@@ -615,8 +615,10 @@ class FileSyncEngine:
                 "dest_filename": dest.name,
                 "file_id": file_id,
                 # Durable /files/{id}/download URLs are authenticated; the
-                # manager attaches this Bearer header (signed URLs are gone).
-                "request_headers": self._client.auth_header(),
+                # manager attaches this Bearer + organization header pair
+                # (signed URLs are gone; the org header satisfies the file
+                # service's admission gate).
+                "request_headers": await self._client.auth_header(),
             },
             priority=10,
         )

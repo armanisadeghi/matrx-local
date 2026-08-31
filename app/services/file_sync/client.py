@@ -82,7 +82,7 @@ class MatrxFilesClient:
             raise RuntimeError("MATRX_FILES_URL not configured")
         if not self._jwt:
             raise RuntimeError("No JWT set — user must be authenticated")
-        headers = {"Authorization": f"Bearer {self._jwt}"}
+        headers = await self._auth_headers()
         if extra_headers:
             headers.update(extra_headers)
         url = f"{self._base}{path}"
@@ -141,9 +141,35 @@ class MatrxFilesClient:
             "download_url": record.get("download_url"),
         }
 
-    def auth_header(self) -> dict[str, str]:
-        """Authorization header for direct byte fetches of durable file URLs."""
-        return {"Authorization": f"Bearer {self._jwt}"}
+    async def _auth_headers(self) -> dict[str, str]:
+        """Authorization + organization admission headers for the file service.
+
+        The standalone file service runs the same matrx-connect AuthMiddleware
+        as aidream: an authenticated request without X-Organization-Id is
+        refused 400 organization_required at the top of the stack. Same
+        transport rule as app/services/aidream/client.py — resolve-or-raise,
+        never send a request guaranteed to fail.
+        """
+        headers = {"Authorization": f"Bearer {self._jwt}"}
+        from app.services.aidream.organization import (
+            OrganizationNotResolvedError,
+            resolve_active_organization_id,
+        )
+
+        try:
+            headers["X-Organization-Id"] = await resolve_active_organization_id(
+                self._jwt or ""
+            )
+        except OrganizationNotResolvedError as exc:
+            raise RuntimeError(
+                f"[file_sync] Cannot name an organization for this request: "
+                f"{exc} {exc.remedy}"
+            ) from exc
+        return headers
+
+    async def auth_header(self) -> dict[str, str]:
+        """Auth + organization headers for direct byte fetches of durable file URLs."""
+        return await self._auth_headers()
 
     async def get_record(self, file_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/files/{file_id}")

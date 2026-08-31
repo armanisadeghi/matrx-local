@@ -104,7 +104,7 @@ function Stat({
   );
 }
 
-export function ClaudeCode() {
+export function CodingSessions() {
   const [data, setData] = useState<ClaudeOverview | null>(null);
   const [bridge, setBridge] = useState<CodingSessionBridgeStatus | null>(null);
   const [readiness, setReadiness] =

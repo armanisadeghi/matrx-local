@@ -27,7 +27,7 @@ import { SystemPrompts } from "@/pages/SystemPrompts";
 import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
-import { ClaudeCode } from "@/pages/ClaudeCode";
+import { CodingSessions } from "@/pages/CodingSessions";
 import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
 import { useAuth } from "@/hooks/use-auth";
@@ -463,7 +463,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
-      { path: "/coding-sessions", element: <ClaudeCode /> },
+      { path: "/coding-sessions", element: <CodingSessions /> },
       {
         path: "/bridge-test",
         element: (

@@ -19,7 +19,7 @@ importers:
         version: 0.10.0(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.4.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.4.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -227,8 +227,8 @@ packages:
     resolution: {integrity: sha512-BIlXpLGA7hM+/DMBJur2dZw71/kDH87DI/5FBmO87OvfA/c8bVv700lvmcWTJsSfE/lNt0ppOGNm1CcYVOEmwQ==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/data@0.6.2':
-    resolution: {integrity: sha512-ob2wOGjcQvY+DYEq3aftjXd6MCJKFHcGFr13zD+ZaHt7zEP0C/XBenvA9/6d+ct1PnpogU6ag1miCj+X8/bhTA==}
+  '@ai-matrx/data@0.6.3':
+    resolution: {integrity: sha512-iEwTGLeu3Hi6PwcuAa0FO69VfGx5UnUGWNF9SSGoDEL6mYO5kUhZoT5B7YBjb3DWD+LTToHXrF6eQiVW2rmkkA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -236,8 +236,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.4.1':
-    resolution: {integrity: sha512-XDZS54qgB6XgzQaDEWfMmcXaFHIfOJh9c+24aKbRtBHd4mrTy14qwsW9zKDYNvQVte1S6DcMJGSheON0l5JZEQ==}
+  '@ai-matrx/design-system@0.4.2':
+    resolution: {integrity: sha512-AdWwuYE422ObyNDEKM3ZJejznb9l0L4pvz85fyATB7edC5/qPcoF3BFEtjxqvHBlI0471InkcWPINFQ/DU9bdg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -248,6 +248,18 @@ packages:
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
+
+  '@ai-matrx/realtime@0.2.1':
+    resolution: {integrity: sha512-xOaYlNa6Pt6IyU+AwKr/UyrRcfv7OfURvB6arMsTOs7z6lsI1DA/6QsRtiTQrEZRGihh8fAh7qg1T6PGMUZmGQ==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      react: '>=18.0.0'
+      react-native: '>=0.76.0'
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-native:
+        optional: true
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -3302,11 +3314,12 @@ snapshots:
 
   '@ai-matrx/agents@0.6.2(@supabase/supabase-js@2.112.4)(react@19.2.4)':
     dependencies:
-      '@ai-matrx/data': 0.6.2(@supabase/supabase-js@2.112.4)(react@19.2.4)
+      '@ai-matrx/data': 0.6.3(@supabase/supabase-js@2.112.4)(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
       - '@supabase/supabase-js'
+      - react-native
 
   '@ai-matrx/content-ir-react@0.10.0(react@19.2.4)':
     dependencies:
@@ -3317,15 +3330,17 @@ snapshots:
     dependencies:
       ajv: 8.20.0
 
-  '@ai-matrx/data@0.6.2(@supabase/supabase-js@2.112.4)(react@19.2.4)':
+  '@ai-matrx/data@0.6.3(@supabase/supabase-js@2.112.4)(react@19.2.4)':
     dependencies:
+      '@ai-matrx/realtime': 0.2.1(react@19.2.4)
       '@supabase/ssr': 0.12.5(@supabase/supabase-js@2.112.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
       - '@supabase/supabase-js'
+      - react-native
 
-  '@ai-matrx/design-system@0.4.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.4.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/kit': 0.7.4(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-dialog': 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3358,6 +3373,10 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
       - react-dom
+
+  '@ai-matrx/realtime@0.2.1(react@19.2.4)':
+    optionalDependencies:
+      react: 19.2.4
 
   '@alloc/quick-lru@5.2.0': {}
 

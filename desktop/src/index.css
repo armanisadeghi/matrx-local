@@ -1,3 +1,7 @@
+@layer matrx-design-system-tokens, matrx-design-system, base, components, utilities;
+@import "@ai-matrx/design-system/tokens.css";
+@import "@ai-matrx/design-system/styles.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

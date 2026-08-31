@@ -147,6 +147,37 @@ describe("KindBlockView draws server-built kinds", () => {
     expect(text).not.toContain("absorbs blue and red");
   });
 
+  it("refuses a typed component for a kind that FAILED its schema", () => {
+    // @ai-matrx/content-ir 0.10.0 consumer action 2, answered for this repo.
+    // KIND PRESERVATION means a payload that fails validation stays a *broken*
+    // `flashcard_set` — `root.kind` still says "flashcard_set" and
+    // `root.status` still says "complete". `kindState` is the only validity
+    // signal, and `raw` means checked-and-rejected.
+    //
+    // This app never reads `kindState` itself, and does not need to: the
+    // typed component is chosen from what the SHARED route returned
+    // (`routed.type`), not from `envelope.root.kind`, and the route diverts a
+    // `raw` root to the generic floor. This pins that indirection — the day
+    // someone "simplifies" KindBlockView to dispatch on `kind`, a broken deck
+    // would be handed to FlashcardSetKind and this fails.
+    const source = BLOCKS.flashcard_set!;
+    const envelope = JSON.parse(
+      JSON.stringify((source.metadata as Record<string, unknown>).__ir),
+    ) as { root: { kind: string; kindState: string; status: string } };
+    envelope.root.kindState = "raw";
+    expect(envelope.root.kind).toBe("flashcard_set");
+    expect(envelope.root.status).toBe("complete");
+
+    const text = draw({ ...source, metadata: { __ir: envelope } });
+    // The deck component never ran: no flashcard affordance anywhere.
+    expect(text).not.toContain("Show answer");
+    // And the floor is honest about WHY rather than blank or silently generic:
+    // the route's `broken-instance` reason, said in words.
+    expect(text.toLowerCase()).toContain("did not match the shape's schema");
+    // The reader still gets the data.
+    expect(text.toLowerCase()).toContain("what pigment absorbs light?");
+  });
+
   it("sends a KNOWN kind with no component here to the honest floor", () => {
     // The same real envelope, relabelled to a kind this app maps no component
     // for. R6's disposition: readable data plus a muted "no custom view" note

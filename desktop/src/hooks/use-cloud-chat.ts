@@ -1422,6 +1422,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             const resolution = await fetchMandateResolution(
               localMandateKey,
               session.access_token,
+              await requireActiveOrganizationId(),
             );
             requestOptions = { ...options, agentId: resolution.agent_id };
           } catch (err) {

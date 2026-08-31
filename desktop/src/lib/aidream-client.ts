@@ -274,10 +274,12 @@ export type MandateResolution = components["schemas"]["MandateResolutionResponse
 export async function fetchMandateResolution(
   mandateKey: string,
   jwt: string,
+  organizationId: string,
   signal?: AbortSignal,
 ): Promise<MandateResolution> {
   return aidreamGet<MandateResolution>(mandateResolutionPath(mandateKey), {
     jwt,
+    organizationId,
     ...(signal ? { signal } : {}),
   });
 }

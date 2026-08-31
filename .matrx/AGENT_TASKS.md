@@ -447,6 +447,7 @@ are condensed under Completed. Still open:
   publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
   workaround note in tests/conftest.py if desired.
 ## Completed
+- 2026-08-30 — Claude Code screen rebuilt: one list + one Sync everything button; old 1,148-line ClaudeHistorySync deleted; V31 `claude_session_synced` makes per-conversation sync state real (MXL-D-084, MXL-D-086 closed). Commit f835747a4, released v1.4.63.
 
 - [TASK-005] Preserved retired mirror columns without hiding unknown drift — 2026-08-25 (`613fa2651`, MXL-D-082)
 - [TASK-002] Rebuilt all four Coding Sessions tabs as truthful, inspectable control surfaces with durable operation evidence, uncapped pagination, guided readiness, verified session-detail sync, and persistent local runtime history — 2026-08-23 (`1106549b7`)

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchAIDreamModels, fetchMandateResolution } from "@/lib/aidream-client";
 import {
-  fetchAIDreamModels,
-  fetchMandateResolution,
-  resolveConversationOrganizationId,
-} from "@/lib/aidream-client";
+  isOrganizationNotSelectedError,
+  requestOrganizationPicker,
+  requireActiveOrganizationId,
+} from "@/lib/org/active-org";
 import { mandateKeyFromAgentRef } from "@/lib/mandates";
 import { agentTargetExecutePath } from "@/lib/api/routes/ai";
 import { getAIDreamServerUrl } from "@/lib/app-config";
@@ -1673,7 +1674,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           ...routePatch,
         };
         // A NEW cloud conversation must name its organization in the request
-        // BODY; the server owns that choice (GET /auth/whoami).
+        // BODY too; the server verifies it, never chooses it.
         const startsCloudConversation =
           executionTarget === "cloud" &&
           !(requestConversation.cloudConversationId ?? requestConversation.serverConversationId);
@@ -1683,11 +1684,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         // organization_required), before it ever reaches conversation
         // routing. A continuing conversation already belongs to an
         // organization server-side, but the header gate runs ahead of that
-        // lookup, so it still must be sent on every cloud request.
+        // lookup, so it still must be sent on every cloud request. Resolved
+        // from THIS device's own choice — never a server round trip;
+        // aidream cannot answer "which organization does this client carry"
+        // any more (GET /auth/whoami itself now requires the header). A
+        // caller with no organization chosen gets a clear, remediable
+        // OrganizationNotSelectedError instead of a guaranteed 400.
         const cloudOrganizationId =
-          executionTarget === "cloud"
-            ? await resolveConversationOrganizationId(token)
-            : null;
+          executionTarget === "cloud" ? await requireActiveOrganizationId() : null;
         if (startsCloudConversation && cloudOrganizationId) {
           requestOptions = {
             ...requestOptions,
@@ -2218,8 +2222,15 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           updateAssistant({ isStreaming: false, streamStatus: "Stopped." });
           publishBlocks();
         } else {
-          const message =
-            error instanceof SyntaxError
+          if (isOrganizationNotSelectedError(error)) {
+            // Nothing fails silently: surface the exact remedy AND open the
+            // organization picker so the user can act on it immediately
+            // instead of hunting for where to fix it.
+            requestOrganizationPicker();
+          }
+          const message = isOrganizationNotSelectedError(error)
+            ? error.remedy
+            : error instanceof SyntaxError
               ? `Failed to parse ${serviceLabel} stream: ${error.message}`
               : error instanceof Error
                 ? error.message

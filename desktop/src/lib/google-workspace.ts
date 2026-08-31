@@ -15,7 +15,7 @@
 
 import supabase from "@/lib/supabase";
 import { getAIDreamServerUrl, getWebAppOrigin } from "@/lib/app-config";
-import { resolveConversationOrganizationId } from "@/lib/aidream-client";
+import { requireActiveOrganizationId } from "@/lib/org/active-org";
 
 /**
  * Canonical scope strings. Backend mirror:
@@ -224,13 +224,10 @@ export async function sendReviewedGmail(
   }
   // aidream's AuthMiddleware refuses every authenticated request that names
   // no organization (400 organization_required) before it even reaches the
-  // reviewed-send route. Resolve the caller's organization the same way
-  // conversation start does — the server's own whoami answer, never a
-  // client-side guess — and fail closed here rather than let the send
-  // round-trip into a guaranteed refusal.
-  const organizationId = await resolveConversationOrganizationId(
-    session.access_token,
-  );
+  // reviewed-send route. Resolve THIS device's own choice — never a server
+  // round trip, aidream cannot answer "which organization does this client
+  // carry" — and fail closed with a remedy if the user hasn't picked one.
+  const organizationId = await requireActiveOrganizationId();
   const response = await fetch(
     `${await getAIDreamServerUrl()}/api/google-workspace/gmail/send-reviewed`,
     {

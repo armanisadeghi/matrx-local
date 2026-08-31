@@ -26,6 +26,10 @@ import {
   sendReviewedGmail,
   type GoogleConnectionRef,
 } from "@/lib/google-workspace";
+import {
+  isOrganizationNotSelectedError,
+  requestOrganizationPicker,
+} from "@/lib/org/active-org";
 import { openExternal } from "@/lib/open-external";
 import type {
   PendingEmailReview,
@@ -125,9 +129,14 @@ export function GmailReviewCard({ review, onResolve }: GmailReviewCardProps) {
       });
     } catch (cause) {
       // The card stays open and says nothing was sent. Never a success.
-      setError(
-        cause instanceof Error ? cause.message : "The message was not sent.",
-      );
+      if (isOrganizationNotSelectedError(cause)) {
+        requestOrganizationPicker();
+        setError(cause.remedy);
+      } else {
+        setError(
+          cause instanceof Error ? cause.message : "The message was not sent.",
+        );
+      }
       setSending(false);
     }
   }

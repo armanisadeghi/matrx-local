@@ -28,6 +28,7 @@ import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
 import { CodingSessions } from "@/pages/CodingSessions";
+import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -632,6 +633,7 @@ function AppInner() {
           <UpdateDialog state={updateState} actions={updateActions} />
           <DownloadManagerModal />
           <DevTerminalPanel />
+          <OrganizationPickerDialog />
         </HashRouter>
       </AccessHealthProvider>
     </TooltipProvider>

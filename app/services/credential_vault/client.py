@@ -96,88 +96,27 @@ async def _session_jwt() -> str:
 # context header (matrx-connect's ``require_organization_context`` — a
 # fail-closed route backstop). A request without it is refused with HTTP 422
 # before handler code runs, which is exactly the "AI Matrx returned HTTP 422
-# for a Vault request" the startup vault warm logged on 2026-08-30. The
-# middleware verifies the value against the caller's OWN active
-# ``iam.memberships`` row, so the desktop resolves it from the same canonical
-# source: the public ``mbr_for_user`` SECURITY-DEFINER RPC, scoped to
-# auth.uid() by the user's JWT. For USER-principal vault reads the org is a
-# verified context lens, not a filter — any org the user is an active member
-# of is equivalent — so we pick deterministically: an ``owner`` membership
-# first, then the oldest.
-_org_cache: dict[str, str] = {}
-
-
-def _jwt_sub(jwt_value: str) -> str | None:
-    try:
-        import jwt as pyjwt
-
-        claims = pyjwt.decode(jwt_value, options={"verify_signature": False})
-        sub = claims.get("sub")
-        return sub if isinstance(sub, str) and sub else None
-    except Exception:
-        return None
+# for a Vault request" the startup vault warm logged on 2026-08-30.
+#
+# The org is resolved through the ONE Python-side resolver
+# (``app.services.aidream.organization.resolve_active_organization_id``):
+# the user's durable default-organization preference, then a sole active
+# membership, otherwise refuse. It does NOT pick "owner-or-oldest" — that
+# was a guess, and a guess is exactly the defect class
+# common-docs/projects/no-db-assigned-org exists to end.
 
 
 async def _organization_id(jwt_value: str) -> str:
-    """The org id to send as ``X-Organization-Id``, resolved once per user."""
-    cache_key = _jwt_sub(jwt_value) or "?"
-    cached = _org_cache.get(cache_key)
-    if cached:
-        return cached
-
-    import httpx
-
-    from app.config import (
-        SUPABASE_PROFILE_HEADERS,
-        SUPABASE_PUBLISHABLE_KEY,
-        SUPABASE_URL,
+    """The org id to send as ``X-Organization-Id``."""
+    from app.services.aidream.organization import (
+        OrganizationNotResolvedError,
+        resolve_active_organization_id,
     )
 
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/mbr_for_user"
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as http:
-            resp = await http.post(
-                url,
-                json={"p_container_type": "organization"},
-                headers={
-                    "apikey": SUPABASE_PUBLISHABLE_KEY,
-                    **SUPABASE_PROFILE_HEADERS,
-                    "Authorization": f"Bearer {jwt_value}",
-                    "Content-Type": "application/json",
-                },
-            )
-        resp.raise_for_status()
-        rows = resp.json()
-    except Exception as exc:  # noqa: BLE001 — mapped to a renderable state
-        raise VaultUnavailable(
-            "no_organization",
-            f"Could not resolve your organization membership ({exc}); "
-            "Vault credentials are unavailable until it resolves.",
-        ) from exc
-
-    memberships = [
-        row
-        for row in (rows if isinstance(rows, list) else [])
-        if isinstance(row, dict)
-        and row.get("status") == "active"
-        and isinstance(row.get("container_id"), str)
-        and row.get("container_id")
-    ]
-    if not memberships:
-        raise VaultUnavailable(
-            "no_organization",
-            "Your account has no active organization membership, so Vault "
-            "credentials can't be fetched. Local API keys are unaffected.",
-        )
-    memberships.sort(
-        key=lambda row: (
-            0 if row.get("role") == "owner" else 1,
-            str(row.get("created_at") or ""),
-        )
-    )
-    org_id = str(memberships[0]["container_id"])
-    _org_cache[cache_key] = org_id
-    return org_id
+        return await resolve_active_organization_id(jwt_value)
+    except OrganizationNotResolvedError as exc:
+        raise VaultUnavailable("no_organization", f"{exc} {exc.remedy}") from exc
 
 
 async def _org_headers(jwt_value: str) -> dict[str, str]:

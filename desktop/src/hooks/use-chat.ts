@@ -692,15 +692,14 @@ export function useChat({ engineUrl }: UseChatOptions) {
           await import("@/state/compute-target-store")
         ).useComputeTargetStore.getState().bound;
         if (boundTarget) {
-          const { resolveComputeTarget, resolveConversationOrganizationId } =
-            await import("@/lib/aidream-client");
+          const { resolveComputeTarget } = await import("@/lib/aidream-client");
+          const { getActiveOrganizationId } = await import("@/lib/org/active-org");
           // aidream refuses an authenticated request with no organization
           // before it routes; resolveComputeTarget is already best-effort
-          // (returns null on any failure → unbound turn), so a failed org
-          // resolution degrades the same way — never a fabricated org.
-          const organizationId = token
-            ? await resolveConversationOrganizationId(token).catch(() => null)
-            : null;
+          // (returns null on any failure → unbound turn), so an unresolved
+          // org degrades the same way — never a fabricated org. Resolved
+          // locally (this device's own choice), never a server round trip.
+          const organizationId = token ? await getActiveOrganizationId() : null;
           const binding = await resolveComputeTarget(
             { kind: boundTarget.kind, id: boundTarget.rowId },
             { jwt: token || null, organizationId, signal: abort.signal },

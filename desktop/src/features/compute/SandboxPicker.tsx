@@ -32,10 +32,10 @@ import {
 import supabase from "@/lib/supabase";
 import {
   fetchComputeTargets,
-  resolveConversationOrganizationId,
   type ComputeTarget,
   type ComputeTargetListResponse,
 } from "@/lib/aidream-client";
+import { getActiveOrganizationId } from "@/lib/org/active-org";
 import { cn } from "@/lib/utils";
 import { useBoundComputeTarget } from "@/state/compute-target-store";
 
@@ -63,11 +63,11 @@ export function SandboxPicker({ thisDeviceInstanceId }: SandboxPickerProps) {
       } = await supabase.auth.getSession();
       const jwt = session?.access_token ?? null;
       // aidream refuses an authenticated request with no organization
-      // before it routes — resolve it the same way conversation start does
-      // whenever we're actually signed in.
-      const organizationId = jwt
-        ? await resolveConversationOrganizationId(jwt)
-        : null;
+      // before it routes — resolve THIS device's own choice (never a
+      // server round trip: aidream cannot answer "which org do you carry").
+      // getActiveOrganizationId returns null rather than guessing; the list
+      // just comes back empty until the user picks one elsewhere.
+      const organizationId = jwt ? await getActiveOrganizationId() : null;
       const resp = await fetchComputeTargets({ jwt, organizationId });
       setData(resp);
     } catch (err) {

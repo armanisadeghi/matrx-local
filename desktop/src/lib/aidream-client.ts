@@ -46,8 +46,10 @@ async function aidreamGet<T>(
         `[aidream-client] ${path} is an authenticated request but no ` +
           "organizationId was provided. aidream refuses every authenticated " +
           "request with no X-Organization-Id header before it routes — " +
-          "resolve the caller's organization (resolveConversationOrganizationId) " +
-          "before calling this endpoint.",
+          "resolve THIS device's own choice with getActiveOrganizationId / " +
+          "requireActiveOrganizationId (@/lib/org/active-org) before calling " +
+          "this endpoint. aidream cannot answer 'which organization does this " +
+          "client carry' — it only verifies membership.",
       );
     }
     headers["Authorization"] = `Bearer ${options.jwt}`;
@@ -278,28 +280,4 @@ export async function fetchMandateResolution(
     jwt,
     ...(signal ? { signal } : {}),
   });
-}
-
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
-
-interface WhoamiResponse {
-  authenticated: boolean;
-  user_id: string | null;
-  organization_id: string | null;
-}
-
-/**
- * Corresponds to GET /api/auth/whoami (auth required). Every NEW cloud
- * conversation must name an `organization_id` (`AgentStartRequest` /
- * `ChatRequest` require it); the server owns that choice for the caller.
- * Mirrors matrx-extend's `resolveConversationOrganizationId`.
- */
-export async function resolveConversationOrganizationId(jwt: string): Promise<string> {
-  const whoami = await aidreamGet<WhoamiResponse>("/auth/whoami", { jwt });
-  if (!whoami.organization_id) {
-    throw new Error("Workspace initialization failed: the server returned no organization.");
-  }
-  return whoami.organization_id;
 }

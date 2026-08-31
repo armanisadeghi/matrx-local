@@ -17,7 +17,7 @@
 
 import type { components } from "@/types/python-generated/api-types";
 import { getAIDreamServerUrl } from "@/lib/app-config";
-import { resolveConversationOrganizationId } from "@/lib/aidream-client";
+import { getActiveOrganizationId } from "@/lib/org/active-org";
 import supabase from "@/lib/supabase";
 
 /** Generated wire types are the source of truth — never hand-mirrored. */
@@ -35,27 +35,23 @@ export interface CatalogFetch {
  * aidream's AuthMiddleware refuses ANY authenticated request that names no
  * organization (400 organization_required) before it routes — /workflow/kinds
  * is not on its exemption list. So a Bearer token here MUST be paired with
- * `X-Organization-Id`, resolved the same way conversation start already does
- * (`resolveConversationOrganizationId`, GET /auth/whoami — itself exempt).
+ * `X-Organization-Id`, resolved from THIS device's own choice
+ * (`getActiveOrganizationId` — never a server round trip; aidream cannot
+ * answer "which organization does this client carry" any more).
  *
- * If org resolution fails (no membership resolves), we do NOT invent one —
- * we drop the Authorization header entirely and fall back to the anonymous
- * public catalog, which this endpoint already serves. That is a real,
- * server-defined degrade, not a client-side guess.
+ * When no organization is resolved (not signed in, or the user hasn't
+ * chosen one yet), we do NOT invent one — we drop the Authorization header
+ * entirely and fall back to the anonymous public catalog, which this
+ * endpoint already serves. That is a real, server-defined degrade, not a
+ * client-side guess.
  */
 async function authHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) return {};
-  try {
-    const organizationId = await resolveConversationOrganizationId(token);
-    return { Authorization: `Bearer ${token}`, "X-Organization-Id": organizationId };
-  } catch {
-    // No resolvable organization for this caller — degrade to anonymous
-    // rather than send an authenticated request the gate is guaranteed to
-    // refuse.
-    return {};
-  }
+  const organizationId = await getActiveOrganizationId();
+  if (!organizationId) return {};
+  return { Authorization: `Bearer ${token}`, "X-Organization-Id": organizationId };
 }
 
 /**

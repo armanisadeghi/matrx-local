@@ -275,6 +275,25 @@ async def import_claude_history(
         ) from exc
 
 
+@router.post("/claude/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_claude_everything() -> dict[str, object]:
+    """Sync everything. One call — no review, no selection, no apply step."""
+    try:
+        return await ClaudeHistoryImporter().sync_all()
+    except ClaudeHistoryConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+@router.get("/claude/overview")
+async def claude_overview() -> dict[str, object]:
+    """Everything the Claude Code screen shows: accounts, conversations, state."""
+    from app.services.coding_sessions.claude_overview import overview
+
+    return await overview()
+
+
 @router.get("/claude/history/status")
 async def claude_history_status() -> dict[str, object]:
     return await ClaudeHistoryImporter().status()

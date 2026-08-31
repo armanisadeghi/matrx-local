@@ -666,6 +666,53 @@ export interface CodingSessionDeliveryEnvelopePage {
   next_cursor: number | null;
 }
 
+export type ClaudeSyncState = "synced" | "behind" | "not_synced";
+
+export interface ClaudeConversation {
+  session_id: string;
+  title: string;
+  project: string | null;
+  last_activity_at: number;
+  bytes: number;
+  on_disk: boolean;
+  state: ClaudeSyncState;
+  pinned: boolean;
+  archived: boolean;
+}
+
+export interface ClaudeAccount {
+  account_id: string;
+  name: string | null;
+  conversations: number;
+  first_seen: string | null;
+  active: boolean;
+}
+
+export interface ClaudeOverview {
+  account_id: string | null;
+  accounts: ClaudeAccount[];
+  conversations: ClaudeConversation[];
+  totals: {
+    conversations: number;
+    index_files_read: number;
+    unreadable: number;
+    synced: number;
+    behind: number;
+    not_synced: number;
+    waiting: number;
+    failed: number;
+  };
+}
+
+export interface ClaudeSyncResult {
+  started: boolean;
+  blocked_reason: string | null;
+  queued: number;
+  entries: number;
+  conversations: number;
+  failed: { sessions: string; reason: string }[];
+}
+
 export interface ClaudeCaptureStatus {
   enabled: boolean;
   running: boolean;
@@ -2620,6 +2667,14 @@ class EngineAPI {
     };
   }> {
     return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}?confirm=${confirm ? "true" : "false"}`, { method: "DELETE" });
+  }
+
+  async getClaudeOverview(): Promise<ClaudeOverview> {
+    return this.request("/coding-session/claude/overview");
+  }
+
+  async syncClaudeEverything(): Promise<ClaudeSyncResult> {
+    return this.request("/coding-session/claude/sync", { method: "POST" });
   }
 
   async getClaudeCaptureStatus(): Promise<ClaudeCaptureStatus> {

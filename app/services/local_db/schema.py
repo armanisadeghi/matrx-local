@@ -1312,6 +1312,25 @@ CREATE INDEX IF NOT EXISTS idx_coding_session_runtime_events_replay
 ON coding_session_runtime_events(runtime_id, sequence);
 """
 
+# One row per Claude conversation that aidream has ACKNOWLEDGED.
+#
+# Publication deletes the outbox row, and the only other acknowledgement ledger
+# (coding_session_bridge_delivery_activity) is keyed (provider, action, source)
+# with no session identity — so before this table the app could not answer
+# "is this conversation synced?" for any single conversation. Absence from the
+# pending and quarantine tables cannot tell "delivered" from "never enqueued".
+#
+# last_synced_at is compared against the transcript file's mtime on disk, which
+# is why no fingerprint or hash is stored: a file newer than the last ack is
+# behind. That is a local stat() call, never a cloud round-trip.
+_V31_CLAUDE_SESSION_SYNCED = """
+CREATE TABLE IF NOT EXISTS claude_session_synced (
+    provider_session_id TEXT PRIMARY KEY,
+    last_synced_at      TEXT NOT NULL,
+    deliveries          INTEGER NOT NULL DEFAULT 1
+)
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1343,4 +1362,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (28, _V28_CODING_SESSION_BRIDGE_QUEUE_ITEM_COUNT),
     (29, _V29_CODING_SESSION_METADATA_SYNC_OPERATIONS),
     (30, _V30_CODING_SESSION_RUNTIME_JOURNAL),
+    (31, _V31_CLAUDE_SESSION_SYNCED),
 ]

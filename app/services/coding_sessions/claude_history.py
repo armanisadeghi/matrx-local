@@ -807,6 +807,123 @@ class ClaudeHistoryImporter:
             "truncated": len(sources) > limit,
         }
 
+    async def sync_all(self) -> dict[str, Any]:
+        """Sync every syncable conversation. No selection, no preview, no steps.
+
+        The four-call shape this replaces (review, page, prepare, import) exists
+        to let a caller choose a subset. Nothing ever wants a subset: the job is
+        "put my conversations in the cloud". MAX_SELECTED_SESSIONS caps a single
+        prepare/import pair at 10, so batching is this method's problem, not the
+        user's — it is an internal transport detail, never a reason to make
+        somebody click 181 times.
+        """
+        review = await self.review(limit=1)
+        scan_id = str(review["scan"]["scan_id"])
+        account_key = str(review["provider_account_key"])
+        if not review.get("import_ready"):
+            return {
+                "started": False,
+                "blocked_reason": (
+                    review.get("account_blocked_reason")
+                    or ("Sign in to AI Matrx to sync." if not review.get(
+                        "matrx_user_available"
+                    ) else "Claude account identity is unavailable.")
+                ),
+                "queued": 0,
+                "entries": 0,
+                "conversations": 0,
+                "failed": [],
+            }
+
+        identities: list[dict[str, str]] = []
+        cursor: str | None = None
+        while True:
+            page = await self._inventory.list_rows(
+                scan_id, cursor=cursor, limit=MAX_PREVIEW_SESSIONS, importable=True
+            )
+            for row in page["items"]:
+                identities.append(
+                    {
+                        "session_id": str(row["session_id"]),
+                        "provider_project_key": str(row["project_key"]),
+                    }
+                )
+            cursor = page["page"]["next_cursor"]
+            if not cursor:
+                break
+
+        queued = 0
+        entries = 0
+        synced = 0
+        failed: list[dict[str, str]] = []
+        for start in range(0, len(identities), MAX_SELECTED_SESSIONS):
+            batch = identities[start : start + MAX_SELECTED_SESSIONS]
+            try:
+                prepared = await self.prepare_selected(
+                    ClaudeHistoryPrepareRequest(
+                        scan_id=UUID(scan_id),
+                        provider_account_key=account_key,
+                        sessions=[
+                            ClaudeHistoryPrepareSelection(
+                                session_id=UUID(item["session_id"]),
+                                provider_project_key=item["provider_project_key"],
+                                source_state=item["source_state"],
+                            )
+                            for item in await self._source_states(scan_id, batch)
+                        ],
+                    )
+                )
+                ready = [
+                    ClaudeHistorySelection(
+                        session_id=UUID(str(item["session_id"])),
+                        provider_project_key=str(item["provider_project_key"]),
+                        source_revision=str(item["source_revision"]),
+                    )
+                    for item in prepared.get("sessions", [])
+                    if item.get("source_revision")
+                ]
+                if not ready:
+                    continue
+                result = await self.import_selected(
+                    ClaudeHistoryImportRequest(
+                        provider_account_key=account_key, sessions=ready
+                    )
+                )
+                queued += int(result.get("queued_batches", 0))
+                entries += int(result.get("entries", 0))
+                synced += int(result.get("selected_sessions", 0))
+            except Exception as exc:  # one bad batch must not stop the rest
+                failed.append(
+                    {
+                        "sessions": ", ".join(item["session_id"] for item in batch),
+                        "reason": str(exc),
+                    }
+                )
+
+        return {
+            "started": True,
+            "blocked_reason": None,
+            "queued": queued,
+            "entries": entries,
+            "conversations": synced,
+            "failed": failed,
+        }
+
+    async def _source_states(
+        self, scan_id: str, batch: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        """Attach each row's current source_state hash, which prepare requires."""
+        out: list[dict[str, str]] = []
+        for item in batch:
+            row = await self._inventory._db.fetchone(
+                """SELECT source_state FROM coding_session_history_scan_rows
+                   WHERE scan_id = ? AND session_id = ? AND project_key = ?""",
+                (scan_id, item["session_id"], item["provider_project_key"]),
+            )
+            if row and row["source_state"]:
+                out.append({**item, "source_state": str(row["source_state"])})
+        return out
+
     async def import_selected(
         self,
         request: ClaudeHistoryImportRequest,

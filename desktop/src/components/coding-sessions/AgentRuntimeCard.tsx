@@ -145,13 +145,8 @@ export function AgentRuntimeCard() {
         <div>
           <CardTitle className="flex items-center gap-2 text-base">
             <Play className="h-4 w-4" />
-            Local runtime — Claude Code on this Mac
+            Run Claude Code here
           </CardTitle>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Runs use your installed Claude Code and its subscription login.
-            They can work only in folders you explicitly approve, and their
-            turn events are queued for delivery to your private AI Matrx history.
-          </p>
         </div>
         <Button variant="outline" onClick={() => void refresh()} disabled={refreshing}>
           {refreshing ? (
@@ -214,13 +209,13 @@ export function AgentRuntimeCard() {
 
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div><div className="text-sm font-medium">Runs</div><p className="text-xs text-muted-foreground">Provider execution and AI Matrx delivery settle independently. Both are shown for every run.</p></div>
+            <div className="text-sm font-medium">Runs</div>
             {capabilities?.capabilities.start && <Badge variant="outline"><CloudUpload className="mr-1 h-3 w-3" />Start supported through AI Matrx New work</Badge>}
           </div>
           <div className="mt-2 space-y-2">
             {!initialLoad && runs.length === 0 && (
               <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-                <p>No runs yet. Start through the canonical AI Matrx work composer, then choose Claude Code on this Mac.</p>
+                <p>No runs yet.</p>
                 <Button asChild variant="outline" size="sm" className="mt-2"><a href={newWorkUrl} target="_blank" rel="noreferrer">Open AI Matrx New work</a></Button>
               </div>
             )}

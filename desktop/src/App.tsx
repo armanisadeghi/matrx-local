@@ -27,7 +27,7 @@ import { SystemPrompts } from "@/pages/SystemPrompts";
 import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
-import { CodingSessions } from "@/pages/CodingSessions";
+import { ClaudeCode } from "@/pages/ClaudeCode";
 import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
 import { useAuth } from "@/hooks/use-auth";
@@ -463,7 +463,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
-      { path: "/coding-sessions", element: <CodingSessions /> },
+      { path: "/claude-code", element: <ClaudeCode /> },
       {
         path: "/bridge-test",
         element: (
@@ -575,7 +575,11 @@ function AppInner() {
                     selected another destination. */}
                 <Route
                   path="/claude-history"
-                  element={<Navigate to="/coding-sessions?tab=history" replace />}
+                  element={<Navigate to="/claude-code" replace />}
+                />
+                <Route
+                  path="/coding-sessions"
+                  element={<Navigate to="/claude-code" replace />}
                 />
                 <Route
                   path="/*"

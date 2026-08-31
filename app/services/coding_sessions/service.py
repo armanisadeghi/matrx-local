@@ -2076,6 +2076,26 @@ class CodingSessionBridgeOutbox:
                 fidelity,
             ),
         )
+        if (
+            request.provider is BridgeProvider.CLAUDE_CODE
+            and request.provider_session_id is not None
+        ):
+            # Per-conversation delivery truth. The aggregate ledger above is
+            # keyed (provider, action, source) and cannot say whether ONE
+            # conversation reached the cloud; the outbox row is deleted on
+            # success, so absence proves nothing either. Without this row the
+            # UI can only guess, which is why it used to show queue counts
+            # instead of answering the actual question.
+            await connection.execute(
+                """INSERT INTO claude_session_synced (
+                       provider_session_id, last_synced_at, deliveries
+                   ) VALUES (?, datetime('now'), 1)
+                   ON CONFLICT(provider_session_id) DO UPDATE SET
+                       last_synced_at=excluded.last_synced_at,
+                       deliveries=claude_session_synced.deliveries + 1""",
+                (request.provider_session_id,),
+            )
+
         hook = request.hook_event
         if (
             request.provider is BridgeProvider.CLAUDE_CODE

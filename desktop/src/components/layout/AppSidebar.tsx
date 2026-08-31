@@ -73,7 +73,7 @@ const navItems = [
   { to: "/aimatrx", icon: Sparkles, label: "AiMatrx" },
   { to: "/browser", icon: MonitorSmartphone, label: "Browser" },
   { to: "/bridge-test", icon: Plug, label: "Bridge Test" },
-  { to: "/claude-code", icon: Terminal, label: "Claude Code" },
+  { to: "/coding-sessions", icon: Terminal, label: "Coding Sessions" },
   { to: "/configurations", icon: SlidersHorizontal, label: "Configurations" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];

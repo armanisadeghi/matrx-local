@@ -463,7 +463,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
-      { path: "/claude-code", element: <ClaudeCode /> },
+      { path: "/coding-sessions", element: <ClaudeCode /> },
       {
         path: "/bridge-test",
         element: (
@@ -575,11 +575,11 @@ function AppInner() {
                     selected another destination. */}
                 <Route
                   path="/claude-history"
-                  element={<Navigate to="/claude-code" replace />}
+                  element={<Navigate to="/coding-sessions" replace />}
                 />
                 <Route
-                  path="/coding-sessions"
-                  element={<Navigate to="/claude-code" replace />}
+                  path="/claude-code"
+                  element={<Navigate to="/coding-sessions" replace />}
                 />
                 <Route
                   path="/*"

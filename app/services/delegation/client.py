@@ -121,11 +121,40 @@ class DelegationApiClient:
     ) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout, transport=self._transport)
 
-    def _headers(self, jwt: str) -> dict[str, str]:
+    async def _headers(self, jwt: str) -> dict[str, str]:
+        """Identity for one delegation call — bearer token AND organization.
+
+        aidream's AuthMiddleware refuses an authenticated request that names no
+        organization (400 ``organization_required``) before it routes, and
+        never picks one for the caller. The organization is therefore a
+        per-request transport fact exactly like the bearer token, and it is
+        attached HERE — the one place this client builds headers — rather than
+        at each of the three call sites. ``GET /ai/user/pending_calls`` was
+        400ing continuously in production on 2026-08-30 for exactly this
+        reason.
+
+        Resolution never guesses (see ``aidream.organization``); an
+        unresolvable organization raises rather than sending a request that is
+        a guaranteed 400, and the refusal names the remedy.
+        """
+        from app.services.aidream.organization import (
+            OrganizationNotResolvedError,
+            resolve_active_organization_id,
+        )
+
+        try:
+            organization_id = await resolve_active_organization_id(jwt)
+        except OrganizationNotResolvedError as exc:
+            raise DelegationApiError(
+                400,
+                f"[delegation] Cannot name an organization for this request: "
+                f"{exc} {exc.remedy}",
+            ) from exc
         return {
             "Authorization": f"Bearer {jwt}",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "X-Organization-Id": organization_id,
         }
 
     def _instance_id(self) -> str | None:
@@ -173,7 +202,7 @@ class DelegationApiClient:
                 params["instance_id"] = iid
         async with self._client() as http:
             resp = await http.get(
-                url, headers=self._headers(jwt), params=params or None
+                url, headers=await self._headers(jwt), params=params or None
             )
         if resp.status_code != 200:
             raise DelegationApiError(
@@ -210,7 +239,7 @@ class DelegationApiClient:
             payload["instance_id"] = instance_id
         async with self._client() as http:
             resp = await http.post(
-                url, headers=self._headers(jwt), json=payload
+                url, headers=await self._headers(jwt), json=payload
             )
         if resp.status_code != 200:
             raise DelegationApiError(
@@ -246,7 +275,7 @@ class DelegationApiClient:
         url = f"{self._base_url}/ai/conversations/{conversation_id}/resume"
         async with self._client(timeout=_RESUME_TIMEOUT) as http:
             async with http.stream(
-                "POST", url, headers=self._headers(jwt), json=body
+                "POST", url, headers=await self._headers(jwt), json=body
             ) as resp:
                 if resp.status_code == 409:
                     raw = await _read_json_body(resp)

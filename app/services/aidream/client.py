@@ -68,6 +68,62 @@ class AIDreamClient:
         self._base_url = base_url.rstrip("/")
         self._transport = transport
 
+    async def _build_headers(
+        self,
+        base: dict[str, str],
+        jwt: Optional[str],
+        headers: Optional[dict[str, str]],
+    ) -> dict[str, str]:
+        """The ONE place every request's identity headers are assembled.
+
+        aidream's AuthMiddleware refuses an authenticated request that names
+        no organization (400 ``organization_required``) BEFORE it routes, and
+        it will never pick one for the caller. That made the organization a
+        per-request transport fact exactly like the bearer token — so it is
+        attached here, on the same line as ``Authorization``, instead of at
+        each call site. Attaching it per-call-site is what left the coding
+        session bridge, ``/ai/user/pending_calls``, ``/agents`` and
+        ``/coding-sessions/sessions`` 400ing in production on 2026-08-30 while
+        four other call sites were fine: the four that remembered.
+
+        Rules:
+          - No JWT -> public call, no organization to state. Untouched.
+          - A caller-supplied ``X-Organization-Id`` always WINS (the runtime
+            spine and the tool bridge state the org of the specific lease they
+            act under; the transport must never overwrite that).
+          - Otherwise resolve the caller's own active organization through the
+            canonical resolver, which never guesses.
+
+        An organization that cannot be resolved raises rather than sending a
+        header-less request that is a guaranteed 400 — the same rule the
+        runtime spine already follows. The refusal names the remedy.
+        """
+        merged = dict(base)
+        if jwt:
+            merged["Authorization"] = f"Bearer {jwt}"
+        if headers:
+            merged.update(headers)
+
+        if not jwt:
+            return merged
+        if any(name.lower() == "x-organization-id" for name in merged):
+            return merged
+
+        from app.services.aidream.organization import (
+            OrganizationNotResolvedError,
+            resolve_active_organization_id,
+        )
+
+        try:
+            merged["X-Organization-Id"] = await resolve_active_organization_id(jwt)
+        except OrganizationNotResolvedError as exc:
+            raise AIDreamError(
+                400,
+                f"[aidream_client] Cannot name an organization for this request: "
+                f"{exc} {exc.remedy}",
+            ) from exc
+        return merged
+
     async def get(
         self,
         path: str,
@@ -84,12 +140,9 @@ class AIDreamClient:
         Raises AIDreamError on non-2xx response.
         """
         url = f"{self._base_url}/api{path}"
-        merged_headers: dict[str, str] = {"Accept": "application/json"}
-        if jwt:
-            merged_headers["Authorization"] = f"Bearer {jwt}"
-        if headers:
-            merged_headers.update(headers)
-        headers = merged_headers
+        headers = await self._build_headers(
+            {"Accept": "application/json"}, jwt, headers
+        )
 
         try:
             async with httpx.AsyncClient(
@@ -143,15 +196,11 @@ class AIDreamClient:
         ``headers`` merges on top of the defaults (e.g. ``X-Organization-Id``).
         """
         url = f"{self._base_url}/api{path}"
-        merged_headers: dict[str, str] = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        if jwt:
-            merged_headers["Authorization"] = f"Bearer {jwt}"
-        if headers:
-            merged_headers.update(headers)
-        headers = merged_headers
+        headers = await self._build_headers(
+            {"Accept": "application/json", "Content-Type": "application/json"},
+            jwt,
+            headers,
+        )
 
         try:
             async with httpx.AsyncClient(

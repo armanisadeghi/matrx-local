@@ -290,3 +290,32 @@ def http_public(engine_url: str) -> Generator[httpx.Client, None, None]:
     """Session-scoped httpx client without auth (for public endpoints)."""
     with httpx.Client(base_url=engine_url, timeout=15.0) as client:
         yield client
+
+
+# ── the organization admission gate (2026-08-30) ─────────────────────────────
+#
+# aidream's AuthMiddleware refuses any authenticated request that names no
+# organization, so both aidream transports now resolve and attach
+# `X-Organization-Id` where they build `Authorization`. Resolving it is a live
+# Supabase round trip (`mbr_for_user`), which no unit test may make: without
+# this stub every transport test 401s against the real database and fails for
+# a reason that has nothing to do with what it is testing.
+#
+# This stubs ONLY the network identity lookup. Header assembly — attach,
+# caller-supplied-wins, public-calls-untouched, and the refusal when no
+# organization resolves — is exercised for real in
+# tests/unit/test_aidream_transport_organization_header.py, which overrides
+# this fixture with its own resolvers.
+TEST_ORGANIZATION_ID = "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _organization_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.aidream import organization as organization_module
+
+    async def _resolve(_jwt: str) -> str:
+        return TEST_ORGANIZATION_ID
+
+    monkeypatch.setattr(
+        organization_module, "resolve_active_organization_id", _resolve
+    )

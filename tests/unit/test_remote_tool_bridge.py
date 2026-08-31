@@ -16,21 +16,6 @@ from app.services.aidream.client import AIDreamClient
 
 
 
-@pytest.fixture(autouse=True)
-def _organization_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every authenticated call now names its organization at the TRANSPORT
-    (2026-08-30 admission gate). Resolving it is a Supabase round trip, so
-    these transport tests stub the lookup — never the header assembly, which
-    has its own guards in test_aidream_transport_organization_header.py."""
-    from app.services.aidream import organization as organization_module
-
-    async def _resolve(_jwt: str) -> str:
-        return "11111111-2222-4333-8444-555555555555"
-
-    monkeypatch.setattr(
-        organization_module, "resolve_active_organization_id", _resolve
-    )
-
 
 class _FakeRegistry:
     def __init__(self) -> None:

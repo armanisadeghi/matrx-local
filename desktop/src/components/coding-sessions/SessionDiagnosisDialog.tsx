@@ -50,7 +50,7 @@ export const SESSION_STATE_LABEL: Record<ClaudeSessionState, string> = {
 export const SESSION_STATE_HINT: Record<ClaudeSessionState, string> = {
   in_cloud: "AI Matrx holds this conversation and it is up to date.",
   changed:
-    "AI Matrx holds it, but the transcript on this Mac is newer than the server's last delivery.",
+    "AI Matrx holds it, but Claude's last activity on it here is newer than the server's last delivery.",
   queued: "Not on the server yet — its events are waiting in this Mac's delivery queue.",
   failed:
     "AI Matrx refused a delivery for it; the envelope is preserved here and needs a decision.",

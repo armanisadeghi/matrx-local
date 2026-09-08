@@ -263,8 +263,9 @@ held 1,671 of those conversations:
   quarantine) explain HOW a session got there or why it has not — they never decide
   whether it is in the cloud, because most sessions arrive through the Claude Code
   plugin hook and never pass through this engine at all.
-- **Six states, one vocabulary** (`SESSION_STATES`): `in_cloud` · `changed` (local
-  transcript newer than the server's last delivery by more than the 5-minute grace)
+- **Six states, one vocabulary** (`SESSION_STATES`): `in_cloud` · `changed` (Claude's own
+  `lastActivityAt` for the session is newer than the server's last delivery by more than
+  the 5-minute grace — never the transcript file's mtime, which a bulk rewrite can stamp)
   · `queued` (deliveries waiting here) · `failed` (a delivery was refused and is
   preserved) · `not_in_cloud` (nothing anywhere) · `unknown` (the server could not be
   asked — `overview.cloud.reason/detail` say exactly why; the screen never guesses

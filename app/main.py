@@ -22,6 +22,7 @@ from app.api.document_routes import router as document_router  # notes — local
 from app.api.access_routes import router as access_router  # filesystem access health
 from app.api.proxy_routes import router as proxy_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
+from app.api.agent_catalog_routes import router as agent_catalog_router
 from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
@@ -1971,6 +1972,7 @@ app.include_router(access_router)
 app.include_router(proxy_router)
 app.include_router(cloud_sync_router)
 app.include_router(chat_router)
+app.include_router(agent_catalog_router)
 app.include_router(data_router)
 app.include_router(permissions_router)
 app.include_router(artifact_router)

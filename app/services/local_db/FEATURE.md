@@ -20,8 +20,11 @@ phrase in the sync directories.
 - `repositories.py` — typed repo layer; ALL reads elsewhere in the app go
   through these (the replica IS the read path — never route local reads
   through the cloud "for consistency").
-- `sync_engine.py` — the pull-only replica engine: AIDream `/api/ai-models` +
-  `/api/agents` → `ai_models`/`prompt_builtins`/`agents`; the local tool
+- `sync_engine.py` — the pull-only replica engine: the Supabase RPC
+  `public.agx_get_list_full()` → `agents` (THE agent catalog; see
+  `app/services/agent_catalog/FEATURE.md`), AIDream `/api/ai-models` →
+  `ai_models`, AIDream `/api/agents` → `prompt_builtins` as a
+  variables/settings DETAIL cache only — never membership; the local tool
   catalog (`app.tools.catalog.get_catalog`, 108 entries) → `tools`. Runs at
   startup + every 10 min (`DEFAULT_SYNC_INTERVAL = 600`). It is the ONLY
   component allowed to write cloud catalog data into SQLite. Initial and
@@ -41,6 +44,13 @@ phrase in the sync directories.
   when the OS keychain/Fernet backend is unavailable; plaintext/base64 is not an
   equivalent fallback. Historical plaintext remains readable but is never newly written.
   Do not merge these secrets into the synced settings blob.
+- `agents` — the EXACT offline mirror of `agx_get_list_full()`: the 19
+  platform columns with the platform's names, plus `user_id`,
+  `catalog_position`, `raw_json`, `synced_at`. 🚨 Ruling D4 (Arman,
+  2026-09-08): matrx-local is never an exception — offline changes WHERE the
+  catalog lives, never WHAT it is. Never add, drop, rename, or re-sort a
+  column here. Before V32 this table was a 7-column projection of a different
+  catalog that could not see shared or org-shared agents.
 - `agent_execution_definitions` — fetch-through cache of the complete,
   authenticated AIDream execution definition consumed by matrx-ai's
   `ExecutionAgentSource`. It is deliberately separate from `agents` /
@@ -82,9 +92,13 @@ phrase in the sync directories.
   pinned by characterization) — truth lives in `sync_meta.status`.
 
 **Enforcement:** `tests/characterization/test_local_db_sync_characterization.py`
-(11 tests) + `tests/parity/test_sync_contract.py`. Red test = contract
++ `tests/parity/test_sync_contract.py` + `tests/parity/test_agent_catalog_contract.py`
+(the 19-key shape, RPC order, and the shared-agent membership guard). Red test = contract
 conversation, not a test edit.
 
 ## Change log
 
+- 2026-09-08 — Migration V32: `agents` became the exact mirror of
+  `agx_get_list_full()`; its source moved off the aidream `GET /agents` route,
+  which could not see shared or org-shared agents (ruling D4).
 - 2026-08-21 — Credential writes refuse plaintext/base64 substitution when keychain encryption is unavailable.

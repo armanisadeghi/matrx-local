@@ -55,7 +55,6 @@ _PUBLIC_PATHS = frozenset(
         "/chat/tools/by-category",
         "/chat/tools/anthropic",
         "/chat/models",  # read-only model list, no user data
-        "/chat/agents",  # read-only agent/prompt list, no user data — frontend calls this before auth
         "/chat/sync/status",  # read-only sync status — useful for diagnostics before auth
         "/chat/ai-status",  # read-only provider availability — needed before auth to show warnings
         "/remote-scraper/queue/poller-stats",
@@ -95,6 +94,17 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/cloud/reconfigure",
         "/settings",  # PUT /settings runs in parallel with /cloud/configure
         "/chat/sync/trigger",  # force sync — used from setup/diagnostics
+        # The agent catalog. These were PUBLIC while the list was builtins +
+        # the caller's own agents ("no user data"). Since 2026-09-08 the rows
+        # are the platform catalog (agx_get_list_full), which carries SHARED
+        # and ORG-SHARED agents including the sharer's email — user data by
+        # any reading. They stay reachable on direct loopback (the desktop
+        # webview reads the list before its JWT hydrates) but a tunnel caller
+        # now falls through to verified auth.
+        "/chat/agents",
+        "/agents/catalog",
+        "/agents/catalog/rpc",
+        "/agents/catalog/status",
         # Local llama-server bridge. The desktop UI/Rust shell may need to
         # register a just-started local model before Supabase auth has fully
         # hydrated in the webview; over the tunnel these still require auth.

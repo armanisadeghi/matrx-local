@@ -9,8 +9,10 @@ allowed to write cloud catalog data into SQLite.  All other components read
 from SQLite only (the replica IS the read path).
 
 Sync sources:
-  - AIDream server (/api/ai-models, /api/agents)
-    → ai_models, prompt_builtins, agents tables
+  - Supabase RPC public.agx_get_list_full() (the ONE platform agent catalog,
+    read as the signed-in user) → agents  [the mirror; ruling D4]
+  - AIDream server (/api/ai-models) → ai_models; (/api/agents) → prompt_builtins
+    as a variables/settings DETAIL cache only — never membership
   - Local tool catalog (app.tools.catalog.get_catalog)
     → tools table
 
@@ -25,7 +27,7 @@ Offline behaviour:
   and the app continues to work normally.
 
 User JWT:
-  The agent catalog (/api/agents) now REQUIRES a JWT — there is no public
+  The agent catalog RPC REQUIRES a JWT — there is no public
   builtins variant anymore. The engine reads the JWT from the auth_tokens
   SQLite table (written by React via POST /auth/token). If no valid token is
   stored, the agent sync is skipped entirely, the previously cached agents are
@@ -40,7 +42,6 @@ import json
 from typing import Any, Optional
 
 from app.common.system_logger import get_logger
-from app.services.local_db.database import get_db
 from app.services.local_db.repositories import (
     ModelsRepo,
     AgentsRepo,
@@ -51,6 +52,12 @@ from app.services.local_db.repositories import (
     TokenRepo,
 )
 from app.services.aidream.client import get_aidream_client, AIDreamOfflineError
+from app.services.agent_catalog.client import (
+    CATALOG_RPC,
+    AgentCatalogAuthError,
+    AgentCatalogError,
+    fetch_agent_catalog,
+)
 
 logger = get_logger()
 
@@ -287,113 +294,168 @@ class SyncEngine:
     # ------------------------------------------------------------------
 
     async def sync_agents(self) -> None:
-        """Pull the unified agent catalog from AIDream's GET /api/agents.
+        """Mirror the platform agent catalog into SQLite.
 
-        /api/agents requires a JWT and returns platform agents (formerly prompt
-        builtins, now rows in ``agent.definition``) plus the user's own agents,
-        as one list with no ownership field. We therefore treat the whole
-        catalog as the ``builtin`` source of the local cache.
+        THE SOURCE IS `public.agx_get_list_full()` — the same Supabase RPC
+        matrx-frontend, matrx-extend and workflow-studio read. Ruling D4
+        (Arman, 2026-09-08): matrx-local is never an exception; "offline" is a
+        data LOCATION, never a different list, structure or format. The rows
+        land in `agents` byte-identically, in the order the database returned
+        them.
 
-        Writes to two tables:
-          - prompt_builtins: the canonical catalog records (diagnostics count)
-          - agents: merged view consumed by the /chat/agents read route
+        Historically this method read the aidream route ``GET /agents``, whose
+        membership is builtins + agents the caller created — every SHARED and
+        ORG-SHARED agent was missing, and only 7 of the 19 catalog columns
+        arrived. That was a second catalog, and it is gone.
 
-        If no valid JWT is stored (logged out / expired token), the fetch is
-        SKIPPED, the previously cached catalog is KEPT, and the skip is logged
-        loudly — never a silent swallow, never a crash.
+        A second, clearly separate step refreshes `prompt_builtins`, the
+        variables/settings DETAIL cache the legacy `/chat/agents` projection
+        still reads. It is NOT a membership source and never contributes a row
+        to the catalog; it retires with that endpoint when the desktop adopts
+        the shared picker package.
+
+        Failure posture (nothing silent):
+          - no/expired JWT   -> loud skip, mirror kept, sync_meta `skipped`
+          - RPC auth refusal -> loud error, mirror kept, sync_meta `error`
+          - network failure  -> loud error, mirror kept, sync_meta `offline`
+          - empty result     -> mirror kept, sync_meta `error` (an empty
+                                catalog is indistinguishable from lost access)
         """
-        client = get_aidream_client()
-        if client is None:
-            logger.debug("[sync_engine] AIDream client not available — skipping agent sync")
-            await self._sync_meta.set_last_sync(
-                "agents",
-                status="skipped",
-                error_message="AIDream server URL unavailable from app config",
-            )
-            return
-
-        # ── Auth gate — /api/agents has no anonymous variant ───────────
+        # ── Auth gate — the catalog RPC has no anonymous variant ───────
         token_row = await self._token_repo.get()
         jwt: str | None = None
         user_id = ""
         if token_row and not self._token_repo.is_expired(token_row):
             jwt = token_row.get("access_token")
-            user_id = token_row.get("user_id", "")
+            user_id = token_row.get("user_id", "") or ""
 
         if not jwt:
             reason = "stored JWT is expired" if token_row else "no stored JWT"
             logger.warning(
-                "[sync_engine] Agent sync SKIPPED — %s. /api/agents requires "
-                "authentication (no public builtins endpoint anymore). Keeping "
-                "the previously cached agent catalog; sign in to refresh it.",
+                "[sync_engine] Agent catalog sync SKIPPED — %s. %s() is called as "
+                "the signed-in user (RLS decides membership), so there is no "
+                "anonymous refresh. Keeping the previously mirrored catalog; "
+                "sign in to refresh it.",
                 reason,
+                CATALOG_RPC,
             )
             await self._sync_meta.set_last_sync(
                 "agents",
                 status="skipped",
-                error_message=f"/api/agents requires auth — {reason}",
+                error_message=f"{CATALOG_RPC} requires authentication — {reason}",
             )
             return
 
-        # ── Fetch the unified catalog (platform + user agents) ─────────
-        agents_raw = await client.fetch_agents(jwt)
+        # ── The catalog: the RPC, verbatim ─────────────────────────────
+        try:
+            rows = await fetch_agent_catalog(jwt)
+        except AgentCatalogAuthError as exc:
+            logger.error(
+                "[sync_engine] Agent catalog sync FAILED — the stored JWT was "
+                "rejected by %s. Keeping the previously mirrored catalog rather "
+                "than serving a membership this user may no longer have; sign in "
+                "again to refresh. (%s)",
+                CATALOG_RPC,
+                exc,
+            )
+            await self._sync_meta.set_last_sync(
+                "agents", status="error", error_message=str(exc)
+            )
+            return
+        except AgentCatalogError as exc:
+            logger.error(
+                "[sync_engine] Agent catalog sync FAILED (%s) — keeping the "
+                "previously mirrored catalog. It may be stale.",
+                exc,
+            )
+            await self._sync_meta.set_last_sync(
+                "agents", status="offline", error_message=str(exc)
+            )
+            return
 
-        catalog_to_save: list[dict[str, Any]] = []
-        for a in agents_raw:
-            catalog_to_save.append({
+        if not rows:
+            logger.error(
+                "[sync_engine] %s returned ZERO rows — every user sees at least "
+                "the active builtins, so this is a failure, not an empty catalog. "
+                "Keeping the previously mirrored rows.",
+                CATALOG_RPC,
+            )
+            await self._sync_meta.set_last_sync(
+                "agents",
+                status="error",
+                error_message=f"{CATALOG_RPC} returned zero rows — mirror kept",
+            )
+            return
+
+        mirrored = await self._agents_repo.replace_catalog(rows, user_id=user_id)
+
+        await self._refresh_agent_detail_cache(jwt)
+
+        await self._sync_meta.set_last_sync("agents", last_hash=_hash_list(rows))
+
+        shared = sum(
+            1
+            for r in rows
+            if r.get("access_level") not in ("owner", "system") and not r.get("is_owner")
+        )
+        logger.info(
+            "[sync_engine] Agent catalog mirrored from %s: %d row(s) "
+            "(%d shared/org-shared)",
+            CATALOG_RPC,
+            mirrored,
+            shared,
+        )
+
+    async def _refresh_agent_detail_cache(self, jwt: str) -> None:
+        """Refresh `prompt_builtins` — variables/settings ONLY, never membership.
+
+        TEMPORARY. The legacy `/chat/agents` projection still hands the desktop
+        `variable_defaults` and `settings`, which the catalog RPC (correctly)
+        does not carry — no Matrx client's LIST rows do. Until the desktop
+        adopts the shared picker package, those details come from the aidream
+        route the catalog no longer uses for membership. A failure here degrades
+        the variables form, never the agent list, so it is logged and dropped.
+        """
+        client = get_aidream_client()
+        if client is None:
+            logger.debug(
+                "[sync_engine] AIDream client unavailable — agent detail cache "
+                "(variables/settings) not refreshed; the catalog itself is unaffected"
+            )
+            return
+        try:
+            detail_rows = await client.fetch_agents(jwt)
+        except Exception as exc:  # noqa: BLE001 — never let details break the catalog
+            logger.warning(
+                "[sync_engine] Agent DETAIL cache (variables/settings) refresh "
+                "failed: %s. The agent catalog itself synced fine; variable forms "
+                "may show stale or missing variables for new agents.",
+                exc,
+            )
+            return
+
+        details = [
+            {
                 "id": a.get("id", ""),
                 "name": a.get("name", ""),
                 "description": a.get("description", ""),
                 "category": a.get("category", ""),
                 "tags": a.get("tags") or [],
-                # New endpoint calls the variable list "variables"; the old
-                # builtins endpoint called it "variable_defaults".
                 "variable_defaults": a.get("variables") or a.get("variable_defaults") or [],
                 "settings": _extract_settings(a),
                 "is_active": True,
-            })
-
-        await self._builtins_repo.upsert_many(catalog_to_save)
-        catalog_keep = {a["id"] for a in catalog_to_save}
-        await self._builtins_repo.delete_missing(catalog_keep)
-
-        # ── Populate the merged agents table (read by /chat/agents) ────
-        catalog_agents: list[dict[str, Any]] = []
-        for a in catalog_to_save:
-            catalog_agents.append({
-                "id": a["id"],
-                "name": a["name"],
-                "description": a["description"],
-                "source": "builtin",
-                "user_id": "",
-                "category": a.get("category", ""),
-                "tags": a.get("tags") or [],
-                "is_favorite": False,
-                "variable_defaults": a["variable_defaults"],
-                "settings": a["settings"],
-                "is_active": True,
-            })
-
-        await self._agents_repo.upsert_many(catalog_agents)
-
-        # Guard the empty case: delete_by_source treats an empty keep set as
-        # "delete everything for this source". A transient empty payload from
-        # the server would otherwise wipe the entire agent list until the next
-        # successful sync — keep the cache instead.
-        if catalog_keep:
-            await self._agents_repo.delete_by_source("builtin", catalog_keep)
-            # The unified catalog now includes the user's own agents, so the
-            # legacy per-user "user" source is retired. Clear any stale rows
-            # left from the old two-endpoint sync so they don't linger.
-            await self._agents_repo.delete_by_source("user", set())
-
-        data_hash = _hash_list(catalog_to_save)
-        await self._sync_meta.set_last_sync("agents", last_hash=data_hash)
-
-        logger.info(
-            "[sync_engine] Agents synced: %d agents in unified catalog",
-            len(catalog_to_save),
-        )
+            }
+            for a in detail_rows
+            if a.get("id")
+        ]
+        if not details:
+            logger.warning(
+                "[sync_engine] Agent detail feed was empty — keeping the cached "
+                "variables/settings rather than wiping them"
+            )
+            return
+        await self._builtins_repo.upsert_many(details)
+        await self._builtins_repo.delete_missing({d["id"] for d in details})
 
     # ------------------------------------------------------------------
     # Tools sync

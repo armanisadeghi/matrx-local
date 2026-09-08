@@ -1331,6 +1331,72 @@ CREATE TABLE IF NOT EXISTS claude_session_synced (
 )
 """
 
+# ------------------------------------------------------------------
+# Migration 32: `agents` becomes the EXACT mirror of agx_get_list_full()
+#
+# 🚨 Ruling D4 (Arman, 2026-09-08): matrx-local is never an exception. The
+# offline mirror changes WHERE the catalog is stored, never WHAT it is. Before
+# this migration the desktop's offline list was a different catalog from every
+# other Matrx client: 7 of the platform's 19 catalog columns, and a membership
+# (builtins + own agents) that silently omitted every shared and org-shared
+# agent. Both are gone.
+#
+# The table now carries the 19 columns `public.agx_get_list_full()` returns,
+# with the platform's exact names, plus four bookkeeping columns this sidecar
+# owns (they are prefixed/suffixed so they can never be confused with platform
+# columns):
+#   user_id          — whose JWT produced these rows (membership is per-user)
+#   catalog_position — the row's index in the RPC's own result order, so the
+#                      served list replays the database's ORDER BY exactly
+#   raw_json         — the RPC row verbatim, as received
+#   synced_at        — when this row was last mirrored
+#
+# The old columns (source, variable_defaults, settings, and the local-clock
+# `updated_at`) are gone: `updated_at` is now the PLATFORM column, and the
+# projection columns were never part of the catalog contract. This table is a
+# pure cache, so the migration REBUILDS it empty rather than back-filling —
+# every row is re-fetched on the next `SyncEngine.sync_agents()` run, which
+# fires at startup. `prompt_builtins` (the separate variables/settings detail
+# cache read by the legacy /chat/agents projection) is untouched.
+# ------------------------------------------------------------------
+
+_V32_AGENTS_PLATFORM_CATALOG = """
+DROP TABLE IF EXISTS agents;
+
+CREATE TABLE agents (
+    -- ── The 19 columns of public.agx_get_list_full(), verbatim ────────
+    id              TEXT PRIMARY KEY,
+    agent_type      TEXT,
+    name            TEXT,
+    description     TEXT,
+    model_id        TEXT,
+    category        TEXT,
+    tags            TEXT,           -- JSON array text (text[] on the wire)
+    is_active       INTEGER,
+    is_archived     INTEGER,
+    is_favorite     INTEGER,
+    created_by      TEXT,
+    organization_id TEXT,
+    task_id         TEXT,
+    source_agent_id TEXT,
+    created_at      TEXT,           -- ISO-8601, exactly as returned
+    updated_at      TEXT,           -- ISO-8601, exactly as returned
+    is_owner        INTEGER,
+    access_level    TEXT,
+    shared_by_email TEXT,
+    -- ── Sidecar bookkeeping (never served as catalog data) ────────────
+    user_id          TEXT NOT NULL DEFAULT '',
+    catalog_position INTEGER NOT NULL DEFAULT 0,
+    raw_json         TEXT NOT NULL DEFAULT '{}',
+    synced_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_user_id ON agents(user_id);
+CREATE INDEX IF NOT EXISTS idx_agents_access_level ON agents(access_level);
+CREATE INDEX IF NOT EXISTS idx_agents_category ON agents(category);
+CREATE INDEX IF NOT EXISTS idx_agents_position ON agents(catalog_position);
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1363,4 +1429,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (29, _V29_CODING_SESSION_METADATA_SYNC_OPERATIONS),
     (30, _V30_CODING_SESSION_RUNTIME_JOURNAL),
     (31, _V31_CLAUDE_SESSION_SYNCED),
+    (32, _V32_AGENTS_PLATFORM_CATALOG),
 ]

@@ -1464,8 +1464,17 @@ async def debug_state() -> dict[str, Any]:
         sync_meta = SyncMetaRepo()
         report["sqlite"] = {
             "ai_models_cached": await models_repo.count(),
-            "agents_cached_builtin": len(await agents_repo.list_all(source="builtin")),
-            "agents_cached_user": len(await agents_repo.list_all(source="user")),
+            # Counted off the mirrored catalog rows: `access_level` is the
+            # database's own membership answer, never a locally invented one.
+            "agents_cached_total": await agents_repo.count(),
+            "agents_cached_builtin": sum(
+                1 for r in await agents_repo.list_catalog() if r["access_level"] == "system"
+            ),
+            "agents_cached_shared": sum(
+                1
+                for r in await agents_repo.list_catalog()
+                if r["access_level"] not in ("system", "owner") and not r["is_owner"]
+            ),
             "tools_cached": await tools_repo.count(),
             "sync_status": await sync_meta.get_all_sync_status(),
         }

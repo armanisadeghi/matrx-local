@@ -5,7 +5,8 @@ Provides:
   GET  /chat/tools/by-category       — tool schemas grouped by category
   GET  /chat/tools/anthropic         — Anthropic Messages API format
   GET  /chat/models                  — AI models from local SQLite cache
-  GET  /chat/agents                  — agents/prompts from local SQLite cache
+  GET  /chat/agents                  — LEGACY bucketed agent list (retiring;
+                                       new callers use GET /agents/catalog)
   GET  /chat/local-tools             — local OS tools registered in matrx-ai registry
                                        (each item carries `enabled` from the
                                        user's cloud_tools exposure setting)
@@ -352,138 +353,62 @@ async def list_models() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _shape_agent_from_sqlite(row: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a SQLite agents row into the API response shape."""
-    import json as _json
-    settings: dict[str, Any] = row.get("settings") or {}
-    if isinstance(settings, str):
-        try:
-            settings = _json.loads(settings)
-        except Exception:
-            settings = {}
-    variable_defaults = row.get("variable_defaults") or []
-    if isinstance(variable_defaults, str):
-        try:
-            variable_defaults = _json.loads(variable_defaults)
-        except Exception:
-            variable_defaults = []
-    tags = row.get("tags") or []
-    if isinstance(tags, str):
-        try:
-            tags = _json.loads(tags)
-        except Exception:
-            tags = []
-    return {
-        "id": row.get("id", ""),
-        "name": row.get("name", ""),
-        "description": row.get("description") or "",
-        "source": row.get("source", "builtin"),
-        "variable_defaults": variable_defaults,
-        "category": row.get("category") or None,
-        "tags": tags,
-        "is_favorite": bool(row.get("is_favorite", False)),
-        "settings": {
-            "model_id": settings.get("model_id"),
-            "temperature": settings.get("temperature"),
-            "max_tokens": settings.get("max_tokens") or settings.get("max_output_tokens"),
-            "stream": settings.get("stream", True),
-            "tools": settings.get("tools") or [],
-        },
-    }
-
-
 @router.get("/agents")
 async def list_agents() -> dict[str, Any]:
-    """Return all agents from local SQLite cache.
+    """LEGACY bucketed agent list, derived from the mirrored platform catalog.
 
-    Sources:
-      - builtins: prompt_builtins table (system agents, always available)
-      - user: prompts table (user's own agents, populated when JWT is available)
-      - shared: not yet supported
+    The rows come from the SQLite mirror of `public.agx_get_list_full()` —
+    the same catalog every other Matrx client reads (ruling D4). `shared` is
+    now a real bucket; it was hardcoded `[]` here until 2026-09-08 while the
+    sync source (the aidream `GET /agents` route) could not even see shared or
+    org-shared agents.
 
-    SQLite is populated by SyncEngine. If empty and never synced, triggers
-    a background sync and returns syncing=True.
+    🚨 RETIRING. New consumers read `GET /agents/catalog`, which serves the
+    19-column rows unchanged. This endpoint dies with the desktop's adoption of
+    the shared picker package; do not add fields to it.
     """
-    from app.services.local_db.repositories import AgentsRepo, SyncMetaRepo, TokenRepo
+    from app.api.agent_legacy_shape import build_legacy_payload
+    from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
     from app.services.local_db.sync_engine import get_sync_engine
 
-    logger.info("[chat_routes /agents] Request received")
+    payload = await build_legacy_payload(source="sqlite")
 
-    # Resolve the authenticated user_id from the stored JWT so we only return
-    # this user's own agents (builtins are always included).
-    user_id: str | None = None
-    jwt: str | None = None
-    try:
-        token_repo = TokenRepo()
-        token_row = await token_repo.get()
-        if token_row and not token_repo.is_expired(token_row):
-            user_id = token_row.get("user_id") or None
-            jwt = token_row.get("access_token") or None
-    except Exception:
-        pass
-
-    logger.info("[chat_routes /agents] user_id from stored JWT: %s", user_id)
-
-    repo = AgentsRepo()
-    all_agents = await repo.list_all(user_id=user_id)
-
-    builtins = [_shape_agent_from_sqlite(a) for a in all_agents if a.get("source") == "builtin"]
-    user_agents = [_shape_agent_from_sqlite(a) for a in all_agents if a.get("source") == "user"]
-
-    logger.info(
-        "[chat_routes /agents] Found in SQLite: %d builtins, %d user agents",
-        len(builtins), len(user_agents),
-    )
-
-    sync_meta = SyncMetaRepo()
-    meta = await sync_meta.get_last_sync("agents")
+    meta = await SyncMetaRepo().get_last_sync("agents")
     never_synced = meta is None or meta.get("last_synced_at") is None
 
-    if not builtins:
-        if never_synced:
+    if payload["totals"]["total"] == 0:
+        # An empty mirror is never a real catalog (every signed-in user sees
+        # the active builtins), so say plainly whether a refresh is running.
+        token_row = await TokenRepo().get()
+        has_jwt = bool(token_row and not TokenRepo().is_expired(token_row))
+        if never_synced or has_jwt:
             logger.info(
-                "[chat_routes /agents] SQLite empty and never synced — triggering background sync"
+                "[chat_routes /agents] Agent mirror empty (never_synced=%s, jwt=%s) "
+                "— starting a catalog sync",
+                never_synced, has_jwt,
             )
-            engine = get_sync_engine()
-            fire_and_forget(engine.sync_agents(), name="agents-sync")
-            return {
-                "builtins": [], "user": [], "shared": [],
-                "source": "sqlite", "syncing": True,
-                "totals": {"builtins": 0, "user": 0, "shared": 0, "total": 0},
-            }
-        logger.info("[chat_routes /agents] SQLite empty but sync ran — no builtins from server")
-
-    # If we have a JWT but no user agents, kick a background sync to fetch them.
-    # This covers the case where builtins synced before the JWT was available.
-    if jwt and user_id and not user_agents:
-        logger.info(
-            "[chat_routes /agents] No user agents in SQLite but JWT is available — "
-            "triggering background agent sync for user_id=%s",
-            user_id,
+            global _agents_sync_task
+            existing = _agents_sync_task
+            if existing is None or existing.done():
+                # /chat/agents is polled; reuse the in-flight sync instead of
+                # spawning one per poll.
+                _agents_sync_task = asyncio.create_task(get_sync_engine().sync_agents())
+            payload["syncing"] = True
+            return payload
+        logger.warning(
+            "[chat_routes /agents] Agent mirror is empty and no valid JWT is "
+            "stored — the catalog RPC is called as the signed-in user, so the "
+            "list stays empty until sign-in"
         )
-        global _agents_sync_task
-        existing = _agents_sync_task
-        if existing is None or existing.done():
-            engine = get_sync_engine()
-            # Retain the task (the loop holds only a weak ref) and reuse it
-            # while in flight — /chat/agents is polled, and each poll used to
-            # spawn ANOTHER full server sync when the user had zero agents.
-            _agents_sync_task = asyncio.create_task(engine.sync_agents())
 
-    total = len(builtins) + len(user_agents)
-    return {
-        "builtins": sorted(builtins, key=lambda x: x["name"]),
-        "user": sorted(user_agents, key=lambda x: x["name"]),
-        "shared": [],
-        "source": "sqlite",
-        "syncing": False,
-        "totals": {
-            "builtins": len(builtins),
-            "user": len(user_agents),
-            "shared": 0,
-            "total": total,
-        },
-    }
+    payload["syncing"] = False
+    logger.info(
+        "[chat_routes /agents] %d builtin / %d user / %d shared from the mirror",
+        payload["totals"]["builtins"],
+        payload["totals"]["user"],
+        payload["totals"]["shared"],
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +428,7 @@ async def chat_sync_status() -> dict[str, Any]:
     all_meta = await sync_meta.get_all_sync_status()
 
     models_count = await ModelsRepo().count()
-    agents_count_total = len(await AgentsRepo().list_all())
+    agents_count_total = await AgentsRepo().count()
     builtins_count = await PromptBuiltinsRepo().count()
 
     user_id: str | None = None

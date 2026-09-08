@@ -59,25 +59,31 @@ _MOCK_MODEL = {
 
 _AGENT_ID = str(uuid.uuid4())
 _MOCK_AGENT = {
+    # A complete `agx_get_list_full()` row — the ONLY shape the `agents`
+    # mirror holds since 2026-09-08 (ruling D4: matrx-local is never an
+    # exception to the platform catalog). The list row is deliberately
+    # NON-EXECUTABLE: it carries no prompt, tools, or settings, and if Local
+    # ever regresses to running one, the executable-definition tests below
+    # fail loudly.
     "id": _AGENT_ID,
+    "agent_type": "builtin",
     "name": "Smoke Agent",
     "description": "In-process smoke agent",
-    "source": "builtin",
-    "user_id": "",
+    "model_id": None,
     "category": "test",
     "tags": [],
-    "is_favorite": False,
-    "variable_defaults": [],
-    "settings": {
-        # Listing metadata is deliberately non-executable. If Local ever
-        # regresses to interpreting this projection, the test fails loudly.
-        "model_id": "must-never-be-used",
-        "temperature": 0.2,
-        "max_tokens": 512,
-        "stream": True,
-        "tools": [],
-    },
     "is_active": True,
+    "is_archived": False,
+    "is_favorite": False,
+    "created_by": "00000000-0000-0000-0000-0000000000aa",
+    "organization_id": None,
+    "task_id": None,
+    "source_agent_id": None,
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "updated_at": "2026-01-01T00:00:00+00:00",
+    "is_owner": False,
+    "access_level": "system",
+    "shared_by_email": None,
 }
 
 _MOCK_EXECUTION_DEFINITION = {

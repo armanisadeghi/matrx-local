@@ -9,7 +9,13 @@ Injection points used:
     LocalDatabase(tmp_path/...) so every repo constructed via get_db()
     lands in the throwaway DB.
   - app.services.local_db.sync_engine.get_aidream_client is monkeypatched
-    for the models/agents pulls.
+    for the models pull and the (legacy) agent variables/settings detail cache.
+  - app.services.local_db.sync_engine.fetch_agent_catalog is monkeypatched
+    for the AGENT CATALOG pull. Since 2026-09-08 the catalog's source is the
+    Supabase RPC ``public.agx_get_list_full()`` — the same one matrx-frontend,
+    matrx-extend and workflow-studio read (ruling D4: matrx-local is never an
+    exception). It is NOT the aidream ``GET /agents`` route, whose membership
+    silently omitted every shared and org-shared agent.
 
 Each test runs its whole scenario inside ONE asyncio.run() so the aiosqlite
 connection lives and dies on a single event loop.
@@ -30,6 +36,11 @@ from app.services.local_db.sync_engine import (
     SyncEngine,
     _extract_settings,
     _hash_list,
+)
+from app.services.agent_catalog.client import (
+    CATALOG_COLUMNS,
+    AgentCatalogAuthError,
+    AgentCatalogError,
 )
 from app.services.aidream.client import AIDreamOfflineError
 from app.tools.catalog import get_catalog
@@ -64,16 +75,108 @@ class FakeAIDreamClient:
         return self._agents
 
 
+class FakeTokenRepo:
+    """A signed-in user, without touching the OS keychain."""
+
+    def __init__(self, jwt: str = "jwt-abc", user_id: str = "user-1") -> None:
+        self._row = {"access_token": jwt, "user_id": user_id}
+
+    async def get(self) -> dict[str, Any]:
+        return dict(self._row)
+
+    def is_expired(self, token_row: dict[str, Any]) -> bool:
+        return False
+
+
+class FakeCatalog:
+    """Stands in for the ``agx_get_list_full`` PostgREST read."""
+
+    def __init__(
+        self,
+        rows: list[dict[str, Any]] | None = None,
+        raises: Exception | None = None,
+    ) -> None:
+        self.rows = rows if rows is not None else []
+        self.raises = raises
+        self.jwts: list[str] = []
+
+    async def __call__(self, jwt: str) -> list[dict[str, Any]]:
+        self.jwts.append(jwt)
+        if self.raises is not None:
+            raise self.raises
+        return [dict(r) for r in self.rows]
+
+
+def _catalog_row(**overrides: Any) -> dict[str, Any]:
+    """A complete 19-column ``agx_get_list_full()`` row."""
+    row: dict[str, Any] = {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "agent_type": "user",
+        "name": "Owned Agent",
+        "description": "mine",
+        "model_id": "10000000-0000-0000-0000-000000000001",
+        "category": "general",
+        "tags": ["alpha", "beta"],
+        "is_active": True,
+        "is_archived": False,
+        "is_favorite": True,
+        "created_by": "user-1",
+        "organization_id": "20000000-0000-0000-0000-000000000001",
+        "task_id": None,
+        "source_agent_id": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-02-01T00:00:00+00:00",
+        "is_owner": True,
+        "access_level": "owner",
+        "shared_by_email": None,
+    }
+    row.update(overrides)
+    assert set(row) == set(CATALOG_COLUMNS), "fixture drifted from the RPC contract"
+    return row
+
+
+SHARED_ROW = _catalog_row(
+    id="00000000-0000-0000-0000-000000000002",
+    name="Shared With Me",
+    description="someone else's, shared",
+    is_favorite=False,
+    is_owner=False,
+    access_level="view",
+    created_by="user-2",
+    shared_by_email="owner@example.com",
+    updated_at="2026-01-15T00:00:00+00:00",
+)
+
+BUILTIN_ROW = _catalog_row(
+    id="00000000-0000-0000-0000-000000000003",
+    agent_type="builtin",
+    name="General Chat",
+    is_favorite=False,
+    is_owner=False,
+    access_level="system",
+    tags=[],
+    category=None,
+    organization_id=None,
+    shared_by_email=None,
+    updated_at="2026-01-10T00:00:00+00:00",
+)
+
+
 def run_scenario(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     scenario: Callable[[SyncEngine, LocalDatabase], Awaitable[None]],
     *,
     client: FakeAIDreamClient | None = None,
+    catalog: FakeCatalog | None = None,
+    signed_in: bool = False,
 ) -> None:
     """Connect a throwaway SQLite DB, run `scenario`, always close."""
     monkeypatch.setattr(
         sync_engine_module, "get_aidream_client", lambda: client
+    )
+    monkeypatch.setattr(
+        sync_engine_module, "fetch_agent_catalog", catalog or FakeCatalog()
     )
 
     async def main() -> None:
@@ -82,6 +185,8 @@ def run_scenario(
         monkeypatch.setattr(database_module, "_instance", db)
         try:
             engine = SyncEngine()  # repos resolve get_db() -> our tmp db
+            if signed_in:
+                engine._token_repo = FakeTokenRepo()
             await scenario(engine, db)
         finally:
             await db.close()
@@ -221,42 +326,169 @@ def test_sync_models_without_client_records_skipped(
 
 
 # ---------------------------------------------------------------------------
-# Agents sync — JWT gate keeps the cache
+# Agent catalog sync — source, shape, membership, failure posture
 # ---------------------------------------------------------------------------
 
 
 def test_sync_agents_without_jwt_skips_and_keeps_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client = FakeAIDreamClient(agents=[{"id": "a-new", "name": "New Agent"}])
+    catalog = FakeCatalog(rows=[_catalog_row()])
 
     async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
-        # Pre-seed a cached agent from a previous successful sync.
-        await engine._agents_repo.upsert_many(
-            [
-                {
-                    "id": "a-cached",
-                    "name": "Cached Agent",
-                    "description": "",
-                    "source": "builtin",
-                    "user_id": "",
-                    "is_active": True,
-                }
-            ]
-        )
+        # Pre-seed a mirrored row from a previous successful sync.
+        await engine._agents_repo.upsert(BUILTIN_ROW, user_id="user-1")
 
-        await engine.sync_agents()  # no token stored → must skip
+        await engine.sync_agents()  # no token stored -> must skip
 
-        # The fetch never happened, and the cache survived.
-        assert client.fetch_agents_jwts == []
+        # The RPC was never called, and the mirror survived.
+        assert catalog.jwts == []
         rows = await db.fetchall("SELECT id FROM agents")
-        assert [r["id"] for r in rows] == ["a-cached"]
+        assert [r["id"] for r in rows] == [BUILTIN_ROW["id"]]
 
         meta = await _sync_status(db, "agents")
         assert meta is not None and meta["status"] == "skipped"
-        assert "requires auth" in (meta["error_message"] or "")
+        assert "requires authentication" in (meta["error_message"] or "")
 
-    run_scenario(tmp_path, monkeypatch, scenario, client=client)
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog)
+
+
+def test_sync_agents_mirrors_the_rpc_rows_verbatim_and_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ruling D4: the mirror changes WHERE the catalog lives, never WHAT it is.
+
+    Every one of the 19 columns survives with its JSON type, and the rows come
+    back in the order the database returned them — not re-sorted locally.
+    """
+    owned = _catalog_row()
+    rpc_rows = [owned, SHARED_ROW, BUILTIN_ROW]
+    catalog = FakeCatalog(rows=rpc_rows)
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine.sync_agents()
+
+        assert catalog.jwts == ["jwt-abc"]
+        mirrored = await engine._agents_repo.list_catalog()
+        assert mirrored == rpc_rows, (
+            "the SQLite mirror must return the RPC rows byte-shape identical "
+            "and in the RPC's own order"
+        )
+
+        meta = await _sync_status(db, "agents")
+        assert meta is not None and meta["status"] == "success"
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
+
+
+def test_sync_agents_keeps_shared_and_org_shared_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE DEFECT THIS FIXES: shared agents used to be structurally impossible.
+
+    The old source (aidream ``GET /agents``) returned builtins plus rows the
+    caller created, so no shared or org-shared agent could ever reach the
+    desktop. This test fails the moment a membership filter creeps back in.
+    """
+    catalog = FakeCatalog(rows=[SHARED_ROW, BUILTIN_ROW])
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine.sync_agents()
+
+        rows = {r["id"]: r for r in await engine._agents_repo.list_catalog()}
+        shared = rows[SHARED_ROW["id"]]
+        assert shared["is_owner"] is False
+        assert shared["access_level"] == "view"
+        assert shared["shared_by_email"] == "owner@example.com"
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
+
+
+def test_sync_agents_auth_failure_is_loud_and_keeps_the_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An expired JWT never silently downgrades to a stale membership claim."""
+    catalog = FakeCatalog(raises=AgentCatalogAuthError("rejected", status_code=401))
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine._agents_repo.upsert(BUILTIN_ROW, user_id="user-1")
+        await engine.sync_agents()
+
+        rows = await db.fetchall("SELECT id FROM agents")
+        assert [r["id"] for r in rows] == [BUILTIN_ROW["id"]]
+        meta = await _sync_status(db, "agents")
+        assert meta is not None and meta["status"] == "error"
+        assert "rejected" in (meta["error_message"] or "")
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
+
+
+def test_sync_agents_network_failure_keeps_the_mirror_and_records_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = FakeCatalog(raises=AgentCatalogError("agx_get_list_full unreachable: boom"))
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine._agents_repo.upsert(BUILTIN_ROW, user_id="user-1")
+        await engine.sync_agents()
+
+        rows = await db.fetchall("SELECT id FROM agents")
+        assert [r["id"] for r in rows] == [BUILTIN_ROW["id"]]
+        meta = await _sync_status(db, "agents")
+        assert meta is not None and meta["status"] == "offline"
+        assert "unreachable" in (meta["error_message"] or "")
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
+
+
+def test_sync_agents_empty_rpc_result_never_wipes_the_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every signed-in user sees the active builtins — zero rows is a failure."""
+    catalog = FakeCatalog(rows=[])
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine._agents_repo.upsert(BUILTIN_ROW, user_id="user-1")
+        await engine.sync_agents()
+
+        rows = await db.fetchall("SELECT id FROM agents")
+        assert [r["id"] for r in rows] == [BUILTIN_ROW["id"]]
+        meta = await _sync_status(db, "agents")
+        assert meta is not None and meta["status"] == "error"
+        assert "zero rows" in (meta["error_message"] or "")
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
+
+
+def test_agent_membership_never_comes_from_the_aidream_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The aidream feed may only fill the variables/settings DETAIL cache.
+
+    If a row it returns ever reaches the `agents` catalog table, matrx-local
+    has grown a second catalog again — exactly the defect ruling D4 forbids.
+    """
+    client = FakeAIDreamClient(
+        agents=[{"id": "detail-only", "name": "Detail Only", "variables": [{"name": "x"}]}]
+    )
+    catalog = FakeCatalog(rows=[BUILTIN_ROW])
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine.sync_agents()
+
+        catalog_ids = [r["id"] for r in await db.fetchall("SELECT id FROM agents")]
+        assert catalog_ids == [BUILTIN_ROW["id"]]
+        assert "detail-only" not in catalog_ids
+
+        # ...but it DID land in the detail cache the legacy projection reads.
+        detail_ids = [
+            r["id"] for r in await db.fetchall("SELECT id FROM prompt_builtins")
+        ]
+        assert detail_ids == ["detail-only"]
+
+    run_scenario(
+        tmp_path, monkeypatch, scenario, client=client, catalog=catalog, signed_in=True
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,6 @@ from pydantic import BaseModel
 from app.common.system_logger import get_logger
 from app.services.local_db.repositories import (
     ModelsRepo,
-    AgentsRepo,
     ConversationsRepo,
     MessagesRepo,
     ToolsRepo,
@@ -112,37 +111,17 @@ async def list_models() -> dict[str, Any]:
 
 @router.get("/agents")
 async def list_agents() -> dict[str, Any]:
-    """Return all agents from the local cache.
+    """LEGACY bucketed agent list from the mirrored platform catalog.
 
-    Resolves the authenticated user_id from the stored JWT so only this
-    user's own prompts are returned alongside builtins.
+    Same projection as `GET /chat/agents` (one implementation:
+    `app/api/agent_legacy_shape.py`) so the two endpoints can never drift.
+    `shared` was a hardcoded `[]` here too until 2026-09-08. Retiring with the
+    desktop's adoption of the shared picker package — new callers read
+    `GET /agents/catalog`.
     """
-    from app.services.local_db.repositories import TokenRepo
+    from app.api.agent_legacy_shape import build_legacy_payload
 
-    user_id: str | None = None
-    try:
-        token_row = await TokenRepo().get()
-        if token_row:
-            user_id = token_row.get("user_id") or None
-    except Exception:
-        pass
-
-    repo = AgentsRepo()
-    all_agents = await repo.list_all(user_id=user_id)
-    builtins = [a for a in all_agents if a.get("source") == "builtin"]
-    user = [a for a in all_agents if a.get("source") == "user"]
-    return {
-        "builtins": builtins,
-        "user": user,
-        "shared": [],
-        "source": "local_db",
-        "totals": {
-            "builtins": len(builtins),
-            "user": len(user),
-            "shared": 0,
-            "total": len(builtins) + len(user),
-        },
-    }
+    return await build_legacy_payload(source="local_db")
 
 
 # ------------------------------------------------------------------

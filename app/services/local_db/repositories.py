@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.common.system_logger import get_logger
+from app.services.agent_catalog.client import CATALOG_COLUMNS as AGENT_CATALOG_COLUMNS
 from app.services.local_db.database import get_db, LocalDatabase
 
 logger = get_logger()
@@ -137,111 +138,118 @@ class ModelsRepo:
 # ==================================================================
 
 class AgentsRepo:
+    """The offline mirror of `public.agx_get_list_full()` — nothing else.
+
+    🚨 Ruling D4 (Arman, 2026-09-08): "the SQL light mirror is simply designed
+    to give a user offline access, and so nothing should ever change ... the
+    structure, the format, and everything else must be absolutely identical."
+    Every method here therefore moves the RPC's own 19-column rows in and out
+    UNCHANGED — same keys, same JSON types, same order. No projection, no
+    derived `source` field, no local sort. Anything that reshapes a catalog row
+    belongs in the caller that needs the legacy shape, never here.
+    """
+
+    #: The 19 platform columns, in the RPC's declared order.
+    CATALOG_COLUMNS: tuple[str, ...] = AGENT_CATALOG_COLUMNS
+    _BOOL_COLUMNS = frozenset({"is_active", "is_archived", "is_favorite", "is_owner"})
+    _JSON_COLUMNS = frozenset({"tags"})
+
     def __init__(self, db: LocalDatabase | None = None):
         self._db = db or get_db()
 
-    async def list_all(
-        self,
-        source: str | None = None,
-        user_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return active agents.
+    # -- reads ---------------------------------------------------------
 
-        For user-sourced agents, pass user_id to restrict results to that user.
-        Builtins (source='builtin') are always returned regardless of user_id.
-        If user_id is None, all agents are returned (use only for admin/debug).
+    async def list_catalog(self) -> list[dict[str, Any]]:
+        """Every mirrored row, replayed in the exact order the RPC returned.
+
+        `agx_get_list_full()` orders its user rows (favourites first, then
+        `updated_at DESC`, then `id`) and then appends builtins; that whole
+        sequence is what a browser sees, so `catalog_position` replays it
+        rather than re-deriving an order the database already decided.
         """
-        if user_id is not None:
-            # Return builtins unconditionally + user agents only for this user.
-            rows = await self._db.fetchall(
-                "SELECT * FROM agents WHERE is_active = 1 "
-                "AND (source = 'builtin' OR user_id = ?) "
-                "ORDER BY source, name",
-                (user_id,),
-            )
-        elif source:
-            rows = await self._db.fetchall(
-                "SELECT * FROM agents WHERE source = ? AND is_active = 1 ORDER BY name",
-                (source,),
-            )
-        else:
-            rows = await self._db.fetchall(
-                "SELECT * FROM agents WHERE is_active = 1 ORDER BY source, name"
-            )
-        return [self._deserialize(r) for r in rows]
+        rows = await self._db.fetchall(
+            "SELECT * FROM agents ORDER BY catalog_position, id"
+        )
+        return [self._to_catalog_row(r) for r in rows]
 
     async def get(self, agent_id: str) -> dict[str, Any] | None:
         row = await self._db.fetchone("SELECT * FROM agents WHERE id = ?", (agent_id,))
-        return self._deserialize(row) if row else None
+        return self._to_catalog_row(row) if row else None
 
-    async def upsert(self, agent: dict[str, Any]) -> None:
-        await self._db.execute(
-            """INSERT INTO agents (id, name, description, source, user_id,
-               category, tags, is_favorite, variable_defaults, settings,
-               is_active, raw_json, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 name=excluded.name, description=excluded.description,
-                 source=excluded.source, user_id=excluded.user_id,
-                 category=excluded.category, tags=excluded.tags,
-                 is_favorite=excluded.is_favorite,
-                 variable_defaults=excluded.variable_defaults,
-                 settings=excluded.settings, is_active=excluded.is_active,
-                 raw_json=excluded.raw_json, updated_at=excluded.updated_at""",
-            (
-                agent["id"],
-                agent.get("name", ""),
-                agent.get("description", ""),
-                agent.get("source", "builtin"),
-                agent.get("user_id", ""),
-                agent.get("category", ""),
-                _json_dumps(agent.get("tags", [])),
-                int(bool(agent.get("is_favorite", False))),
-                _json_dumps(agent.get("variable_defaults", [])),
-                _json_dumps(agent.get("settings", {})),
-                int(agent.get("is_active", True)),
-                _json_dumps(agent),
-                _now(),
-            ),
-        )
-        await self._db.commit()
+    async def count(self) -> int:
+        row = await self._db.fetchone("SELECT COUNT(*) AS cnt FROM agents")
+        return int(row["cnt"]) if row else 0
 
-    async def upsert_many(self, agents: list[dict[str, Any]]) -> None:
-        for a in agents:
-            await self.upsert(a)
+    async def mirror_user_id(self) -> str:
+        """Whose JWT produced the mirrored rows ('' when never synced)."""
+        row = await self._db.fetchone("SELECT user_id FROM agents LIMIT 1")
+        return str(row["user_id"]) if row else ""
 
-    async def delete_by_source(
-        self, source: str, keep_ids: set[str], user_id: str | None = None
+    # -- writes --------------------------------------------------------
+
+    async def replace_catalog(
+        self, rows: list[dict[str, Any]], *, user_id: str
     ) -> int:
-        """Delete agents by source, keeping only keep_ids.
+        """Replace the whole mirror with one RPC result, in one transaction.
 
-        For user-sourced agents, pass user_id to scope the delete to that user
-        only — prevents one user's sync from removing another user's agents.
+        The catalog RPC answers a membership question, so a row that stopped
+        being returned has stopped being in this user's list — replacing the
+        table is the only correct semantics. The caller guards the empty case;
+        this method does exactly what it is told.
         """
-        user_clause = " AND user_id = ?" if (source == "user" and user_id is not None) else ""
-        user_args: tuple = (user_id,) if (source == "user" and user_id is not None) else ()
-
-        if not keep_ids:
-            cursor = await self._db.execute(
-                f"DELETE FROM agents WHERE source = ?{user_clause}",
-                (source, *user_args),
-            )
-        else:
-            placeholders = ",".join("?" for _ in keep_ids)
-            cursor = await self._db.execute(
-                f"DELETE FROM agents WHERE source = ? AND id NOT IN ({placeholders}){user_clause}",
-                (source, *keep_ids, *user_args),
-            )
+        await self._db.execute("DELETE FROM agents")
+        for position, row in enumerate(rows):
+            await self._insert(row, user_id=user_id, position=position)
         await self._db.commit()
-        return cursor.rowcount
+        return len(rows)
 
-    def _deserialize(self, row) -> dict[str, Any]:
+    async def upsert(self, row: dict[str, Any], *, user_id: str = "", position: int = 0) -> None:
+        """Mirror ONE catalog row (used by tests and targeted refreshes)."""
+        await self._insert(row, user_id=user_id, position=position)
+        await self._db.commit()
+
+    async def _insert(self, row: dict[str, Any], *, user_id: str, position: int) -> None:
+        columns = list(self.CATALOG_COLUMNS)
+        placeholders = ",".join("?" for _ in columns) + ",?,?,?,?"
+        assignments = ",".join(f"{c}=excluded.{c}" for c in columns)
+        values = [self._encode(c, row.get(c)) for c in columns]
+        values += [user_id, position, _json_dumps(row), _now()]
+        await self._db.execute(
+            f"INSERT INTO agents ({','.join(columns)},user_id,catalog_position,raw_json,synced_at) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT(id) DO UPDATE SET {assignments}, user_id=excluded.user_id, "
+            "catalog_position=excluded.catalog_position, raw_json=excluded.raw_json, "
+            "synced_at=excluded.synced_at",
+            tuple(values),
+        )
+
+    # -- codec ---------------------------------------------------------
+
+    def _encode(self, column: str, value: Any) -> Any:
+        if value is None:
+            return None
+        if column in self._BOOL_COLUMNS:
+            return 1 if value else 0
+        if column in self._JSON_COLUMNS:
+            return _json_dumps(value)
+        return value if isinstance(value, str) else str(value)
+
+    def _to_catalog_row(self, row) -> dict[str, Any]:
+        """Rebuild the RPC row EXACTLY: same 19 keys, same JSON types."""
         d = _row_to_dict(row)
-        d["variable_defaults"] = _json_loads(d.get("variable_defaults", "[]")) or []
-        d["settings"] = _json_loads(d.get("settings", "{}")) or {}
-        d["is_active"] = bool(d.get("is_active", 1))
-        d["raw_json"] = _json_loads(d.get("raw_json", "{}")) or {}
-        return d
+        out: dict[str, Any] = {}
+        for column in self.CATALOG_COLUMNS:
+            value = d.get(column)
+            if value is None:
+                out[column] = None
+            elif column in self._BOOL_COLUMNS:
+                out[column] = bool(value)
+            elif column in self._JSON_COLUMNS:
+                decoded = _json_loads(value)
+                out[column] = decoded if isinstance(decoded, list) else []
+            else:
+                out[column] = value
+        return out
 
 
 # ==================================================================

@@ -63,7 +63,12 @@ describe("NotificationCenter overlays", () => {
     expect(panel).toBeDefined();
     expect(container.contains(panel!)).toBe(false);
     expect(panel!.className).toContain("bg-popover");
-    expect(panel!.className).toContain("z-[100]");
+    // The bell panel must portal ABOVE the desktop shell and the quick-action
+    // bar. It used to assert the fork's `z-[100]`; since the 2026-09-07
+    // adoption the layer is @ai-matrx/design-system's `z-[10000]` — the same
+    // rung as a Dialog, deliberately equal so portal order (not a z race)
+    // decides which of the two stacks on top.
+    expect(panel!.className).toContain("z-[10000]");
     expect(onMarkRead).toHaveBeenCalledWith(notification.id);
   });
 

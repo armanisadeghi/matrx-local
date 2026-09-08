@@ -21,8 +21,7 @@
 
 import { useState } from "react";
 import { Check, Copy, Film, Image as ImageIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import {
   Dialog,
   DialogContent,

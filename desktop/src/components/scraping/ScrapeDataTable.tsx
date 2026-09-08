@@ -12,7 +12,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import type { ScrapeTable } from "@/lib/scrape-extraction";
 

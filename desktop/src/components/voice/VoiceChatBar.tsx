@@ -13,7 +13,7 @@
 
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { Mic, X, Send, Square, Loader2, Zap, ZapOff } from "lucide-react";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 import type { VoiceChatState, VoiceChatActions } from "@/hooks/use-voice-chat";

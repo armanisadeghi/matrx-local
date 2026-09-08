@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useLayoutEffect, useRef } from "react";
-import { Label } from "@/components/ui/label";
+import { Label } from "@ai-matrx/design-system";
 import { findTokens } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 import {

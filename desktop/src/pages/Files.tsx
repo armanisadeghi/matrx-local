@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Folder, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,

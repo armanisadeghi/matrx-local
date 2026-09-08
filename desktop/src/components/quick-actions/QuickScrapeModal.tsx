@@ -20,8 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import { Check, Copy, FileText, Loader2 } from "lucide-react";
 import { engine } from "@/lib/api";
 import { MethodSelector } from "@/components/scraping/MethodSelector";

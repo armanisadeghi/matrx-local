@@ -13,8 +13,7 @@ import {
   MoreHorizontal,
   RefreshCw,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button, Checkbox } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";

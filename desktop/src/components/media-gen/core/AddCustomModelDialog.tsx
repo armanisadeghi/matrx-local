@@ -22,9 +22,7 @@ import {
   PackagePlus,
   Search,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, BasicInput as Input, Label } from "@ai-matrx/design-system";
 import {
   Dialog,
   DialogContent,

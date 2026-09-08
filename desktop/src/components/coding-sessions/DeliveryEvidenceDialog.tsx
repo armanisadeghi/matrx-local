@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Loader2, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { engine } from "@/lib/api";
 import type { CodingSessionDeliveryEnvelopePage, CodingSessionProvider } from "@/lib/api";

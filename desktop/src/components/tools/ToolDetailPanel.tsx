@@ -1,7 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button, ScrollArea, Separator } from "@ai-matrx/design-system";
 import { Play, RotateCcw, Code, FormInput, Loader2 } from "lucide-react";
 import { ToolForm } from "./ToolForm";
 import { ToolOutput } from "./ToolOutput";

@@ -8,8 +8,7 @@
 
 import { Chrome, Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Button, Progress } from "@ai-matrx/design-system";
 import { useOptionalBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";
 
 export function BrowserRuntimeNotice() {

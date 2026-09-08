@@ -26,8 +26,7 @@ import {
 import { PageHeader } from "@/components/layout/PageHeader";
 import { SetupWizard } from "@/components/SetupWizard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { SystemInfo, BrowserStatus, PermissionInfo } from "@/lib/api";

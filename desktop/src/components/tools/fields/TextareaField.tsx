@@ -1,6 +1,5 @@
 import { useFormContext } from "react-hook-form";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
+import { Label, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import type { ToolFieldSchema } from "@/types/tool-schema";
 
 interface FieldProps {

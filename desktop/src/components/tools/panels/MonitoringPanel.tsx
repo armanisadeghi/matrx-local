@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Activity, Cpu, HardDrive, Battery, BatteryCharging, RefreshCw, Zap, Search, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import { GaugeRing } from "@/components/tools/shared/GaugeRing";
 import { Sparkline } from "@/components/tools/shared/Sparkline";
 import { ToolSection } from "@/components/tools/shared/ToolSection";

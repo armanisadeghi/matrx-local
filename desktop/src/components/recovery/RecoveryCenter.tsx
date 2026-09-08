@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { recovery } from "@/lib/recovery";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getEngineRecoveryStatus, runEngineRecoveryAction, type EngineRecoveryStatus, type RecoveryServiceAction } from "@/lib/api";
 import { useAccessHealthContext } from "@/contexts/AccessHealthContext";

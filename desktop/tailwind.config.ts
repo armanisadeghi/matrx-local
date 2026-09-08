@@ -47,6 +47,22 @@ export default {
           DEFAULT: "hsl(var(--secondary))",
           foreground: "hsl(var(--secondary-foreground))",
         },
+        /* The status vocabulary @ai-matrx/design-system paints with — Badge
+           `success`/`warning`/`info`, Button `success`, Progress tones, Alert.
+           Without these three entries the package's variants generate NO
+           utility at all and render as unstyled text (design-system 0.4.0
+           Consumer action 2b, the failure four consumer apps shipped for a
+           week). The VALUES come from the package's own tokens.css defaults
+           unless this app overrides them in index.css. */
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        info: "hsl(var(--info))",
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
@@ -89,23 +105,19 @@ export default {
       },
 
       /* ── Keyframes ─────────────────────────────────── */
+      /* No accordion keyframes here: @ai-matrx/design-system ships
+         `.matrx-accordion-content` / `.matrx-collapsible-content` and their
+         keyframes in its own styles.css (0.8.0 / 0.9.0 Consumer action), and
+         this app had zero `animate-accordion-*` call sites. `tailwindcss-animate`
+         DOES stay in the plugin list — unlike matrx-extend, seven components
+         here use `animate-in` / `slide-in-from-*` of their own. */
       keyframes: {
-        "accordion-down": {
-          from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
-        },
-        "accordion-up": {
-          from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
         "pulse-subtle": {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.7" },
         },
       },
       animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
         "pulse-subtle": "pulse-subtle 2s ease-in-out infinite",
       },
     },

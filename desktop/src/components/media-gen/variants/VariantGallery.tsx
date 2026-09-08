@@ -26,7 +26,7 @@ import {
   Sparkles,
   CheckCircle2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import {
   PROMPT_TEXTAREA_KEYS,
   ResizablePromptTextarea,

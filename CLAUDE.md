@@ -170,6 +170,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 | Matrx Envelope · Tool registry · DB rules | `/Users/armanisadeghi/code/common-docs/systems/{matrx-envelope,tool-registry,db-rules}/FEATURE.md` |
 | Sync doctrine · file sync · coding-session bridge | [docs/SYNC_CONTRACT.md](docs/SYNC_CONTRACT.md) · [app/services/file_sync/FEATURE.md](app/services/file_sync/FEATURE.md) · [app/services/coding_sessions/FEATURE.md](app/services/coding_sessions/FEATURE.md) |
 | Content IR — NEVER parse a stream; server envelopes render via the SHARED packages (`desktop/src/features/content-ir/`); catalog is `GET /workflow/kinds`, never a `content_ir.*` table read; DB components stay OFF | [docs/CONTENT_IR_CONSUMER_GUIDE.md](docs/CONTENT_IR_CONSUMER_GUIDE.md) |
+| UI primitives — `@ai-matrx/design-system` owns ALL of them (adopted 2026-09-07); never define a Button/Badge/Dialog/Select/… locally, and the four files left in `ui/` are one-prop bindings | [desktop/src/components/ui/FEATURE.md](desktop/src/components/ui/FEATURE.md) |
 | Any image/video UI (one `MediaDescriptor`, one thumb, one action set — never a hand-rolled `<img>`) | [desktop/src/components/media/FEATURE.md](desktop/src/components/media/FEATURE.md) |
 | Multi-window (labels, leader election, panels checklist) | [desktop/src/panels/FEATURE.md](desktop/src/panels/FEATURE.md) |
 | Code-local rules | `app/tools/FEATURE.md`, `app/api/FEATURE.md`, `app/services/*/FEATURE.md` |

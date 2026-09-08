@@ -13,20 +13,13 @@ import {
   Loader2,
   SlidersHorizontal,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input, Label, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { NumberInput } from "@/components/ui/number-input";
-import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import {
   buildCustomQueueInput,

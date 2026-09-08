@@ -6,7 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
+import { Label } from "@ai-matrx/design-system";
 import type { ToolFieldSchema } from "@/types/tool-schema";
 
 interface FieldProps {

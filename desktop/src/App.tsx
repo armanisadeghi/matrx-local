@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@ai-matrx/design-system";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Documents } from "@/pages/Documents";

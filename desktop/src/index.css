@@ -53,6 +53,13 @@
     --glass-border: rgba(255, 255, 255, 0.4);
     --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
 
+    /* Modal scrim behind @ai-matrx/design-system's Dialog. The package reads
+       this token (default rgb(0 0 0 / 0.2)); this app's dialogs have always
+       dimmed to 40%, so the VALUE is host-owned here rather than the rule
+       being overridden. Unlayered, so it beats the package default in
+       `@layer matrx-design-system-tokens`. */
+    --matrx-overlay-scrim-soft: rgb(0 0 0 / 0.4);
+
     /* ── Sidebar ──────────────────────────────────────── */
     --sidebar: 240 20% 96%;
     --sidebar-foreground: 240 6% 20%;
@@ -103,6 +110,9 @@
     --glass-border: rgba(255, 255, 255, 0.1);
     --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
 
+    /* See the light-theme note above. */
+    --matrx-overlay-scrim-soft: rgb(0 0 0 / 0.5);
+
     /* ── Sidebar ──────────────────────────────────────── */
     --sidebar: 240 5% 7%;
     --sidebar-foreground: 0 0% 90%;
@@ -144,6 +154,14 @@
    GLASSMORPHISM UTILITIES
    ═══════════════════════════════════════════════════════════════ */
 
+/* NOTE for the `components/ui/*` bindings over @ai-matrx/design-system: these
+   two classes live in Tailwind's `components` layer and therefore LOSE to any
+   single-class utility, including the package's own `bg-card` / `bg-popover` /
+   `shadow-md`. The shims do NOT use them — they bind the same `--glass-*`
+   tokens as utilities (`bg-[var(--glass-bg)] border-[color:var(--glass-border)]
+   shadow-glass`), which tailwind-merge substitutes for the package's classes
+   and a caller's own `border-destructive/50` then substitutes for in turn. See
+   `components/ui/FEATURE.md`. */
 @layer components {
   /* Full glass — modals, floating headers, popovers */
   .glass {

@@ -16,8 +16,7 @@
 
 import { AlertTriangle, Clock, Layers, Loader2 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import {
   Dialog,
   DialogContent,

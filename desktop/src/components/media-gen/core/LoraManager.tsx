@@ -12,9 +12,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Badge, Button, Checkbox, BasicInput as Input, Label, Slider, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
 import {
   Dialog,
   DialogContent,
@@ -22,11 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { SelectedLora } from "@/hooks/use-media-gen";

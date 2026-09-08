@@ -76,10 +76,7 @@ import {
 } from "lucide-react";
 import { isTauri } from "@/lib/sidecar";
 import { openExternal } from "@/lib/open-external";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge, Button, BasicInput as Input, Label, Progress, ScrollArea, Separator, Slider, Tabs, TabsContent, TabsList, TabsTrigger, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import {
   Card,
   CardContent,
@@ -87,13 +84,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Slider } from "@/components/ui/slider";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,

@@ -11,8 +11,7 @@ import {
   AlertCircle,
   CheckCircle2,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge, ScrollArea } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import type { ToolUISchema, ToolFieldSchema } from "@/types/tool-schema";
 

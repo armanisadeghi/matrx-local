@@ -29,8 +29,7 @@ import {
   Table2,
   XCircle,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { openExternal } from "@/lib/open-external";
 import { cn } from "@/lib/utils";
 import type { ScrapeResultViewData as ScrapeResultData } from "@/lib/scrape-result";

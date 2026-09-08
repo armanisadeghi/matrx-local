@@ -16,7 +16,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, Loader2, RotateCcw, Terminal } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 interface EngineDownBannerProps {

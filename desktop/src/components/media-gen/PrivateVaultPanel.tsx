@@ -35,10 +35,7 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, Checkbox, BasicInput as Input, Label } from "@ai-matrx/design-system";
 import type { MediaLibraryItem, MediaVaultOpResult } from "@/lib/api";
 import type {
   MediaVaultState,

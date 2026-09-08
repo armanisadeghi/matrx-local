@@ -7,9 +7,7 @@
 
 import { useRef } from "react";
 import { Film, ImagePlus, Loader2, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Badge, Button, Label } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import {
   PROMPT_TEXTAREA_KEYS,

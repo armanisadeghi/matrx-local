@@ -27,15 +27,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Badge, Button, BasicInput as Input, Switch, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import type {
   MatrixVariable,
   ParamAxis,

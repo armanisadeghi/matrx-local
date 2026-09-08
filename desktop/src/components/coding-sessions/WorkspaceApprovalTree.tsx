@@ -14,9 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Badge, Button, BasicInput as Input } from "@ai-matrx/design-system";
 import { invoke } from "@tauri-apps/api/core";
 import { engine } from "@/lib/api";
 import type {

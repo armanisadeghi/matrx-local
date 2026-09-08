@@ -20,7 +20,7 @@ import {
   Play,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { VideoGenJob } from "@/lib/api";
 import { useMediaActions } from "@/components/media/MediaActionsProvider";

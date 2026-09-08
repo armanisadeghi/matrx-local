@@ -216,6 +216,362 @@
       "package": "@ai-matrx/design-system",
       "why": "Collapsible family. @ai-matrx/design-system 0.9.0 made the open/close transition package-owned .matrx-collapsible-content CSS keyed off --radix-collapsible-content-height; every host that invented its own either animated in exactly one app or interpolated to the ACCORDION variable and never animated at all, with no error. This app defines none — src/components/media-gen/prompts/CollapsibleOptionalField.tsx is a bespoke labelled optional-field control, a different name and a different capability (C28, 2026-09-07).",
       "allow": []
+    },
+    {
+      "name": "Avatar",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "AvatarImage",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "AvatarFallback",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Badge",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "badgeVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Button",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "buttonVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Card",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": [
+        {
+          "file": "src/components/ui/card.tsx",
+          "reason": "Not a twin: a forwardRef that BINDS the package Card's `size` to this app's `lg` density and its glass surface to the host's own --glass-* tokens, then delegates. The body is <PackageCard size={size} className={...} {...props} /> — the sanctioned adapter shape, identical to aidream/apps/dashboard/src/components/ui/card.tsx. It re-implements nothing."
+        }
+      ]
+    },
+    {
+      "name": "CardHeader",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "CardTitle",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "CardDescription",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "CardContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "CardFooter",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "CardAction",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Checkbox",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Dialog",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogPortal",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogClose",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogOverlay",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": [
+        {
+          "file": "src/components/ui/dialog.tsx",
+          "reason": "Not a twin: a forwardRef that BINDS this app's glass surface (from the host's own --glass-* tokens) and `mobileSheet={false}` (a Tauri desktop window dragged narrow is not a phone), then delegates to the package DialogContent. It re-implements no dialog behaviour."
+        }
+      ]
+    },
+    {
+      "name": "DialogHeader",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogFooter",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogTitle",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "DialogDescription",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Input",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Label",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Popover",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "PopoverTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "PopoverContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": [
+        {
+          "file": "src/components/ui/popover.tsx",
+          "reason": "Not a twin: a forwardRef that BINDS `w-auto min-w-[12rem] p-3` — this app's popovers size to their content where the package defaults to a fixed w-72 — and delegates. No positioning, portal or scroll logic is re-implemented."
+        }
+      ]
+    },
+    {
+      "name": "PopoverAnchor",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Progress",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "ScrollArea",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "ScrollBar",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Select",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectGroup",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectValue",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": [
+        {
+          "file": "src/components/ui/select.tsx",
+          "reason": "Not a twin: a forwardRef that BINDS this app's glass popup surface (from the host's own --glass-* tokens) and delegates to the package SelectContent."
+        }
+      ]
+    },
+    {
+      "name": "SelectItem",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectLabel",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectSeparator",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectScrollUpButton",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "SelectScrollDownButton",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Separator",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Slider",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Switch",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Tabs",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TabsList",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TabsTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TabsContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Textarea",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "Tooltip",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TooltipProvider",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TooltipTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
+    },
+    {
+      "name": "TooltipContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "allow": []
     }
   ]
 }

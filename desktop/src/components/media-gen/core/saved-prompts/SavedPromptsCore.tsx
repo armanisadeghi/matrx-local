@@ -12,8 +12,7 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import { useSavedPromptsApp } from "@/contexts/SavedPromptsContext";
 import { useDebouncedSave } from "@/hooks/use-debounced-save";
 import type { SavedPrompt } from "@/lib/saved-prompts/types";

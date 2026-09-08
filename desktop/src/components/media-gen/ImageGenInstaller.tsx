@@ -14,7 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import {
   isRuntimeActive,

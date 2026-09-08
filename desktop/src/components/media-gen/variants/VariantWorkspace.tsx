@@ -29,7 +29,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { WorkflowSection } from "../WorkflowSection";
 import { MediaLibrarySection } from "../MediaLibrarySection";

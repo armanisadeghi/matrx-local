@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@ai-matrx/design-system";
 
 export interface SubTab {
   value: string;

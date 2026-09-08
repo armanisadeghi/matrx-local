@@ -29,7 +29,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { openExternalUrl } from "@/components/media-gen/shared";
 import type { AppConfigNotice, AppConfigStatus } from "@/lib/api";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";

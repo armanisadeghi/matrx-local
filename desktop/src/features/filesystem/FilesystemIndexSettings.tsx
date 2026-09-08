@@ -12,12 +12,9 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button, BasicInput as Input, Switch } from "@ai-matrx/design-system";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
-import { Switch } from "@/components/ui/switch";
 import {
   engine,
   type FilesystemIndexStatus,

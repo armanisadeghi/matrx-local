@@ -53,14 +53,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { APP_VERSION } from "@/lib/app-version";
 import {
   Select,
@@ -69,7 +62,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useLocation } from "react-router-dom";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { engine } from "@/lib/api";
@@ -108,7 +100,6 @@ import {
   refreshApiKeyPatterns,
   type ParsedEnvEntry,
 } from "@/lib/api-key-patterns";
-import { Textarea } from "@/components/ui/textarea";
 import {
   ENGINE_PORT_BASE,
   ENGINE_PORT_RANGE_LABEL,

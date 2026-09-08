@@ -1,4 +1,4 @@
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@ai-matrx/design-system";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 interface HeaderProps {

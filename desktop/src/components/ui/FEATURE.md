@@ -1,50 +1,102 @@
 # UI primitives (`desktop/src/components/ui`)
 
-## Shared package boundary
+## The shared package owns every primitive in this folder
 
-`Separator` is a compatibility export over exact public
-`@ai-matrx/design-system@0.1.1`. Tailwind scans the installed package artifact,
-so package-owned utility classes cannot disappear from production CSS. Button,
-Badge, and Label remain local because their current styling and element contracts
-are not yet identical to the shared primitives; a matching filename alone is not
-evidence for extraction.
+**There are no forks here any more.** Every shadcn primitive this app used to
+carry a copy of lives in `@ai-matrx/design-system`; import it from there, never
+from a local file. A new local definition of any of those names fails
+`pnpm check:package-twins --strict` — all seventeen families are registered in
+`scripts/package-twins.json`.
 
-### The un-collapsed fork census (recorded 2026-09-07, C28 catch-up)
+```tsx
+import { Button, Badge, ScrollArea, Tooltip } from "@ai-matrx/design-system";
+```
 
-`Separator` is still the ONLY shim in this folder. Seventeen files here are
-local implementations of components `@ai-matrx/design-system` has since taken
-ownership of:
+Two names do NOT map one-to-one, because the package ships two rungs of each:
 
-- **0.5.0 wave** — `avatar`, `card`, `checkbox`, `dialog`, `progress`,
-  `scroll-area`, `switch`, `tabs`, `textarea`
-- **0.7.0 wave** — `tooltip`, `slider`, `popover`, `select`
-- **older waves** — `button`, `badge`, `label`, `input`
+| You want | Import |
+|---|---|
+| the flat control input (this app's historical field) | `BasicInput as Input` |
+| the elevated, `shadow-textarea` field | `Input` |
+| the flat control textarea (this app's historical field) | `BasicTextarea as Textarea` |
+| the elevated textarea | `Textarea` |
 
-This matters beyond tidiness: both of those CHANGELOG entries name their
-holders explicitly, and **neither one names this repo** — 0.7.0 states "No
-other consumer repo carries a fork of these — verified by census on 2026-09-07
-across matrx-extend, matrx-games, aidream `apps/dashboard` and
-`apps/workflow-studio`". `matrx-local` was not in that census, so the campaign's
-own record of where the twins live is incomplete, and every future wave that
-reads it will keep skipping this app. The gap is reported upward; do not treat
-the package CHANGELOGs as a complete census of this repo.
+### The four files that remain, and why
 
-Collapsing them is NOT a drive-by: it is Arman's C20 supervised guided session
-(the desktop app's whole visual language rides on these files), and this repo's
-release stays blocked on that session. Until then:
+Each is a BINDING — one prop or one class deep, delegating to the package. None
+re-implements behaviour, and each is allow-listed in `package-twins.json` with
+that reason. Add nothing to them; if you need a capability they do not have, it
+belongs in the package (THE SAME-SESSION LAW).
 
-- **Never add an eighteenth fork.** `scripts/package-twins.json` now registers
-  the Accordion and Collapsible families — the two the package owns that this
-  repo has never defined — so a new hand-rolled one fails
-  `pnpm check:package-twins --strict` instead of shipping.
-- The families listed above are deliberately absent from that register: this
-  repo defines them today, so a row would assert a collapse that has not
-  happened. Add each row the same session its fork is deleted.
-- The CSS contract IS current: `src/index.css` declares the layer order and
-  imports the package's `tokens.css` + `styles.css`, so the package-owned
-  structural rules (`.matrx-accordion-content`, `.matrx-collapsible-content`,
-  glass/scroll-fade/safe-area chrome) are present the moment a package
-  component is adopted.
+| File | Binds |
+|---|---|
+| `card.tsx` | `size="lg"` (this app's `p-6` density) + the glass surface |
+| `dialog.tsx` | glass + `rounded-3xl` + `mobileSheet={false}` |
+| `popover.tsx` | `w-auto min-w-[12rem] p-3` — popovers here size to their content; the package defaults to a fixed `w-72` |
+| `select.tsx` | glass on the popup |
+
+`number-input.tsx` is not a shim and not a fork: it is a host capability the
+package does not ship (see **Number entry** below).
+
+### Why the shims bind glass as utilities, not as `.glass`
+
+`.glass` / `.glass-subtle` live in Tailwind's `components` layer; the package
+paints `bg-card` / `bg-popover` / `shadow-md` as `utilities`, which come later —
+so a shim that simply added `glass` would render an ordinary flat card and
+nobody would see an error. The shims therefore bind the SAME `--glass-*` tokens
+as utilities:
+
+```
+bg-[var(--glass-bg)] border-[color:var(--glass-border)] shadow-glass
+```
+
+`cn` is tailwind-merge, so those **substitute** the package's classes, and a
+caller's own `border-destructive/50` / `shadow-xl` then substitutes for the
+glass in turn — which is the order that has to hold: package loses to host,
+host loses to the call site. Six call sites depend on that second half (the
+Settings and Devices danger cards, the setup wizard, the login card, the
+notification tray, the Ports dialog).
+
+For it to work, `cn` in `lib/utils.ts` registers `shadow-glass` in
+tailwind-merge's `shadow` group — the library cannot know about this app's
+`boxShadow.glass` theme entry and otherwise files it under shadow-COLOR, where
+it neither replaces nor is replaced by anything. Note also that
+`shadow-[var(--glass-shadow)]` is NOT a substitute: Tailwind compiles a bare
+`var()` there to a shadow *colour*, and tailwind-merge dedupes no var-valued
+shadow at all. Both were caught on the built stylesheet, not in review.
+
+### The status colours are a host mapping, and they are load-bearing
+
+`tailwind.config.ts` maps `success` / `warning` / `info` onto the package's
+tokens. Without those three entries the package's `Badge` `success`/`warning`/
+`info`, `Button variant="success"`, `Progress tone=` and `Alert` variants
+generate **no utility at all** and render as unstyled text — silently
+(design-system 0.4.0 Consumer action 2b). Never delete them; the VALUES come
+from the package's `tokens.css` defaults unless `index.css` overrides them.
+
+### `tailwindcss-animate` stays in this repo
+
+design-system 0.10.0 told matrx-extend to delete the plugin. **That does not
+apply here:** seven components in this app use `animate-in` / `slide-in-from-*`
+of their own, and the plugin is genuinely loaded (a v3 plugin in a v3 app). The
+package's own motion is `matrx-`-prefixed and ships in its `styles.css`.
+
+### History
+
+Adopted 2026-09-07 (census row 19). Until that day this repo had **never** been
+put on `@ai-matrx/design-system` — the campaign's census row said "all four
+repos" while five consumers exist, and design-system 0.7.0's "no other consumer
+repo carries a fork of these" had swept only the other four. Both records are
+corrected in place. Seventeen forks were swapped, fourteen files deleted, 131
+files repointed, re-grep zero.
+
+Deliberate visual convergences from that swap, so nobody files them as
+regressions: `Badge` `default` is the soft `bg-primary/15` tint rather than a
+solid primary chip and its `success`/`warning` are tokens rather than raw
+emerald/amber; `Tooltip` is a bordered popover surface rather than a solid blue
+chip; the unchecked `Checkbox` border and the `Slider` track/thumb take the
+package's geometry. Retiming any package motion is a `--matrx-motion-*` token
+change, never a rule override.
 
 ## Number entry
 
@@ -65,8 +117,9 @@ finite number.
 ## Floating overlays
 
 Account menus, notifications, selects, and similar floating controls use the
-shared Radix `Popover` / `Select` primitives instead of hand-rolled absolute
-positioning and document click listeners. Their portal content sits at
-`z-[100]`, above the desktop shell and quick-action bar. User-facing popovers
-and notification toasts render on an opaque `bg-popover` surface so content
-behind them cannot bleed through.
+shared `Popover` / `Select` primitives instead of hand-rolled absolute
+positioning and document click listeners. Their portal content sits at the
+package's `z-[10000]` (Popover, Dialog) / `z-[10001]` (Select, Tooltip) rungs,
+above the desktop shell and quick-action bar — the fork's `z-[100]` is gone.
+User-facing popovers and notification toasts render on an opaque `bg-popover`
+surface so content behind them cannot bleed through.

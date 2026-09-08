@@ -37,9 +37,7 @@ import {
   Globe,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
+import { Badge, Button, Progress } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type {
   SetupStatus,

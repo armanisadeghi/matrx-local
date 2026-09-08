@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import { Progress } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication

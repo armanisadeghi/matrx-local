@@ -8,11 +8,7 @@
  * (BrowserRuntimeContext owns that state and the install that fixes it).
  */
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import type { ScrapeMethod } from "@/hooks/use-scrape";
 import { useOptionalBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";

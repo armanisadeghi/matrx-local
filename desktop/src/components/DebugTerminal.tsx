@@ -20,8 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Check, Trash2, ChevronDown, ChevronUp, Terminal } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------

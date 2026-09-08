@@ -23,11 +23,7 @@ import {
   Loader2,
   CircleDot,
 } from "lucide-react";
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Popover,
   PopoverContent,

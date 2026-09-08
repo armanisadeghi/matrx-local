@@ -13,9 +13,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
+import { Badge, Button, Progress } from "@ai-matrx/design-system";
 import { Download, RefreshCw, Loader2, ArrowUpCircle, X, CheckCircle2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";

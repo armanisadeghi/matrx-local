@@ -25,7 +25,7 @@ import {
   Radio,
   Settings2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import { engine as engineAPI } from "@/lib/api";
 import { isTauri } from "@/lib/sidecar";

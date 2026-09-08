@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { engine } from "@/lib/api";
 import { Zap, ArrowLeft, ExternalLink, CheckCircle2, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 
 // Production redirect URI — must exactly match the redirect_uri sent in the
 // authorization request (see use-auth.ts getRedirectUri()). The OS intercepts

@@ -11,8 +11,7 @@ import {
   Trash2,
   Clock,
 } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
+import { Badge, ScrollArea } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import type { ScrapeEntry } from "@/hooks/use-scrape";
 

@@ -11,7 +11,7 @@ import {
 } from "react";
 import { GripHorizontal } from "lucide-react";
 
-import { Textarea } from "@/components/ui/textarea";
+import { BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 
 export const PROMPT_TEXTAREA_DEFAULT_ROWS = 10;

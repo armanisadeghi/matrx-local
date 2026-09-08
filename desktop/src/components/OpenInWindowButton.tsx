@@ -11,11 +11,7 @@
 import { useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import { PictureInPicture2 } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { isTauri, invokeTauri } from "@/lib/sidecar";
 import { ROUTE_TO_PANEL } from "@/panels/manifest";
 

@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronsUpDown, Copy, Loader2, Search } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Badge, Button, Checkbox, BasicInput as Input } from "@ai-matrx/design-system";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { engine } from "@/lib/api";
 import type { ClaudeHistoryChangeType, ClaudeHistoryInventoryPage, ClaudeHistoryReview } from "@/lib/api";

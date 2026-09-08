@@ -11,7 +11,7 @@
  */
 
 import { NumberInput } from "@/components/ui/number-input";
-import { Label } from "@/components/ui/label";
+import { Label, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,
@@ -19,11 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { type MatrixSpec, type StrategyKind } from "@/lib/prompt-matrix";
 import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";
 

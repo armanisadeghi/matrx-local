@@ -26,9 +26,7 @@ import {
 } from "lucide-react";
 
 import { AgentRuntimeCard } from "@/components/coding-sessions/AgentRuntimeCard";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Badge, Button, BasicInput as Input } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type {
   ClaudeConversation,

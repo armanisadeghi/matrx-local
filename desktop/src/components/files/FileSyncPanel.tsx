@@ -20,9 +20,7 @@ import {
   Laptop,
   Cloud,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { Button, Label, Separator } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,

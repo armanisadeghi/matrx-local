@@ -1,5 +1,5 @@
 import { Info } from "lucide-react";
-import { Label } from "@/components/ui/label";
+import { Label } from "@ai-matrx/design-system";
 import {
   Popover,
   PopoverContent,

@@ -27,7 +27,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, BasicInput as Input, Label, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Dialog,
   DialogContent,
@@ -36,13 +36,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useListLibraryApp } from "@/contexts/ListLibraryContext";
 import type { NamedList } from "@/lib/list-library/types";
 import type { MatrixOption } from "@/lib/prompt-matrix/types";

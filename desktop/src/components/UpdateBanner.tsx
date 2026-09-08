@@ -6,8 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Button, Progress } from "@ai-matrx/design-system";
 import { ArrowUpCircle, Download, RefreshCw, X, Loader2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";

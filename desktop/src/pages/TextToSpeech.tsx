@@ -5,8 +5,7 @@ import { useTtsApp } from "@/contexts/TtsContext";
 import { useTts } from "@/hooks/use-tts";
 import type { TtsVoice } from "@/lib/tts/types";
 import type { TtsHistoryEntry, TtsPlaybackState } from "@/hooks/use-tts";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
+import { Button, Slider } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import { parseMarkdownToText } from "@/lib/parse-markdown-for-speech";
 import {

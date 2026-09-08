@@ -15,8 +15,7 @@ import { SelectField } from "./fields/SelectField";
 import { FilePathField } from "./fields/FilePathField";
 import { TagsField } from "./fields/TagsField";
 import { KeyValueField } from "./fields/KeyValueField";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Label, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import type { ToolFieldSchema, ToolUISchema } from "@/types/tool-schema";
 
 /** JSON textarea field with live syntax validation feedback */

@@ -13,9 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Wrench } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
+import { Badge, Label, Switch } from "@ai-matrx/design-system";
 
 interface LocalToolItem {
   name: string;

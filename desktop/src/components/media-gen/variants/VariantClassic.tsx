@@ -15,7 +15,7 @@ import {
   Shuffle,
   Workflow,
 } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { ImageGenSection } from "@/components/media-gen/ImageGenSection";
 import { VideoGenSection } from "@/components/media-gen/VideoGenSection";

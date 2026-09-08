@@ -14,7 +14,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { X, Copy, Check, GripHorizontal, Mic } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useTheme } from "@/hooks/use-theme";
 
 // ── Keyframes injected once ───────────────────────────────────────────────────

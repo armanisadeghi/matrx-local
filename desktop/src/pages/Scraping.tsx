@@ -10,14 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge, Button, Label, Progress, ScrollArea, Separator, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
 import { ScrapeResultViewer } from "@/components/scraping/ScrapeResultViewer";
 import { ScrapeUrlList } from "@/components/scraping/ScrapeUrlList";
 import { MethodSelector } from "@/components/scraping/MethodSelector";

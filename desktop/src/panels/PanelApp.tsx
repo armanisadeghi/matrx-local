@@ -19,7 +19,7 @@ import {
   ActionNeededSources,
   actionNeededStore,
 } from "@/features/action-needed";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@ai-matrx/design-system";
 import { useAuth } from "@/hooks/use-auth";
 import { useEngine } from "@/hooks/use-engine";
 import { useTheme } from "@/hooks/use-theme";

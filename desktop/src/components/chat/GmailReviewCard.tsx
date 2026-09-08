@@ -16,10 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { ExternalLink, Loader2, Send, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Button, BasicInput as Input, Label, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import {
   googleWorkspaceSettingsUrl,
   resolveGmailSendConnection,

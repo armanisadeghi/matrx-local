@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AUTOSAVE_DELAY_MS } from "@/hooks/use-debounced-save";
 import type { SavedPrompt } from "@/lib/saved-prompts/types";
 import type { NamedList } from "@/lib/list-library/types";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@ai-matrx/design-system";
 
 const updatePrompt = vi.fn(async () => true);
 const refresh = vi.fn(async () => undefined);

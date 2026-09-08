@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,
@@ -12,11 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useListLibraryApp } from "@/contexts/ListLibraryContext";
 import type { NamedList } from "@/lib/list-library/types";
 import {

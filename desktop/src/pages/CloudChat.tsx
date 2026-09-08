@@ -13,7 +13,7 @@ import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
 import { GmailReviewCard } from "@/components/chat/GmailReviewCard";
 import { CloudChatPlusMenu } from "@/components/chat/PlusMenu";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useCloudAgents } from "@/hooks/use-cloud-agents";
 import { useEmailReviews } from "@/hooks/use-email-reviews";
 import {

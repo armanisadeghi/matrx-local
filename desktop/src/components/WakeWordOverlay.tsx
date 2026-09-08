@@ -21,7 +21,7 @@
 
 import { useEffect, useRef } from "react";
 import type { WakeWordUIMode } from "@/hooks/use-wake-word";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 
 // ── Keyframes injected once ───────────────────────────────────────────────────
 

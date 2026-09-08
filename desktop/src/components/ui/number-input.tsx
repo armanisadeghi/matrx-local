@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Input } from "@/components/ui/input";
+import { BasicInput as Input } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 
 type InputProps = Omit<

@@ -18,11 +18,8 @@ import {
   RotateCcw,
   Wrench,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Badge, Checkbox, BasicInput as Input, Slider } from "@ai-matrx/design-system";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Slider } from "@/components/ui/slider";
 import type {
   ChatAttachment,
   CloudChatExecutionTarget,

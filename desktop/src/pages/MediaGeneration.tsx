@@ -15,7 +15,7 @@
 import { useCallback, useState } from "react";
 import { LayoutTemplate, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,

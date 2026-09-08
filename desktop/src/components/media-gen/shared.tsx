@@ -28,15 +28,8 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input, Label, Slider, BasicTextarea as Textarea, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { NumberInput } from "@/components/ui/number-input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -44,8 +37,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
-import { Textarea } from "@/components/ui/textarea";
 import type { DownloadEntry } from "@/lib/downloads/types";
 import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 import type { ImageGenJob } from "@/lib/api";

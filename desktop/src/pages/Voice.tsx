@@ -19,7 +19,7 @@ import { WakeWordControls } from "@/components/WakeWordControls";
 import { WakeWordPage } from "@/pages/WakeWord";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 import { loadSettings } from "@/lib/settings";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { DownloadProgress } from "@/components/DownloadProgress";
 import { TranscriptionMiniMode } from "@/components/TranscriptionMiniMode";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";

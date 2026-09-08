@@ -1,27 +1,37 @@
+/**
+ * HOST BINDING ONLY — the Popover implementation lives in
+ * `@ai-matrx/design-system` (portal seam, viewport-capped height with its own
+ * scroll, dialog-safe z layer). This file binds one thing: this app's popovers
+ * SIZE TO THEIR CONTENT.
+ *
+ * The package defaults to a fixed `w-72` because that is the shadcn shape most
+ * hosts wanted; every popover in Matrx Local — the account menu, the
+ * notification tray, the quick-action pickers — was `min-w-[12rem]` with an
+ * auto width and `p-3`. Forcing 288px on all thirteen of them would be a
+ * regression, so the width and padding are bound here and nothing else moves.
+ *
+ * A caller's className is merged last, so `w-96` (or any padding) still wins.
+ */
+
+import {
+  PopoverContent as PackagePopoverContent,
+  type PopoverContentProps,
+} from "@ai-matrx/design-system";
 import * as React from "react";
-import * as PopoverPrimitive from "@radix-ui/react-popover";
+
 import { cn } from "@/lib/utils";
 
-const Popover = PopoverPrimitive.Root;
-const PopoverTrigger = PopoverPrimitive.Trigger;
+export { Popover, PopoverAnchor, PopoverTrigger } from "@ai-matrx/design-system";
+export type { PopoverContentProps } from "@ai-matrx/design-system";
 
-const PopoverContent = React.forwardRef<
-  React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "center", sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
-    <PopoverPrimitive.Content
-      ref={ref}
-      align={align}
-      sideOffset={sideOffset}
-      className={cn(
-        "z-[100] min-w-[12rem] rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-        className,
-      )}
-      {...props}
-    />
-  </PopoverPrimitive.Portal>
+export const PopoverContent = React.forwardRef<
+  HTMLDivElement,
+  PopoverContentProps
+>(({ className, ...props }, ref) => (
+  <PackagePopoverContent
+    ref={ref}
+    className={cn("w-auto min-w-[12rem] p-3", className)}
+    {...props}
+  />
 ));
-PopoverContent.displayName = PopoverPrimitive.Content.displayName;
-
-export { Popover, PopoverTrigger, PopoverContent };
+PopoverContent.displayName = "PopoverContent";

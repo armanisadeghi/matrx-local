@@ -19,7 +19,7 @@ vi.mock("@/contexts/BrowserRuntimeContext", () => ({
   useOptionalBrowserRuntimeContext: () => runtime,
 }));
 
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@ai-matrx/design-system";
 
 import { BrowserRuntimeNotice } from "./BrowserRuntimeNotice";
 import { MethodSelector } from "./MethodSelector";

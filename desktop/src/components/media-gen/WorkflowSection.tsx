@@ -11,9 +11,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { AlertCircle, Loader2, RefreshCw, Sparkles, Wand2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, BasicInput as Input, Label } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,

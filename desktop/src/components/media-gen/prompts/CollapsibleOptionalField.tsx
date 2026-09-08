@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import type { NamedList } from "@/lib/list-library/types";
 import { FieldInfoButton } from "./LabelWithInfo";
 import { VariablePromptTextarea } from "./VariablePromptTools";

@@ -9,8 +9,7 @@
 import type { ReactNode } from "react";
 import { useCallback } from "react";
 import { AppWindow } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { invokeTauri } from "@/lib/sidecar";
 import type { EngineStatus } from "@/hooks/use-engine";
 

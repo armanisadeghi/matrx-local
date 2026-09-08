@@ -6,9 +6,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { Button, BasicInput as Input, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { useDocuments } from "@/hooks/use-documents";
 import type { EngineStatus } from "@/hooks/use-engine";
 

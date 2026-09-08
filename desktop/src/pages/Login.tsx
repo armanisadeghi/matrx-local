@@ -1,9 +1,6 @@
 import { useState } from "react";
 import { Loader2, Zap } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { Button, BasicInput as Input, Label, Separator } from "@ai-matrx/design-system";
 import { Card, CardContent } from "@/components/ui/card";
 import type { useAuth } from "@/hooks/use-auth";
 import { AppVersion } from "@/lib/app-version";

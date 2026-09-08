@@ -13,8 +13,7 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { enqueueVariationBatchForImageGen } from "@/lib/media-gen/enqueue-variation-batch";
 import type { VariationQueueOptions } from "@/lib/media-gen/enqueue-variation-batch";

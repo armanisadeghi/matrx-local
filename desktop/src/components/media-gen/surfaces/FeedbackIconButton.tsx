@@ -1,11 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Button, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 
 export function FeedbackIconButton({
   feedbackKey,

@@ -25,8 +25,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
-import { Button } from "@/components/ui/button";
+import { Button, Progress } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import supabase from "@/lib/supabase";
 import { AppVersion } from "@/lib/app-version";

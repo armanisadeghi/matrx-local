@@ -35,9 +35,7 @@ import {
   Loader2,
   X,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Badge, Button, Label, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { IMG2IMG_DEFAULT_STRENGTH } from "@/hooks/use-media-gen";
@@ -55,11 +53,6 @@ import {
   SeedInput,
   formatGb,
 } from "@/components/media-gen/shared";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   ImagePromptToolbar,
   type ImageFormPanelToggles,

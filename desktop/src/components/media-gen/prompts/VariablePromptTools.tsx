@@ -10,8 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { ChevronDown, Eye, RefreshCw, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import {
   Popover,
   PopoverContent,

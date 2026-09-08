@@ -24,8 +24,7 @@ import {
 } from "lucide-react";
 
 import { WorkspaceApprovalTree } from "@/components/coding-sessions/WorkspaceApprovalTree";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { engine } from "@/lib/api";
 import { getAppRuntimeConfig } from "@/lib/app-config";

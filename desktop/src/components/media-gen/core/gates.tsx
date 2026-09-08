@@ -16,7 +16,7 @@ import {
   RefreshCw,
   UserPlus,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { useAuth } from "@/hooks/use-auth";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { engine } from "@/lib/api";

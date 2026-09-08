@@ -1,8 +1,6 @@
 import { useState, useCallback } from "react";
 import { useFormContext, Controller } from "react-hook-form";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
+import { Badge, BasicInput as Input, Label } from "@ai-matrx/design-system";
 import { X } from "lucide-react";
 import type { ToolFieldSchema } from "@/types/tool-schema";
 

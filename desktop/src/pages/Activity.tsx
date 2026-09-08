@@ -45,9 +45,7 @@ import {
   List,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge, Button, Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import type { EngineStatus } from "@/hooks/use-engine";
 import {

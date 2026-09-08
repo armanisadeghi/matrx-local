@@ -27,8 +27,7 @@ import {
   Search,
   ShieldAlert,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@ai-matrx/design-system";
 import { MediaThumb } from "@/components/media/MediaThumb";
 import {
   descriptorFromWebImage,

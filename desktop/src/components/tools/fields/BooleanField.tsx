@@ -1,6 +1,5 @@
 import { useFormContext, Controller } from "react-hook-form";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { Label, Switch } from "@ai-matrx/design-system";
 import type { ToolFieldSchema } from "@/types/tool-schema";
 
 interface FieldProps {

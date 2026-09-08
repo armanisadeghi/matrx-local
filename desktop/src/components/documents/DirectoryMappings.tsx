@@ -10,8 +10,7 @@ import {
 } from "lucide-react";
 import { engine } from "@/lib/api";
 import type { DocFolder, DocMappings } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import {
   Select,
   SelectContent,

@@ -21,9 +21,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge, Button, ScrollArea } from "@ai-matrx/design-system";
 import {
   RefreshCw,
   Play,

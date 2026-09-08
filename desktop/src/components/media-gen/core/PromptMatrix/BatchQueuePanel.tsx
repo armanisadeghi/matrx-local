@@ -49,15 +49,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Badge, Button, Progress, ScrollArea, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenBatch, ImageGenJob } from "@/lib/api";
 import { cn } from "@/lib/utils";

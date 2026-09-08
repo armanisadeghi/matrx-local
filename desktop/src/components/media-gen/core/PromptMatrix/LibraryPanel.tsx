@@ -14,13 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Badge, Button, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import type { LibraryEntry } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 

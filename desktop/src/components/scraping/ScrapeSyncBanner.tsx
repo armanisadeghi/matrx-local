@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, CloudOff, LogIn, Loader2, RefreshCw, UploadCloud } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@ai-matrx/design-system";
 import { engine, type ScrapeSyncState, type ScrapeSyncStatus } from "@/lib/api";
 import supabase from "@/lib/supabase";
 

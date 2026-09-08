@@ -47,22 +47,12 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Badge, Button, BasicInput as Input, Label, Separator, BasicTextarea as Textarea, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { usePromptMatrixApp } from "@/contexts/PromptMatrixContext";
 import type { PromptMatrixActions } from "@/hooks/use-prompt-matrix";

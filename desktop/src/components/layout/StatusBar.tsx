@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@ai-matrx/design-system";
 import { LifeBuoy, RefreshCw } from "lucide-react";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { TerminalToggleButton } from "@/components/DevTerminalPanel";

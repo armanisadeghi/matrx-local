@@ -19,7 +19,7 @@ importers:
         version: 0.10.0(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.9.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.8.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -239,8 +239,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.9.0':
-    resolution: {integrity: sha512-bVgOdaAtLXh0HWJbVH1emiPlF47BelnfLHA+3anqoD43os0FcWBE7X5wVtGclHmsmIAFN+odezap9dgi5W+x0A==}
+  '@ai-matrx/design-system@0.10.0':
+    resolution: {integrity: sha512-DapSoKVL0w4bW/D5JOU4F4/sr5VAQna6SA3BW+pU3b20wCuyjceAg7lIre9WWmxIlyN+lGYuZq88KVLuG8EBnw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3618,7 +3618,7 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.9.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/kit': 0.8.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

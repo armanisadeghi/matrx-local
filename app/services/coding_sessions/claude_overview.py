@@ -53,9 +53,15 @@ logger = get_logger()
 
 _MAX_CONVERSATIONS = 5000
 
-# A transcript is rewritten on every turn, and the hook that mirrors that turn
-# lands seconds later. Inside this window "local newer than cloud" is the
-# ordinary shape of a live session, not a gap.
+# A session is "changed" when Claude's OWN last-activity stamp for it (the
+# sidebar index record's lastActivityAt) is newer than the server's last
+# delivery. The hook that mirrors a turn lands seconds after it, so inside this
+# window "local newer than cloud" is the ordinary shape of a live session.
+#
+# NOT the transcript file's mtime: measured 2026-09-08, a bulk rewrite had
+# stamped 2026-09-07T22:44 on hundreds of untouched transcripts and 1,389 of
+# 1,432 cloud-held sessions read "changed" while their last entry matched the
+# server's last delivery to the second.
 _CHANGED_GRACE_SECONDS = 5 * 60
 
 # The server inventory is one paged read of every bound session (1,671 here).
@@ -425,7 +431,7 @@ def _session_state(
     *,
     cloud_checked: bool,
     binding: dict[str, Any] | None,
-    mtime_ns: int,
+    activity_ns: int,
     queue: dict[str, int],
 ) -> str:
     if queue.get("quarantined", 0) > 0:
@@ -434,8 +440,8 @@ def _session_state(
         seen_ns = _parse_iso_ns(binding.get("last_seen_at"))
         if (
             seen_ns is not None
-            and mtime_ns
-            and mtime_ns > seen_ns + _CHANGED_GRACE_SECONDS * 1_000_000_000
+            and activity_ns
+            and activity_ns > seen_ns + _CHANGED_GRACE_SECONDS * 1_000_000_000
         ):
             return "changed"
         return "in_cloud"
@@ -470,7 +476,7 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         state = _session_state(
             cloud_checked=bool(cloud_meta["checked"]),
             binding=binding,
-            mtime_ns=mtime_ns,
+            activity_ns=int(entry.last_activity_at or 0) * 1_000_000,
             queue=session_queue,
         )
         counts[state] += 1
@@ -717,7 +723,7 @@ def _verdict(
     if state == "changed":
         return {
             "summary": (
-                "AI Matrx holds this conversation, but the transcript on this Mac is newer "
+                "AI Matrx holds this conversation, but Claude's last activity on it here is newer "
                 f"than the server's last delivery ({binding.get('last_seen_at') if binding else 'unknown'})."
             ),
             "remedy": (
@@ -796,7 +802,7 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
     state = _session_state(
         cloud_checked=bool(cloud_meta["checked"]),
         binding=binding,
-        mtime_ns=mtime_ns,
+        activity_ns=int(entry.last_activity_at or 0) * 1_000_000,
         queue=queue,
     )
     capture = await _capture_facts(session_id)

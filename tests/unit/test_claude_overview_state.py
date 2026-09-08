@@ -29,7 +29,7 @@ def test_a_hook_mirrored_session_is_in_cloud_even_if_this_mac_never_uploaded_it(
     state = _session_state(
         cloud_checked=True,
         binding=binding,
-        mtime_ns=1_788_868_800 * 1_000_000_000,  # 2026-09-08T12:00:00Z
+        activity_ns=1_788_868_800 * 1_000_000_000,  # 2026-09-08T12:00:00Z (Claude's lastActivityAt)
         queue={"pending": 0, "quarantined": 0},
     )
     assert state == "in_cloud"
@@ -41,19 +41,19 @@ def test_local_transcript_newer_than_cloud_beyond_grace_is_changed() -> None:
     inside_grace = seen_ns + (_CHANGED_GRACE_SECONDS - 1) * 1_000_000_000
     beyond_grace = seen_ns + (_CHANGED_GRACE_SECONDS + 1) * 1_000_000_000
     queue = {"pending": 0, "quarantined": 0}
-    assert _session_state(cloud_checked=True, binding=binding, mtime_ns=inside_grace, queue=queue) == "in_cloud"
-    assert _session_state(cloud_checked=True, binding=binding, mtime_ns=beyond_grace, queue=queue) == "changed"
+    assert _session_state(cloud_checked=True, binding=binding, activity_ns=inside_grace, queue=queue) == "in_cloud"
+    assert _session_state(cloud_checked=True, binding=binding, activity_ns=beyond_grace, queue=queue) == "changed"
 
 
 def test_queue_and_quarantine_outrank_absence_and_failure_outranks_everything() -> None:
     queue_only = {"pending": 3, "quarantined": 0}
-    assert _session_state(cloud_checked=True, binding=None, mtime_ns=1, queue=queue_only) == "queued"
+    assert _session_state(cloud_checked=True, binding=None, activity_ns=1, queue=queue_only) == "queued"
     failed = {"pending": 3, "quarantined": 1}
-    assert _session_state(cloud_checked=True, binding={"last_seen_at": None}, mtime_ns=1, queue=failed) == "failed"
+    assert _session_state(cloud_checked=True, binding={"last_seen_at": None}, activity_ns=1, queue=failed) == "failed"
     none = {"pending": 0, "quarantined": 0}
-    assert _session_state(cloud_checked=True, binding=None, mtime_ns=1, queue=none) == "not_in_cloud"
+    assert _session_state(cloud_checked=True, binding=None, activity_ns=1, queue=none) == "not_in_cloud"
 
 
 def test_an_unanswered_server_is_unknown_never_not_in_cloud() -> None:
     none = {"pending": 0, "quarantined": 0}
-    assert _session_state(cloud_checked=False, binding=None, mtime_ns=1, queue=none) == "unknown"
+    assert _session_state(cloud_checked=False, binding=None, activity_ns=1, queue=none) == "unknown"

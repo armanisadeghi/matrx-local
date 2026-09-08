@@ -288,10 +288,45 @@ async def sync_claude_everything() -> dict[str, object]:
 
 @router.get("/claude/overview")
 async def claude_overview() -> dict[str, object]:
-    """Everything the Claude Code screen shows: accounts, conversations, state."""
+    """Everything the Claude Code screen shows: accounts, conversations, state.
+
+    State is judged against the server's own inventory of bound sessions —
+    never only against what this engine uploaded — see claude_overview.py.
+    """
     from app.services.coding_sessions.claude_overview import overview
 
     return await overview()
+
+
+@router.get("/claude/sessions/{session_id}/diagnosis")
+async def claude_session_diagnosis(session_id: str) -> dict[str, object]:
+    """Every fact behind one conversation's status, from every system involved.
+
+    The screen's rule: anything reported as a problem must open into the exact
+    evidence it was judged on — index record, transcript, server binding,
+    queued/preserved envelopes with their errors, capture attempts, label
+    ledgers — plus one plain verdict and its remedy.
+    """
+    from app.services.coding_sessions.claude_overview import session_diagnosis
+
+    result = await session_diagnosis(session_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No Claude Code session with that id exists in the sidebar index on this Mac.",
+        )
+    return result
+
+
+@router.post("/delivery/resume")
+async def resume_coding_session_delivery() -> dict[str, object]:
+    """Re-check every publisher-wide pause now and run a delivery tick if clear.
+
+    The organization pause lifts on its own within one poll interval once an
+    organization is chosen; this is the "I fixed it, go" button for people who
+    do not want to wait for it.
+    """
+    return await get_coding_session_bridge_outbox().resume_delivery()
 
 
 @router.get("/claude/history/status")

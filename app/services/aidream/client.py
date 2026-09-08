@@ -43,6 +43,30 @@ class AIDreamError(Exception):
         self.status = status
 
 
+# Owner-scoped coding-session routes. The server exempts them from the
+# organization admission gate (aidream/api/middleware/auth.py
+# ORGANIZATION_EXEMPT_PATHS) and resolves the organization INSIDE the handler
+# from the signed-in user's own default/personal organization
+# (coding_session_bridge/ownership.py) — "coding agents never choose or supply
+# an organization UUID". Demanding one here anyway is what paused every
+# delivery on a Mac with several memberships and no default chosen: 116,803
+# envelopes for nine days (2026-08-30 → 2026-09-08) behind a header the server
+# would not have read. A caller-supplied header still wins; this only stops the
+# transport from REFUSING to send when it has nothing to say.
+_ORGANIZATION_SELF_RESOLVED_PATHS: tuple[str, ...] = (
+    "/coding-sessions/bridge",
+    "/coding-sessions/sessions",
+)
+
+
+def _is_organization_self_resolved(path: str) -> bool:
+    bare = path.split("?", 1)[0].rstrip("/")
+    for prefix in _ORGANIZATION_SELF_RESOLVED_PATHS:
+        if bare == prefix or bare.startswith(prefix + "/"):
+            return True
+    return False
+
+
 class AIDreamClient:
     """Thin async HTTP client for the AIDream REST API.
 
@@ -73,6 +97,8 @@ class AIDreamClient:
         base: dict[str, str],
         jwt: Optional[str],
         headers: Optional[dict[str, str]],
+        *,
+        path: str = "",
     ) -> dict[str, str]:
         """The ONE place every request's identity headers are assembled.
 
@@ -108,6 +134,8 @@ class AIDreamClient:
             return merged
         if any(name.lower() == "x-organization-id" for name in merged):
             return merged
+        if _is_organization_self_resolved(path):
+            return merged
 
         from app.services.aidream.organization import (
             OrganizationNotResolvedError,
@@ -141,7 +169,7 @@ class AIDreamClient:
         """
         url = f"{self._base_url}/api{path}"
         headers = await self._build_headers(
-            {"Accept": "application/json"}, jwt, headers
+            {"Accept": "application/json"}, jwt, headers, path=path
         )
 
         try:
@@ -200,6 +228,7 @@ class AIDreamClient:
             {"Accept": "application/json", "Content-Type": "application/json"},
             jwt,
             headers,
+            path=path,
         )
 
         try:

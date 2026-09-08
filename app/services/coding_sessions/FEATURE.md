@@ -249,6 +249,65 @@ Actions are guided instructions. Claude and Codex can point to their supported
 host setup/test/trust flows; unpublished Cursor and VS Code artifacts are never
 silently installed from local source checkouts.
 
+## The Coding Sessions screen — judged against the CLOUD, every number a door
+
+`GET /coding-session/claude/overview` (`claude_overview.py`) feeds the desktop's
+Coding Sessions page. Ruled by Arman 2026-09-08 after the screen said
+**Synced 0 · Not synced 1,836 · Uploading 116,803 · Failed 195** while AI Matrx
+held 1,671 of those conversations:
+
+- **State is the server's, not this Mac's.** The engine asks AI Matrx for its own
+  inventory of bound Claude sessions (`identity_client.fetch_complete_identity_inventory`,
+  the same read the title reconciler uses; cached 45s) and judges each local
+  conversation against it. Local ledgers (`claude_session_synced`, the outbox, the
+  quarantine) explain HOW a session got there or why it has not — they never decide
+  whether it is in the cloud, because most sessions arrive through the Claude Code
+  plugin hook and never pass through this engine at all.
+- **Six states, one vocabulary** (`SESSION_STATES`): `in_cloud` · `changed` (local
+  transcript newer than the server's last delivery by more than the 5-minute grace)
+  · `queued` (deliveries waiting here) · `failed` (a delivery was refused and is
+  preserved) · `not_in_cloud` (nothing anywhere) · `unknown` (the server could not be
+  asked — `overview.cloud.reason/detail` say exactly why; the screen never guesses
+  "not synced" from silence).
+- **Both spellings of a session are one session.** A hook mirror binds the raw
+  Claude UUID; a history import binds `claude-sdk:<sha256(project)>:<b64(uuid)>`.
+  `raw_session_id()` reduces either to the UUID before any cloud or queue lookup.
+- **Every number opens into its evidence.** Status cards filter the list; the
+  per-app "Waiting to send" / "Refused, preserved" counts open
+  `DeliveryEvidenceDialog` (retry/discard per delivery); every row opens
+  `GET /coding-session/claude/sessions/{id}/diagnosis` — a plain verdict + remedy,
+  then the server binding, the transcript, Claude's sidebar record (pinned, rank,
+  category, accounts), every queued/preserved delivery with its error and attempts,
+  the capture reconciler's attempts, and the label ledgers. Pinned is a column.
+- **A pause is a banner with a button, never a count.** `publisher.blocker` on
+  `GET /coding-session/status` names the one thing stopping ALL delivery
+  (`cloud_credentials_rejected`, or `organization_not_chosen` — see below) with its
+  remedy; the screen renders it above everything with the one-click door
+  (organization picker / sign-in) and "Retry delivery now" (`POST /coding-session/delivery/resume`).
+
+### 🚨 THE ORGANIZATION PAUSE — a local refusal is never a server rejection
+
+The AI Dream client refuses to SEND when it cannot name the caller's organization
+(several memberships, no default chosen) — a synthetic `AIDreamError(400)` raised
+before any byte leaves the Mac. Found live 2026-09-08: 116,803 deliveries deferred
+for nine days behind it, each row's attempt counter walking toward the
+25-attempt quarantine threshold (six had reached 24), the log repeating the same
+line every 15s, and the screen saying "Uploading". Now (`service.py`):
+
+- the refusal sets a publisher-wide `organization_not_chosen` blocker and stops the
+  tick; **no attempt is charged** to the row (the server was never asked) and
+  `_is_terminal_rejection` can never quarantine it;
+- every tick re-resolves the organization first; the moment it resolves the pause
+  lifts, rows that were deferred under it reset to `attempts=0`, and delivery
+  resumes without anyone clicking anything (the desktop's organization picker
+  writes the same `users.user_preferences` default the resolver reads);
+- `_safe_delivery_error` maps the text to `organization_not_chosen` with the remedy,
+  so a preserved-envelope row never shows a bare "cloud delivery failed".
+
+Guard: `tests/unit/test_coding_session_bridge.py::test_unnamed_organization_pauses_delivery_without_charging_attempts`
+(fails against the pre-fix publisher) and `test_organization_refusal_is_never_a_terminal_rejection`.
+State rules: `tests/unit/test_claude_overview_state.py`.
+
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
 `capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude

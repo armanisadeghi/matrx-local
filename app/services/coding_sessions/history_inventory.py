@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from app.services.local_db.write_gate import write_gate
 from app.services.local_db.database import LocalDatabase, get_db
 
 HistoryChangeType = Literal[
@@ -109,6 +110,20 @@ class HistoryInventoryStore:
         return scan_id
 
     async def complete_scan(
+        self,
+        scan_id: str,
+        *,
+        rows: list[dict[str, Any]],
+        totals: dict[str, int],
+    ) -> dict[str, Any]:
+        # The bridge publisher commits every hook on its own BEGIN IMMEDIATE
+        # connection. Racing it here is exactly what turned "Sync everything"
+        # into a bare HTTP 500 ("database is locked", 2026-09-08 09:30 and
+        # 16:30) after a 27s scan — take the engine-wide write gate instead.
+        async with write_gate():
+            return await self._complete_scan_locked(scan_id, rows=rows, totals=totals)
+
+    async def _complete_scan_locked(
         self,
         scan_id: str,
         *,

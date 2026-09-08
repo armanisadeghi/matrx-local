@@ -552,7 +552,9 @@ export interface CodingSessionBridgeStatus {
     blocker: {
       code: string;
       message: string;
-      http_status?: number;
+      remedy?: string;
+      since?: string;
+      http_status?: number | null;
       receipt_id?: number;
       provider?: CodingSessionProvider;
     } | null;
@@ -573,6 +575,7 @@ export interface CodingSessionBridgeStatus {
   };
   pending: {
     total: number;
+    item_count?: number;
     payload_bytes?: number;
     by_provider: Record<CodingSessionProvider, number>;
     sessions_by_provider?: Record<CodingSessionProvider, number>;
@@ -581,6 +584,7 @@ export interface CodingSessionBridgeStatus {
   };
   quarantine: {
     total: number;
+    item_count?: number;
     payload_bytes?: number;
     by_provider: Record<CodingSessionProvider, number>;
     sessions_by_provider?: Record<CodingSessionProvider, number>;
@@ -664,18 +668,43 @@ export interface CodingSessionDeliveryEnvelopePage {
   next_cursor: number | null;
 }
 
-export type ClaudeSyncState = "synced" | "behind" | "not_synced";
+/**
+ * A conversation's standing AGAINST THE CLOUD (claude_overview.py):
+ *   in_cloud     AI Matrx holds it and it is not behind
+ *   changed      AI Matrx holds it; the transcript here is newer than the
+ *                server's last delivery by more than the grace window
+ *   queued       not on the server yet; its events wait in the local queue
+ *   failed       a delivery was refused and is preserved here — needs a decision
+ *   not_in_cloud nothing on the server, nothing queued: never mirrored/imported
+ *   unknown      the server could not be asked (see ClaudeOverview.cloud)
+ */
+export type ClaudeSessionState =
+  | "in_cloud"
+  | "changed"
+  | "queued"
+  | "failed"
+  | "not_in_cloud"
+  | "unknown";
 
 export interface ClaudeConversation {
   session_id: string;
   title: string;
+  title_source: string | null;
   project: string | null;
   last_activity_at: number;
   bytes: number;
   on_disk: boolean;
-  state: ClaudeSyncState;
+  state: ClaudeSessionState;
   pinned: boolean;
+  pinned_rank: number | null;
+  category: string | null;
   archived: boolean;
+  cloud: {
+    conversation_id: string | null;
+    fidelity: string | null;
+    last_seen_at: string | null;
+  } | null;
+  delivery: { pending: number; quarantined: number };
 }
 
 export interface ClaudeAccount {
@@ -686,19 +715,100 @@ export interface ClaudeAccount {
   active: boolean;
 }
 
+export interface ClaudeCloudCheck {
+  /** False when AI Matrx could not be asked; `reason`/`detail` say why. */
+  checked: boolean;
+  reason: string | null;
+  detail: string | null;
+  sessions: number;
+  checked_at: string;
+}
+
 export interface ClaudeOverview {
+  schema_version: 2;
   account_id: string | null;
   accounts: ClaudeAccount[];
+  cloud: ClaudeCloudCheck;
   conversations: ClaudeConversation[];
   totals: {
     conversations: number;
+    pinned: number;
     index_files_read: number;
     unreadable: number;
-    synced: number;
-    behind: number;
-    not_synced: number;
-    waiting: number;
+    in_cloud: number;
+    changed: number;
+    queued: number;
     failed: number;
+    not_in_cloud: number;
+    unknown: number;
+    /** Whole-queue, every provider: envelopes still to send. */
+    waiting: number;
+    /** Whole-queue, every provider: envelopes preserved after a refusal. */
+    quarantined: number;
+  };
+}
+
+export interface ClaudeSessionDiagnosisEnvelope {
+  receipt_id: number;
+  state: "pending" | "quarantine";
+  action: string;
+  source: string;
+  enqueue_origin: string;
+  item_count: number;
+  payload_bytes: number;
+  created_at: string | null;
+  attempts: number;
+  retry_in_seconds: number;
+  http_status: number | null;
+  quarantined_at: string | null;
+  error: { code: string; message: string } | null;
+}
+
+export interface ClaudeSessionDiagnosis {
+  schema_version: 1;
+  session_id: string;
+  state: ClaudeSessionState;
+  verdict: { summary: string; remedy: string | null };
+  index: {
+    title: string | null;
+    title_source: string | null;
+    project: string | null;
+    git_branch: string | null;
+    worktree_name: string | null;
+    pinned: boolean;
+    pinned_rank: number | null;
+    category: string | null;
+    archived: boolean;
+    last_activity_at: number;
+    record_count: number;
+    accounts: string[];
+  };
+  transcript: { on_disk: boolean; bytes: number; modified_at: string | null };
+  cloud: ClaudeCloudCheck & {
+    binding: {
+      provider_session_id: string;
+      conversation_id: string | null;
+      fidelity: string | null;
+      last_seen_at: string | null;
+      conversation_title: string | null;
+      title_source: string | null;
+    } | null;
+  };
+  delivery: {
+    publisher_blocker: CodingSessionBridgeStatus["publisher"]["blocker"];
+    envelopes: ClaudeSessionDiagnosisEnvelope[];
+    delivered_by_this_mac_at: string | null;
+  };
+  capture: Array<{
+    session_key: string;
+    attempts: number;
+    last_error: string | null;
+    enqueued_at: string | null;
+    updated_at: string | null;
+  }>;
+  labels: {
+    metadata_sent: Record<string, unknown> | null;
+    title_pushed: Record<string, unknown> | null;
   };
 }
 
@@ -2669,6 +2779,18 @@ class EngineAPI {
 
   async getClaudeOverview(): Promise<ClaudeOverview> {
     return this.request("/coding-session/claude/overview");
+  }
+
+  async getClaudeSessionDiagnosis(sessionId: string): Promise<ClaudeSessionDiagnosis> {
+    return this.request(
+      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/diagnosis`,
+    );
+  }
+
+  async resumeCodingSessionDelivery(): Promise<{
+    blocker: CodingSessionBridgeStatus["publisher"]["blocker"];
+  }> {
+    return this.request("/coding-session/delivery/resume", { method: "POST" });
   }
 
   async syncClaudeEverything(): Promise<ClaudeSyncResult> {

@@ -76,11 +76,11 @@ def _recorder() -> tuple[list[httpx.Request], httpx.MockTransport]:
 
 @pytest.mark.anyio
 async def test_authenticated_post_names_its_organization(resolves_org: None) -> None:
-    """The 2823-reject path: POST /api/coding-sessions/bridge."""
+    """An org-gated POST (the runtime spine, tools) names the organization."""
     seen, transport = _recorder()
     client = AIDreamClient(BASE, transport=transport)
 
-    await client.post("/coding-sessions/bridge", {"entries": []}, jwt=JWT)
+    await client.post("/v2/runtime/open", {}, jwt=JWT)
 
     assert seen[0].headers["X-Organization-Id"] == ORG
     assert seen[0].headers["Authorization"] == f"Bearer {JWT}"
@@ -88,13 +88,34 @@ async def test_authenticated_post_names_its_organization(resolves_org: None) -> 
 
 @pytest.mark.anyio
 async def test_authenticated_get_names_its_organization(resolves_org: None) -> None:
-    """GET /api/agents and GET /api/coding-sessions/sessions ride this."""
+    """GET /api/agents rides this."""
     seen, transport = _recorder()
     client = AIDreamClient(BASE, transport=transport)
 
-    await client.get("/coding-sessions/sessions", jwt=JWT)
+    await client.get("/agents", jwt=JWT)
 
     assert seen[0].headers["X-Organization-Id"] == ORG
+
+
+@pytest.mark.anyio
+async def test_owner_scoped_coding_session_routes_send_without_an_organization(
+    cannot_resolve_org: None,
+) -> None:
+    """The server exempts /coding-sessions/bridge and /coding-sessions/sessions
+    from the organization gate and resolves the organization inside the
+    handler from the signed-in user. Refusing to send them without a header
+    the server would not read is what paused 116,803 deliveries for nine days
+    on a Mac with several memberships and no default (2026-09-08)."""
+    seen, transport = _recorder()
+    client = AIDreamClient(BASE, transport=transport)
+
+    await client.post("/coding-sessions/bridge", {"entries": []}, jwt=JWT)
+    await client.get("/coding-sessions/sessions?provider=claude_code", jwt=JWT)
+
+    assert len(seen) == 2
+    for request in seen:
+        assert "X-Organization-Id" not in request.headers
+        assert request.headers["Authorization"] == f"Bearer {JWT}"
 
 
 @pytest.mark.anyio
@@ -138,7 +159,7 @@ async def test_unresolvable_organization_refuses_with_a_remedy(
     client = AIDreamClient(BASE, transport=transport)
 
     with pytest.raises(AIDreamError) as excinfo:
-        await client.post("/coding-sessions/bridge", {"entries": []}, jwt=JWT)
+        await client.post("/v2/runtime/open", {}, jwt=JWT)
 
     assert excinfo.value.status == 400
     assert "Choose your organization in the desktop app" in str(excinfo.value)

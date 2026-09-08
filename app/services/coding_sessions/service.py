@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime, timezone
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -80,6 +81,26 @@ _TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
 # them transiently and dropping a row early would be real data loss.
 _TERMINAL_STATUSES = frozenset({400, 409, 422})
 _QUARANTINE_AFTER_ATTEMPTS = 25
+
+# The local AI Dream client refuses to SEND when it cannot name the caller's
+# organization (several memberships, no default chosen). That refusal is raised
+# as a synthetic ``AIDreamError(400)`` before any byte reaches the server, so
+# it must never be read as a server rejection: it is a publisher-wide blocker
+# with one remedy, and no envelope may burn attempts — let alone be
+# quarantined — while it stands. (2026-08-30 → 2026-09-08: 116,803 envelopes
+# sat behind exactly this, each row silently deferred 24 times toward the
+# quarantine threshold, and the screen said "Uploading".)
+_ORGANIZATION_UNRESOLVED_MARKER = "Cannot name an organization for this request"
+_ORGANIZATION_BLOCKER_CODE = "organization_not_chosen"
+_ORGANIZATION_BLOCKER_MESSAGE = (
+    "Delivery is paused: this Mac has no default organization chosen, and AI "
+    "Matrx needs to know which organization your coding sessions belong to. "
+    "Nothing is lost — every event stays queued here."
+)
+_ORGANIZATION_BLOCKER_REMEDY = (
+    "Choose your organization in Matrx Local (the organization picker). "
+    "Delivery resumes on its own within a few seconds."
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +219,10 @@ def _session_ref(session_key: object) -> str | None:
     return hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:12]
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _utc_timestamp(value: object) -> str | None:
     """SQLite datetime('now') is UTC but lacks an offset; make that truth explicit."""
     if value is None:
@@ -292,6 +317,40 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
             "code": "invalid_cloud_acknowledgement",
             "message": "The cloud response did not prove that the queued event was stored.",
         }
+    if _ORGANIZATION_UNRESOLVED_MARKER in raw_error:
+        return {
+            "code": _ORGANIZATION_BLOCKER_CODE,
+            "message": f"{_ORGANIZATION_BLOCKER_MESSAGE} {_ORGANIZATION_BLOCKER_REMEDY}",
+        }
+    # The server's own refusal codes, each with what it means and what to do.
+    # A bare "HTTP 409" told nobody anything (2026-09-08).
+    if '"provider_account_conflict"' in raw_error:
+        return {
+            "code": "provider_account_conflict",
+            "message": (
+                "AI Matrx already holds this session bound to a DIFFERENT Claude "
+                "account, so a delivery from this account cannot replace it. The "
+                "conversation is in AI Matrx; discard this delivery."
+            ),
+        }
+    if '"source_conflict"' in raw_error:
+        return {
+            "code": "source_conflict",
+            "message": (
+                "AI Matrx already holds this session from a different import source "
+                "and will not mix the two. The conversation is in AI Matrx; discard "
+                "this delivery."
+            ),
+        }
+    if '"native_gap"' in raw_error:
+        return {
+            "code": "native_gap",
+            "message": (
+                "AI Matrx is missing earlier entries of this session, so it refused "
+                "to append later ones out of order. Sync everything re-imports the "
+                "full transcript."
+            ),
+        }
     status_match = re.search(r"HTTP\s+(\d{3})", raw_error)
     if status_match:
         status_code = status_match.group(1)
@@ -323,6 +382,9 @@ def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
     if isinstance(exc, AIDreamOfflineError) or not isinstance(exc, AIDreamError):
         return False
     message = str(exc)
+    if _ORGANIZATION_UNRESOLVED_MARKER in message:
+        # Raised locally before the request was sent — the server refused nothing.
+        return False
     if any(f'"{code}"' in message for code in _TERMINAL_ERROR_CODES):
         return True
     return exc.status in _TERMINAL_STATUSES and attempts >= _QUARANTINE_AFTER_ATTEMPTS
@@ -502,6 +564,10 @@ class CodingSessionBridgeOutbox:
         self._stopping = False
         self._sync_lock = asyncio.Lock()
         self._credential_blocker: dict[str, Any] | None = None
+        # Publisher-wide pause while the caller's organization cannot be named.
+        # Cleared automatically the moment it resolves (each tick re-checks),
+        # or explicitly through ``resume_delivery``.
+        self._organization_blocker: dict[str, Any] | None = None
         self._blocked_token_hash: str | None = None
         self._circuit_state = "closed"
         self._circuit_opened_at: float | None = None
@@ -539,6 +605,136 @@ class CodingSessionBridgeOutbox:
 
     def wake(self) -> None:
         self._wake.set()
+
+    @property
+    def publisher_blocker(self) -> dict[str, Any] | None:
+        """The one thing stopping ALL delivery right now, or None.
+
+        Credential rejection outranks an unnamed organization: without a valid
+        session there is nobody whose organization could be resolved.
+        """
+        if self._credential_blocker is not None:
+            return dict(self._credential_blocker)
+        if self._organization_blocker is not None:
+            return dict(self._organization_blocker)
+        return None
+
+    async def _organization_resolves(self, access_token: str) -> bool:
+        from app.services.aidream.organization import (
+            OrganizationNotResolvedError,
+            resolve_active_organization_id,
+        )
+
+        try:
+            await resolve_active_organization_id(access_token)
+        except OrganizationNotResolvedError:
+            return False
+        except Exception:  # noqa: BLE001 — a transient lookup failure keeps the pause
+            logger.exception(
+                "[coding_session_bridge] organization re-check failed; delivery stays paused"
+            )
+            return False
+        return True
+
+    async def _set_organization_blocker(self, row: Any, provider: str) -> None:
+        if self._organization_blocker is None:
+            logger.warning(
+                "[coding_session_bridge] delivery PAUSED: %s %s (first envelope id=%s)",
+                _ORGANIZATION_BLOCKER_MESSAGE,
+                _ORGANIZATION_BLOCKER_REMEDY,
+                int(row["id"]),
+            )
+        self._organization_blocker = {
+            "code": _ORGANIZATION_BLOCKER_CODE,
+            "message": _ORGANIZATION_BLOCKER_MESSAGE,
+            "remedy": _ORGANIZATION_BLOCKER_REMEDY,
+            "http_status": None,
+            "receipt_id": int(row["id"]),
+            "provider": provider,
+            "since": self._organization_blocker.get("since")
+            if self._organization_blocker is not None
+            else _utc_now_iso(),
+        }
+        # Visible on the envelope itself, but NO attempt is charged: the server
+        # was never asked, so this row is not one step closer to quarantine.
+        await self._durable_writes(
+            [
+                (
+                    """UPDATE coding_session_bridge_outbox
+                       SET last_error=?, updated_at=datetime('now') WHERE id=?""",
+                    (
+                        f"[aidream_client] {_ORGANIZATION_UNRESOLVED_MARKER}"[:1000],
+                        int(row["id"]),
+                    ),
+                )
+            ]
+        )
+
+    async def _clear_organization_blocker(self) -> None:
+        """Lift the pause and give every row it touched a clean slate.
+
+        Rows deferred under the pause (before this fix, up to 24 attempts each)
+        were never refused by the server; their attempt counters are evidence
+        of the pause, not of the envelope, so they reset to zero. Rows the old
+        publisher already QUARANTINED for it (61 on 2026-09-08 — the synthetic
+        400 crossed the 25-attempt threshold) go back to the queue the same
+        way, because nothing about them was ever terminal.
+        """
+        self._organization_blocker = None
+        await self._durable_writes(
+            [
+                (
+                    f"""UPDATE coding_session_bridge_outbox
+                        SET attempts=0, next_attempt_at=0, last_error=NULL,
+                            updated_at=datetime('now')
+                        WHERE last_error LIKE '%{_ORGANIZATION_UNRESOLVED_MARKER}%'""",
+                    (),
+                )
+            ]
+        )
+        restored = await self.requeue_organization_quarantine()
+        logger.info(
+            "[coding_session_bridge] organization resolved; delivery resumed (%s preserved rows requeued)",
+            restored,
+        )
+
+    async def requeue_organization_quarantine(self) -> int:
+        """Return every envelope quarantined for the organization refusal.
+
+        Runs when the pause lifts and once at publisher start, so a Mac that
+        upgrades into this fix repairs the old publisher's mistake by itself.
+        """
+        try:
+            rows = await self._db.fetchall(
+                f"""SELECT id FROM coding_session_bridge_quarantine
+                    WHERE last_error LIKE '%{_ORGANIZATION_UNRESOLVED_MARKER}%'
+                    ORDER BY id"""
+            )
+        except Exception:
+            logger.exception("[coding_session_bridge] could not list organization-quarantined rows")
+            return 0
+        restored = 0
+        for row in rows:
+            try:
+                await self.retry_delivery_envelope(int(row["id"]))
+                restored += 1
+            except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rest
+                logger.warning(
+                    "[coding_session_bridge] could not requeue preserved row id=%s: %s",
+                    int(row["id"]),
+                    exc,
+                )
+        return restored
+
+    async def resume_delivery(self) -> dict[str, Any]:
+        """Re-check every publisher-wide pause now and run a tick if clear."""
+        token_row = await self._tokens.get()
+        access_token = str(token_row.get("access_token") or "") if token_row else ""
+        if self._organization_blocker is not None and access_token:
+            if await self._organization_resolves(access_token):
+                await self._clear_organization_blocker()
+        self.wake()
+        return {"blocker": self.publisher_blocker}
 
     async def credentials_changed(self) -> None:
         """Clear a credential-derived pause and retry immediately.
@@ -1526,9 +1722,7 @@ class CodingSessionBridgeOutbox:
                 "active": self.active,
                 "cloud_enabled": self._cloud_enabled,
                 "server_path": f"/api{_SERVER_PATH}",
-                "blocker": dict(self._credential_blocker)
-                if self._credential_blocker is not None
-                else None,
+                "blocker": self.publisher_blocker,
                 "transport_circuit": self._transport_circuit_status(),
             },
             "pending": pending,
@@ -1601,6 +1795,15 @@ class CodingSessionBridgeOutbox:
                     "failed": 0,
                     "blocked": "aidream_server_unconfigured",
                 }
+
+            if self._organization_blocker is not None:
+                if not await self._organization_resolves(access_token):
+                    return {
+                        "sent": 0,
+                        "failed": 0,
+                        "blocked": _ORGANIZATION_BLOCKER_CODE,
+                    }
+                await self._clear_organization_blocker()
 
             # A row aidream already accepted must never be uploaded twice.
             # Clear any that lost the write lock last tick before selecting
@@ -1725,6 +1928,25 @@ class CodingSessionBridgeOutbox:
                             "sent": sent,
                             "failed": failed + 1,
                             "blocked": "cloud_credentials_rejected",
+                        }
+                    if (
+                        isinstance(exc, AIDreamError)
+                        and _ORGANIZATION_UNRESOLVED_MARKER in str(exc)
+                    ):
+                        try:
+                            await self._set_organization_blocker(
+                                row, persisted_request.provider.value
+                            )
+                        except Exception:
+                            logger.exception(
+                                "[coding_session_bridge] could not record the "
+                                "organization pause for id=%s",
+                                int(row["id"]),
+                            )
+                        return {
+                            "sent": sent,
+                            "failed": failed + 1,
+                            "blocked": _ORGANIZATION_BLOCKER_CODE,
                         }
                     if _is_terminal_rejection(exc, int(row["attempts"])):
                         try:
@@ -2218,6 +2440,17 @@ class CodingSessionBridgeOutbox:
         )
 
     async def _publisher_loop(self) -> None:
+        # Repair the old publisher's mistake before the first tick: rows it
+        # quarantined for a refusal the server never issued go back to work.
+        try:
+            restored = await self.requeue_organization_quarantine()
+            if restored:
+                logger.info(
+                    "[coding_session_bridge] requeued %s row(s) preserved for the organization refusal",
+                    restored,
+                )
+        except Exception:
+            logger.exception("[coding_session_bridge] organization-quarantine repair failed")
         while not self._stopping:
             # Consume the wake signal before work. An enqueue that lands while
             # sync_pending is running then remains set and triggers the next

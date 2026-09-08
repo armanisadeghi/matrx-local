@@ -946,3 +946,134 @@ async def test_shutdown_cancels_inflight_upload_and_keeps_durable_row(
     assert publisher is not None and publisher.done()
     assert service.active is False
     assert await service.pending_count() == 1
+
+
+@pytest.mark.anyio
+async def test_unnamed_organization_pauses_delivery_without_charging_attempts(
+    bridge_db: LocalDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The client's own "cannot name an organization" refusal is a PAUSE.
+
+    Found live 2026-09-08: 116,803 envelopes deferred for nine days behind this
+    synthetic 400, each row's attempt counter walking toward the quarantine
+    threshold, and the screen saying "Uploading". The server was never asked,
+    so nothing may be charged to the envelope; the publisher pauses as one, the
+    status names the remedy, and delivery resumes by itself once an
+    organization resolves.
+    """
+    from app.services.aidream import organization as organization_module
+
+    refusal = AIDreamError(
+        400,
+        "[aidream_client] Cannot name an organization for this request: You "
+        "belong to more than one organization and haven't set a default. "
+        "Choose your organization in the desktop app, then try again.",
+    )
+    client = FakeClient([refusal])
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=client,
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook(stable_id="lane-a", provider_session_id="session-a"))
+    await service.enqueue(_hook(stable_id="lane-b", provider_session_id="session-b"))
+
+    resolvable = {"value": False}
+
+    async def fake_resolve(_jwt: str) -> str:
+        if not resolvable["value"]:
+            raise organization_module.OrganizationNotResolvedError(
+                "You belong to more than one organization and haven't set a default.",
+                remedy="Choose your organization in the desktop app, then try again.",
+            )
+        return "org-1"
+
+    monkeypatch.setattr(organization_module, "resolve_active_organization_id", fake_resolve)
+
+    first = await service.sync_pending()
+    assert first == {"sent": 0, "failed": 1, "blocked": "organization_not_chosen"}
+    assert len(client.calls) == 1, "one refusal must stop cross-lane fan-out"
+
+    rows = await bridge_db.fetchall(
+        "SELECT id, attempts, last_error FROM coding_session_bridge_outbox ORDER BY id"
+    )
+    assert [int(row["attempts"]) for row in rows] == [0, 0], "no attempt is charged"
+    assert "Cannot name an organization" in str(rows[0]["last_error"])
+
+    paused = await service.sync_pending()
+    assert paused == {"sent": 0, "failed": 0, "blocked": "organization_not_chosen"}
+    assert len(client.calls) == 1, "a paused publisher does not knock on the server"
+
+    status = await service.delivery_status()
+    blocker = status["publisher"]["blocker"]
+    assert blocker["code"] == "organization_not_chosen"
+    assert "Choose your organization" in blocker["remedy"]
+    assert blocker["receipt_id"] == 1
+
+    resolvable["value"] = True
+    resumed = await service.sync_pending()
+    assert resumed == {"sent": 2, "failed": 0, "blocked": None}
+    assert (await service.delivery_status())["publisher"]["blocker"] is None
+    rows = await bridge_db.fetchall("SELECT COUNT(*) AS n FROM coding_session_bridge_outbox")
+    assert int(rows[0]["n"]) == 0
+
+
+def test_organization_refusal_is_never_a_terminal_rejection() -> None:
+    from app.services.coding_sessions.service import (
+        _is_terminal_rejection,
+        _safe_delivery_error,
+    )
+
+    refusal = AIDreamError(400, "[aidream_client] Cannot name an organization for this request: x")
+    assert _is_terminal_rejection(refusal, attempts=10_000) is False
+    mapped = _safe_delivery_error(str(refusal))
+    assert mapped is not None and mapped["code"] == "organization_not_chosen"
+    assert "Choose your organization" in mapped["message"]
+
+
+@pytest.mark.anyio
+async def test_rows_quarantined_for_the_organization_refusal_are_requeued(
+    bridge_db: LocalDatabase,
+) -> None:
+    """61 envelopes were quarantined on 2026-09-08 because the synthetic
+    organization refusal crossed the 25-attempt threshold. Nothing about them
+    was terminal; the repair puts them back to work, and only them."""
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=FakeClient(),
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook(stable_id="org-a", provider_session_id="session-a"))
+    await service.enqueue(_hook(stable_id="real-b", provider_session_id="session-b"))
+    rows = await bridge_db.fetchall("SELECT id FROM coding_session_bridge_outbox ORDER BY id")
+    org_id, real_id = (int(row["id"]) for row in rows)
+    for receipt_id, error, status in (
+        (org_id, "[aidream_client] Cannot name an organization for this request: x", 400),
+        (real_id, '[aidream_client] /coding-sessions/bridge → HTTP 409: {"error":"entry_mutated"}', 409),
+    ):
+        row = await bridge_db.fetchone(
+            "SELECT * FROM coding_session_bridge_outbox WHERE id=?", (receipt_id,)
+        )
+        await bridge_db.execute(
+            """INSERT INTO coding_session_bridge_quarantine
+               (id, envelope_json, envelope_sha256, attempts, http_status, last_error,
+                original_created_at, quarantined_at)
+               VALUES (?, ?, ?, 25, ?, ?, ?, datetime('now'))""",
+            (receipt_id, row["envelope_json"], row["envelope_sha256"], status, error, row["created_at"]),
+        )
+        await bridge_db.execute("DELETE FROM coding_session_bridge_outbox WHERE id=?", (receipt_id,))
+        await bridge_db.execute(
+            "UPDATE coding_session_bridge_queue_metadata SET queue_state='quarantine' WHERE receipt_id=?",
+            (receipt_id,),
+        )
+    await bridge_db.commit()
+
+    restored = await service.requeue_organization_quarantine()
+
+    assert restored == 1
+    pending = await bridge_db.fetchall("SELECT id, attempts FROM coding_session_bridge_outbox")
+    assert [(int(r["id"]), int(r["attempts"])) for r in pending] == [(org_id, 0)]
+    preserved = await bridge_db.fetchall("SELECT id FROM coding_session_bridge_quarantine")
+    assert [int(r["id"]) for r in preserved] == [real_id], "a real server refusal stays preserved"

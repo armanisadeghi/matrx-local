@@ -174,6 +174,48 @@
       "package": "@ai-matrx/kit/html-escape",
       "why": "TEN copies were live across the fleet and THEY DID NOT ESCAPE THE SAME CHARACTERS — three did & < > only, two added \", four added ' (two as &#39;, two as &#039;), and a tenth wore the name escapeHtmlAttr while escaping only & < \" into an HTML ATTRIBUTE. A string safe through one was an attribute break-out through another. kit ships ONE decided set: & < > \" ' — all five, always. It is not in @ai-matrx/print because an HTML escaper must not require jspdf + html2canvas.",
       "allow": []
+    },
+    {
+      "name": "Accordion",
+      "package": "@ai-matrx/design-system",
+      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css — a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "AccordionItem",
+      "package": "@ai-matrx/design-system",
+      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css — a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "AccordionTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css — a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "AccordionContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css — a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "Collapsible",
+      "package": "@ai-matrx/design-system",
+      "why": "Collapsible family. @ai-matrx/design-system 0.9.0 made the open/close transition package-owned .matrx-collapsible-content CSS keyed off --radix-collapsible-content-height; every host that invented its own either animated in exactly one app or interpolated to the ACCORDION variable and never animated at all, with no error. This app defines none — src/components/media-gen/prompts/CollapsibleOptionalField.tsx is a bespoke labelled optional-field control, a different name and a different capability (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "CollapsibleTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "Collapsible family. @ai-matrx/design-system 0.9.0 made the open/close transition package-owned .matrx-collapsible-content CSS keyed off --radix-collapsible-content-height; every host that invented its own either animated in exactly one app or interpolated to the ACCORDION variable and never animated at all, with no error. This app defines none — src/components/media-gen/prompts/CollapsibleOptionalField.tsx is a bespoke labelled optional-field control, a different name and a different capability (C28, 2026-09-07).",
+      "allow": []
+    },
+    {
+      "name": "CollapsibleContent",
+      "package": "@ai-matrx/design-system",
+      "why": "Collapsible family. @ai-matrx/design-system 0.9.0 made the open/close transition package-owned .matrx-collapsible-content CSS keyed off --radix-collapsible-content-height; every host that invented its own either animated in exactly one app or interpolated to the ACCORDION variable and never animated at all, with no error. This app defines none — src/components/media-gen/prompts/CollapsibleOptionalField.tsx is a bespoke labelled optional-field control, a different name and a different capability (C28, 2026-09-07).",
+      "allow": []
     }
   ]
 }

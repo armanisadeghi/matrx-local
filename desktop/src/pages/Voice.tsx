@@ -97,7 +97,7 @@ import type {
 // 2026-09-07). THE UNIT LAW: the unit is in the name.
 import {
   formatDurationSeconds,
-  formatRelativeTime as kitFormatRelativeTime,
+  formatRelativeTime,
 } from "@ai-matrx/kit/format";
 const TABS = [
   { value: "setup", label: "Setup" },
@@ -3874,8 +3874,6 @@ function formatSessionTitle(date: Date): string {
   });
 }
 
-const formatRelativeTime = (date: Date): string =>
-  kitFormatRelativeTime(date);
 
 function getGpuLabel(hw: HardwareDetectionResult): string {
   if (hw.hardware.is_apple_silicon) return "Apple Silicon (Metal)";

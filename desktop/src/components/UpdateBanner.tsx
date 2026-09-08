@@ -12,6 +12,11 @@ import { ArrowUpCircle, Download, RefreshCw, X, Loader2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 interface UpdateBannerProps {
   state: AutoUpdateState;
   actions: AutoUpdateActions;
@@ -133,7 +138,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
             <span>{progress}%</span>
             {status?.content_length && status?.downloaded != null && (
               <span>
-                {formatBytes(status.downloaded)} / {formatBytes(status.content_length)}
+                {formatFileSize(status.downloaded)} / {formatFileSize(status.content_length)}
               </span>
             )}
           </div>
@@ -203,8 +208,3 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

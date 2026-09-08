@@ -8,6 +8,11 @@ import { ToolSection } from "@/components/tools/shared/ToolSection";
 import type { ToolUISchema } from "@/types/tool-schema";
 import { cn } from "@/lib/utils";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 interface MonitoringPanelProps {
   onInvoke: (toolName: string, params: Record<string, unknown>) => Promise<void>;
   loading: boolean;
@@ -49,12 +54,6 @@ function formatUptime(seconds: number) {
   return `${m}m`;
 }
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelProps) {
   const [resources, setResources] = useState<ResourceData | null>(null);
@@ -230,7 +229,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
               <div className="rounded-xl border bg-card/40 px-3 py-2.5 text-center">
                 <p className="text-[10px] text-muted-foreground font-medium">Network</p>
                 <p className="text-sm font-bold tabular-nums">
-                  {resources.net_sent_bytes ? formatBytes(resources.net_sent_bytes) : "—"}
+                  {resources.net_sent_bytes ? formatFileSize(resources.net_sent_bytes) : "—"}
                 </p>
               </div>
             </div>

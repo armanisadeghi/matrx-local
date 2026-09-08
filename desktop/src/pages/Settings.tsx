@@ -115,6 +115,9 @@ import {
 } from "@/lib/engine-ports";
 import { FilesystemIndexSettings } from "@/features/filesystem/FilesystemIndexSettings";
 
+// THE package formatters (`@ai-matrx/kit/format`, duplication census H1
+// 2026-09-07). THE UNIT LAW: the unit is in the name.
+import { formatFileSize } from "@ai-matrx/kit/format";
 type AuthActions = ReturnType<typeof useAuth>;
 
 /** Tri-state, mirroring the engine's ApiKeyValidation. `unknown` means we could
@@ -3032,14 +3035,6 @@ export function Settings({
               const userPaths = storagePaths.filter((p) => p.user_visible);
               const internalPaths = storagePaths.filter((p) => !p.user_visible);
 
-              const formatBytes = (bytes: number) => {
-                if (bytes === 0) return "0 B";
-                const k = 1024;
-                const sizes = ["B", "KB", "MB", "GB"];
-                const i = Math.floor(Math.log(bytes) / Math.log(k));
-                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-              };
-
               const StatsCell = ({ name }: { name: string }) => {
                 const stats = pathStats[name];
                 const loading = statsLoading[name];
@@ -3068,7 +3063,7 @@ export function Settings({
                         {stats.file_count.toLocaleString()} file
                         {stats.file_count !== 1 ? "s" : ""}
                         <span className="text-muted-foreground ml-1.5">
-                          ({formatBytes(stats.size_bytes)})
+                          ({formatFileSize(stats.size_bytes)})
                         </span>
                       </span>
                     )}

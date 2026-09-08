@@ -40,6 +40,11 @@ import type {
   CodingSessionProviderReadinessStatus,
 } from "@/lib/api";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 const PROVIDERS: CodingSessionProvider[] = [
   "claude_code",
   "codex",
@@ -66,12 +71,6 @@ const STATE_STYLE: Record<ClaudeSyncState, string> = {
   not_synced: "text-muted-foreground",
 };
 
-function formatBytes(bytes: number): string {
-  if (!bytes) return "—";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function formatWhen(ms: number): string {
   if (!ms) return "—";
@@ -403,7 +402,7 @@ export function CodingSessions() {
                       {formatWhen(row.last_activity_at)}
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
-                      {formatBytes(row.bytes)}
+                      {formatFileSize(row.bytes)}
                     </td>
                     <td
                       className={`px-4 py-2 text-right ${STATE_STYLE[row.state]}`}

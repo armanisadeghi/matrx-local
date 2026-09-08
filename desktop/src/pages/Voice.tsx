@@ -93,6 +93,12 @@ import type {
   TranscriptionSession,
 } from "@/lib/transcription/types";
 
+// THE package formatters (`@ai-matrx/kit/format`, duplication census H1
+// 2026-09-07). THE UNIT LAW: the unit is in the name.
+import {
+  formatDurationSeconds,
+  formatRelativeTime as kitFormatRelativeTime,
+} from "@ai-matrx/kit/format";
 const TABS = [
   { value: "setup", label: "Setup" },
   { value: "transcribe", label: "Transcribe" },
@@ -3839,12 +3845,8 @@ function formatRam(mb: number): string {
   return `${mb} MB`;
 }
 
-function formatDuration(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return s > 0 ? `${m}m ${s}s` : `${m}m`;
-}
+const formatDuration = (secs: number): string =>
+  formatDurationSeconds(secs, { style: "compact" });
 
 function formatSessionTitle(date: Date): string {
   const now = new Date();
@@ -3872,15 +3874,8 @@ function formatSessionTitle(date: Date): string {
   });
 }
 
-function formatRelativeTime(date: Date): string {
-  const now = Date.now();
-  const diff = Math.floor((now - date.getTime()) / 1000);
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+const formatRelativeTime = (date: Date): string =>
+  kitFormatRelativeTime(date);
 
 function getGpuLabel(hw: HardwareDetectionResult): string {
   if (hw.hardware.is_apple_silicon) return "Apple Silicon (Metal)";

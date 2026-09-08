@@ -34,11 +34,13 @@ import { useMediaActions } from "./MediaActionsProvider";
 import { buildMediaMenu } from "./MediaMenuItems";
 import {
   extraParams,
-  formatBytes,
   formatDate,
   type MediaDescriptor,
 } from "./types";
 
+// THE package formatters (`@ai-matrx/kit/format`, duplication census H1
+// 2026-09-07). THE UNIT LAW: the unit is in the name.
+import { formatFileSize } from "@ai-matrx/kit/format";
 /** Copy-to-clipboard button with a transient confirmation. */
 export function CopyButton({
   value,
@@ -158,7 +160,7 @@ function InfoBody({ item }: { item: MediaDescriptor }) {
           <DialogDescription className="break-words text-xs">
             {formatDate(item.createdAt)}
             {item.width && item.height ? ` · ${item.width}×${item.height}` : ""}
-            {item.fileSizeBytes ? ` · ${formatBytes(item.fileSizeBytes)}` : ""}
+            {item.fileSizeBytes ? ` · ${formatFileSize(item.fileSizeBytes)}` : ""}
             {typeof item.elapsedSeconds === "number"
               ? ` · ${item.elapsedSeconds.toFixed(1)}s`
               : ""}
@@ -230,7 +232,7 @@ function InfoBody({ item }: { item: MediaDescriptor }) {
             {!!item.fileSizeBytes && (
               <MetaRow
                 label="File size"
-                value={formatBytes(item.fileSizeBytes)}
+                value={formatFileSize(item.fileSizeBytes)}
               />
             )}
             {item.createdAt && (

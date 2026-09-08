@@ -29,14 +29,18 @@ import {
 import { LARGE_BATCH_THRESHOLD, type MatrixPlan } from "@/lib/prompt-matrix";
 import { cn } from "@/lib/utils";
 
-/** Human-readable duration from seconds ("about 2h 10m"). */
+// THE package formatters (`@ai-matrx/kit/format`, duplication census H1
+// 2026-09-07). THE UNIT LAW: the unit is in the name.
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
+/**
+ * Human-readable ESTIMATE from seconds ("about 2h 10m"), or the honest word
+ * "unknown" when this machine has no timing history yet — which is not the
+ * same statement as an em-dash, so the fallback is bound here while the
+ * reading itself is the package's coarse voice.
+ */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "unknown";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.round((seconds % 3600) / 60);
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
-  if (m >= 1) return `${m}m`;
-  return `${Math.round(seconds)}s`;
+  return formatDurationSeconds(seconds, { style: "coarse" });
 }
 
 export function BatchConfirmDialog({

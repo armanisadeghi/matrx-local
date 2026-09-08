@@ -26,6 +26,11 @@ import {
   type FilesystemPriorityRoot,
 } from "@/lib/api";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 function pathLabel(path: string): string {
   const clean = path.replace(/[\\/]+$/, "");
   const parts = clean.split(/[\\/]/);
@@ -692,7 +697,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                   <span className="font-medium text-foreground">
                     Local storage:
                   </span>{" "}
-                  {formatBytes(status?.storage_bytes)}
+                  {formatFileSize(status?.storage_bytes)}
                 </div>
                 <div>
                   <span className="font-medium text-foreground">
@@ -836,13 +841,6 @@ function Metric({ value, label }: { value: string | number; label: string }) {
   );
 }
 
-function formatBytes(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 * 1024 * 1024)
-    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
 
 function formatTimestamp(value: number | null | undefined): string {
   return value ? new Date(value * 1000).toLocaleString() : "Never";

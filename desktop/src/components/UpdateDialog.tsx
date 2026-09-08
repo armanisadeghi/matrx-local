@@ -20,16 +20,16 @@ import { Download, RefreshCw, Loader2, ArrowUpCircle, X, CheckCircle2 } from "lu
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 interface UpdateDialogProps {
   state: AutoUpdateState;
   actions: AutoUpdateActions;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function UpdateDialog({ state, actions }: UpdateDialogProps) {
   const { status, busy, showDownloadProgress, progress, dialogOpen, restarting } = state;
@@ -96,7 +96,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
                   <span>{progress}%</span>
                   {status?.content_length && (
                     <span>
-                      {formatBytes(status.downloaded ?? 0)} / {formatBytes(status.content_length)}
+                      {formatFileSize(status.downloaded ?? 0)} / {formatFileSize(status.content_length)}
                     </span>
                   )}
                 </div>

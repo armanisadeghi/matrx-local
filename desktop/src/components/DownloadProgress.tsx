@@ -3,6 +3,11 @@ import { Download, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 /** Minimal download progress shape accepted by this component.
  *  Compatible with both DownloadProgress (transcription) and LlmDownloadProgress (LLM). */
 export interface DownloadProgressData {
@@ -123,16 +128,10 @@ function useSmoothedPercent(
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i >= 2 ? 1 : 0)} ${units[i]}`;
-}
 
 function formatSpeed(bps: number): string {
   if (bps <= 0) return "";
-  return `${formatBytes(bps)}/s`;
+  return `${formatFileSize(bps)}/s`;
 }
 
 function formatEta(sec: number | null): string {
@@ -253,8 +252,8 @@ export function DownloadProgress({
         ) : progress ? (
           <>
             <span className="tabular-nums">
-              {formatBytes(progress.bytes_downloaded)}
-              {progress.total_bytes > 0 && ` / ${formatBytes(progress.total_bytes)}`}
+              {formatFileSize(progress.bytes_downloaded)}
+              {progress.total_bytes > 0 && ` / ${formatFileSize(progress.total_bytes)}`}
             </span>
             <div className="flex items-center gap-3 tabular-nums">
               {speedBps > 0 && (

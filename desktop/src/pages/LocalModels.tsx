@@ -139,6 +139,11 @@ import { VoiceChatBar } from "@/components/voice/VoiceChatBar";
 import { WakeWordActivePopup } from "@/components/voice/WakeWordActivePopup";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 // ── Shared LLM context (single hook instance for all tabs) ───────────────
 
 const LlmContext = createContext<[LlmState, LlmActions] | null>(null);
@@ -151,13 +156,6 @@ function useLlmContext(): [LlmState, LlmActions] {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const gb = bytes / (1024 * 1024 * 1024);
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = bytes / (1024 * 1024);
-  return `${mb.toFixed(1)} MB`;
-}
 
 // ── Rating scale description ──────────────────────────────────────────────
 
@@ -393,7 +391,7 @@ function SetupTab() {
       ? ` — Part ${downloadProgress.part} of ${downloadProgress.total_parts}`
       : "";
   const bytesLabel = downloadProgress
-    ? `${formatBytes(downloadProgress.bytes_downloaded)} / ${formatBytes(downloadProgress.total_bytes || (hardwareResult?.all_models.find((m) => m.filename === downloadProgress.filename)?.expected_size_bytes ?? 0))}`
+    ? `${formatFileSize(downloadProgress.bytes_downloaded)} / ${formatFileSize(downloadProgress.total_bytes || (hardwareResult?.all_models.find((m) => m.filename === downloadProgress.filename)?.expected_size_bytes ?? 0))}`
     : "";
 
   if (!desktopAvailable) {
@@ -1233,7 +1231,7 @@ function ModelRow({
               />
               <span className="text-xs text-foreground/70 tabular-nums w-24 text-right">
                 {downloadProgress.percent.toFixed(0)}% ·{" "}
-                {formatBytes(downloadProgress.bytes_downloaded)}
+                {formatFileSize(downloadProgress.bytes_downloaded)}
               </span>
             </>
           ) : (

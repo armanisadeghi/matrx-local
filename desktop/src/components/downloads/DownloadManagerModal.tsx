@@ -38,20 +38,17 @@ import {
 import { useClientLogSubscriber } from "@/hooks/use-unified-log";
 import type { DownloadEntry } from "@/lib/downloads/types";
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
+// bodies with twelve different roundings and five different words for
+// "unknown" — the clearest case in the fleet for one owner.
+import { formatFileSize } from "@ai-matrx/kit/format";
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "—";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 function formatSpeed(bps: number | undefined): string {
   if (!bps || bps <= 0) return "—";
-  return `${formatBytes(bps)}/s`;
+  return `${formatFileSize(bps)}/s`;
 }
 
 function formatEta(seconds: number | null | undefined): string {
@@ -184,8 +181,8 @@ function ActiveRow({
       {/* Bytes */}
       <div className="w-32 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         {entry.total_bytes > 0
-          ? `${formatBytes(entry.bytes_done)} / ${formatBytes(entry.total_bytes)}`
-          : formatBytes(entry.bytes_done)}
+          ? `${formatFileSize(entry.bytes_done)} / ${formatFileSize(entry.total_bytes)}`
+          : formatFileSize(entry.bytes_done)}
       </div>
 
       {/* Speed */}
@@ -249,7 +246,7 @@ function WaitingRow({
 
       {/* Size */}
       <div className="w-24 shrink-0 text-right text-xs text-muted-foreground">
-        {entry.total_bytes > 0 ? formatBytes(entry.total_bytes) : "—"}
+        {entry.total_bytes > 0 ? formatFileSize(entry.total_bytes) : "—"}
       </div>
 
       {/* Priority */}
@@ -376,7 +373,7 @@ function HistoryRow({
 
       {/* Size */}
       <div className="w-24 shrink-0 text-right text-xs text-muted-foreground">
-        {entry.total_bytes > 0 ? formatBytes(entry.total_bytes) : "—"}
+        {entry.total_bytes > 0 ? formatFileSize(entry.total_bytes) : "—"}
       </div>
 
       {/* Retry button (failed only) */}

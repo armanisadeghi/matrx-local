@@ -781,6 +781,10 @@ ok "pnpm-lock.yaml is up to date."
 # action"s); pinning is banned.
 info "Checking @ai-matrx packages are npm latest..."
 (cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
+# Package logic is NEVER duplicated outside the package: a local re-definition of a
+# collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
+# run means the guard can actually fail.
+(cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || fail "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
 ok "@ai-matrx packages are npm latest."
 
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────

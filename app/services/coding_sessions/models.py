@@ -78,7 +78,7 @@ class BridgeAccountIdentity(BaseModel):
     provider_account_fingerprint: (
         Annotated[str, Field(pattern=r"^[0-9a-f]{12}$")] | None
     ) = None
-    provider_account_label: Annotated[str, Field(min_length=1, max_length=64)] | None = (
+    provider_account_label: Annotated[str, Field(min_length=1, max_length=320)] | None = (
         None
     )
 
@@ -104,7 +104,7 @@ class BridgeSourceMetadata(BaseModel):
     provider_account_fingerprint: (
         Annotated[str, Field(pattern=r"^[0-9a-f]{12}$")] | None
     ) = None
-    provider_account_label: Annotated[str, Field(min_length=1, max_length=64)] | None = (
+    provider_account_label: Annotated[str, Field(min_length=1, max_length=320)] | None = (
         None
     )
     importer_version: Annotated[str, Field(min_length=1, max_length=64)]

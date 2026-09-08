@@ -21,7 +21,6 @@ from app.services.coding_sessions.claude_probe import (
     AccountSnapshot as _AccountSnapshot,
     account_label,
     derive_account_key,
-    mask_email,
     read_account_snapshot as _read_account_snapshot,
 )
 from app.services.coding_sessions.claude_session_index import (
@@ -661,7 +660,6 @@ class ClaudeHistoryImporter:
                 "provider_account_key_version": ACCOUNT_KEY_VERSION,
                 "account_fingerprint": account.fingerprint,
                 "provider_account_label": account.account_label,
-                "provider_account_display_identity": account.local_display_identity,
                 "account_identity_observed_at": summary["completed_at"],
                 "account_blocked_reason": account.reason,
                 "claude_client_version": account.client_version,
@@ -753,7 +751,6 @@ class ClaudeHistoryImporter:
             "provider_account_key_version": ACCOUNT_KEY_VERSION,
             "account_fingerprint": account.fingerprint,
             "provider_account_label": account.account_label,
-            "provider_account_display_identity": account.local_display_identity,
             "account_blocked_reason": account.reason,
             "claude_client_version": account.client_version,
             "matrx_user_available": matrx_user_available,
@@ -1063,7 +1060,6 @@ class ClaudeHistoryImporter:
             "accepted": True,
             "provider_account_fingerprint": account.fingerprint,
             "provider_account_label": account.account_label,
-            "provider_account_display_identity": account.local_display_identity,
             "selected_sessions": len(selected_sources),
             "labeled_sessions": len(label_requests),
             "queued_label_updates": queued_labels,
@@ -1429,5 +1425,4 @@ __all__ = [
     "ClaudeHistorySelection",
     "account_label",
     "derive_account_key",
-    "mask_email",
 ]

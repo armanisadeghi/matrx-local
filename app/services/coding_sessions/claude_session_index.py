@@ -236,9 +236,28 @@ def read_session_index(
         is_pinned = fields.get("isPinned")
         rank = fields.get("pinnedRank")
         category = _clean_text(fields.get("categoryName"))
+        # THE LEDGER WINS for the sidebar labels it carries. The machine's
+        # session-sync agent (~/.claude/sync-claude-code-sessions.py) merges
+        # every account's copy of a session into one canonical title /
+        # titleSource / isArchived, with a rule the raw records cannot express:
+        # a title the person typed is never replaced by an auto-generated one
+        # from a sibling account. Reading only the freshest record file sent
+        # AI Matrx the sibling's auto title while Claude's own sidebar showed
+        # the person's rename (observed 2026-09-07). A record wins only when
+        # the ledger has no opinion on that field.
+        ledger_title = _clean_text(fields.get("title"))
+        ledger_title_source = _clean_text(fields.get("titleSource"), limit=32)
+        ledger_archived = fields.get("isArchived")
         enriched[session_id] = replace(
             entry,
             record_paths=record_paths,
+            title=ledger_title or entry.title,
+            title_source=(
+                ledger_title_source if ledger_title else entry.title_source
+            ),
+            is_archived=(
+                ledger_archived if isinstance(ledger_archived, bool) else entry.is_archived
+            ),
             is_pinned=is_pinned if isinstance(is_pinned, bool) else None,
             pinned_rank=rank if isinstance(rank, int) else None,
             category=category,

@@ -80,8 +80,7 @@ async def test_signed_in_account_uses_canonical_launcher_and_safe_identity(
     assert snapshot.probe_status == "ready"
     assert snapshot.executable_path == str(launcher)
     assert snapshot.client_version == "2.1.228"
-    assert snapshot.account_label == "a***n@t***.com"
-    assert snapshot.local_display_identity == "arman@titaniumsuccess.com"
+    assert snapshot.account_label == "arman@titaniumsuccess.com"
     assert snapshot.account_key is not None
     assert snapshot.fingerprint == snapshot.account_key[:12]
 
@@ -110,8 +109,7 @@ async def test_account_probe_ignores_inherited_developer_api_key(
     snapshot = await read_account_snapshot(executable=launcher)
 
     assert snapshot.available is True
-    assert snapshot.account_label == "org:org-subs"
-    assert snapshot.local_display_identity == "org-subscription"
+    assert snapshot.account_label == "org:org-subscription"
 
 
 @pytest.mark.parametrize(
@@ -187,8 +185,7 @@ async def test_signed_out_status_falls_back_to_desktop_oauth_record(
         org_id="org-1234",
         email="user@example.com",
     )
-    assert snapshot.account_label == "u***r@e***.com"
-    assert snapshot.local_display_identity == "user@example.com"
+    assert snapshot.account_label == "user@example.com"
     assert snapshot.diagnostic is not None and "desktop OAuth" in snapshot.diagnostic
 
 

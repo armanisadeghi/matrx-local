@@ -66,8 +66,7 @@ async def _account() -> _AccountSnapshot:
         "a" * 12,
         "2.1.228",
         None,
-        account_label="a***n@t***.com",
-        local_display_identity="arman@test.com",
+        account_label="arman@test.com",
     )
 
 
@@ -150,13 +149,13 @@ async def test_runtime_journal_migration_is_present(env) -> None:
     }
 
 
-async def test_capabilities_show_full_account_only_in_local_display_field(env) -> None:
+async def test_capabilities_show_the_full_account_label(env) -> None:
     runtime, *_ = env
 
     capabilities = await runtime.capabilities()
 
-    assert capabilities["claude_account_display_identity"] == "arman@test.com"
-    assert capabilities["claude_account_label"] == "a***n@t***.com"
+    assert capabilities["claude_account_label"] == "arman@test.com"
+    assert "claude_account_display_identity" not in capabilities
     assert capabilities["runtime_config"]["max_active_runs"] == 4
     assert capabilities["runtime_config"]["shutdown_timeout_seconds"] == 30.0
     assert capabilities["runtime_config"]["source"] in {

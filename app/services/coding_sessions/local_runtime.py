@@ -628,7 +628,6 @@ class LocalClaudeRuntime:
             "sdk_available": sdk_available,
             "claude_cli": str(cli) if cli else None,
             "claude_account_label": account.account_label,
-            "claude_account_display_identity": account.local_display_identity,
             "claude_client_version": account.client_version,
             "matrx_user_available": matrx_user,
             "auth_path": "user_subscription_login",

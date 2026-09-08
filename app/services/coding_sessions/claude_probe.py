@@ -7,9 +7,10 @@ signed-in installation as missing. Every coding-session consumer uses this
 module so history import and the local runtime cannot disagree.
 
 The probe reads only Claude's documented local CLI status. Cloud-bound metadata
-continues to use the deterministic account key and masked label. The loopback
-desktop may additionally show ``local_display_identity`` so the person using
-the machine can tell which of their own accounts Claude reported.
+carries the deterministic account key and the account's own identity — the
+signed-in email, else the organization id — in full. An account name is the
+owner's own provenance, not a secret (Arman's ruling, 2026-09-07); credentials
+and tokens never enter any payload.
 """
 
 from __future__ import annotations
@@ -62,7 +63,6 @@ class AccountSnapshot:
     executable_path: str | None = None
     probe_status: ProbeStatus | None = None
     diagnostic: str | None = None
-    local_display_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,28 +93,18 @@ def derive_account_key(
     return _sha256_text(f"{_ACCOUNT_KEY_NAMESPACE}\0{material}")
 
 
-def mask_email(email: str) -> str | None:
-    """Reduce an email to a display-safe label, or return ``None``."""
-
-    local, _, domain = email.partition("@")
-    if not local or not domain or "." not in domain:
-        return None
-    domain_name, _, tld = domain.rpartition(".")
-    if not domain_name or not tld:
-        return None
-    local_masked = local[0] + "***" + (local[-1] if len(local) > 1 else "")
-    return f"{local_masked}@{domain_name[0]}***.{tld}"[:64]
-
-
 def account_label(*, email: str | None, org_id: str | None) -> str | None:
-    """Return a masked email, then an opaque organization prefix as fallback."""
+    """The account identity a person recognizes: full email, else ``org:<id>``.
+
+    Shown verbatim everywhere (desktop, cloud metadata, AI Matrx). It was a
+    masked ``a***n@t***.com`` until 2026-09-07; Arman ruled the account name
+    is not a secret, so the mask is gone and every surface shows the value.
+    """
 
     if email:
-        masked = mask_email(email)
-        if masked:
-            return masked
+        return email[:320]
     if org_id:
-        return f"org:{org_id[:8]}"
+        return f"org:{org_id}"[:320]
     return None
 
 
@@ -402,7 +392,6 @@ async def read_account_snapshot(
                     "identity from the desktop OAuth record; `claude auth "
                     "status` reported signed out"
                 ),
-                local_display_identity=email or org_id,
             )
         return AccountSnapshot(
             False,
@@ -491,7 +480,6 @@ async def read_account_snapshot(
         executable_path=executable_path,
         probe_status="ready",
         diagnostic=version_diagnostic,
-        local_display_identity=email or normalized_org_id,
     )
 
 
@@ -500,7 +488,6 @@ __all__ = [
     "AccountSnapshot",
     "account_label",
     "derive_account_key",
-    "mask_email",
     "read_account_snapshot",
     "resolve_claude_executable",
 ]

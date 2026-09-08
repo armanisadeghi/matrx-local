@@ -60,7 +60,7 @@ def _write_session(config_dir: Path, *, session_id: str, mtime: datetime) -> Pat
 
 async def _account_a() -> _AccountSnapshot:
     return _AccountSnapshot(
-        True, "a" * 64, "a" * 12, "2.1.228", None, account_label="a***n@t***.com"
+        True, "a" * 64, "a" * 12, "2.1.228", None, account_label="arman@titaniumsuccess.com"
     )
 
 

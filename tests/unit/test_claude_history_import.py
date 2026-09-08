@@ -18,7 +18,6 @@ from app.services.coding_sessions.claude_history import (
     _AccountSnapshot,
     account_label,
     derive_account_key,
-    mask_email,
 )
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
@@ -59,8 +58,7 @@ async def _account_a() -> _AccountSnapshot:
         "a" * 12,
         "2.1.228",
         None,
-        account_label="a***n@t***.com",
-        local_display_identity="arman@titaniumsuccess.com",
+        account_label="arman@titaniumsuccess.com",
     )
 
 
@@ -71,8 +69,7 @@ async def _account_b() -> _AccountSnapshot:
         "b" * 12,
         "2.1.228",
         None,
-        account_label="o***r@e***.com",
-        local_display_identity="other@example.com",
+        account_label="other@example.com",
     )
 
 
@@ -147,10 +144,7 @@ async def test_preview_discloses_scope_and_local_account_without_private_content
     assert preview["sessions"][0]["project_name"] == "secret-project"
     assert preview["sessions"][0]["subagent_count"] == 1
     assert preview["provider_account_key_version"] == ACCOUNT_KEY_VERSION
-    assert preview["provider_account_label"] == "a***n@t***.com"
-    assert preview["provider_account_display_identity"] == (
-        "arman@titaniumsuccess.com"
-    )
+    assert preview["provider_account_label"] == "arman@titaniumsuccess.com"
     serialized = json.dumps(preview)
     assert "/private/company" not in serialized
     assert "private prompt" not in serialized
@@ -372,12 +366,13 @@ async def test_selected_import_is_atomic_bounded_and_replay_safe(importer_env) -
     metadata = envelopes[0].source_metadata
     assert metadata is not None
     assert metadata.provider_account_key == "a" * 64
-    assert "arman@titaniumsuccess.com" not in serialized
     assert metadata.provider_account_key_version == ACCOUNT_KEY_VERSION
     assert metadata.provider_account_fingerprint == "a" * 12
-    assert metadata.provider_account_label == "a***n@t***.com"
-    # Only the masked display label may carry an "@"; never a raw address.
-    assert "@" not in serialized.replace("a***n@t***.com", "")
+    # The account label is the full signed-in email (Arman's ruling 2026-09-07:
+    # an account name is not a secret). Nothing else in the preview carries an
+    # address — prompts, paths and org names never enter it.
+    assert metadata.provider_account_label == "arman@titaniumsuccess.com"
+    assert "@" not in serialized.replace("arman@titaniumsuccess.com", "")
 
 
 @pytest.mark.anyio
@@ -786,16 +781,19 @@ def test_account_key_is_deterministic_across_machines() -> None:
     ) != derive_account_key(api_provider="a", auth_method="bc", org_id=None, email=None)
 
 
-def test_account_label_is_masked_and_never_a_raw_email() -> None:
-    assert mask_email("arman@titaniumsuccess.com") == "a***n@t***.com"
-    assert mask_email("x@y.io") == "x***@y***.io"
-    assert mask_email("not-an-email") is None
-    assert mask_email("user@nodot") is None
+def test_account_label_is_the_full_identity_never_masked() -> None:
+    # Ruled 2026-09-07: the account name the person signed in with is shown in
+    # full everywhere. The old star-mask read as a secret being hidden for no
+    # reason and made accounts indistinguishable on /work/connections.
     assert account_label(email="arman@titaniumsuccess.com", org_id="e883f812-239f") == (
-        "a***n@t***.com"
+        "arman@titaniumsuccess.com"
     )
-    assert account_label(email=None, org_id="e883f812-239f-4dd8") == "org:e883f812"
+    assert account_label(email="x@y.io", org_id=None) == "x@y.io"
+    assert account_label(email=None, org_id="e883f812-239f-4dd8") == (
+        "org:e883f812-239f-4dd8"
+    )
     assert account_label(email=None, org_id=None) is None
+    assert "*" not in (account_label(email="arman@titaniumsuccess.com", org_id=None) or "")
 
 
 @pytest.mark.anyio

@@ -308,7 +308,6 @@ export interface ClaudeHistoryReview extends ClaudeHistoryInventoryPage {
   provider_account_key_version: 2;
   account_fingerprint: string | null;
   provider_account_label: string | null;
-  provider_account_display_identity: string | null;
   account_identity_observed_at: string;
   account_blocked_reason: string | null;
   claude_client_version: string | null;
@@ -478,7 +477,6 @@ export interface LocalRuntimeCapabilities {
   sdk_available: boolean;
   claude_cli: string | null;
   claude_account_label: string | null;
-  claude_account_display_identity?: string | null;
   claude_client_version: string | null;
   matrx_user_available: boolean;
   auth_path: "user_subscription_login";

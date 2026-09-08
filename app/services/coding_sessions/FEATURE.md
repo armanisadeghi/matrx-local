@@ -344,11 +344,12 @@ the ordered publisher; neither repair silently drops an event.
   with a per-installation secret and falsely conflicted across machines). It is an opaque
   correlation ID, deliberately not a secret. The wire metadata also carries
   `provider_account_key_version=2`, `provider_account_fingerprint` (the key's first 12 hex chars),
-  and a cloud-safe `provider_account_label` — a masked email such as `a***n@t***.com`, else
-  `org:<orgId[:8]>`; `orgName` is never used because it commonly embeds the raw email. The direct
-  loopback review/runtime responses additionally return the full locally observed account identity
-  so the person can identify which of their accounts is active. That display field never enters an
-  outbox envelope or cloud metadata; organization names, credentials, and tokens never enter either.
+  and `provider_account_label` — the account identity the person signed in with, IN FULL: the
+  email, else `org:<orgId>`. Ruled by Arman 2026-09-07: an account name is the owner's own
+  provenance, not a secret; the earlier mask (`a***n@t***.com`) and the parallel
+  `local_display_identity` / `*_display_identity` fields it forced are gone — one label, shown
+  verbatim on the desktop, in cloud metadata and on /work/connections. `orgName`, credentials and
+  tokens never enter any envelope.
   An unknown account may be enriched once; a known same-version key can never change for the same
   provider session ID, and a v2 key upgrades a legacy v1 binding exactly once on re-import. This
   identity describes the active login at import time; Claude's local transcript does not

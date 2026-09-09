@@ -83,6 +83,19 @@ jobs:
       - name: TypeScript typecheck
         run: pnpm tsc -b
 
+      # THERE IS ONE AGENT PICKER — `@ai-matrx/agents/catalog/react` (rulings
+      # D1/D4, 2026-09-08: matrx-local is never an exception; offline is a data
+      # location, not a different list). This desktop shipped a 912-line
+      # hand-rolled `AgentPicker` with its own sorts, filters and a hardcoded
+      # default-agent NAME. The guard blocked in `release.sh` only, so a
+      # re-grown fork could sit on main until someone cut a release; ~1s static
+      # scan, so it runs per PR too. The self-test proves the detector can
+      # still fail.
+      - name: THERE IS ONE AGENT PICKER
+        run: pnpm check:canonical-pickers
+      - name: the picker guard can still fail (self-test)
+        run: pnpm check:canonical-pickers:self-test
+
       # v1.3.104 shipped a crash that killed the app on boot for every user.
       # Typecheck passed and the bundle built — nothing here ever RENDERED the
       # app. This step does: it boots the real production bundle in Chromium

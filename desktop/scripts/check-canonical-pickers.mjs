@@ -35,12 +35,23 @@ const AGENT_CANONICAL_IMPORT = "@ai-matrx/agents/catalog/react";
 const AGENT_EXEMPTION = /canonical-agent-picker-exempt:\s*(.{12,})/;
 
 /** Names and shapes that only exist when someone rebuilt the roster. */
+// The prefix is OPTIONAL and not `[A-Z]\w*`: the frontend's original required a
+// character BEFORE "Agent", so a component named exactly `AgentPicker` — which
+// is what this repo actually shipped — slipped straight through it. It is a
+// NAMED prefix class rather than a bare `\w*` (which is what this port used
+// 2026-09-08 morning): bare `\w*` also matches `handleAgentSelect`, the handler
+// name every one of these surfaces has, and flagged four innocent files when it
+// was carried back to matrx-frontend the same day. `fetch|get|load|build|create`
+// keep `fetchAgentList` and friends — the retired hand-rolled loaders — caught.
+const NAME_PREFIX = "(?:[A-Z]\\w*|use|fetch|get|load|build|create)?";
+
 const AGENT_SIGNALS = [
-  // `\w*` and not `[A-Z]\w*`: the frontend's original required a prefix
-  // BEFORE "Agent", so a component named exactly `AgentPicker` — which is what
-  // this repo actually shipped — slipped straight through it.
-  /(?:export\s+)?function\s+\w*Agent(?:Picker|Selector|Select|Dropdown|List)\b/,
-  /const\s+\w*Agent(?:Picker|Selector|Select|Dropdown|List)\b\s*=\s*(?:\([^)]*\)|[^=])*=>/,
+  new RegExp(
+    `(?:export\\s+)?function\\s+${NAME_PREFIX}Agent(?:Picker|Selector|Select|Dropdown|List)\\b`,
+  ),
+  new RegExp(
+    `const\\s+${NAME_PREFIX}Agent(?:Picker|Selector|Select|Dropdown|List)\\b\\s*=\\s*(?:\\([^)]*\\)|[^=])*=>`,
+  ),
   /<SelectValue\b[^>]*placeholder\s*=\s*["'][^"']*(?:select|choose|pick)[^"']*agent/i,
   /<select\b[^>]*aria-label\s*=\s*["'][^"']*agent/i,
   /\b(?:agentOptions|availableAgents|displayAgents|allAgents|filteredAgents)\.map\s*\(/,
@@ -97,6 +108,20 @@ function selfTest() {
       "🚨 check:canonical-pickers SELF-TEST FAILED — the detector did not flag a\n" +
         "hand-rolled AgentPicker. A guard that cannot fail is not a guard; fix the\n" +
         "patterns in scripts/check-canonical-pickers.mjs before trusting a green run.",
+    );
+    process.exit(1);
+  }
+  const handler = scan(
+    "export function ChatSurface() {\n" +
+      "  const handleAgentSelect = useCallback((agent) => open(agent.id), []);\n" +
+      "  return <button onClick={() => handleAgentSelect({ id: '1' })}>Pick</button>;\n" +
+      "}\n",
+  );
+  if (handler) {
+    console.error(
+      "🚨 check:canonical-pickers SELF-TEST FAILED — the detector flagged a plain\n" +
+        "`handleAgentSelect` callback. A false positive makes agents delete the guard\n" +
+        "instead of the fork.",
     );
     process.exit(1);
   }

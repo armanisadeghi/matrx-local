@@ -1397,6 +1397,45 @@ CREATE INDEX IF NOT EXISTS idx_agents_category ON agents(category);
 CREATE INDEX IF NOT EXISTS idx_agents_position ON agents(catalog_position);
 """
 
+# ------------------------------------------------------------------
+# V33 — the mirror tolerates a SUPERSET, and execution detail comes from
+#       the platform RPC instead of the aidream /agents listing route.
+#
+# 1) `agents.orchestra` (nullable JSON text). `agx_get_list_full()` is about
+#    to return a nullable `orchestra jsonb` (the conductor badge:
+#    {mode, tagline, depth_budget, member_count, member_titles} or null).
+#    The platform column list is a REQUIRED MINIMUM, never an exact set — a
+#    new platform column must never take an installed desktop's catalog down —
+#    so extra columns always ride through `raw_json` verbatim, and a column
+#    this build knows by name additionally gets a first-class SQLite column it
+#    can query. See `app/services/agent_catalog/client.py`.
+#
+# 2) `agent_execution_details` — the fetch-through cache of
+#    `public.agx_get_execution_full(p_agent_id)`, the SAME per-agent read
+#    Cloud Chat makes in the browser. The row is stored VERBATIM (ruling D4:
+#    offline changes WHERE the data lives, never WHAT it is) and served
+#    verbatim by `GET /agents/catalog/{agent_id}/execution`.
+#
+# 3) `prompt_builtins` is DROPPED. It was a hand-made projection
+#    ({variable_defaults, settings}) of the aidream `GET /agents` listing
+#    route — a second shape for data the platform already answers, refreshed
+#    wholesale at every sync, and it failed outright for a user with several
+#    organizations and no default, leaving every variables form empty. We
+#    don't do legacy: it is migrated, repointed, deleted.
+# ------------------------------------------------------------------
+
+_V33_CATALOG_SUPERSET_AND_EXECUTION_DETAIL = """
+ALTER TABLE agents ADD COLUMN orchestra TEXT;
+
+CREATE TABLE IF NOT EXISTS agent_execution_details (
+    agent_id   TEXT PRIMARY KEY,
+    raw_json   TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+DROP TABLE IF EXISTS prompt_builtins;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1430,4 +1469,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (30, _V30_CODING_SESSION_RUNTIME_JOURNAL),
     (31, _V31_CLAUDE_SESSION_SYNCED),
     (32, _V32_AGENTS_PLATFORM_CATALOG),
+    (33, _V33_CATALOG_SUPERSET_AND_EXECUTION_DETAIL),
 ]

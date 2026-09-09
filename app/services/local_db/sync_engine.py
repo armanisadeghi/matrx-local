@@ -11,8 +11,7 @@ from SQLite only (the replica IS the read path).
 Sync sources:
   - Supabase RPC public.agx_get_list_full() (the ONE platform agent catalog,
     read as the signed-in user) → agents  [the mirror; ruling D4]
-  - AIDream server (/api/ai-models) → ai_models; (/api/agents) → prompt_builtins
-    as a variables/settings DETAIL cache only — never membership
+  - AIDream server (/api/ai-models) → ai_models
   - Local tool catalog (app.tools.catalog.get_catalog)
     → tools table
 
@@ -47,7 +46,6 @@ from app.services.local_db.repositories import (
     AgentsRepo,
     ToolsRepo,
     SyncMetaRepo,
-    PromptBuiltinsRepo,
     PromptsRepo,
     TokenRepo,
 )
@@ -91,7 +89,6 @@ class SyncEngine:
         self._agents_repo = AgentsRepo()
         self._tools_repo = ToolsRepo()
         self._sync_meta = SyncMetaRepo()
-        self._builtins_repo = PromptBuiltinsRepo()
         self._prompts_repo = PromptsRepo()
         self._token_repo = TokenRepo()
 
@@ -290,7 +287,7 @@ class SyncEngine:
         )
 
     # ------------------------------------------------------------------
-    # Agents sync (builtins + user prompts → prompt_builtins, prompts, agents)
+    # Agents sync (the platform catalog RPC → the `agents` mirror)
     # ------------------------------------------------------------------
 
     async def sync_agents(self) -> None:
@@ -308,11 +305,11 @@ class SyncEngine:
         ORG-SHARED agent was missing, and only 7 of the 19 catalog columns
         arrived. That was a second catalog, and it is gone.
 
-        A second, clearly separate step refreshes `prompt_builtins`, the
-        variables/settings DETAIL cache the single-agent execution door
-        still reads. It is NOT a membership source and never contributes a row
-        to the catalog; it retires with that endpoint when the desktop adopts
-        the shared picker package.
+        Per-agent execution detail (variables/settings) is NOT synced here and
+        never was membership: it is read ONE agent at a time, lazily, from
+        `public.agx_get_execution_full(p_agent_id)` when
+        `GET /agents/catalog/{agent_id}/execution` is asked — 468 agents are
+        not 468 RPC calls at startup.
 
         Failure posture (nothing silent):
           - no/expired JWT   -> loud skip, mirror kept, sync_meta `skipped`
@@ -389,8 +386,6 @@ class SyncEngine:
 
         mirrored = await self._agents_repo.replace_catalog(rows, user_id=user_id)
 
-        await self._refresh_agent_detail_cache(jwt)
-
         await self._sync_meta.set_last_sync("agents", last_hash=_hash_list(rows))
 
         shared = sum(
@@ -405,57 +400,6 @@ class SyncEngine:
             mirrored,
             shared,
         )
-
-    async def _refresh_agent_detail_cache(self, jwt: str) -> None:
-        """Refresh `prompt_builtins` — variables/settings ONLY, never membership.
-
-        `variable_defaults` and `settings` are NOT catalog columns — no Matrx
-        client's LIST rows carry them, online or off. They are read ONE agent at
-        a time by `GET /agents/catalog/{agent_id}/execution`, which serves this
-        cache. It is filled from the aidream detail route the catalog no longer
-        uses for membership. A failure here degrades the variables form, never
-        the agent list, so it is logged and dropped.
-        """
-        client = get_aidream_client()
-        if client is None:
-            logger.debug(
-                "[sync_engine] AIDream client unavailable — agent detail cache "
-                "(variables/settings) not refreshed; the catalog itself is unaffected"
-            )
-            return
-        try:
-            detail_rows = await client.fetch_agents(jwt)
-        except Exception as exc:  # noqa: BLE001 — never let details break the catalog
-            logger.warning(
-                "[sync_engine] Agent DETAIL cache (variables/settings) refresh "
-                "failed: %s. The agent catalog itself synced fine; variable forms "
-                "may show stale or missing variables for new agents.",
-                exc,
-            )
-            return
-
-        details = [
-            {
-                "id": a.get("id", ""),
-                "name": a.get("name", ""),
-                "description": a.get("description", ""),
-                "category": a.get("category", ""),
-                "tags": a.get("tags") or [],
-                "variable_defaults": a.get("variables") or a.get("variable_defaults") or [],
-                "settings": _extract_settings(a),
-                "is_active": True,
-            }
-            for a in detail_rows
-            if a.get("id")
-        ]
-        if not details:
-            logger.warning(
-                "[sync_engine] Agent detail feed was empty — keeping the cached "
-                "variables/settings rather than wiping them"
-            )
-            return
-        await self._builtins_repo.upsert_many(details)
-        await self._builtins_repo.delete_missing({d["id"] for d in details})
 
     # ------------------------------------------------------------------
     # Tools sync
@@ -509,27 +453,6 @@ class SyncEngine:
 def _hash_list(items: list[dict]) -> str:
     raw = json.dumps(items, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def _extract_settings(row: dict[str, Any]) -> dict[str, Any]:
-    """Extract a normalized settings dict from a raw prompt/builtin row."""
-    settings = row.get("settings") or {}
-    if isinstance(settings, str):
-        try:
-            settings = json.loads(settings)
-        except Exception:
-            settings = {}
-    return {
-        "model_id": settings.get("model_id") or row.get("model_id"),
-        "temperature": settings.get("temperature") or row.get("temperature"),
-        "max_tokens": (
-            settings.get("max_tokens")
-            or settings.get("max_output_tokens")
-            or row.get("max_tokens")
-        ),
-        "stream": settings.get("stream", True),
-        "tools": settings.get("tools") or [],
-    }
 
 
 def get_sync_engine() -> SyncEngine:

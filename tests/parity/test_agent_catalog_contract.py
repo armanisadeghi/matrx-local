@@ -4,14 +4,19 @@ Ruling D4 (Arman, 2026-09-08) — "the SQL light mirror is simply designed to
 give a user offline access ... the structure, the format, and everything else
 must be absolutely identical." These tests are the enforcement:
 
-  * the served rows carry EXACTLY the 19 keys `public.agx_get_list_full()`
-    declares, with the right JSON types (uuids as strings, ISO timestamps,
-    `tags` as an array, nulls as null, booleans as booleans);
+  * the served rows carry at LEAST the 19 keys `public.agx_get_list_full()`
+    declares today, with the right JSON types (uuids as strings, ISO
+    timestamps, `tags` as an array, nulls as null, booleans as booleans);
+  * SUPERSET TOLERANCE: a row carrying a column this build predates (the
+    platform's incoming nullable `orchestra`) round-trips sync → SQLite → door
+    UNCHANGED, and a row MISSING a required column is still refused — an
+    additive platform migration must never take an installed desktop's catalog
+    down, and a subtractive one must never pass silently;
   * a shared / org-shared agent survives the round trip (it was structurally
     impossible before 2026-09-08);
-  * the ONE-agent execution door serves variables/settings from the detail
-    cache and REFUSES (404) rather than answering "no variables" for an agent
-    it has never mirrored;
+  * the ONE-agent execution door serves the `agx_get_execution_full` row
+    VERBATIM from its fetch-through cache and REFUSES rather than answering
+    "no variables" for an agent it can neither cache nor fetch;
   * an empty mirror REFUSES rather than serving an empty list.
 
 The 19-column contract is verified against the live database definition in
@@ -30,7 +35,13 @@ import pytest
 from fastapi import FastAPI
 
 from app.api.agent_catalog_routes import router as agent_catalog_router
-from app.services.agent_catalog.client import CATALOG_COLUMNS, CATALOG_RPC
+from app.services.agent_catalog.client import (
+    CATALOG_COLUMNS,
+    CATALOG_RPC,
+    EXECUTION_RPC,
+    AgentCatalogError,
+    _first_row_missing_columns,
+)
 from app.services.local_db import database as database_module
 from app.services.local_db.database import LocalDatabase
 
@@ -118,7 +129,7 @@ def run_with_mirror(
     scenario,
     *,
     rows: list[dict[str, Any]] | None = None,
-    details: list[dict[str, Any]] | None = None,
+    details: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> None:
     """Seed a throwaway SQLite mirror, serve it over ASGI, run `scenario`."""
 
@@ -127,12 +138,17 @@ def run_with_mirror(
         await db.connect()  # real migrations, including V32
         monkeypatch.setattr(database_module, "_instance", db)
         try:
-            from app.services.local_db.repositories import AgentsRepo, PromptBuiltinsRepo
+            from app.services.local_db.repositories import (
+                AgentExecutionDetailsRepo,
+                AgentsRepo,
+            )
 
             if rows:
                 await AgentsRepo().replace_catalog(rows, user_id="user-1")
             if details:
-                await PromptBuiltinsRepo().upsert_many(details)
+                repo = AgentExecutionDetailsRepo()
+                for agent_id, payload in details:
+                    await repo.upsert(agent_id, payload)
             async with _client(_app()) as http:
                 await scenario(http)
         finally:
@@ -147,11 +163,12 @@ def run_with_mirror(
 
 
 def test_catalog_columns_match_the_rpc_contract() -> None:
+    """The 19 columns are the REQUIRED MINIMUM, not an exact set."""
     assert CATALOG_COLUMNS == LIVE_RPC_COLUMNS
     assert len(CATALOG_COLUMNS) == 19
 
 
-def test_served_rows_have_exactly_the_19_keys_with_the_right_json_types(
+def test_served_rows_carry_the_required_keys_with_the_right_json_types(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario(http: httpx.AsyncClient) -> None:
@@ -164,8 +181,9 @@ def test_served_rows_have_exactly_the_19_keys_with_the_right_json_types(
 
         for row in body:
             assert list(row) == list(LIVE_RPC_COLUMNS), (
-                "a served row has extra/missing/reordered keys — the mirror must "
-                "never add a local field or drop a platform one"
+                "a served row reordered or dropped a platform key, or the mirror "
+                "invented a LOCAL field — extra PLATFORM columns are welcome, "
+                "local additions never are"
             )
             assert isinstance(row["id"], str)
             assert isinstance(row["tags"], list)
@@ -243,41 +261,151 @@ def test_status_reports_freshness_without_polluting_the_row_array(
 # ---------------------------------------------------------------------------
 
 
-def test_execution_door_serves_the_detail_cache_and_refuses_what_it_lacks(
+def test_execution_door_serves_the_rpc_row_verbatim_and_refuses_what_it_lacks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A variables form asks for ONE agent, exactly as Cloud Chat asks Supabase.
 
-    An agent with no mirrored detail must 404: an empty payload is
-    indistinguishable from "this agent takes no variables", and a form that
-    silently drops a required question is the defect this refuses.
+    The payload is the `agx_get_execution_full` row VERBATIM — the SAME object
+    a browser gets — so the desktop can normalize both lanes with one mapper.
+
+    An agent with nothing cached and no way to fetch must REFUSE: an empty
+    payload is indistinguishable from "this agent takes no variables", and a
+    form that silently drops a required question is the defect this refuses.
     """
 
-    details = [
-        {
-            "id": OWNED_ROW["id"],
-            "name": OWNED_ROW["name"],
-            "description": "mine",
-            "category": "general",
-            "tags": ["alpha"],
-            "variable_defaults": [{"name": "topic"}],
-            "settings": {"model_id": "m1", "stream": True},
-            "is_active": True,
-        }
-    ]
+    execution_row = {
+        "id": OWNED_ROW["id"],
+        "variable_definitions": [{"name": "topic", "component_type": "text"}],
+        "model_id": "10000000-0000-0000-0000-000000000001",
+        "settings": {"temperature": 0.4, "stream": True},
+        "tools": ["30000000-0000-0000-0000-000000000009"],
+        "custom_tools": None,
+        "context_policies": {"mode": "auto"},
+        "auto_context_disabled": False,
+        "ui_gates": None,
+    }
 
     async def scenario(http: httpx.AsyncClient) -> None:
         resp = await http.get(f"/agents/catalog/{OWNED_ROW['id']}/execution")
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["variable_defaults"] == [{"name": "topic"}]
-        assert body["settings"]["model_id"] == "m1"
+        assert resp.json() == execution_row, (
+            "the execution door must hand back the RPC row byte-shape identical "
+            "— a projection here is a second structure (ruling D4)"
+        )
+        assert resp.headers["x-matrx-agent-detail-stale"] == "false"
 
+        # Nothing cached, and no stored JWT to call the RPC with.
         missing = await http.get(f"/agents/catalog/{SHARED_ROW['id']}/execution")
         assert missing.status_code == 404
-        assert missing.json()["detail"]["error"] == "agent_detail_not_mirrored"
+        detail = missing.json()["detail"]
+        assert detail["error"] == "agent_detail_unavailable"
+        assert detail["rpc"] == EXECUTION_RPC
+        assert detail["remedy"]
 
-    run_with_mirror(tmp_path, monkeypatch, scenario, rows=RPC_ROWS, details=details)
+    run_with_mirror(
+        tmp_path,
+        monkeypatch,
+        scenario,
+        rows=RPC_ROWS,
+        details=[(OWNED_ROW["id"], execution_row)],
+    )
+
+
+# ---------------------------------------------------------------------------
+# SUPERSET TOLERANCE — the platform column list is a MINIMUM, not an exact set
+# ---------------------------------------------------------------------------
+
+#: The nullable column `agx_get_list_full()` is about to grow: the conductor
+#: badge. Every installed desktop reads the SAME function the browser does, so
+#: if a new column were a shape violation, one platform migration would take
+#: every shipped desktop's catalog offline.
+ORCHESTRA_VALUE = {
+    "mode": "conductor",
+    "tagline": "Runs a section",
+    "depth_budget": 3,
+    "member_count": 4,
+    "member_titles": ["Researcher", "Writer", "Editor", "Critic"],
+}
+
+
+def test_an_extra_platform_column_round_trips_through_the_mirror_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sync → SQLite → door, byte-shape identical, with no desktop release.
+
+    Proven failing-then-passing: before superset tolerance the mirror rebuilt
+    each served row from a pinned 19-column list, so `orchestra` was silently
+    DROPPED between the RPC and the door — the desktop's structural client
+    would have rendered no conductor badge and said nothing.
+    """
+    superset_rows = [
+        {**OWNED_ROW, "orchestra": ORCHESTRA_VALUE},
+        {**SHARED_ROW, "orchestra": None},
+        {**BUILTIN_ROW, "orchestra": None},
+    ]
+
+    async def scenario(http: httpx.AsyncClient) -> None:
+        for path, body in (
+            ("/agents/catalog", None),
+            ("/agents/catalog/rpc", {"fn": CATALOG_RPC}),
+        ):
+            resp = (
+                await http.get(path)
+                if body is None
+                else await http.post(path, json=body)
+            )
+            assert resp.status_code == 200, path
+            served = resp.json()
+            assert served == superset_rows, (
+                f"{path} did not return the superset rows unchanged — an extra "
+                "PLATFORM column must reach the desktop exactly as the browser "
+                "sees it"
+            )
+            assert served[0]["orchestra"] == ORCHESTRA_VALUE
+            assert served[1]["orchestra"] is None
+
+    run_with_mirror(tmp_path, monkeypatch, scenario, rows=superset_rows)
+
+
+def test_an_extra_column_also_lands_in_its_first_class_sqlite_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`orchestra` is queryable in SQLite, not only carried in raw_json (V33)."""
+
+    async def main() -> None:
+        db = LocalDatabase(path=tmp_path / "orchestra.db")
+        await db.connect()
+        monkeypatch.setattr(database_module, "_instance", db)
+        try:
+            from app.services.local_db.repositories import AgentsRepo
+
+            await AgentsRepo().replace_catalog(
+                [{**OWNED_ROW, "orchestra": ORCHESTRA_VALUE}], user_id="user-1"
+            )
+            rows = await db.fetchall(
+                "SELECT id, orchestra FROM agents WHERE orchestra IS NOT NULL"
+            )
+            assert [r["id"] for r in rows] == [OWNED_ROW["id"]]
+        finally:
+            await db.close()
+
+    asyncio.run(main())
+
+
+def test_a_row_missing_a_required_column_is_still_refused() -> None:
+    """Additive is fine; SUBTRACTIVE is a loud refusal, never a quiet gap."""
+    complete = [{**OWNED_ROW, "orchestra": ORCHESTRA_VALUE}]
+    assert _first_row_missing_columns(complete) == [], (
+        "a superset row must not be reported as a shape violation"
+    )
+
+    without_access_level = dict(OWNED_ROW)
+    without_access_level.pop("access_level")
+    assert _first_row_missing_columns([without_access_level]) == ["access_level"]
+
+    # And the caller turns that into a refusal with a stated remedy.
+    assert issubclass(AgentCatalogError, RuntimeError)
 
 
 # ---------------------------------------------------------------------------

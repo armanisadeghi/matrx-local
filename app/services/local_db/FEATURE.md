@@ -23,8 +23,7 @@ phrase in the sync directories.
 - `sync_engine.py` — the pull-only replica engine: the Supabase RPC
   `public.agx_get_list_full()` → `agents` (THE agent catalog; see
   `app/services/agent_catalog/FEATURE.md`), AIDream `/api/ai-models` →
-  `ai_models`, AIDream `/api/agents` → `prompt_builtins` as a
-  variables/settings DETAIL cache only — never membership; the local tool
+  `ai_models`; the local tool
   catalog (`app.tools.catalog.get_catalog`, 108 entries) → `tools`. Runs at
   startup + every 10 min (`DEFAULT_SYNC_INTERVAL = 600`). It is the ONLY
   component allowed to write cloud catalog data into SQLite. Initial and
@@ -45,17 +44,30 @@ phrase in the sync directories.
   equivalent fallback. Historical plaintext remains readable but is never newly written.
   Do not merge these secrets into the synced settings blob.
 - `agents` — the EXACT offline mirror of `agx_get_list_full()`: the 19
-  platform columns with the platform's names, plus `user_id`,
-  `catalog_position`, `raw_json`, `synced_at`. 🚨 Ruling D4 (Arman,
-  2026-09-08): matrx-local is never an exception — offline changes WHERE the
-  catalog lives, never WHAT it is. Never add, drop, rename, or re-sort a
-  column here. Before V32 this table was a 7-column projection of a different
-  catalog that could not see shared or org-shared agents.
+  platform columns with the platform's names, the optional platform column
+  `orchestra` (V33), plus `user_id`, `catalog_position`, `raw_json`,
+  `synced_at`. 🚨 Ruling D4 (Arman, 2026-09-08): matrx-local is never an
+  exception — offline changes WHERE the catalog lives, never WHAT it is.
+  Never add, drop, rename, or re-sort a column here. Before V32 this table
+  was a 7-column projection of a different catalog that could not see shared
+  or org-shared agents. The platform column list is a REQUIRED MINIMUM, not
+  an exact set: an EXTRA platform column is stored in `raw_json` and served
+  verbatim, because one additive platform migration must never take every
+  installed desktop's catalog down. A MISSING required column is still a
+  loud refusal.
+- `agent_execution_details` — fetch-through cache (V33) of
+  `public.agx_get_execution_full(p_agent_id)`, stored and served VERBATIM by
+  `GET /agents/catalog/{agent_id}/execution`. Filled LAZILY on the first
+  request for an agent, TTL 600s — never 468 RPC calls at startup. It
+  replaced `prompt_builtins`, a hand-made `{variable_defaults, settings}`
+  projection of the aidream `GET /agents` listing route (dropped in V33 with
+  `AIDreamClient.fetch_agents`).
 - `agent_execution_definitions` — fetch-through cache of the complete,
   authenticated AIDream execution definition consumed by matrx-ai's
   `ExecutionAgentSource`. It is deliberately separate from `agents` /
-  `prompt_builtins`: those are picker projections and must never be interpreted
-  as models, prompts, tools, or other executable policy.
+  `agent_execution_details`: those are the picker's catalog and its
+  variables/settings form data, and must never be interpreted as models,
+  prompts, tools, or other executable policy.
 
 ## Rules
 
@@ -98,6 +110,11 @@ conversation, not a test edit.
 
 ## Change log
 
+- 2026-09-08 — Migration V33: the `agents` mirror tolerates a SUPERSET of the
+  platform columns (`orchestra` promoted to a first-class nullable column;
+  anything else rides `raw_json` verbatim); `agent_execution_details` replaced
+  `prompt_builtins`, moving per-agent variables/settings off the aidream
+  `GET /agents` route onto `agx_get_execution_full()`.
 - 2026-09-08 — Migration V32: `agents` became the exact mirror of
   `agx_get_list_full()`; its source moved off the aidream `GET /agents` route,
   which could not see shared or org-shared agents (ruling D4).

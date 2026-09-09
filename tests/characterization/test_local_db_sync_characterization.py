@@ -34,7 +34,6 @@ from app.services.local_db import sync_engine as sync_engine_module
 from app.services.local_db.database import LocalDatabase
 from app.services.local_db.sync_engine import (
     SyncEngine,
-    _extract_settings,
     _hash_list,
 )
 from app.services.agent_catalog.client import (
@@ -55,24 +54,15 @@ class FakeAIDreamClient:
     def __init__(
         self,
         models: list[dict[str, Any]] | None = None,
-        agents: list[dict[str, Any]] | None = None,
         offline: bool = False,
     ) -> None:
         self._models = models or []
-        self._agents = agents or []
         self._offline = offline
-        self.fetch_agents_jwts: list[str] = []
 
     async def fetch_models(self) -> list[dict[str, Any]]:
         if self._offline:
             raise AIDreamOfflineError("server unreachable (fake)")
         return self._models
-
-    async def fetch_agents(self, jwt: str) -> list[dict[str, Any]]:
-        if self._offline:
-            raise AIDreamOfflineError("server unreachable (fake)")
-        self.fetch_agents_jwts.append(jwt)
-        return self._agents
 
 
 class FakeTokenRepo:
@@ -460,17 +450,25 @@ def test_sync_agents_empty_rpc_result_never_wipes_the_mirror(
     run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
 
 
-def test_agent_membership_never_comes_from_the_aidream_route(
+def test_the_aidream_agents_listing_route_has_no_caller_left(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The aidream feed may only fill the variables/settings DETAIL cache.
+    """The sidecar reads the platform, never the aidream `GET /agents` list.
 
-    If a row it returns ever reaches the `agents` catalog table, matrx-local
-    has grown a second catalog again — exactly the defect ruling D4 forbids.
+    That route's membership is builtins + agents the caller CREATED, it
+    carried 7 of the catalog's columns, and it 400s outright for a user
+    belonging to several organizations with no default — which left every
+    variables form silently empty. Both the catalog and the per-agent
+    execution detail now come from Supabase RPCs. The client method is gone;
+    this pins that it cannot come back through the sync engine.
     """
-    client = FakeAIDreamClient(
-        agents=[{"id": "detail-only", "name": "Detail Only", "variables": [{"name": "x"}]}]
+    from app.services.aidream import client as aidream_client_module
+
+    assert not hasattr(aidream_client_module.AIDreamClient, "fetch_agents"), (
+        "AIDreamClient.fetch_agents is back — the aidream /agents listing route "
+        "is a second catalog and a second membership rule (ruling D4)"
     )
+
     catalog = FakeCatalog(rows=[BUILTIN_ROW])
 
     async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
@@ -478,17 +476,44 @@ def test_agent_membership_never_comes_from_the_aidream_route(
 
         catalog_ids = [r["id"] for r in await db.fetchall("SELECT id FROM agents")]
         assert catalog_ids == [BUILTIN_ROW["id"]]
-        assert "detail-only" not in catalog_ids
 
-        # ...but it DID land in the detail cache the legacy projection reads.
-        detail_ids = [
-            r["id"] for r in await db.fetchall("SELECT id FROM prompt_builtins")
-        ]
-        assert detail_ids == ["detail-only"]
+        # Execution detail is LAZY: a catalog sync must not fire one RPC per
+        # agent. Nothing is cached until an /execution request asks for one.
+        cached = await db.fetchall("SELECT agent_id FROM agent_execution_details")
+        assert cached == [], (
+            "sync_agents pre-warmed the execution cache — 468 agents would be "
+            "468 RPC calls at startup"
+        )
 
     run_scenario(
-        tmp_path, monkeypatch, scenario, client=client, catalog=catalog, signed_in=True
+        tmp_path,
+        monkeypatch,
+        scenario,
+        client=FakeAIDreamClient(),
+        catalog=catalog,
+        signed_in=True,
     )
+
+
+def test_the_mirror_carries_a_platform_column_this_build_predates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An additive platform migration must never take the catalog down."""
+    superset = {**BUILTIN_ROW, "orchestra": {"mode": "conductor", "member_count": 2}}
+    catalog = FakeCatalog(rows=[superset])
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine.sync_agents()
+
+        meta = await _sync_status(db, "agents")
+        assert meta is not None and meta["status"] == "success", (
+            "a NEW platform column was treated as a failure — that is a "
+            "self-inflicted outage on every installed desktop"
+        )
+        served = await engine._agents_repo.list_catalog()
+        assert served == [superset]
+
+    run_scenario(tmp_path, monkeypatch, scenario, catalog=catalog, signed_in=True)
 
 
 # ---------------------------------------------------------------------------
@@ -543,29 +568,3 @@ def test_hash_list_pins() -> None:
     assert _hash_list(a) == _hash_list([{"y": [1, 2], "x": 1}])  # key order free
     assert _hash_list(a) != _hash_list([{"x": 2, "y": [1, 2]}])
     assert len(_hash_list(a)) == 16  # truncated sha256 hex
-
-
-def test_extract_settings_pins() -> None:
-    # settings dict wins; max_output_tokens is an accepted alias.
-    row = {
-        "settings": {"model_id": "m1", "max_output_tokens": 512},
-        "temperature": 0.9,
-    }
-    assert _extract_settings(row) == {
-        "model_id": "m1",
-        "temperature": 0.9,  # falls through to the row when absent in settings
-        "max_tokens": 512,
-        "stream": True,  # default
-        "tools": [],
-    }
-
-    # settings arrives as a JSON string → decoded.
-    row2 = {"settings": '{"model_id": "m2", "stream": false}'}
-    assert _extract_settings(row2)["model_id"] == "m2"
-    assert _extract_settings(row2)["stream"] is False
-
-    # unparseable settings string → treated as empty, row-level fallbacks used.
-    row3 = {"settings": "garbage", "model_id": "m3", "max_tokens": 99}
-    extracted = _extract_settings(row3)
-    assert extracted["model_id"] == "m3"
-    assert extracted["max_tokens"] == 99

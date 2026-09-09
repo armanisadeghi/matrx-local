@@ -166,68 +166,68 @@ function settingsFromUnknown(value: unknown): AgentSettings {
   return settings;
 }
 
-export async function fetchCloudAgentExecutionFull(
-  agentId: string,
-): Promise<{
-  variables: PromptVariable[];
-  contextSlots: unknown[];
-  modelId: string | null;
-  settings: AgentSettings;
-  tools: string[];
-  customTools: unknown;
-  uiGates: unknown;
-}> {
-  // A Mandate-backed choice has no client-readable definition: the server
-  // resolves the agent (and its variables) at run time.
-  if (isMandateAgentRef(agentId)) {
-    return {
-      variables: [],
-      contextSlots: [],
-      modelId: null,
-      settings: {},
-      tools: [],
-      customTools: null,
-      uiGates: null,
-    };
-  }
-  const { data, error } = await supabase.rpc("agx_get_execution_full", {
-    p_agent_id: agentId,
-  });
-  if (error) throw new Error(error.message);
+/** The empty payload — a Mandate ref, or an agent with no readable row. */
+export const EMPTY_EXECUTION_PAYLOAD = {
+  variables: [] as PromptVariable[],
+  contextSlots: [] as unknown[],
+  modelId: null as string | null,
+  settings: {} as AgentSettings,
+  tools: [] as string[],
+  customTools: null as unknown,
+  uiGates: null as unknown,
+};
 
-  const row = Array.isArray(data)
-    ? (data[0] as AgentExecutionFullRow | undefined)
-    : (data as AgentExecutionFullRow | null);
+export type AgentExecutionPayloadShape = typeof EMPTY_EXECUTION_PAYLOAD;
 
-  if (!row) {
-    return {
-      variables: [],
-      contextSlots: [],
-      modelId: null,
-      settings: {},
-      tools: [],
-      customTools: null,
-      uiGates: null,
-    };
-  }
+/**
+ * ONE mapper for `agx_get_execution_full`'s row, whichever lane delivered it.
+ *
+ * Ruling D4: offline is a data LOCATION, never a different structure — the
+ * engine's `/agents/catalog/{id}/execution` door serves the RPC row verbatim,
+ * so cloud and local normalize through exactly this function. A second mapper
+ * would be a second shape.
+ */
+export function executionPayloadFromRow(
+  row: unknown,
+): AgentExecutionPayloadShape {
+  const record = readRecord(row) as AgentExecutionFullRow | null;
+  if (!record) return { ...EMPTY_EXECUTION_PAYLOAD };
 
-  const contextSlots = Array.isArray(row.context_slots) ? row.context_slots : [];
-  const settings = settingsFromUnknown(row.settings);
-  const modelId = row.model_id ?? settings.model_id ?? null;
+  const contextSlots = Array.isArray(record.context_slots)
+    ? record.context_slots
+    : [];
+  const settings = settingsFromUnknown(record.settings);
+  const modelId = record.model_id ?? settings.model_id ?? null;
 
   return {
-    variables: normalizeVariableList(row.variable_definitions),
+    variables: normalizeVariableList(record.variable_definitions),
     contextSlots,
     modelId,
     settings: {
       ...settings,
       ...(modelId ? { model_id: modelId } : {}),
-      ...(row.tools?.length ? { tools: row.tools } : {}),
+      ...(record.tools?.length ? { tools: record.tools } : {}),
     },
-    tools: row.tools ?? [],
-    customTools: row.custom_tools,
-    uiGates: row.ui_gates,
+    tools: record.tools ?? [],
+    customTools: record.custom_tools,
+    uiGates: record.ui_gates,
   };
+}
+
+export async function fetchCloudAgentExecutionFull(
+  agentId: string,
+): Promise<AgentExecutionPayloadShape> {
+  // A Mandate-backed choice has no client-readable definition: the server
+  // resolves the agent (and its variables) at run time.
+  if (isMandateAgentRef(agentId)) return { ...EMPTY_EXECUTION_PAYLOAD };
+
+  const { data, error } = await supabase.rpc("agx_get_execution_full", {
+    p_agent_id: agentId,
+  });
+  if (error) throw new Error(error.message);
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return executionPayloadFromRow(row);
 }
 
 export const fetchCloudAgentExecutionMinimal = fetchCloudAgentExecutionFull;

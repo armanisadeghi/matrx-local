@@ -353,7 +353,8 @@ async def list_models() -> dict[str, Any]:
 async def chat_sync_status() -> dict[str, Any]:
     """Return the sync status for all chat-related data from local SQLite."""
     from app.services.local_db.repositories import (
-        SyncMetaRepo, ModelsRepo, AgentsRepo, TokenRepo, PromptBuiltinsRepo, PromptsRepo,
+        SyncMetaRepo, ModelsRepo, AgentsRepo, TokenRepo,
+        AgentExecutionDetailsRepo, PromptsRepo,
     )
     from app.services.local_db.sync_engine import get_sync_engine
 
@@ -362,7 +363,7 @@ async def chat_sync_status() -> dict[str, Any]:
 
     models_count = await ModelsRepo().count()
     agents_count_total = await AgentsRepo().count()
-    builtins_count = await PromptBuiltinsRepo().count()
+    execution_details_count = await AgentExecutionDetailsRepo().count()
 
     user_id: str | None = None
     jwt_present = False
@@ -388,7 +389,7 @@ async def chat_sync_status() -> dict[str, Any]:
         "counts": {
             "models": models_count,
             "agents_total": agents_count_total,
-            "prompt_builtins": builtins_count,
+            "agent_execution_details": execution_details_count,
             "user_prompts": prompts_count,
         },
         "last_sync": {m["entity_type"]: m for m in all_meta},

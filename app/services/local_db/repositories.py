@@ -15,7 +15,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.common.system_logger import get_logger
-from app.services.agent_catalog.client import CATALOG_COLUMNS as AGENT_CATALOG_COLUMNS
+from app.services.agent_catalog.client import (
+    CATALOG_COLUMNS as AGENT_CATALOG_COLUMNS,
+    MIRRORED_COLUMNS as AGENT_MIRRORED_COLUMNS,
+    OPTIONAL_CATALOG_COLUMNS as AGENT_OPTIONAL_COLUMNS,
+)
 from app.services.local_db.database import get_db, LocalDatabase
 
 logger = get_logger()
@@ -149,10 +153,20 @@ class AgentsRepo:
     belongs in the caller that needs the legacy shape, never here.
     """
 
-    #: The 19 platform columns, in the RPC's declared order.
+    #: The REQUIRED platform columns, in the RPC's declared order. A row
+    #: missing one is refused upstream (`fetch_agent_catalog`).
     CATALOG_COLUMNS: tuple[str, ...] = AGENT_CATALOG_COLUMNS
+    #: Optional platform columns this build gives a first-class SQLite column
+    #: (`orchestra`, the conductor badge). A mirror written before the platform
+    #: returned them simply has NULL there.
+    OPTIONAL_COLUMNS: tuple[str, ...] = AGENT_OPTIONAL_COLUMNS
+    #: Everything with a SQLite home. Anything else the RPC returns still
+    #: round-trips through `raw_json` — the contract is a MINIMUM, not an
+    #: exact set, so one additive platform migration can never take an
+    #: installed desktop's catalog down.
+    MIRRORED_COLUMNS: tuple[str, ...] = AGENT_MIRRORED_COLUMNS
     _BOOL_COLUMNS = frozenset({"is_active", "is_archived", "is_favorite", "is_owner"})
-    _JSON_COLUMNS = frozenset({"tags"})
+    _JSON_COLUMNS = frozenset({"tags", "orchestra"})
 
     #: 🚨 THE TORN-MIRROR LOCK. `replace_catalog` DELETEs and re-INSERTs 468
     #: rows on the process's ONE shared aiosqlite connection, so a read issued
@@ -233,7 +247,11 @@ class AgentsRepo:
         await self._db.commit()
 
     async def _insert(self, row: dict[str, Any], *, user_id: str, position: int) -> None:
-        columns = list(self.CATALOG_COLUMNS)
+        # Required columns always; optional platform columns only when the RPC
+        # actually returned them (an older platform simply leaves them NULL).
+        columns = list(self.CATALOG_COLUMNS) + [
+            c for c in self.OPTIONAL_COLUMNS if c in row
+        ]
         placeholders = ",".join("?" for _ in columns) + ",?,?,?,?"
         assignments = ",".join(f"{c}=excluded.{c}" for c in columns)
         values = [self._encode(c, row.get(c)) for c in columns]
@@ -259,18 +277,42 @@ class AgentsRepo:
         return value if isinstance(value, str) else str(value)
 
     def _to_catalog_row(self, row) -> dict[str, Any]:
-        """Rebuild the RPC row EXACTLY: same 19 keys, same JSON types."""
+        """Rebuild the RPC row EXACTLY — same keys, order and JSON types.
+
+        `raw_json` holds the row as the database handed it over, so replaying
+        it is the ONLY reconstruction that is faithful for a column this build
+        has never heard of. That is what makes the mirror superset-tolerant:
+        the desktop's structural client sees byte-for-byte what a browser sees
+        the moment the platform adds a column, with no desktop release.
+
+        The typed-column rebuild survives as the fallback for a row written
+        before `raw_json` carried the whole row, and says so out loud.
+        """
         d = _row_to_dict(row)
+        raw = _json_loads(d.get("raw_json"))
+        if isinstance(raw, dict) and all(c in raw for c in self.CATALOG_COLUMNS):
+            return raw
+
+        logger.warning(
+            "[agents_repo] Mirrored row %s has no usable raw_json — rebuilding it "
+            "from the typed columns, which cannot carry a platform column this "
+            "build predates. Re-sync to restore an exact mirror.",
+            d.get("id"),
+        )
         out: dict[str, Any] = {}
-        for column in self.CATALOG_COLUMNS:
+        for column in self.MIRRORED_COLUMNS:
+            if column not in d:
+                continue
             value = d.get(column)
             if value is None:
                 out[column] = None
             elif column in self._BOOL_COLUMNS:
                 out[column] = bool(value)
-            elif column in self._JSON_COLUMNS:
+            elif column == "tags":
                 decoded = _json_loads(value)
                 out[column] = decoded if isinstance(decoded, list) else []
+            elif column in self._JSON_COLUMNS:
+                out[column] = _json_loads(value)
             else:
                 out[column] = value
         return out
@@ -926,80 +968,63 @@ class TokenRepo:
 
 
 # ==================================================================
-# PromptBuiltinsRepo — prompt_builtins table
+# AgentExecutionDetailsRepo — the fetch-through cache of
+# `public.agx_get_execution_full(p_agent_id)`
+#
+# 🚨 Ruling D4: offline changes WHERE the data lives, never WHAT it is. The
+# RPC row is stored and returned VERBATIM — the same keys Cloud Chat reads
+# from `supabase.rpc("agx_get_execution_full")` in the browser. This table
+# replaced `prompt_builtins` (V33), a hand-made {variable_defaults, settings}
+# projection of the aidream `GET /agents` listing route: a second shape for
+# data the platform already answers, which additionally failed outright for a
+# user with several organizations and no default.
 # ==================================================================
 
-class PromptBuiltinsRepo:
+class AgentExecutionDetailsRepo:
     def __init__(self, db: LocalDatabase | None = None):
         self._db = db or get_db()
 
-    async def list_all(self, active_only: bool = True) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM prompt_builtins"
-        if active_only:
-            sql += " WHERE is_active = 1"
-        sql += " ORDER BY name"
-        rows = await self._db.fetchall(sql)
-        return [self._deserialize(r) for r in rows]
-
-    async def get(self, builtin_id: str) -> dict[str, Any] | None:
+    async def get(self, agent_id: str) -> tuple[dict[str, Any], str] | None:
+        """The cached RPC row and when it was fetched, or None."""
         row = await self._db.fetchone(
-            "SELECT * FROM prompt_builtins WHERE id = ?", (builtin_id,)
+            "SELECT raw_json, fetched_at FROM agent_execution_details WHERE agent_id = ?",
+            (agent_id,),
         )
-        return self._deserialize(row) if row else None
+        if not row:
+            return None
+        d = _row_to_dict(row)
+        payload = _json_loads(d.get("raw_json"))
+        if not isinstance(payload, dict):
+            logger.warning(
+                "[agent_execution_details] Cached row for %s is not an object — "
+                "dropping it so the next read refetches from %s.",
+                agent_id,
+                "agx_get_execution_full",
+            )
+            return None
+        return payload, str(d.get("fetched_at") or "")
 
-    async def upsert(self, builtin: dict[str, Any]) -> None:
+    async def upsert(self, agent_id: str, payload: dict[str, Any]) -> None:
         await self._db.execute(
-            """INSERT INTO prompt_builtins
-               (id, name, description, category, tags, variable_defaults, settings, is_active, raw_json, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 name=excluded.name, description=excluded.description,
-                 category=excluded.category, tags=excluded.tags,
-                 variable_defaults=excluded.variable_defaults,
-                 settings=excluded.settings, is_active=excluded.is_active,
-                 raw_json=excluded.raw_json, updated_at=excluded.updated_at""",
-            (
-                builtin["id"],
-                builtin.get("name", ""),
-                builtin.get("description", ""),
-                builtin.get("category", ""),
-                _json_dumps(builtin.get("tags", [])),
-                _json_dumps(builtin.get("variable_defaults", [])),
-                _json_dumps(builtin.get("settings", {})),
-                int(builtin.get("is_active", True)),
-                _json_dumps(builtin),
-                _now(),
-            ),
+            """INSERT INTO agent_execution_details (agent_id, raw_json, fetched_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(agent_id) DO UPDATE SET
+                 raw_json=excluded.raw_json, fetched_at=excluded.fetched_at""",
+            (agent_id, _json_dumps(payload), _now()),
         )
         await self._db.commit()
 
-    async def upsert_many(self, builtins: list[dict[str, Any]]) -> None:
-        for b in builtins:
-            await self.upsert(b)
-
-    async def delete_missing(self, keep_ids: set[str]) -> int:
-        if not keep_ids:
-            return 0
-        placeholders = ",".join("?" for _ in keep_ids)
-        cursor = await self._db.execute(
-            f"DELETE FROM prompt_builtins WHERE id NOT IN ({placeholders})",
-            tuple(keep_ids),
+    async def delete(self, agent_id: str) -> None:
+        await self._db.execute(
+            "DELETE FROM agent_execution_details WHERE agent_id = ?", (agent_id,)
         )
         await self._db.commit()
-        return cursor.rowcount
 
     async def count(self) -> int:
-        row = await self._db.fetchone("SELECT COUNT(*) as cnt FROM prompt_builtins WHERE is_active = 1")
-        return row["cnt"] if row else 0
-
-    def _deserialize(self, row) -> dict[str, Any]:
-        d = _row_to_dict(row)
-        d["tags"] = _json_loads(d.get("tags", "[]")) or []
-        d["variable_defaults"] = _json_loads(d.get("variable_defaults", "[]")) or []
-        d["settings"] = _json_loads(d.get("settings", "{}")) or {}
-        d["is_active"] = bool(d.get("is_active", 1))
-        d["raw_json"] = _json_loads(d.get("raw_json", "{}")) or {}
-        return d
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS cnt FROM agent_execution_details"
+        )
+        return int(row["cnt"]) if row else 0
 
 
 # ==================================================================

@@ -78,7 +78,7 @@ class AIDreamClient:
         models = await client.get("/ai-models")
 
         # authenticated endpoint — pass user JWT
-        agents = await client.get("/agents", jwt=user_jwt)
+        models = await client.fetch_models()
     """
 
     def __init__(
@@ -108,7 +108,7 @@ class AIDreamClient:
         per-request transport fact exactly like the bearer token — so it is
         attached here, on the same line as ``Authorization``, instead of at
         each call site. Attaching it per-call-site is what left the coding
-        session bridge, ``/ai/user/pending_calls``, ``/agents`` and
+        session bridge, ``/ai/user/pending_calls`` and
         ``/coding-sessions/sessions`` 400ing in production on 2026-08-30 while
         four other call sites were fine: the four that remembered.
 
@@ -276,19 +276,6 @@ class AIDreamClient:
         """GET /api/ai-models — public, no auth needed."""
         data = await self.get("/ai-models")
         return data.get("models", [])
-
-    async def fetch_agents(self, jwt: str) -> list[dict[str, Any]]:
-        """GET /api/agents — requires user JWT.
-
-        Returns the unified agent catalog: platform agents (formerly prompt
-        builtins, now rows in the ``agent.definition`` table) plus the
-        authenticated user's own agents. There is no public/anonymous variant;
-        the old /api/prompts/builtins, /api/prompts and /api/prompts/all
-        endpoints are unmounted. Each item is shaped as
-        ``{id, name, description, category, tags, type, variables}``.
-        """
-        data = await self.get("/agents", jwt=jwt)
-        return data.get("agents", [])
 
     async def fetch_agent_execution_definition(
         self,

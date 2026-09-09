@@ -9,10 +9,9 @@ import {
   FileText,
   X,
 } from "lucide-react";
+import { AgentListDropdown } from "@ai-matrx/agents/catalog/react";
 import { cn } from "@/lib/utils";
 import { LOCAL_MODEL_PREFIX, type ChatMode } from "@/hooks/use-chat";
-import type { AgentInfo } from "@/types/agents";
-import { AgentPicker } from "./AgentPicker";
 
 interface ChatInputProps {
   onSend: (message: string) => void | Promise<void>;
@@ -34,11 +33,14 @@ interface ChatInputProps {
   sendBlockedReason?: string | null;
   /** When true, focus the textarea on mount. */
   autoFocus?: boolean;
-  // Agent props
-  agents?: AgentInfo[];
+  // Agent props. The list itself belongs to `@ai-matrx/agents/catalog` — the
+  // ONE agent picker (ruling D1) — so nothing is passed in but the selection.
   selectedAgentId?: string | null;
-  onAgentChange?: (agentId: string | null) => void;
-  agentsLoading?: boolean;
+  onAgentChange?: (agentId: string) => void;
+  /** The mandate whose live Holder heads the list, e.g. `local.cloud_chat`. */
+  defaultMandateKey?: string;
+  /** Isolates this surface's tab/sort/filter state in the shared catalog. */
+  agentConsumerId?: string;
   showModelSelector?: boolean;
   showModeSelector?: boolean;
   /**
@@ -82,10 +84,10 @@ export function ChatInput({
   engineReady = true,
   sendBlockedReason = null,
   autoFocus = false,
-  agents = [],
   selectedAgentId = null,
   onAgentChange,
-  agentsLoading = false,
+  defaultMandateKey,
+  agentConsumerId,
   showModelSelector = true,
   showModeSelector = true,
   plusMenuSlot,
@@ -97,7 +99,6 @@ export function ChatInput({
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [showAgentPicker, setShowAgentPicker] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -280,39 +281,15 @@ export function ChatInput({
               </button>
             )}
 
-            {/* Agent selector */}
+            {/* Agent selector — THE ONE PICKER, from the package. */}
             {onAgentChange && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowAgentPicker(true)}
-                  className={cn(
-                    "flex max-w-[min(280px,40vw)] items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-1.5 text-xs transition-colors",
-                    selectedAgentId
-                      ? "border-primary/30 text-primary hover:bg-primary/5"
-                      : "text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground",
-                  )}
-                >
-                  <span className="truncate font-medium">
-                    {selectedAgentId
-                      ? (agents.find((a) => a.id === selectedAgentId)?.name ??
-                        "Agent")
-                      : "Choose agent"}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                </button>
-
-                <AgentPicker
-                  agents={agents}
-                  selectedAgentId={selectedAgentId}
-                  onSelect={(id) => {
-                    onAgentChange(id);
-                  }}
-                  isLoading={agentsLoading}
-                  open={showAgentPicker}
-                  onClose={() => setShowAgentPicker(false)}
-                />
-              </div>
+              <AgentListDropdown
+                onSelect={onAgentChange}
+                activeAgentId={selectedAgentId ?? null}
+                {...(defaultMandateKey ? { defaultMandateKey } : {})}
+                {...(agentConsumerId ? { consumerId: agentConsumerId } : {})}
+                compact
+              />
             )}
 
             {/* Model selector */}

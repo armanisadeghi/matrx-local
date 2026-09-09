@@ -785,7 +785,12 @@ info "Checking @ai-matrx packages are npm latest..."
 # collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
 # run means the guard can actually fail.
 (cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || fail "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
-ok "@ai-matrx packages are npm latest."
+# THERE IS ONE AGENT PICKER (ruling D1) and matrx-local is NEVER an exception
+# (ruling D4). This desktop shipped a 912-line hand-rolled AgentPicker with its
+# own sorts, filters and a hardcoded default-agent NAME; the guard is what stops
+# that class returning. Self-test first so a green run means it can fail.
+(cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || fail "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
+ok "@ai-matrx packages are npm latest; the one agent picker holds."
 
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
 # The live DB is canonical, but registry reachability or drift must not stop an

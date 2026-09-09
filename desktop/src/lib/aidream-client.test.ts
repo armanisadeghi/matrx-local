@@ -6,7 +6,7 @@ const { getAIDreamServerUrl } = vi.hoisted(() => ({
 
 vi.mock("@/lib/app-config", () => ({ getAIDreamServerUrl }));
 
-import { fetchAIDreamAgents, fetchAIDreamModels } from "./aidream-client";
+import { fetchAIDreamModels, fetchMandateResolution } from "./aidream-client";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -28,15 +28,17 @@ describe("AIDream GET requests", () => {
 
   it("sends authentication with the organization aidream now requires", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
+      new Response(JSON.stringify({ mandate_key: "local.cloud_chat" }), { status: 200 }),
     );
 
     // A REAL organization id: since @ai-matrx/agents 0.6.0 the package's
     // org-context kernel writes this header AND validates the id, so the old
     // "org-123" placeholder is no longer a representative fixture.
-    await fetchAIDreamAgents("test-jwt", {
-      organizationId: "3f2a91c4-5b6d-4e7f-8a90-1b2c3d4e5f60",
-    });
+    await fetchMandateResolution(
+      "local.cloud_chat",
+      "test-jwt",
+      "3f2a91c4-5b6d-4e7f-8a90-1b2c3d4e5f60",
+    );
 
     const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.headers).toEqual({
@@ -50,11 +52,11 @@ describe("AIDream GET requests", () => {
     // stored id used to be sent anyway and earned an opaque server 400; now it
     // is refused here, with a message that names the problem.
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
+      new Response(JSON.stringify({ mandate_key: "local.cloud_chat" }), { status: 200 }),
     );
 
     await expect(
-      fetchAIDreamAgents("test-jwt", { organizationId: "org-123" }),
+      fetchMandateResolution("local.cloud_chat", "test-jwt", "org-123"),
     ).rejects.toThrow(/organization ID is invalid/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -65,12 +67,12 @@ describe("AIDream GET requests", () => {
     // The client fails closed at the SAME boundary instead of spending a
     // round trip on a guaranteed refusal — and never invents an organization.
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ agents: [], count: 0 }), { status: 200 }),
+      new Response(JSON.stringify({ mandate_key: "local.cloud_chat" }), { status: 200 }),
     );
 
-    await expect(fetchAIDreamAgents("test-jwt")).rejects.toThrow(
-      /organizationId/,
-    );
+    await expect(
+      fetchMandateResolution("local.cloud_chat", "test-jwt", ""),
+    ).rejects.toThrow(/organizationId/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

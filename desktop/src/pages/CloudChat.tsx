@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ChevronDown,
   Cloud,
   Cpu,
   Loader2,
   MessageSquarePlus,
 } from "lucide-react";
-import { AgentPicker } from "@/components/chat/AgentPicker";
+import {
+  AgentCatalogProvider,
+  AgentListDropdown,
+} from "@ai-matrx/agents/catalog/react";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
@@ -14,7 +16,9 @@ import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
 import { GmailReviewCard } from "@/components/chat/GmailReviewCard";
 import { CloudChatPlusMenu } from "@/components/chat/PlusMenu";
 import { Button } from "@ai-matrx/design-system";
-import { useCloudAgents } from "@/hooks/use-cloud-agents";
+import { getCloudAgentCatalog } from "@/lib/agent-catalog";
+import { useAgentExecution } from "@/hooks/use-agent-execution";
+import { useAgentName } from "@/hooks/use-agent-name";
 import { useEmailReviews } from "@/hooks/use-email-reviews";
 import {
   type ChatAttachment,
@@ -22,9 +26,9 @@ import {
   useCloudChat,
 } from "@/hooks/use-cloud-chat";
 import type { EngineStatus } from "@/hooks/use-engine";
-import { DEFAULT_CHAT_AGENT } from "@/lib/cloud-agents";
+import { DEFAULT_CHAT_MANDATE_KEY, DEFAULT_CHAT_MANDATE_REF } from "@/lib/mandates";
 import { cn } from "@/lib/utils";
-import type { AgentInfo, PromptVariable } from "@/types/agents";
+import type { PromptVariable } from "@/types/agents";
 
 function defaultVariableValues(variables: PromptVariable[]): Record<string, string> {
   const defaults: Record<string, string> = {};
@@ -34,11 +38,11 @@ function defaultVariableValues(variables: PromptVariable[]): Record<string, stri
   return defaults;
 }
 
-function CloudEmptyState({ activeAgent }: { activeAgent: AgentInfo | null }) {
+function CloudEmptyState({ agentName }: { agentName: string | null }) {
   return (
     <div className="flex h-full items-center justify-center px-4">
       <div className="text-center text-xs text-muted-foreground">
-        {activeAgent ? activeAgent.name : "Select an agent"}
+        {agentName ?? "Select an agent"}
       </div>
     </div>
   );
@@ -49,13 +53,26 @@ interface CloudChatProps {
   engineUrl: string | null;
 }
 
-export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
+/**
+ * Cloud Chat overrides the app-wide (offline) catalog with the LIVE one. Same
+ * package, same picker, same rows in the same order — only the transport
+ * differs (ruling D4). `lib/agent-catalog.ts` holds both clients.
+ */
+export function CloudChat(props: CloudChatProps) {
+  return (
+    <AgentCatalogProvider catalog={getCloudAgentCatalog()}>
+      <CloudChatSurface {...props} />
+    </AgentCatalogProvider>
+  );
+}
+
+function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [defaultAgentApplied, setDefaultAgentApplied] = useState(false);
-  const [activeAgent, setActiveAgent] = useState<AgentInfo | null>(null);
-  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
-  const [agentSelectionError, setAgentSelectionError] = useState<string | null>(null);
+  // ONE piece of agent state: which id is selected. The list, its tabs, sorts,
+  // filters, favourites and the live-named default row all belong to
+  // `@ai-matrx/agents/catalog` (ruling D1).
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [activeVariables, setActiveVariables] = useState<PromptVariable[]>([]);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -65,7 +82,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   // message). Nothing has been sent; the card below IS the authorization.
   const [emailReviews, emailReviewActions] = useEmailReviews(engineUrl);
   const resolveEmailReview = emailReviewActions.resolve;
-  const cloudAgents = useCloudAgents();
+  const agentExecution = useAgentExecution("cloud");
   const {
     activeConversationId,
     attachedGoogleFiles,
@@ -93,21 +110,15 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     stopStreaming,
   } = cloudChat;
   const {
-    agents,
-    ensureExecutionFull,
-    error: agentsError,
-    executionError,
-    executionLoadingAgentId,
-    isLoading: agentsLoading,
-  } = cloudAgents;
+    ensureExecution,
+    error: executionError,
+    loadingAgentId: executionLoadingAgentId,
+  } = agentExecution;
+  const selectedAgentName = useAgentName(selectedAgentId);
 
   const activeConversation = cloudChat.activeConversation;
   const messages = activeConversation?.messages ?? [];
   const hasMessages = messages.length > 0;
-  const selectedAgentId = pendingAgentId ?? activeAgent?.id ?? null;
-  const currentActiveAgent = selectedAgentId
-    ? (agents.find((agent) => agent.id === selectedAgentId) ?? activeAgent)
-    : null;
 
   const handleReferencePaths = useCallback((paths: string[]) => {
     const text = paths.length === 1
@@ -119,39 +130,16 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   // The default choice is the `local.cloud_chat` Mandate — a platform answer,
   // not an agent id — so it needs no agent list to be selectable.
   useEffect(() => {
-    if (defaultAgentApplied || activeAgent || activeConversationId) return;
-    setActiveAgent(DEFAULT_CHAT_AGENT);
+    if (defaultAgentApplied || selectedAgentId || activeConversationId) return;
+    setSelectedAgentId(DEFAULT_CHAT_MANDATE_REF);
     setDefaultAgentApplied(true);
-  }, [activeAgent, activeConversationId, defaultAgentApplied]);
+  }, [activeConversationId, defaultAgentApplied, selectedAgentId]);
 
   useEffect(() => {
     if (!activeConversationId) return;
-    if (!activeConversation?.agentId) {
-      setActiveAgent(null);
-      return;
-    }
-    const conversationAgent = agents.find((agent) => agent.id === activeConversation.agentId);
-    if (conversationAgent) {
-      setActiveAgent(conversationAgent);
-      setPendingAgentId(null);
-      setAgentSelectionError(null);
-      setDefaultAgentApplied(true);
-    } else {
-      setPendingAgentId(activeConversation.agentId);
-      setAgentSelectionError(
-        "This conversation's agent is still syncing. Sending is paused until it is available.",
-      );
-    }
-  }, [activeConversation?.agentId, activeConversationId, agents]);
-
-  useEffect(() => {
-    if (!pendingAgentId) return;
-    const resolved = agents.find((agent) => agent.id === pendingAgentId);
-    if (!resolved) return;
-    setActiveAgent(resolved);
-    setPendingAgentId(null);
-    setAgentSelectionError(null);
-  }, [agents, pendingAgentId]);
+    setSelectedAgentId(activeConversation?.agentId ?? null);
+    if (activeConversation?.agentId) setDefaultAgentApplied(true);
+  }, [activeConversation?.agentId, activeConversationId]);
 
   useEffect(() => {
     if (!selectedAgentId || hasMessages) {
@@ -161,7 +149,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     }
 
     let cancelled = false;
-    void ensureExecutionFull(selectedAgentId).then((payload) => {
+    void ensureExecution(selectedAgentId).then((payload) => {
       if (cancelled) return;
       setActiveVariables(payload.variables);
       setVariableValues(defaultVariableValues(payload.variables));
@@ -171,37 +159,11 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     return () => {
       cancelled = true;
     };
-  }, [ensureExecutionFull, hasMessages, selectedAgentId, setModel]);
-
-  const activeAgentWithVariables = useMemo(() => {
-    if (!currentActiveAgent) return null;
-    return {
-      ...currentActiveAgent,
-      variable_defaults: activeVariables,
-    };
-  }, [currentActiveAgent, activeVariables]);
+  }, [ensureExecution, hasMessages, selectedAgentId, setModel]);
 
   const handleSelectAgent = useCallback(
-    (agentId: string | null) => {
-      if (!agentId) {
-        setActiveAgent(null);
-        setPendingAgentId(null);
-        setAgentSelectionError(null);
-        setActiveVariables([]);
-        setVariableValues({});
-        return;
-      }
-      const found = agents.find((agent) => agent.id === agentId) ?? null;
-      if (!found) {
-        setPendingAgentId(agentId);
-        setAgentSelectionError(
-          "The selected agent is still syncing. Sending is paused until it is available.",
-        );
-        return;
-      }
-      setActiveAgent(found);
-      setPendingAgentId(null);
-      setAgentSelectionError(null);
+    (agentId: string) => {
+      setSelectedAgentId(agentId);
       setDefaultAgentApplied(true);
       setActiveVariables([]);
       setVariableValues({});
@@ -209,7 +171,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
         selectConversation(null);
       }
     },
-    [activeConversationId, agents, selectConversation],
+    [activeConversationId, selectConversation],
   );
 
   const handleTargetChange = useCallback(
@@ -227,9 +189,9 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
   );
 
   const handleNewChat = useCallback(() => {
-    if (!activeAgent) setActiveAgent(DEFAULT_CHAT_AGENT);
+    if (!selectedAgentId) setSelectedAgentId(DEFAULT_CHAT_MANDATE_REF);
     createConversation();
-  }, [activeAgent, createConversation]);
+  }, [createConversation, selectedAgentId]);
 
   const handleSelectConversation = useCallback(
     (conversationId: string) => {
@@ -239,17 +201,14 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
         (conversation?.localConversationId ? "local" : "cloud");
       setExecutionTarget(target);
       selectConversation(conversationId);
-      const conversationAgent = conversation?.agentId
-        ? agents.find((agent) => agent.id === conversation.agentId)
-        : null;
-      if (conversationAgent) {
-        setActiveAgent(conversationAgent);
+      if (conversation?.agentId) {
+        setSelectedAgentId(conversation.agentId);
         setDefaultAgentApplied(true);
       }
       setActiveVariables([]);
       setVariableValues({});
     },
-    [agents, cloudChat.conversations, selectConversation, setExecutionTarget],
+    [cloudChat.conversations, selectConversation, setExecutionTarget],
   );
 
   const handleSend = useCallback(
@@ -260,14 +219,14 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
       setVariableValues({});
       setAttachments([]);
       await sendMessage(content, {
-        ...(activeAgentWithVariables?.id ? { agentId: activeAgentWithVariables.id } : {}),
+        ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
         variables: submittedVariables,
         ...(submittedAttachments.length > 0
           ? { attachments: submittedAttachments }
           : {}),
       });
     },
-    [activeAgentWithVariables?.id, attachments, sendMessage, variableValues],
+    [attachments, selectedAgentId, sendMessage, variableValues],
   );
 
   const handleAddAttachments = useCallback((files: ChatAttachment[]) => {
@@ -289,7 +248,6 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
     [attachedGoogleFiles, executionTarget],
   );
 
-  const pickerLabel = activeAgent?.name ?? "Select an agent";
   const showVariables = activeVariables.length > 0 && !hasMessages;
   const engineReady = executionTarget === "cloud" || engineStatus === "connected";
   const localTargetError =
@@ -303,26 +261,23 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             "Local model is not registered with the engine.")
         : null;
   const cloudError =
-    agentSelectionError ??
-    agentsError ??
     executionError ??
     cloudChat.modelError ??
     cloudChat.requestError ??
     historyError ??
     localTargetError;
-  const sidebarAgentPicker = (
+  const sidebarAgentControls = (
     <div className="space-y-1.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-8 w-full justify-start px-2 text-xs"
-        onClick={() => setAgentPickerOpen(true)}
-      >
-        <Cloud className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-left">{pickerLabel}</span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
-      </Button>
+      {/* THE ONE AGENT PICKER. The trigger's label is the package's — the live
+          name of the selected agent, or of the mandate's real Holder. */}
+      <AgentListDropdown
+        onSelect={handleSelectAgent}
+        activeAgentId={selectedAgentId}
+        defaultMandateKey={DEFAULT_CHAT_MANDATE_KEY}
+        consumerId="matrx-local.cloud-chat"
+        contentSide="right"
+        className="w-full"
+      />
       <div className="grid grid-cols-2 gap-1 rounded-md border border-border/60 p-0.5">
         <Button
           type="button"
@@ -362,7 +317,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
         onNew={handleNewChat}
         onDelete={deleteConversation}
         onRename={renameConversation}
-        headerContent={sidebarAgentPicker}
+        headerContent={sidebarAgentControls}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
@@ -374,7 +329,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {messages.length === 0 ? (
-            <CloudEmptyState activeAgent={activeAgentWithVariables} />
+            <CloudEmptyState agentName={selectedAgentName} />
           ) : (
             <ChatMessages messages={messages} isStreaming={isStreaming} onReferencePaths={handleReferencePaths} />
           )}
@@ -431,7 +386,7 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
             onModelChange={setModel}
             onModeChange={setMode}
             engineReady={engineReady}
-            sendBlockedReason={agentSelectionError}
+            sendBlockedReason={executionError}
             selectedAgentId={selectedAgentId}
             showModelSelector={false}
             showModeSelector={false}
@@ -462,14 +417,6 @@ export function CloudChat({ engineStatus, engineUrl }: CloudChatProps) {
         </div>
       </div>
 
-      <AgentPicker
-        agents={agents}
-        selectedAgentId={selectedAgentId}
-        onSelect={handleSelectAgent}
-        isLoading={agentsLoading}
-        open={agentPickerOpen}
-        onClose={() => setAgentPickerOpen(false)}
-      />
     </div>
   );
 }

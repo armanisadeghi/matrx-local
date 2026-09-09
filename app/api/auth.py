@@ -101,10 +101,7 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         # any reading. They stay reachable on direct loopback (the desktop
         # webview reads the list before its JWT hydrates) but a tunnel caller
         # now falls through to verified auth.
-        "/chat/agents",
         "/agents/catalog",
-        "/agents/catalog/rpc",
-        "/agents/catalog/status",
         # Local llama-server bridge. The desktop UI/Rust shell may need to
         # register a just-started local model before Supabase auth has fully
         # hydrated in the webview; over the tunnel these still require auth.
@@ -135,6 +132,11 @@ _LOCAL_BOOTSTRAP_PREFIXES = (
     # hydrated in the webview. Tunnel callers still fall through to verified
     # auth, so no remote caller can trigger a download.
     "/browser-runtime/",
+    # The agent catalog's sub-paths (/rpc, /status, /{id}/execution). Same
+    # posture and same reason as "/agents/catalog" in the exact set above: the
+    # desktop webview reads the catalog before its JWT hydrates; a tunnel
+    # caller falls through to verified auth because these rows are user data.
+    "/agents/catalog/",
     # Process-local media bytes for the desktop webview. Tunnel callers still
     # fall through to verified auth; direct <img> requests cannot attach the
     # API's bearer header.

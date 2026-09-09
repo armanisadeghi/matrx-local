@@ -1,33 +1,22 @@
-import {
-  DEFAULT_CHAT_MANDATE_REF,
-  isMandateAgentRef,
-} from "@/lib/mandates";
+/**
+ * ONE AGENT'S EXECUTION DETAIL — never a list.
+ *
+ * The agent LIST lives in `@ai-matrx/agents/catalog` and nowhere else (ruling
+ * D1/D4). What remains here is the read a variables form makes for the ONE
+ * agent a person selected: `agx_get_execution_full(p_agent_id)`. It is not a
+ * catalog column and never appears in a list row, online or off — the offline
+ * twin is `GET /agents/catalog/{agent_id}/execution` (see
+ * `lib/agent-execution.ts`).
+ */
+
+import { isMandateAgentRef } from "@/lib/mandates";
 import supabase from "@/lib/supabase";
 import type {
-  AgentInfo,
   AgentSettings,
-  AgentSource,
   PromptVariable,
   VariableComponentType,
   VariableCustomComponent,
 } from "@/types/agents";
-
-interface AgentListRow {
-  id: string;
-  name: string | null;
-  description: string | null;
-  category: string | null;
-  tags: string[] | null;
-  agent_type: string | null;
-  model_id: string | null;
-  is_active: boolean | null;
-  is_archived: boolean | null;
-  is_favorite: boolean | null;
-  is_owner: boolean | null;
-  access_level: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
 
 interface AgentExecutionFullRow {
   id: string;
@@ -142,7 +131,7 @@ export function normalizeVariableDefinition(value: unknown): PromptVariable | nu
   return variable;
 }
 
-function normalizeVariableList(value: unknown): PromptVariable[] {
+export function normalizeVariableList(value: unknown): PromptVariable[] {
   const values = Array.isArray(value)
     ? value
     : Object.entries(readRecord(value) ?? {}).map(([name, raw]) => {
@@ -153,12 +142,6 @@ function normalizeVariableList(value: unknown): PromptVariable[] {
   return values
     .map(normalizeVariableDefinition)
     .filter((variable): variable is PromptVariable => variable !== null);
-}
-
-function sourceFromRow(row: AgentListRow): AgentSource {
-  if (row.agent_type === "builtin" || row.access_level === "system") return "builtin";
-  if (row.is_owner) return "user";
-  return "shared";
 }
 
 function settingsFromUnknown(value: unknown): AgentSettings {
@@ -181,61 +164,6 @@ function settingsFromUnknown(value: unknown): AgentSettings {
   if (tools) settings.tools = tools;
 
   return settings;
-}
-
-function settingsFromRow(row: AgentListRow): AgentSettings {
-  return row.model_id ? { model_id: row.model_id } : {};
-}
-
-function agentFromRow(row: AgentListRow): AgentInfo {
-  return {
-    id: row.id,
-    name: row.name?.trim() || "Untitled agent",
-    description: row.description ?? "",
-    source: sourceFromRow(row),
-    variable_defaults: [],
-    settings: settingsFromRow(row),
-    category: row.category,
-    tags: row.tags ?? [],
-    is_favorite: Boolean(row.is_favorite),
-    is_owner: Boolean(row.is_owner),
-    access_level: row.access_level,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-/**
- * Synthetic UI entry for the canonical Cloud Chat Mandate (`local.cloud_chat`).
- * Always first in the list so a user with no visible agents has a working
- * choice. The synthetic id is UI state only; execution sends the mandate key
- * to aidream and the server resolves the agent for the current principal at
- * run time — an admin repointing the Mandate changes desktop with no deploy.
- */
-export const DEFAULT_CHAT_AGENT: AgentInfo = {
-  id: DEFAULT_CHAT_MANDATE_REF,
-  name: "Matrx Desktop Agent",
-  description: "Default Matrx agent for Cloud Chat, resolved by the platform when you send.",
-  source: "builtin",
-  variable_defaults: [],
-  settings: {},
-  category: null,
-  tags: [],
-  is_favorite: false,
-  is_owner: false,
-  access_level: "system",
-  created_at: null,
-  updated_at: null,
-};
-
-export async function fetchCloudAgents(): Promise<AgentInfo[]> {
-  const { data, error } = await supabase.rpc("agx_get_list_full");
-  if (error) throw new Error(error.message);
-
-  const visible = ((data ?? []) as AgentListRow[])
-    .filter((row) => row.is_active !== false && row.is_archived !== true)
-    .map(agentFromRow);
-  return [DEFAULT_CHAT_AGENT, ...visible];
 }
 
 export async function fetchCloudAgentExecutionFull(

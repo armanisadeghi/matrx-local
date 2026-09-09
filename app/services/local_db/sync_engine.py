@@ -309,7 +309,7 @@ class SyncEngine:
         arrived. That was a second catalog, and it is gone.
 
         A second, clearly separate step refreshes `prompt_builtins`, the
-        variables/settings DETAIL cache the legacy `/chat/agents` projection
+        variables/settings DETAIL cache the single-agent execution door
         still reads. It is NOT a membership source and never contributes a row
         to the catalog; it retires with that endpoint when the desktop adopts
         the shared picker package.
@@ -409,12 +409,12 @@ class SyncEngine:
     async def _refresh_agent_detail_cache(self, jwt: str) -> None:
         """Refresh `prompt_builtins` — variables/settings ONLY, never membership.
 
-        TEMPORARY. The legacy `/chat/agents` projection still hands the desktop
-        `variable_defaults` and `settings`, which the catalog RPC (correctly)
-        does not carry — no Matrx client's LIST rows do. Until the desktop
-        adopts the shared picker package, those details come from the aidream
-        route the catalog no longer uses for membership. A failure here degrades
-        the variables form, never the agent list, so it is logged and dropped.
+        `variable_defaults` and `settings` are NOT catalog columns — no Matrx
+        client's LIST rows carry them, online or off. They are read ONE agent at
+        a time by `GET /agents/catalog/{agent_id}/execution`, which serves this
+        cache. It is filled from the aidream detail route the catalog no longer
+        uses for membership. A failure here degrades the variables form, never
+        the agent list, so it is logged and dropped.
         """
         client = get_aidream_client()
         if client is None:

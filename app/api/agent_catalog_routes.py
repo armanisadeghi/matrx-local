@@ -168,6 +168,51 @@ async def post_agent_catalog_rpc(
     return await _catalog_rows(response)
 
 
+@router.get("/catalog/{agent_id}/execution")
+async def get_agent_execution(agent_id: str) -> dict[str, Any]:
+    """ONE agent's execution detail (variables + settings), offline.
+
+    `variable_defaults` and `settings` are NOT catalog columns — no Matrx
+    client's LIST rows carry them, online or off — so a variables form asks
+    for ONE agent by id, exactly as Cloud Chat asks Supabase
+    (`agx_get_execution_full(p_agent_id)`). This is that read against the
+    mirror's detail cache (`prompt_builtins`, refreshed by
+    `SyncEngine._refresh_agent_detail_cache`).
+
+    404 when the detail cache has never seen this agent: an empty variables
+    payload would look exactly like "this agent takes no variables", and a
+    form that silently omits a required question is the failure this refuses.
+    """
+    from app.services.local_db.repositories import PromptBuiltinsRepo
+
+    detail = await PromptBuiltinsRepo().get(agent_id)
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "agent_detail_not_mirrored",
+                "message": (
+                    f"No mirrored execution detail for agent {agent_id!r}. The "
+                    "catalog list and the detail cache refresh together; if the "
+                    "agent is new, sync again once online."
+                ),
+                "remedy": "Reconnect and let the engine refresh, then reopen the agent.",
+            },
+        )
+    settings = detail.get("settings") or {}
+    return {
+        "id": agent_id,
+        "variable_defaults": detail.get("variable_defaults") or [],
+        "settings": {
+            "model_id": settings.get("model_id"),
+            "temperature": settings.get("temperature"),
+            "max_tokens": settings.get("max_tokens") or settings.get("max_output_tokens"),
+            "stream": settings.get("stream", True),
+            "tools": settings.get("tools") or [],
+        },
+    }
+
+
 @router.get("/catalog/status")
 async def get_agent_catalog_status() -> dict[str, Any]:
     """Freshness of the mirror — never mixed into the row array itself."""

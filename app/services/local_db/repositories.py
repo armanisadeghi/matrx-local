@@ -154,6 +154,23 @@ class AgentsRepo:
     _BOOL_COLUMNS = frozenset({"is_active", "is_archived", "is_favorite", "is_owner"})
     _JSON_COLUMNS = frozenset({"tags"})
 
+    #: 🚨 THE TORN-MIRROR LOCK. `replace_catalog` DELETEs and re-INSERTs 468
+    #: rows on the process's ONE shared aiosqlite connection, so a read issued
+    #: between the DELETE and the COMMIT sees a HALF-WRITTEN catalog — and a
+    #: half-written catalog is a picker confidently showing a short list.
+    #: Measured live 2026-09-08: the desktop's offline picker rendered
+    #: "Public 326" against the cloud picker's "Public 413" for the very same
+    #: 468-row catalog, because the 10-minute refresh was mid-replace when the
+    #: door was read. Every read that must see a WHOLE catalog takes this lock;
+    #: it is module-level because every `AgentsRepo()` shares one connection.
+    _mirror_lock: "asyncio.Lock | None" = None
+
+    @classmethod
+    def _lock(cls) -> "asyncio.Lock":
+        if cls._mirror_lock is None:
+            cls._mirror_lock = asyncio.Lock()
+        return cls._mirror_lock
+
     def __init__(self, db: LocalDatabase | None = None):
         self._db = db or get_db()
 
@@ -167,9 +184,10 @@ class AgentsRepo:
         sequence is what a browser sees, so `catalog_position` replays it
         rather than re-deriving an order the database already decided.
         """
-        rows = await self._db.fetchall(
-            "SELECT * FROM agents ORDER BY catalog_position, id"
-        )
+        async with self._lock():
+            rows = await self._db.fetchall(
+                "SELECT * FROM agents ORDER BY catalog_position, id"
+            )
         return [self._to_catalog_row(r) for r in rows]
 
     async def get(self, agent_id: str) -> dict[str, Any] | None:
@@ -177,7 +195,8 @@ class AgentsRepo:
         return self._to_catalog_row(row) if row else None
 
     async def count(self) -> int:
-        row = await self._db.fetchone("SELECT COUNT(*) AS cnt FROM agents")
+        async with self._lock():
+            row = await self._db.fetchone("SELECT COUNT(*) AS cnt FROM agents")
         return int(row["cnt"]) if row else 0
 
     async def mirror_user_id(self) -> str:
@@ -196,11 +215,16 @@ class AgentsRepo:
         being returned has stopped being in this user's list — replacing the
         table is the only correct semantics. The caller guards the empty case;
         this method does exactly what it is told.
+
+        Held under `_mirror_lock` so no reader can observe the table between
+        the DELETE and the COMMIT — see the lock's own note for the live
+        "Public 326 vs 413" measurement that this closes.
         """
-        await self._db.execute("DELETE FROM agents")
-        for position, row in enumerate(rows):
-            await self._insert(row, user_id=user_id, position=position)
-        await self._db.commit()
+        async with self._lock():
+            await self._db.execute("DELETE FROM agents")
+            for position, row in enumerate(rows):
+                await self._insert(row, user_id=user_id, position=position)
+            await self._db.commit()
         return len(rows)
 
     async def upsert(self, row: dict[str, Any], *, user_id: str = "", position: int = 0) -> None:

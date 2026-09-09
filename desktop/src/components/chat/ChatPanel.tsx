@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { AlertCircle } from "lucide-react";
 import { useChat } from "@/hooks/use-chat";
-import { useAgents } from "@/hooks/use-agents";
+import { useAgentExecution } from "@/hooks/use-agent-execution";
 import { useChatTts } from "@/hooks/use-chat-tts";
 import { useTtsApp } from "@/contexts/TtsContext";
 import { ChatMessages } from "@/components/chat/ChatMessages";
@@ -12,9 +12,16 @@ import { SandboxPicker } from "@/features/compute/SandboxPicker";
 import { useServiceStatus } from "@/hooks/use-service-status";
 import { cn } from "@/lib/utils";
 import { engine as engineAPI } from "@/lib/api";
+import { fetchMandateResolution } from "@/lib/aidream-client";
+import {
+  DEFAULT_CHAT_MANDATE_KEY,
+  mandateKeyFromAgentRef,
+} from "@/lib/mandates";
+import { requireActiveOrganizationId } from "@/lib/org/active-org";
+import supabase from "@/lib/supabase";
 import { loadSettings } from "@/lib/settings";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { ActiveAgent, PromptVariable } from "@/types/agents";
+import type { PromptVariable } from "@/types/agents";
 import {
   ActionNeededCard,
   actionNeededStore,
@@ -50,28 +57,14 @@ export function ChatPanel({
   const thisDeviceInstanceId = serviceState.cloudDebug?.instance_id ?? null;
 
 
-  const {
-    builtins,
-    userAgents,
-    sharedAgents,
-    isLoading: agentsLoading,
-  } = useAgents({ engineUrl });
-  const allAgents = useMemo(
-    () => [...builtins, ...userAgents, ...sharedAgents],
-    [builtins, userAgents, sharedAgents],
-  );
-  const [activeAgent, setActiveAgent] = useState<ActiveAgent | null>(null);
-  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
-  const [agentSelectionError, setAgentSelectionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!pendingAgentId) return;
-    const resolved = allAgents.find((agent) => agent.id === pendingAgentId);
-    if (!resolved) return;
-    setActiveAgent(resolved);
-    setPendingAgentId(null);
-    setAgentSelectionError(null);
-  }, [allAgents, pendingAgentId]);
+  // THE ONE AGENT PICKER owns the list (rulings D1/D4). This surface only
+  // remembers WHICH agent is selected; the rows come from the offline catalog
+  // through `@ai-matrx/agents/catalog`, identical to Cloud Chat's.
+  const agentExecution = useAgentExecution("local");
+  const { ensureExecution } = agentExecution;
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [agentSendError, setAgentSendError] = useState<string | null>(null);
+  const agentSelectionError = agentSendError ?? agentExecution.error;
 
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
     {},
@@ -174,25 +167,28 @@ export function ChatPanel({
     }
   }, [chatTts.isReadingAloud, readingMessageId]);
 
+  // Variables come from the ONE-agent execution read, never from a list row —
+  // no Matrx client's list carries them.
   useEffect(() => {
-    if (hasMessages) {
+    if (hasMessages || !activeAgentId) {
       setActiveVariables([]);
       setVariableValues({});
       return;
     }
-    if (!activeAgent || activeAgent.id === "") {
-      setActiveVariables([]);
-      setVariableValues({});
-      return;
-    }
-    const vars = activeAgent.variable_defaults ?? [];
-    setActiveVariables(vars);
-    const defaults: Record<string, string> = {};
-    vars.forEach((v) => {
-      if (v.defaultValue) defaults[v.name] = v.defaultValue;
+    let cancelled = false;
+    void ensureExecution(activeAgentId).then((payload) => {
+      if (cancelled) return;
+      setActiveVariables(payload.variables);
+      const defaults: Record<string, string> = {};
+      payload.variables.forEach((v) => {
+        if (v.defaultValue) defaults[v.name] = v.defaultValue;
+      });
+      setVariableValues(defaults);
     });
-    setVariableValues(defaults);
-  }, [activeAgent?.id, hasMessages]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAgentId, ensureExecution, hasMessages]);
 
   // NOTE: compact mode no longer creates a conversation on mount — every
   // Quick Chat open appended a permanent empty "New conversation" to the
@@ -248,15 +244,47 @@ export function ChatPanel({
           console.warn("[chat] selected-provider preflight failed:", error);
         }
       }
+      // The local engine mirror only has agent-id routes, so a Mandate-backed
+      // choice is resolved by the PLATFORM first (same precedence the server
+      // uses) and THAT agent is run locally — the pattern use-cloud-chat's
+      // local target already uses. It resolves or refuses; there is never a
+      // client-side fallback agent.
+      let agentId = activeAgentId;
+      const mandateKey = mandateKeyFromAgentRef(agentId);
+      if (mandateKey) {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session?.access_token) {
+            throw new Error("Sign in before starting a chat.");
+          }
+          const resolution = await fetchMandateResolution(
+            mandateKey,
+            session.access_token,
+            await requireActiveOrganizationId(),
+          );
+          agentId = resolution.agent_id;
+        } catch (err) {
+          setAgentSendError(
+            `Could not resolve the default agent (${mandateKey}): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return;
+        }
+      }
+      setAgentSendError(null);
+
       const submittedVars = { ...variableValues };
       setActiveVariables([]);
       setVariableValues({});
       await sendMessage(content, {
-        ...(activeAgent?.id ? { agentId: activeAgent.id } : {}),
+        ...(agentId ? { agentId } : {}),
         variables: submittedVars,
       });
     },
-    [sendMessage, activeAgent, variableValues, forceLocalModel, availableModels, model],
+    [sendMessage, activeAgentId, variableValues, forceLocalModel, availableModels, model],
   );
 
   const handleVariableChange = (name: string, value: string) => {
@@ -383,28 +411,13 @@ export function ChatPanel({
           sendBlockedReason={agentSelectionError}
           autoFocus={compact}
           draftInsertion={draftInsertion}
-          agents={allAgents}
-          selectedAgentId={pendingAgentId ?? activeAgent?.id ?? null}
+          selectedAgentId={activeAgentId}
           onAgentChange={(agentId) => {
-            if (!agentId) {
-              setActiveAgent(null);
-              setPendingAgentId(null);
-              setAgentSelectionError(null);
-              return;
-            }
-            const found = allAgents.find((agent) => agent.id === agentId);
-            if (!found) {
-              setPendingAgentId(agentId);
-              setAgentSelectionError(
-                "The selected agent is still syncing. Sending is paused until it is available.",
-              );
-              return;
-            }
-            setActiveAgent(found);
-            setPendingAgentId(null);
-            setAgentSelectionError(null);
+            setActiveAgentId(agentId);
+            setAgentSendError(null);
           }}
-          agentsLoading={agentsLoading}
+          defaultMandateKey={DEFAULT_CHAT_MANDATE_KEY}
+          agentConsumerId="matrx-local.chat"
         />
       </div>
     </div>

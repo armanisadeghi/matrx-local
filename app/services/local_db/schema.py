@@ -1357,7 +1357,7 @@ CREATE TABLE IF NOT EXISTS claude_session_synced (
 # pure cache, so the migration REBUILDS it empty rather than back-filling —
 # every row is re-fetched on the next `SyncEngine.sync_agents()` run, which
 # fires at startup. `prompt_builtins` (the separate variables/settings detail
-# cache read by the legacy /chat/agents projection) is untouched.
+# cache read by GET /agents/catalog/{agent_id}/execution) is untouched.
 # ------------------------------------------------------------------
 
 _V32_AGENTS_PLATFORM_CATALOG = """

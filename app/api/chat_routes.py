@@ -1,12 +1,10 @@
-"""Chat API routes — tool schemas, models, agents, + AI streaming completions.
+"""Chat API routes — tool schemas, models, + AI streaming completions.
 
 Provides:
   GET  /chat/tools                   — all tool schemas (Anthropic-compatible)
   GET  /chat/tools/by-category       — tool schemas grouped by category
   GET  /chat/tools/anthropic         — Anthropic Messages API format
   GET  /chat/models                  — AI models from local SQLite cache
-  GET  /chat/agents                  — LEGACY bucketed agent list (retiring;
-                                       new callers use GET /agents/catalog)
   GET  /chat/local-tools             — local OS tools registered in matrx-ai registry
                                        (each item carries `enabled` from the
                                        user's cloud_tools exposure setting)
@@ -31,7 +29,6 @@ sync and return an empty list with syncing=True so the UI can show a spinner.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -57,7 +54,6 @@ from app.tools.tool_schemas import (
 )
 
 logger = get_logger()
-_agents_sync_task: "asyncio.Task | None" = None
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -346,69 +342,6 @@ async def list_models() -> dict[str, Any]:
 
     logger.info("[chat_routes /models] Returning %d models from SQLite", len(models))
     return {"models": models, "total": len(models), "source": "sqlite", "syncing": False}
-
-
-# ---------------------------------------------------------------------------
-# Agents endpoint — reads from SQLite (populated by SyncEngine)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/agents")
-async def list_agents() -> dict[str, Any]:
-    """LEGACY bucketed agent list, derived from the mirrored platform catalog.
-
-    The rows come from the SQLite mirror of `public.agx_get_list_full()` —
-    the same catalog every other Matrx client reads (ruling D4). `shared` is
-    now a real bucket; it was hardcoded `[]` here until 2026-09-08 while the
-    sync source (the aidream `GET /agents` route) could not even see shared or
-    org-shared agents.
-
-    🚨 RETIRING. New consumers read `GET /agents/catalog`, which serves the
-    19-column rows unchanged. This endpoint dies with the desktop's adoption of
-    the shared picker package; do not add fields to it.
-    """
-    from app.api.agent_legacy_shape import build_legacy_payload
-    from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
-    from app.services.local_db.sync_engine import get_sync_engine
-
-    payload = await build_legacy_payload(source="sqlite")
-
-    meta = await SyncMetaRepo().get_last_sync("agents")
-    never_synced = meta is None or meta.get("last_synced_at") is None
-
-    if payload["totals"]["total"] == 0:
-        # An empty mirror is never a real catalog (every signed-in user sees
-        # the active builtins), so say plainly whether a refresh is running.
-        token_row = await TokenRepo().get()
-        has_jwt = bool(token_row and not TokenRepo().is_expired(token_row))
-        if never_synced or has_jwt:
-            logger.info(
-                "[chat_routes /agents] Agent mirror empty (never_synced=%s, jwt=%s) "
-                "— starting a catalog sync",
-                never_synced, has_jwt,
-            )
-            global _agents_sync_task
-            existing = _agents_sync_task
-            if existing is None or existing.done():
-                # /chat/agents is polled; reuse the in-flight sync instead of
-                # spawning one per poll.
-                _agents_sync_task = asyncio.create_task(get_sync_engine().sync_agents())
-            payload["syncing"] = True
-            return payload
-        logger.warning(
-            "[chat_routes /agents] Agent mirror is empty and no valid JWT is "
-            "stored — the catalog RPC is called as the signed-in user, so the "
-            "list stays empty until sign-in"
-        )
-
-    payload["syncing"] = False
-    logger.info(
-        "[chat_routes /agents] %d builtin / %d user / %d shared from the mirror",
-        payload["totals"]["builtins"],
-        payload["totals"]["user"],
-        payload["totals"]["shared"],
-    )
-    return payload
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
 import { TooltipProvider } from "@ai-matrx/design-system";
+import { AgentCatalogProvider } from "@ai-matrx/agents/catalog/react";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Documents } from "@/pages/Documents";
@@ -30,6 +31,10 @@ import { BridgeTest } from "@/pages/BridgeTest";
 import { CodingSessions } from "@/pages/CodingSessions";
 import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
+import {
+  getLocalAgentCatalog,
+  setAgentCatalogUserId,
+} from "@/lib/agent-catalog";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useNotifications } from "@/hooks/use-notifications";
@@ -401,6 +406,14 @@ function AppInner() {
 
   const handleOpenMonitor = useCallback(() => setMonitorOpen(true), []);
 
+  // THE ONE AGENT PICKER reads the catalog AS the signed-in user. This app
+  // already owns the session, so the catalog is TOLD who that is rather than
+  // running a second auth read that could disagree with the screen.
+  const authUserId = auth.user?.id ?? null;
+  useEffect(() => {
+    setAgentCatalogUserId(authUserId);
+  }, [authUserId]);
+
   // Persistent pages
   const appPages: PageEntry[] = useMemo(
     () => [
@@ -554,6 +567,12 @@ function AppInner() {
 
   return (
     <TooltipProvider delayDuration={150}>
+      {/* THE ONE AGENT PICKER. The app-wide catalog is the LOCAL one — the
+          sidecar's offline mirror of `agx_get_list_full`, identical rows in
+          an identical shape (ruling D4) — because every chat surface here
+          except Cloud Chat runs against the local engine. `/cloud-chat`
+          overrides it with the live Supabase catalog in its own subtree. */}
+      <AgentCatalogProvider catalog={getLocalAgentCatalog()}>
       {/* ONE access-health store app-wide (banner, Documents, Recovery,
           Settings) — single poll owner, generation-fenced updates. Lives here
           (not in the provider stack) because it needs engineStatus. */}
@@ -640,6 +659,7 @@ function AppInner() {
           <OrganizationPickerDialog />
         </HashRouter>
       </AccessHealthProvider>
+      </AgentCatalogProvider>
     </TooltipProvider>
   );
 }

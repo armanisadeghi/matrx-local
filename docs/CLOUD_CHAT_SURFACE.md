@@ -189,3 +189,28 @@ Local models, cloud models, and cloud agents should converge on ONE request
 shape. The local `/ai` surface (ai_routes.py) already mirrors aidream's
 API; as it grows, keep the `client` envelope + `config_overrides` semantics
 identical so the UI needs no per-target branches beyond the base URL.
+
+## Choosing an agent — THE ONE PICKER, two clients (2026-09-08)
+
+Both chats render `AgentListDropdown` from **`@ai-matrx/agents/catalog/react`**
+and nothing else. The list, its tabs, sorts, filters, counts, favourites and the
+live-named default row are the package's; this repo's contract is
+`onSelect(agentId)`. Canonical body: the package's `FEATURE.md` and
+`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`
+(rulings D1–D4). Guard: `pnpm check:canonical-pickers`, blocking in `release.sh`.
+
+The ONLY difference between the two surfaces is which client the catalog reads
+through — both built in `desktop/src/lib/agent-catalog.ts`:
+
+- **`/cloud-chat`** — the real Supabase client → `agx_get_list_full()` live.
+- **`/chat`** — a structural client (same `rpc` / `schema().from()` interface)
+  that proxies the same RPC name to the sidecar's offline door
+  `POST {engine}/agents/catalog/rpc`, which replays the SQLite mirror of those
+  same rows. Contract: `app/services/agent_catalog/FEATURE.md`.
+
+Ruling D4: offline is a data LOCATION, never a different list, structure, sort,
+filter or UI. Verified live 2026-09-08 — 468 rows / 19 columns from each side,
+identical id order, zero value differences; pinned by
+`desktop/src/lib/agent-catalog-parity.test.tsx`. `variable_defaults` / `settings`
+are per-agent execution detail and are read ONE agent at a time
+(`lib/agent-execution.ts`), never off a list row.

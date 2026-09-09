@@ -1,15 +1,17 @@
 /**
  * AIDream server API client.
  *
- * All reads of shared data (models, prompts, tools) go through this client.
+ * All reads of shared data (models, tools, mandate resolutions) go through this
+ * client. 🚨 There is NO agent list here. The ONE agent catalog is
+ * `@ai-matrx/agents/catalog` (rulings D1/D4); a third list path in this file is
+ * exactly the drift the package exists to end.
  * The active server URL comes from the cached remote app-config row; the
  * renderer never reads an AIDream URL from a Vite environment variable.
  *
  * Auth:
  *   - Public endpoints (models, tools): no token needed
- *   - Authenticated endpoints (agents): pass Supabase JWT as Bearer token.
- *     There is no public/anonymous agent listing anymore — /api/agents
- *     requires a JWT. Callers must skip the fetch when logged out.
+ *   - Authenticated endpoints: pass the Supabase JWT as a Bearer token plus
+ *     the organization aidream verifies. Callers skip the fetch when logged out.
  */
 
 import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
@@ -97,26 +99,6 @@ export interface AIDreamModel {
 
 export interface AIDreamModelsResponse {
   models: AIDreamModel[];
-  count: number;
-}
-
-/**
- * A platform or user agent, as returned by GET /api/agents.
- * Prompt builtins now live in the `agent.definition` table and are served
- * from this single unified endpoint alongside the user's own agents.
- */
-export interface AIDreamAgent {
-  id: string;
-  name: string;
-  description?: string;
-  category?: string;
-  tags?: string[];
-  type?: string;
-  variables?: unknown[];
-}
-
-export interface AIDreamAgentsResponse {
-  agents: AIDreamAgent[];
   count: number;
 }
 
@@ -233,20 +215,6 @@ export async function fetchAIDreamModels(
   opts: RequestOptions = {},
 ): Promise<AIDreamModelsResponse> {
   return aidreamGet<AIDreamModelsResponse>("/ai-models", opts);
-}
-
-/**
- * Fetch the unified agent catalog (platform agents + the user's own agents).
- * Requires a JWT — there is no public/anonymous variant. The old
- * /api/prompts/builtins, /api/prompts and /api/prompts/all endpoints are
- * gone; builtins moved into the `agent.definition` table and are served here.
- * Corresponds to GET /api/agents
- */
-export async function fetchAIDreamAgents(
-  jwt: string,
-  opts: RequestOptions = {},
-): Promise<AIDreamAgentsResponse> {
-  return aidreamGet<AIDreamAgentsResponse>("/agents", { ...opts, jwt });
 }
 
 /**

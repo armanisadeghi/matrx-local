@@ -50,7 +50,7 @@ of its own, so only replay is faithful.
 The mirror's source was the aidream route `GET /agents`: its membership is
 builtins + agents the caller created, so **every shared and org-shared agent was
 structurally absent**, and its row carried 7 of the 19 columns. On top of that
-`GET /chat/agents` returned `"shared": []` as a hardcoded literal — a screen
+the retired `GET /chat/agents` returned `"shared": []` as a hardcoded literal — a screen
 telling the user something that could never be true. The desktop was therefore
 reading a different catalog from every other Matrx client. Both are fixed;
 `tests/parity/test_agent_catalog_contract.py` and the agent-catalog tests in
@@ -77,17 +77,27 @@ a star that silently disappears on reconnect is worse than a refusal, so an
 offline favourite toggle must refuse loudly and say why. Do not add a queue here
 without a ruling — `sync_queue` is reserved for the conversation push pipeline.
 
-## Retiring
+## Retiring — DONE 2026-09-08
 
-`GET /chat/agents` and `GET /data/agents` still serve the legacy bucketed
-`{builtins, user, shared}` shape (one implementation:
-`app/api/agent_legacy_shape.py`), now derived from these same 19-column rows.
-They die when the desktop adopts the shared agent-picker package
-(`@ai-matrx/agents/catalog`) and reads `GET /agents/catalog` instead. Do not
-grow them; new consumers use the catalog endpoint.
+`GET /chat/agents`, `GET /data/agents` and `app/api/agent_legacy_shape.py` are
+**deleted**. Their bucketed `{builtins, user, shared}` payload existed only to
+feed the desktop's hand-rolled picker; the desktop now renders
+`@ai-matrx/agents/catalog` and reads `POST /agents/catalog/rpc`, so the last
+caller is gone. Do not reintroduce a bucketed list: buckets are a VIEW the
+shared package computes from these rows, never a second server shape.
+
+`variable_defaults` / `settings` survive as what they always were — per-agent
+execution detail, never list columns — served ONE agent at a time by
+`GET /agents/catalog/{agent_id}/execution` from the `prompt_builtins` detail
+cache. It 404s for an agent it has never mirrored, because an empty payload
+reads exactly like "this agent takes no variables".
 
 ## Change log
 
+- 2026-09-08 — Legacy retirement executed with the desktop's adoption of
+  `@ai-matrx/agents/catalog`: `/chat/agents`, `/data/agents` and
+  `agent_legacy_shape.py` deleted; `GET /agents/catalog/{agent_id}/execution`
+  added as the ONE per-agent variables/settings door.
 - 2026-09-08 — Created. Catalog source switched from the aidream `GET /agents`
   route to `agx_get_list_full()`; SQLite migration V32; `/agents/catalog`
   endpoints added; `shared: []` lie removed from both legacy endpoints.

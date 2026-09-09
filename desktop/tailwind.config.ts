@@ -8,6 +8,9 @@ export default {
     "./index.html",
     "./src/**/*.{ts,tsx}",
     "./node_modules/@ai-matrx/design-system/dist/**/*.{js,mjs}",
+    // THE ONE AGENT PICKER ships from this package and lays out with ordinary
+    // Tailwind utilities; Tailwind only generates what it can SEE.
+    "./node_modules/@ai-matrx/agents/dist/**/*.{js,mjs}",
   ],
   theme: {
     container: {

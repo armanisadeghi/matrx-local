@@ -5,7 +5,6 @@ Cloud data is synced in the background by the SyncEngine.
 
 Provides:
   GET  /data/models                    — AI models (cached from Supabase)
-  GET  /data/agents                    — Agents / prompts (cached from Supabase)
   GET  /data/tools                     — Tools (from local manifest)
   GET  /data/tools/by-category         — Tools grouped by category
 
@@ -103,25 +102,6 @@ async def list_models() -> dict[str, Any]:
     repo = ModelsRepo()
     models = await repo.list_all()
     return {"models": models, "total": len(models), "source": "local_db"}
-
-
-# ------------------------------------------------------------------
-# Agents
-# ------------------------------------------------------------------
-
-@router.get("/agents")
-async def list_agents() -> dict[str, Any]:
-    """LEGACY bucketed agent list from the mirrored platform catalog.
-
-    Same projection as `GET /chat/agents` (one implementation:
-    `app/api/agent_legacy_shape.py`) so the two endpoints can never drift.
-    `shared` was a hardcoded `[]` here too until 2026-09-08. Retiring with the
-    desktop's adoption of the shared picker package — new callers read
-    `GET /agents/catalog`.
-    """
-    from app.api.agent_legacy_shape import build_legacy_payload
-
-    return await build_legacy_payload(source="local_db")
 
 
 # ------------------------------------------------------------------

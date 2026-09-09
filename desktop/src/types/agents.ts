@@ -1,6 +1,12 @@
 /**
- * Agent / Prompt types — mirrors the Supabase schema for prompts and
- * prompt_builtins tables, plus the variable system used in GuidedVariableInputs.
+ * Agent EXECUTION types — what one selected agent needs from a person before
+ * it runs, and nothing else.
+ *
+ * 🚨 There are no LIST types here. The agent list, its row shape, its tabs,
+ * sorts, filters and counts all live in `@ai-matrx/agents/catalog` — THE ONE
+ * AGENT PICKER (rulings D1/D4). `AgentInfo`, `AgentsResponse`, `AgentSource`
+ * and `ActiveAgent` were this repo's private copy of that row and are DELETED;
+ * re-adding one is re-adding the drift the package exists to end.
  */
 
 // ---- Variable system ----
@@ -32,9 +38,7 @@ export interface PromptVariable {
   customComponent?: VariableCustomComponent;
 }
 
-// ---- Agent shape returned by /chat/agents ----
-
-export type AgentSource = "builtin" | "user" | "shared";
+// ---- One agent's execution settings ----
 
 export interface AgentSettings {
   model_id?: string | null;
@@ -42,48 +46,4 @@ export interface AgentSettings {
   max_tokens?: number | null;
   stream?: boolean;
   tools?: string[];
-}
-
-export interface AgentInfo {
-  id: string;
-  name: string;
-  description: string;
-  source: AgentSource;
-  variable_defaults: PromptVariable[];
-  settings: AgentSettings;
-  category?: string | null;
-  tags?: string[] | null;
-  is_favorite?: boolean;
-  is_owner?: boolean;
-  access_level?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface AgentsResponse {
-  builtins: AgentInfo[];
-  user: AgentInfo[];
-  shared: AgentInfo[];
-  source: "sqlite" | "database" | "postgrest" | "fallback" | "error";
-  syncing?: boolean;
-  totals: {
-    builtins: number;
-    user: number;
-    shared: number;
-    total: number;
-  };
-}
-
-// ---- Active agent state used by the chat ----
-
-export interface ActiveAgent {
-  id: string;
-  name: string;
-  description: string;
-  source: AgentSource;
-  variable_defaults: PromptVariable[];
-  settings: AgentSettings;
-  category?: string | null;
-  tags?: string[] | null;
-  is_favorite?: boolean;
 }

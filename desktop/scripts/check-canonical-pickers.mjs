@@ -19,9 +19,9 @@
  * A surface that genuinely is not an agent CHOICE may declare
  * `canonical-agent-picker-exempt: <reason>` (12+ reason characters) nearby.
  *
- * `--self-test` proves the detector can FAIL: it runs the same patterns over a
- * synthetic hand-rolled picker and exits non-zero if they come back clean. A
- * guard you cannot demonstrate failing is not a guard.
+ * `--self-test` proves the detector can FAIL: it runs the same patterns over
+ * synthetic forks and exits non-zero if they come back clean. A guard you
+ * cannot demonstrate failing is not a guard.
  */
 
 import { execSync } from "node:child_process";
@@ -34,7 +34,67 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENT_CANONICAL_IMPORT = "@ai-matrx/agents/catalog/react";
 const AGENT_EXEMPTION = /canonical-agent-picker-exempt:\s*(.{12,})/;
 
-/** Names and shapes that only exist when someone rebuilt the roster. */
+/**
+ * 🚨 THE SUBSTRING HOLE (fixed 2026-09-08, review of P7). The canonical-import
+ * test used to be `text.includes("@ai-matrx/agents/catalog/react")`, so ANY
+ * mention of the path whitelisted the WHOLE file — a tombstone comment, a doc
+ * line, a string. A file could name the package in a comment (or import it for
+ * one purpose) and hand-roll a second picker underneath it, green. Two changes
+ * close it, and they are byte-identical in all four copies of this guard
+ * (matrx-frontend, matrx-extend, matrx-local/desktop,
+ * aidream/apps/workflow-studio):
+ *
+ *  1. Every scan runs over a COMMENT-STRIPPED copy of the file (offsets and
+ *     therefore reported line numbers are preserved), so nothing in a comment
+ *     can whitelist — or trip — the guard.
+ *  2. The import test matches a real `import … from "<path>"` /
+ *     `export … from "<path>"` / `require("<path>")` / `import("<path>")`
+ *     statement, never a substring.
+ *
+ * The EXEMPTION is read from the RAW text: an exemption IS a comment.
+ */
+function stripComments(text) {
+  const blank = (chunk) => chunk.replace(/[^\n]/g, " ");
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(
+      /(^|[^:])\/\/[^\n]*/g,
+      (match, lead) => lead + " ".repeat(match.length - lead.length),
+    );
+}
+
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function importSignals(modulePath) {
+  const quoted = `['"\`]${escapeForRegExp(modulePath)}['"\`]`;
+  return [
+    // `import X from "p"`, `import { X } from "p"` (multi-line included), `import "p"`
+    new RegExp(`\\bimport\\s+(?:[^;'"\`]*?\\bfrom\\s*)?${quoted}`),
+    // `export { X } from "p"`, `export * from "p"`
+    new RegExp(`\\bexport\\s+[^;'"\`]*?\\bfrom\\s*${quoted}`),
+    new RegExp(`\\brequire\\s*\\(\\s*${quoted}`),
+    new RegExp(`\\bimport\\s*\\(\\s*${quoted}`),
+  ];
+}
+
+const IMPORT_SIGNALS = importSignals(AGENT_CANONICAL_IMPORT);
+
+/**
+ * WHAT A CANONICAL IMPORT EXCUSES: rendering the package's own components, and
+ * nothing else. A file that imports the package is STILL scanned. A
+ * hand-rolled `Agent(Picker|Selector|Select|Dropdown|List)` definition is
+ * excused only when the file actually renders `AgentListDropdown` /
+ * `AgentListInlinePicker` (the thin-wrapper shape — a wrapper named
+ * `AgentPicker.tsx` that renders the package component is fine). A hand-built
+ * roster (`agentOptions|availableAgents|displayAgents|allAgents|filteredAgents`
+ * .map, a native `<select>` of agents) and a direct catalogue RPC read are
+ * findings EITHER WAY: rendering the package once does not buy the right to
+ * fork a second list beneath it.
+ */
+const PACKAGE_RENDER = /<\s*(?:AgentListDropdown|AgentListInlinePicker)\b/;
+
 // The prefix is OPTIONAL and not `[A-Z]\w*`: the frontend's original required a
 // character BEFORE "Agent", so a component named exactly `AgentPicker` — which
 // is what this repo actually shipped — slipped straight through it. It is a
@@ -45,19 +105,26 @@ const AGENT_EXEMPTION = /canonical-agent-picker-exempt:\s*(.{12,})/;
 // keep `fetchAgentList` and friends — the retired hand-rolled loaders — caught.
 const NAME_PREFIX = "(?:[A-Z]\\w*|use|fetch|get|load|build|create)?";
 
-const AGENT_SIGNALS = [
+const NAME_SIGNALS = [
   new RegExp(
     `(?:export\\s+)?function\\s+${NAME_PREFIX}Agent(?:Picker|Selector|Select|Dropdown|List)\\b`,
   ),
   new RegExp(
     `const\\s+${NAME_PREFIX}Agent(?:Picker|Selector|Select|Dropdown|List)\\b\\s*=\\s*(?:\\([^)]*\\)|[^=])*=>`,
   ),
+];
+
+const ROSTER_SIGNALS = [
   /<SelectValue\b[^>]*placeholder\s*=\s*["'][^"']*(?:select|choose|pick)[^"']*agent/i,
   /<select\b[^>]*aria-label\s*=\s*["'][^"']*agent/i,
   /\b(?:agentOptions|availableAgents|displayAgents|allAgents|filteredAgents)\.map\s*\(/,
-  // The row read itself: only the package may call the catalog RPCs.
-  /\bagx_get_list(?:_full)?\b/,
-  /\bagx_search\b/,
+  // The row read itself: only the package may CALL the catalog RPCs. The pattern
+  // requires the `.rpc("<name>"` call form on purpose — a bare mention also matches a
+  // test double whose `rpc()` ANSWERS the RPC for the package's own store (this is
+  // what it flagged in workflow-studio once the substring whitelist was closed), and
+  // exempting a real file to get green is how a guard dies.
+  /\.rpc\s*\(\s*['"`]agx_get_list(?:_full)?\b/,
+  /\.rpc\s*\(\s*['"`]agx_search\b/,
 ];
 
 function sourceFiles() {
@@ -86,13 +153,50 @@ function firstMatch(text, patterns) {
   return null;
 }
 
-function scan(text) {
-  if (text.includes(AGENT_CANONICAL_IMPORT)) return null;
-  if (AGENT_EXEMPTION.test(text)) return null;
-  return firstMatch(text, AGENT_SIGNALS);
+function readFileText(absolutePath) {
+  const raw = readFileSync(absolutePath, "utf8");
+  return { raw, code: stripComments(raw) };
 }
 
-const SELF_TEST_FIXTURE = `
+/** Findings for one file. Detection reads `code`; the exemption reads `raw`. */
+function scan({ raw, code }) {
+  if (AGENT_EXEMPTION.test(raw)) return [];
+  const canonical = IMPORT_SIGNALS.some((pattern) => pattern.test(code));
+  const wrapsCanonical = canonical && PACKAGE_RENDER.test(code);
+
+  const findings = [];
+  const named = firstMatch(code, NAME_SIGNALS);
+  if (named && !wrapsCanonical) {
+    findings.push({
+      line: lineFor(code, named.index),
+      reason: canonical
+        ? `defines its own agent picker beside the canonical import without rendering AgentListDropdown / AgentListInlinePicker (matched /${named.source}/)`
+        : `agent-selection UI does not render ${AGENT_CANONICAL_IMPORT} (matched /${named.source}/)`,
+    });
+  }
+  const roster = firstMatch(code, ROSTER_SIGNALS);
+  if (roster) {
+    findings.push({
+      line: lineFor(code, roster.index),
+      reason: canonical
+        ? `builds its own agent roster (or reads the catalogue) beside the canonical import — importing the package excuses rendering its components, nothing else (matched /${roster.source}/)`
+        : `agent-selection UI does not render ${AGENT_CANONICAL_IMPORT} (matched /${roster.source}/)`,
+    });
+  }
+  return findings;
+}
+
+/**
+ * RED 1 is the shape this repo actually shipped (a component named EXACTLY
+ * `AgentPicker` rebuilding the roster). RED 2 and RED 3 are the substring hole
+ * the P7 review found: a file whose ONLY mention of the package is a comment,
+ * and a file that imports the package for one purpose and forks a second picker
+ * beneath it. GREEN 1 renders the package picker; GREEN 2 is a thin wrapper
+ * NAMED `AgentPicker` that renders it (legitimate — the name is not the defect,
+ * the second roster is); the handler fixture is the `handleAgentSelect` false
+ * positive a bare `\w*` prefix brings back.
+ */
+const SELF_TEST_RED_BARE_FORK = `
 import { useState } from "react";
 export function AgentPicker({ agents }) {
   const [q, setQ] = useState("");
@@ -101,44 +205,100 @@ export function AgentPicker({ agents }) {
 }
 `;
 
+const SELF_TEST_RED_COMMENT_MENTION = `
+import { useState } from "react";
+// The platform picker lives in ${AGENT_CANONICAL_IMPORT} and we should adopt it
+// some day; AgentListDropdown does most of this already.
+export function ChooseAgent({ agents }) {
+  const [value, setValue] = useState("");
+  return (
+    <select aria-label="Select agent" value={value}>
+      {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+    </select>
+  );
+}
+`;
+
+const SELF_TEST_RED_IMPORT_AND_FORK = `
+import { AgentListDropdown } from "${AGENT_CANONICAL_IMPORT}";
+export function AgentSurface() {
+  return <AgentListDropdown consumerId="matrx-local.chat" onSelect={() => {}} />;
+}
+export function AgentPicker({ availableAgents, onPick }) {
+  return (
+    <select onChange={(e) => onPick(e.target.value)}>
+      {availableAgents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+    </select>
+  );
+}
+`;
+
+const SELF_TEST_GREEN = `
+import { AgentListDropdown } from "${AGENT_CANONICAL_IMPORT}";
+export function Surface() { return <AgentListDropdown onSelect={() => {}} />; }
+`;
+
+const SELF_TEST_GREEN_WRAPPER = `
+import { AgentListInlinePicker } from "${AGENT_CANONICAL_IMPORT}";
+export function AgentPicker({ onSelect }) {
+  return <AgentListInlinePicker consumerId="matrx-local.chat" onSelect={onSelect} />;
+}
+`;
+
+const SELF_TEST_HANDLER = `
+export function ChatSurface() {
+  const handleAgentSelect = useCallback((agent) => open(agent.id), []);
+  return <button onClick={() => handleAgentSelect({ id: '1' })}>Pick</button>;
+}
+`;
+
 function selfTest() {
-  const hit = scan(SELF_TEST_FIXTURE);
-  if (!hit) {
-    console.error(
-      "🚨 check:canonical-pickers SELF-TEST FAILED — the detector did not flag a\n" +
-        "hand-rolled AgentPicker. A guard that cannot fail is not a guard; fix the\n" +
-        "patterns in scripts/check-canonical-pickers.mjs before trusting a green run.",
+  const failures = [];
+  const check = (fixture) => scan({ raw: fixture, code: stripComments(fixture) });
+
+  if (check(SELF_TEST_RED_BARE_FORK).length === 0) {
+    failures.push(
+      "RED 1: the detector did NOT flag a hand-rolled `AgentPicker` — the name-prefix gap is back.",
     );
-    process.exit(1);
   }
-  const handler = scan(
-    "export function ChatSurface() {\n" +
-      "  const handleAgentSelect = useCallback((agent) => open(agent.id), []);\n" +
-      "  return <button onClick={() => handleAgentSelect({ id: '1' })}>Pick</button>;\n" +
-      "}\n",
-  );
-  if (handler) {
-    console.error(
-      "🚨 check:canonical-pickers SELF-TEST FAILED — the detector flagged a plain\n" +
-        "`handleAgentSelect` callback. A false positive makes agents delete the guard\n" +
-        "instead of the fork.",
+  if (check(SELF_TEST_RED_COMMENT_MENTION).length === 0) {
+    failures.push(
+      "RED 2: the detector did NOT flag a hand-rolled <select> picker in a file whose ONLY mention of the package is a comment — the substring hole is back.",
     );
-    process.exit(1);
   }
-  const clean = scan(
-    `import { AgentListDropdown } from "${AGENT_CANONICAL_IMPORT}";\n` +
-      "export function Surface() { return <AgentListDropdown onSelect={() => {}} />; }\n",
-  );
-  if (clean) {
+  if (check(SELF_TEST_RED_IMPORT_AND_FORK).length === 0) {
+    failures.push(
+      "RED 3: the detector did NOT flag a file that imports the package AND forks its own `AgentPicker` beneath it — a canonical import excuses rendering the package components, nothing else.",
+    );
+  }
+  if (check(SELF_TEST_GREEN).length > 0) {
+    failures.push(
+      "GREEN 1: the detector flagged a surface that DOES render the package picker — it would block correct adoption.",
+    );
+  }
+  if (check(SELF_TEST_GREEN_WRAPPER).length > 0) {
+    failures.push(
+      "GREEN 2: the detector flagged a thin wrapper named `AgentPicker` that renders AgentListInlinePicker — the name is not the defect, a second roster is.",
+    );
+  }
+  if (check(SELF_TEST_HANDLER).length > 0) {
+    failures.push(
+      "HANDLER: the detector flagged a plain `handleAgentSelect` callback — a false positive makes agents delete the guard instead of the fork.",
+    );
+  }
+  if (failures.length > 0) {
+    console.error("\n🚨 check:canonical-pickers SELF-TEST FAILED\n");
+    for (const failure of failures) console.error(`  ✗ ${failure}`);
     console.error(
-      "🚨 check:canonical-pickers SELF-TEST FAILED — the detector flagged a surface\n" +
-        "that DOES render the package picker. It would block correct adoption.",
+      "\nFix scripts/check-canonical-pickers.mjs before trusting a green run.\n",
     );
     process.exit(1);
   }
   console.log(
-    "✅ check:canonical-pickers self-test: the detector fails on a hand-rolled\n" +
-      "   picker and passes a package-rendered one.",
+    "✅ self-test: RED on a hand-rolled `AgentPicker`, on a comment-only package mention\n" +
+      "   beside a <select> picker, and on a canonical import with a fork beneath it;\n" +
+      "   GREEN on the package picker and on a thin `AgentPicker` wrapper; silent on a\n" +
+      "   `handleAgentSelect` handler.",
   );
 }
 
@@ -150,9 +310,8 @@ function main() {
 
   const findings = [];
   for (const file of sourceFiles()) {
-    const text = readFileSync(path.join(ROOT, file), "utf8");
-    const hit = scan(text);
-    if (hit) findings.push({ file, line: lineFor(text, hit.index), signal: hit.source });
+    const text = readFileText(path.join(ROOT, file));
+    for (const finding of scan(text)) findings.push({ file, ...finding });
   }
 
   if (findings.length === 0) {
@@ -165,7 +324,7 @@ function main() {
 
   console.error("\n🚨 AN ALTERNATE AGENT PICKER (OR CATALOG READ) WAS FOUND\n");
   for (const finding of findings) {
-    console.error(`  ✗ ${finding.file}:${finding.line} — matched /${finding.signal}/`);
+    console.error(`  ✗ ${finding.file}:${finding.line} — ${finding.reason}`);
   }
   console.error(
     "\nTHERE IS ONE AGENT PICKER: render AgentListDropdown or\n" +

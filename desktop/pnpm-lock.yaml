@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@ai-matrx/agents':
         specifier: latest
-        version: 0.7.1(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.9.0(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/content-ir':
         specifier: latest
         version: 0.11.0
@@ -211,13 +211,19 @@ importers:
 
 packages:
 
-  '@ai-matrx/agents@0.7.1':
-    resolution: {integrity: sha512-t5AXeaW/1snz170jUEJQGkZec/P/uYVOeRcNbEZivQyJdsbuAoXqSDUXFf0HAt/6lg05NMlgJlLAsQcEAlj7Ow==}
+  '@ai-matrx/agents@0.9.0':
+    resolution: {integrity: sha512-vl6mmpGrdlFfIskhdYEwSnw3hAeMFP3aywkYGl0XYJiN3TqbHVcdWFRiY9vdeLsvqj7ve6udwuMrF6vp3sG8Aw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
+      react-native: '>=0.76.0'
+      react-native-svg: '>=15.0.0'
     peerDependenciesMeta:
       react:
+        optional: true
+      react-native:
+        optional: true
+      react-native-svg:
         optional: true
 
   '@ai-matrx/content-ir-react@0.11.0':
@@ -3590,7 +3596,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/agents@0.7.1(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/agents@0.9.0(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/data': 0.11.0(@supabase/supabase-js@2.116.0)(react@19.2.4)
       '@ai-matrx/design-system': 0.12.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3601,7 +3607,6 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
       - react-dom
-      - react-native
 
   '@ai-matrx/content-ir-react@0.11.0(react@19.2.4)':
     dependencies:

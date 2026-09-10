@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Compact the current conversation into a handoff document for another agent to pick up.
+description: "Session handoff note saved to the OS temp directory. Use when the user runs /handoff to pass this conversation to a fresh agent. NOT for docs/handoffs/*.md (use handoffs)."
 argument-hint: "What will the next session be used for?"
 disable-model-invocation: true
 ---

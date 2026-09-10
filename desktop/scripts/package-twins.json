@@ -572,6 +572,12 @@
       "package": "@ai-matrx/design-system",
       "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system — the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
       "allow": []
+    },
+    {
+      "name": "ArchiveFilter",
+      "package": "@ai-matrx/design-system",
+      "why": "THE ARCHIVED-ITEMS LAW's one control (Arman, 2026-09-09 — common-docs/policies/archived-items.md): the tri-state active/archived/all segmented toggle every list on the platform reveals its archive with. Shipped in design-system 0.13.0. This repo carried a local copy for part of one session — written because 0.13.0 existed unpublished and THE LATEST LAW forbids consuming an unpublished package — and deleted it the moment 0.13.0 landed. The register row is what stops the next host inventing a second answer: a boolean showArchived, a badge, or another segmented control. A behaviour the package lacks is a package change (THE SAME-SESSION LAW), never a local re-definition.",
+      "allow": []
     }
   ]
 }

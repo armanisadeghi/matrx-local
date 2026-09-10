@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronsUpDown, Copy, Loader2, Search } from "lucide-react";
 
-import { Badge, Button, Checkbox, BasicInput as Input } from "@ai-matrx/design-system";
+// `ArchiveFilter` is THE ARCHIVED-ITEMS LAW's one control, from the package
+// (@ai-matrx/design-system 0.13.0). It was briefly a local file here because
+// that version was written and not yet published; it is the package's now.
+import {
+  ArchiveFilter,
+  Badge,
+  Button,
+  Checkbox,
+  DEFAULT_ARCHIVE_FILTER,
+  BasicInput as Input,
+} from "@ai-matrx/design-system";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { engine } from "@/lib/api";
 import type { ArchiveFilterValue, ClaudeHistoryChangeType, ClaudeHistoryInventoryPage, ClaudeHistoryReview } from "@/lib/api";
-// THE ARCHIVED-ITEMS LAW's one control. Temporary local copy of the
-// @ai-matrx/design-system 0.13.0 body — see that file's header for the
-// one-line swap when the package version lands here.
-import { ArchiveFilter, DEFAULT_ARCHIVE_FILTER } from "@/components/archive-filter";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`

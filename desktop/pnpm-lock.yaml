@@ -19,7 +19,7 @@ importers:
         version: 0.11.1(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.12.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.13.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.9.0(react@19.2.4)
@@ -245,8 +245,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.12.1':
-    resolution: {integrity: sha512-W3nUn2rpjy+3HbGS/25anqaSXqfYklmg3feDSlFiSb7JP+e5UjX0jPxMPksCG7ZDLJn8DRtrcsrJLBYSUjO0hQ==}
+  '@ai-matrx/design-system@0.13.0':
+    resolution: {integrity: sha512-fdCSUsUTUhKdEFbl/qaTmRhlJJwct4CSw9CwpaESAZlwZjBh3qz0JxcCx9MATwwKtC1buj5V2nnzOIvxLfFiZg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3599,7 +3599,7 @@ snapshots:
   '@ai-matrx/agents@0.9.2(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/data': 0.11.0(@supabase/supabase-js@2.116.0)(react@19.2.4)
-      '@ai-matrx/design-system': 0.12.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@ai-matrx/design-system': 0.13.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
@@ -3627,7 +3627,7 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.12.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.13.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/kit': 0.9.0(react@19.2.4)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

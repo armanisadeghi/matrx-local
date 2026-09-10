@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClaudeHistoryReview } from "@/lib/api";
-import { DEFAULT_ARCHIVE_FILTER } from "@/components/archive-filter";
+import { DEFAULT_ARCHIVE_FILTER } from "@ai-matrx/design-system";
 import { historyReviewCounts, inventoryRequestFilters } from "./HistoryInventoryTable";
 
 describe("durable history review evidence", () => {

@@ -272,12 +272,17 @@ export interface ClaudeHistoryInventoryRow extends ClaudeHistorySessionInventory
 
 /**
  * THE ARCHIVED-ITEMS LAW's three states (Arman, 2026-09-09 —
- * ../../../common-docs/policies/archived-items.md). The same three words the
- * whole platform uses: `ArchivedFilter` in matrx-frontend's lib/entity-list,
- * `p_archived` in the agx_ and wfx_ list RPCs, `ArchiveFilter` in
- * @ai-matrx/design-system, and now `archived=` on the engine's inventory route.
+ * ../../../common-docs/policies/archived-items.md), re-exported from the ONE
+ * place they are defined: `@ai-matrx/design-system`. The same three words the
+ * whole platform uses — `ArchivedFilter` in matrx-frontend's lib/entity-list
+ * (also an alias of this type), `p_archived` in the agx_ and wfx_ list RPCs,
+ * `archFilter` in @ai-matrx/agents/catalog, and `archived=` on the engine's
+ * inventory route. Declaring the union again here would be a vocabulary twin:
+ * the day the platform grew a fourth state this file would silently disagree
+ * with the control rendering it.
  */
-export type ArchiveFilterValue = "active" | "archived" | "all";
+import type { ArchiveFilterValue } from "@ai-matrx/design-system";
+export type { ArchiveFilterValue };
 
 export interface ClaudeHistoryInventoryPage {
   scan_id: string;

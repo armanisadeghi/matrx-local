@@ -24,6 +24,8 @@
     "check:matrx-packages": "node scripts/check-matrx-packages.mjs",
     "check:matrx-latest": "node scripts/check-matrx-packages.mjs",
     "sync:matrx-packages": "pnpm update \"@ai-matrx/*\" && pnpm check:matrx-packages",
+    "check:archived-items-law": "node scripts/check-archived-items-law.mjs",
+    "check:archived-items-law:self-test": "node scripts/check-archived-items-law.mjs --self-test",
     "check:canonical-pickers": "node scripts/check-canonical-pickers.mjs",
     "check:canonical-pickers:self-test": "node scripts/check-canonical-pickers.mjs --self-test",
     "check:package-twins": "node scripts/check-package-twins.mjs --strict",

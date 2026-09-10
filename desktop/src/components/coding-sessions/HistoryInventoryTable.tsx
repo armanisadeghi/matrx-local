@@ -4,7 +4,11 @@ import { ArrowDown, ArrowUp, ChevronsUpDown, Copy, Loader2, Search } from "lucid
 import { Badge, Button, Checkbox, BasicInput as Input } from "@ai-matrx/design-system";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { engine } from "@/lib/api";
-import type { ClaudeHistoryChangeType, ClaudeHistoryInventoryPage, ClaudeHistoryReview } from "@/lib/api";
+import type { ArchiveFilterValue, ClaudeHistoryChangeType, ClaudeHistoryInventoryPage, ClaudeHistoryReview } from "@/lib/api";
+// THE ARCHIVED-ITEMS LAW's one control. Temporary local copy of the
+// @ai-matrx/design-system 0.13.0 body — see that file's header for the
+// one-line swap when the package version lands here.
+import { ArchiveFilter, DEFAULT_ARCHIVE_FILTER } from "@/components/archive-filter";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
@@ -40,6 +44,41 @@ function changeLabel(change: ClaudeHistoryChangeType) {
   }
 }
 
+/**
+ * The engine request this table's controls add up to. Pure and exported so the
+ * one thing that can silently regress — an archive state chosen on screen that
+ * never reaches the reader — is a unit test rather than a live click.
+ *
+ * 🚨 `archived` is ALWAYS sent, never conditional. THE ARCHIVED-ITEMS LAW's
+ * failure mode here was an omitted parameter: the route's old default was "add
+ * no clause", so sending nothing meant showing everything. A control whose
+ * value is dropped on the way to the reader is a control that does not exist.
+ */
+export function inventoryRequestFilters(state: {
+  cursor: string | undefined;
+  limit: number;
+  query: string;
+  changeFilter: string;
+  availability: string;
+  archiveFilter: ArchiveFilterValue;
+  sortKey: SortKey;
+  direction: SortDirection;
+}) {
+  const changeTypes =
+    state.changeFilter === "all" ? undefined : [state.changeFilter as ClaudeHistoryChangeType];
+  return {
+    ...(state.cursor ? { cursor: state.cursor } : {}),
+    limit: state.limit,
+    ...(state.query.trim() ? { search: state.query.trim() } : {}),
+    ...(changeTypes ? { changeTypes } : {}),
+    ...(state.availability === "all" ? {} : { importable: state.availability === "available" }),
+    archived: state.archiveFilter,
+    includeMissing: state.changeFilter === "missing",
+    sort: state.sortKey,
+    direction: state.direction,
+  };
+}
+
 export function HistoryInventoryTable({
   review,
   selected,
@@ -58,6 +97,11 @@ export function HistoryInventoryTable({
   const [pageData, setPageData] = useState<ClaudeHistoryInventoryPage>(review);
   const [query, setQuery] = useState("");
   const [availability, setAvailability] = useState("all");
+  // THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09): the default HIDES archived.
+  // Until 2026-09-09 this table sent no archive filter at all, so the engine
+  // added no clause and archived sessions rendered mixed in with live ones,
+  // unlabelled — census row C2, category (c).
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilterValue>(DEFAULT_ARCHIVE_FILTER);
   const [changeFilter, setChangeFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("modified");
   const [direction, setDirection] = useState<SortDirection>("desc");
@@ -84,29 +128,32 @@ export function HistoryInventoryTable({
   }, [focusFilter?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const firstReviewPage = pageIndex === 0 && !query && availability === "all" && changeFilter === "all" && sortKey === "modified" && direction === "desc" && pageSize >= review.items.length;
+    // The `review` prop IS a first page the engine already read under the
+    // platform default archive filter (`review()` calls `list_rows` with no
+    // `archived`, which is now "active"), so skipping the round trip is only
+    // honest while this table is still showing that same state.
+    const firstReviewPage = pageIndex === 0 && !query && availability === "all" && changeFilter === "all" && archiveFilter === DEFAULT_ARCHIVE_FILTER && sortKey === "modified" && direction === "desc" && pageSize >= review.items.length;
     if (firstReviewPage) return;
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError(null);
-      const changeTypes = changeFilter === "all" ? undefined : [changeFilter as ClaudeHistoryChangeType];
-      void engine.getClaudeHistoryInventoryPage(review.scan.scan_id, {
-        ...(cursors[pageIndex] ? { cursor: cursors[pageIndex] } : {}),
+      void engine.getClaudeHistoryInventoryPage(review.scan.scan_id, inventoryRequestFilters({
+        cursor: cursors[pageIndex],
         limit: pageSize,
-        ...(query.trim() ? { search: query.trim() } : {}),
-        ...(changeTypes ? { changeTypes } : {}),
-        ...(availability === "all" ? {} : { importable: availability === "available" }),
-        includeMissing: changeFilter === "missing",
-        sort: sortKey,
+        query,
+        changeFilter,
+        availability,
+        archiveFilter,
+        sortKey,
         direction,
-      }).then((next) => {
+      })).then((next) => {
         setPageData(next);
         onPageRowsChange(next);
         onSelectedChange(new Set());
       }).catch((nextError) => setError(nextError instanceof Error ? nextError.message : String(nextError))).finally(() => setLoading(false));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [availability, changeFilter, cursors, direction, onPageRowsChange, onSelectedChange, pageIndex, pageSize, query, review.items.length, review.scan.scan_id, sortKey]);
+  }, [archiveFilter, availability, changeFilter, cursors, direction, onPageRowsChange, onSelectedChange, pageIndex, pageSize, query, review.items.length, review.scan.scan_id, sortKey]);
 
   const selectedBytes = useMemo(() => pageData.items.filter((row) => selected.has(keyOf(row))).reduce((sum, row) => sum + row.bytes, 0), [pageData.items, selected]);
   const selectable = pageData.items.filter((row) => row.present && row.import_available);
@@ -145,6 +192,18 @@ export function HistoryInventoryTable({
       <div className="relative min-w-64 flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(event) => { setQuery(event.target.value); resetPaging(); }} placeholder="Search every reviewed title, project, branch, or session ID" className="pl-9" /></div>
       <Select value={availability} onValueChange={(value) => { setAvailability(value); resetPaging(); }}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All availability</SelectItem><SelectItem value="available">Importable</SelectItem><SelectItem value="blocked">Blocked</SelectItem></SelectContent></Select>
       <Select value={changeFilter} onValueChange={(value) => { setChangeFilter(value); resetPaging(); }}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All present sessions</SelectItem><SelectItem value="new">New</SelectItem><SelectItem value="content_changed">Transcript changed</SelectItem><SelectItem value="metadata_changed">Details changed</SelectItem><SelectItem value="missing">Missing locally</SelectItem><SelectItem value="unchanged">Unchanged</SelectItem></SelectContent></Select>
+      {/* THE ARCHIVED-ITEMS LAW: archived sessions are hidden until asked for,
+          and asking is ONE click. The counts are the engine's, taken over the
+          same search / availability / change filters this page carries, so the
+          number beside each state is what that state would actually render. */}
+      <ArchiveFilter
+        value={archiveFilter}
+        onValueChange={(value) => { setArchiveFilter(value); resetPaging(); }}
+        counts={pageData.archive_counts}
+        labels={{ active: "Active", archived: "Archived", all: "All" }}
+        aria-label="Show archived sessions"
+        disabled={disabled ?? false}
+      />
     </div>
     {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</div>}
     {copyFeedback && <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground" role="status">{copyFeedback}</div>}

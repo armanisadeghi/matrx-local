@@ -22,6 +22,32 @@ _CHANGE_TYPES: tuple[HistoryChangeType, ...] = (
     "unchanged",
 )
 
+# THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
+# ../common-docs/policies/archived-items.md): every list over an entity that
+# can be archived carries an archive filter, the default hides archived, and
+# revealing them is one or two clicks. Three states and no more, named the way
+# the whole platform names them (`ArchivedFilter` in matrx-frontend's
+# lib/entity-list, `p_archived` in the agx_*/wfx_* RPCs, `ArchiveFilter` in
+# @ai-matrx/design-system) so a person meets ONE control, not one per app.
+#
+# This replaced an `archived: bool | None` parameter whose default was None —
+# "no clause", i.e. archived and active rows mixed on every first open, which
+# is what the Claude History Inventory shipped. A boolean also cannot express
+# "archived only", which is why the law names three states.
+ArchiveFilter = Literal["active", "archived", "all"]
+ARCHIVE_FILTERS: tuple[ArchiveFilter, ...] = ("active", "archived", "all")
+ARCHIVE_FILTER_DEFAULT: ArchiveFilter = "active"
+
+# `is_archived` is nullable in the scan rows (Claude's own index does not always
+# say), and in SQLite `NULL = 0` is NULL, not true — so "active" MUST be written
+# as an IS NOT / IS NULL pair or every row Claude never labelled silently
+# vanishes from the default view.
+_ARCHIVE_CLAUSES: dict[str, str] = {
+    "active": "(is_archived IS NULL OR is_archived = 0)",
+    "archived": "is_archived = 1",
+    "all": "",
+}
+
 _SORT_COLUMNS = {
     "modified": "last_modified_ns",
     "title": "title COLLATE NOCASE",
@@ -236,7 +262,7 @@ class HistoryInventoryStore:
         change_types: tuple[HistoryChangeType, ...] = (),
         project: str | None = None,
         branch: str | None = None,
-        archived: bool | None = None,
+        archived: str = ARCHIVE_FILTER_DEFAULT,
         importable: bool | None = None,
         include_missing: bool = False,
         sort: str = "modified",
@@ -271,18 +297,41 @@ class HistoryInventoryStore:
         if branch:
             clauses.append("git_branch = ?")
             params.append(branch)
-        if archived is not None:
-            clauses.append("is_archived = ?")
-            params.append(int(archived))
         if importable is not None:
             clauses.append("import_available = ?")
             params.append(int(importable))
+
+        # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
+        # ../common-docs/policies/archived-items.md). The archive predicate is
+        # applied LAST and kept separate from the others on purpose: the honest
+        # per-state counts below must be counted under every OTHER filter this
+        # request carries, and differ only in this one clause. A count taken
+        # over the whole scan would be a number the list cannot produce.
+        if archived not in ARCHIVE_FILTERS:
+            raise ValueError(
+                "Unsupported archive filter; expected one of "
+                + ", ".join(sorted(ARCHIVE_FILTERS))
+            )
+        unarchived_clauses = list(clauses)
+        unarchived_params = list(params)
+        archive_clause = _ARCHIVE_CLAUSES[archived]
+        if archive_clause:
+            clauses.append(archive_clause)
+
+        base_where = " AND ".join(unarchived_clauses)
+        archive_counts: dict[str, int] = {}
+        for state in ARCHIVE_FILTERS:
+            state_clause = _ARCHIVE_CLAUSES[state]
+            state_where = f"{base_where} AND {state_clause}" if state_clause else base_where
+            state_row = await self._db.fetchone(
+                "SELECT COUNT(*) AS count FROM coding_session_history_scan_rows "
+                f"WHERE {state_where}",
+                tuple(unarchived_params),
+            )
+            archive_counts[state] = int(state_row["count"]) if state_row else 0
+
         where = " AND ".join(clauses)
-        count_row = await self._db.fetchone(
-            f"SELECT COUNT(*) AS count FROM coding_session_history_scan_rows WHERE {where}",
-            tuple(params),
-        )
-        total = int(count_row["count"]) if count_row else 0
+        total = archive_counts[archived]
         order = "ASC" if direction == "asc" else "DESC"
         page = await self._db.fetchall(
             f"""SELECT * FROM coding_session_history_scan_rows
@@ -296,6 +345,11 @@ class HistoryInventoryStore:
         return {
             "scan_id": scan_id,
             "items": items,
+            # What the reader was ASKED for, echoed back, plus what each state
+            # would render under the same other filters. A control that prints
+            # a number the list cannot produce is a screen that lies.
+            "archived": archived,
+            "archive_counts": archive_counts,
             "page": {
                 "returned": len(items),
                 "total": total,

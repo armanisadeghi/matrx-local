@@ -96,6 +96,16 @@ jobs:
       - name: the picker guard can still fail (self-test)
         run: pnpm check:canonical-pickers:self-test
 
+      # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
+      # ../../../common-docs/policies/archived-items.md). The Claude History
+      # Inventory shipped the archive plumbing in three layers and set it in
+      # none, so 1,671 real archived Claude sessions rendered mixed in with live
+      # ones. This scans BOTH halves of the app — desktop/src and app/.
+      - name: THE ARCHIVED-ITEMS LAW
+        run: pnpm check:archived-items-law
+      - name: the archive guard can still fail (self-test)
+        run: pnpm check:archived-items-law:self-test
+
       # v1.3.104 shipped a crash that killed the app on boot for every user.
       # Typecheck passed and the bundle built — nothing here ever RENDERED the
       # app. This step does: it boots the real production bundle in Chromium

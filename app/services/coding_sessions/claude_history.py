@@ -835,8 +835,18 @@ class ClaudeHistoryImporter:
         identities: list[dict[str, str]] = []
         cursor: str | None = None
         while True:
+            # archived-items-law-exempt: "put ALL my conversations in the
+            # cloud" — this walk is a machine enumeration with no screen and no
+            # selection, and an archived conversation is still the user's. The
+            # law governs what a LIST SHOWS, never what a backup carries; the
+            # default "active" here would silently drop archived history from
+            # the sync, which is the opposite of what the button promises.
             page = await self._inventory.list_rows(
-                scan_id, cursor=cursor, limit=MAX_PREVIEW_SESSIONS, importable=True
+                scan_id,
+                cursor=cursor,
+                limit=MAX_PREVIEW_SESSIONS,
+                importable=True,
+                archived="all",
             )
             for row in page["items"]:
                 identities.append(

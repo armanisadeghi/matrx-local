@@ -93,6 +93,29 @@ const ROWS = [
     access_level: "system",
     shared_by_email: null,
   },
+  {
+    // THE ARCHIVED-ITEMS LAW's row. Owned, so it belongs on the default tab —
+    // and must NOT be there until asked for.
+    id: "44444444-4444-4444-8444-444444444444",
+    agent_type: "user",
+    name: "Mike Archived",
+    description: "retired last month",
+    model_id: null,
+    category: "general",
+    tags: [],
+    is_active: true,
+    is_archived: true,
+    is_favorite: false,
+    created_by: USER,
+    organization_id: null,
+    task_id: null,
+    source_agent_id: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-02-15T00:00:00Z",
+    is_owner: true,
+    access_level: "owner",
+    shared_by_email: null,
+  },
 ];
 
 /**
@@ -140,11 +163,16 @@ function clientOver(rows: unknown[]): AgentCatalogClient {
   };
 }
 
-async function renderPicker(catalogId: string, rows: unknown[]) {
+async function renderPicker(
+  catalogId: string,
+  rows: unknown[],
+  defaults?: { archiveFilter: "active" | "archived" | "both" },
+) {
   const catalog = createAgentCatalog({
     catalogId,
     client: clientOver(rows),
     identity: { requireUserId: () => USER },
+    ...(defaults !== undefined && { defaults }),
   });
   await catalog.ensureLoaded({ force: true });
   const html = renderToStaticMarkup(
@@ -188,5 +216,66 @@ describe("D4: one picker, two catalogs, identical output", () => {
     const local = await renderPicker("falsify-local", ROWS.slice(1));
 
     expect(local.rendered).not.toEqual(cloud.rendered);
+  });
+});
+
+/**
+ * THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
+ * ../../../../common-docs/policies/archived-items.md) on BOTH desktop pickers.
+ *
+ * Register row C2(a). Matrx Local mounts `AgentListDropdown` in Cloud Chat and
+ * in `ChatInput`, over two catalogs — the cloud one (Supabase) and the local
+ * one (the sidecar's offline mirror). D4 says offline is a data LOCATION, never
+ * a different list: so the archive control, its default and its reveal must be
+ * identical in both, and this proves it over the same rows through both client
+ * shapes.
+ *
+ * 🚨 What this CANNOT prove: these are server renders — no clicking. That the
+ * chip is reachable with a mouse in the running app is `docs/TESTING_LADDER.md`
+ * rung work, and the package's own interaction tests cover the click itself
+ * (matrx-extend `tests/unit/agent-archive-filter.test.tsx` drives it live in a
+ * DOM). Here the reveal is exercised through the `defaults.archiveFilter` knob,
+ * which is the same state the chip writes.
+ */
+describe("THE ARCHIVED-ITEMS LAW: identical in the cloud and offline pickers", () => {
+  it("renders the archive control, and hides archived agents by default, in BOTH", async () => {
+    _resetCatalogGlobalState();
+    const cloud = await renderPicker("arch-cloud", ROWS);
+    _resetCatalogGlobalState();
+    const local = await renderPicker("arch-local", ROWS);
+
+    for (const [lane, out] of [["cloud", cloud], ["local", local]] as const) {
+      expect(out.html, `${lane}: no archive control on the filter bar`).toContain(
+        'data-testid="agent-archive-filter"',
+      );
+      expect(out.html, `${lane}: the control must open on "hide archived"`).toContain(
+        "Archive filter: hide archived",
+      );
+      expect(out.html.includes("Mike Archived"), `${lane}: archived agent shown by default`).toBe(
+        false,
+      );
+    }
+    // And the un-archived rows are still all there — hiding archived is not
+    // hiding the list.
+    expect(cloud.rendered).toEqual(["Zulu Favourite", "Alpha Owned"]);
+    expect(local.rendered).toEqual(cloud.rendered);
+  });
+
+  it("reveals archived agents in BOTH when the filter is flipped", async () => {
+    _resetCatalogGlobalState();
+    const cloud = await renderPicker("arch-cloud-both", ROWS, { archiveFilter: "both" });
+    _resetCatalogGlobalState();
+    const local = await renderPicker("arch-local-both", ROWS, { archiveFilter: "both" });
+
+    expect(cloud.html).toContain("Mike Archived");
+    expect(local.html).toContain("Mike Archived");
+  });
+
+  it("FALSIFIABILITY: a picker that ignored the filter would fail the default check", async () => {
+    // Proof the assertion above is not vacuous: flip the knob and the very
+    // string the default test requires to be ABSENT appears.
+    _resetCatalogGlobalState();
+    const shown = await renderPicker("arch-falsify", ROWS, { archiveFilter: "both" });
+    expect(shown.html.includes("Mike Archived")).toBe(true);
   });
 });

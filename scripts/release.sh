@@ -790,7 +790,15 @@ info "Checking @ai-matrx packages are npm latest..."
 # own sorts, filters and a hardcoded default-agent NAME; the guard is what stops
 # that class returning. Self-test first so a green run means it can fail.
 (cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || fail "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
-ok "@ai-matrx packages are npm latest; the one agent picker holds."
+# THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
+# ../common-docs/policies/archived-items.md): every list over an entity that can
+# be archived carries an archive filter, the default hides archived, revealing
+# them is one or two clicks. This app shipped the Claude History Inventory with
+# the plumbing built end to end and NOTHING setting it, so 1,671 archived Claude
+# sessions rendered mixed in with live ones. Self-test first so a green run
+# means the detector can still fail.
+(cd desktop && pnpm check:archived-items-law:self-test && pnpm check:archived-items-law) || fail "A list hides archived rows with no way to reveal them (see above). Agent lists use @ai-matrx/agents/catalog's archFilter; anything else uses the tri-state ArchiveFilter with its value passed to the READER (the engine's archived=, the SQLite clause) — three states, never a boolean."
+ok "@ai-matrx packages are npm latest; the one agent picker holds; archived items are reachable."
 
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
 # The live DB is canonical, but registry reachability or drift must not stop an

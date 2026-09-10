@@ -199,7 +199,11 @@ async def list_claude_history_scan(
     change_type: list[str] = Query(default=[]),
     project: str | None = Query(default=None, max_length=200),
     branch: str | None = Query(default=None, max_length=200),
-    archived: bool | None = Query(default=None),
+    # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09): three states, and the
+    # default HIDES archived. This was `bool | None` defaulting to None — "no
+    # clause at all", so every first open of the inventory mixed archived rows
+    # in with live ones.
+    archived: str = Query(default="active", pattern="^(active|archived|all)$"),
     importable: bool | None = Query(default=None),
     include_missing: bool = Query(default=False),
     sort: str = Query(

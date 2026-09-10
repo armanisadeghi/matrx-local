@@ -864,3 +864,114 @@ async def test_discard_pending_history_preserves_hook_events(importer_env) -> No
     assert {
         json.loads(row["envelope_json"])["hook_event"]["name"] for row in remaining
     } == {"SessionMetadata", "Stop"}
+
+
+def _write_index_record(
+    sessions_root: Path,
+    *,
+    cli_session_id: str,
+    **fields: Any,
+) -> Path:
+    """One `local_*.json` record, in the shape Claude Desktop really writes.
+
+    Verified 2026-09-09 against this machine's live index
+    (`~/Library/Application Support/Claude/claude-code-sessions`): 49,176
+    records, 1,671 of them carrying `"isArchived": true` — which is exactly how
+    many archived sessions the Claude History Inventory table was rendering
+    mixed in with live ones before THE ARCHIVED-ITEMS LAW reached it.
+    """
+    folder = sessions_root / "acct-1" / "org-1"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"local_{uuid4()}.json"
+    path.write_text(
+        json.dumps({"sessionId": f"local_{uuid4()}", "cliSessionId": cli_session_id, **fields})
+    )
+    return path
+
+
+@pytest.mark.anyio
+async def test_inventory_hides_archived_by_default_and_reveals_on_request(
+    importer_env, tmp_path: Path
+) -> None:
+    """THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09) on the history inventory.
+
+    ../../common-docs/policies/archived-items.md — every list over an entity
+    that can be archived carries an archive filter, the DEFAULT HIDES archived,
+    and revealing them is one or two clicks. Before this, the route's `archived`
+    parameter was `bool | None` defaulting to None ("add no clause"), so the
+    first open of the table mixed archived sessions in, unlabelled.
+    """
+    config_dir, db, outbox = importer_env
+    sessions_root = tmp_path / "claude-code-sessions"
+
+    live_id, archived_id, unlabelled_id = str(uuid4()), str(uuid4()), str(uuid4())
+    for session_id, title in (
+        (live_id, "Live session"),
+        (archived_id, "Archived session"),
+        (unlabelled_id, "Unlabelled session"),
+    ):
+        _write_session(
+            config_dir,
+            session_id=session_id,
+            records=[{"type": "user", "message": {"content": title}}],
+        )
+    _write_index_record(
+        sessions_root, cli_session_id=live_id, title="Live session", isArchived=False
+    )
+    _write_index_record(
+        sessions_root,
+        cli_session_id=archived_id,
+        title="Archived session",
+        isArchived=True,
+    )
+    # Claude does not label every session, so `is_archived` lands NULL. In
+    # SQLite `NULL = 0` is NULL, not true — a naive "active" predicate would
+    # make every unlabelled session vanish from the default view.
+    _write_index_record(sessions_root, cli_session_id=unlabelled_id, title="Unlabelled session")
+
+    importer = ClaudeHistoryImporter(
+        db=db,
+        outbox=outbox,
+        config_dir=config_dir,
+        sessions_dir=sessions_root,
+        account_reader=_account_a,
+    )
+
+    review = await importer.review(limit=100)
+    scan_id = review["scan_id"]
+    titles = {row["title"] for row in review["items"]}
+    assert "Archived session" not in titles, (
+        "the first open of the inventory must hide archived sessions"
+    )
+    assert {"Live session", "Unlabelled session"} <= titles, (
+        "an unlabelled session is not an archived one — NULL must read as active"
+    )
+    assert review["archived"] == "active"
+    assert review["archive_counts"] == {"active": 2, "archived": 1, "all": 3}
+    assert review["page"]["total"] == 2, "the total must count what the list renders"
+
+    # ONE click: show all.
+    everything = await importer.inventory_page(scan_id, limit=100, archived="all")
+    assert {row["title"] for row in everything["items"]} == {
+        "Live session",
+        "Unlabelled session",
+        "Archived session",
+    }
+    assert everything["page"]["total"] == 3
+
+    # TWO clicks: archived only — a boolean could never say this, which is why
+    # the law names three states.
+    only = await importer.inventory_page(scan_id, limit=100, archived="archived")
+    assert [row["title"] for row in only["items"]] == ["Archived session"]
+    assert only["page"]["total"] == 1
+
+    # The counts are taken under the request's OTHER filters, never over the
+    # whole scan — a control that prints a number the list cannot produce is a
+    # screen that lies.
+    searched = await importer.inventory_page(scan_id, limit=100, search="Archived")
+    assert searched["archive_counts"] == {"active": 0, "archived": 1, "all": 1}
+    assert searched["page"]["total"] == 0
+    assert searched["items"] == []
+
+    with pytest.raises(ValueError):
+        await importer.inventory_page(scan_id, limit=100, archived="everything")

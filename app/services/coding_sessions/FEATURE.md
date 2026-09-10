@@ -373,7 +373,21 @@ paths, file contents, or secrets into the desktop chat replica.
 user presses **Review local history**, persists an immutable local inventory, reports exact
 new/content-changed/details-changed/missing/unchanged counts, and uploads nothing. `GET
 /coding-session/claude/history/scans/{scan_id}` searches, filters, sorts, and pages that stable
-inventory instead of hiding older sessions. A review uses file identity/size/mtime fences and does
+inventory instead of hiding older sessions.
+
+**Archived sessions obey THE ARCHIVED-ITEMS LAW** (Arman, 2026-09-09 —
+`../../../../common-docs/policies/archived-items.md`). `archived` is a three-state parameter —
+`active` (the default; hides archived), `archived`, `all` — on the scan route and on
+`HistoryInventoryStore.list_rows`, and the table renders the tri-state control bound to it.
+`review()` inherits the same default, so a first open never mixes archived sessions in.
+`is_archived` is nullable (Claude does not label every session) and "active" is written as
+`(is_archived IS NULL OR is_archived = 0)`: in SQLite `NULL = 0` is NULL, so a naive predicate
+would make every unlabelled session vanish. Each page also returns `archive_counts` for all three
+states, counted under that request's OTHER filters — the control prints only numbers the list can
+actually produce. `sync_all` is the one declared exemption: a backup walk carries archived history
+too (`archived="all"`, marked `archived-items-law-exempt` at the call). Until 2026-09-09 this
+parameter was `bool | None` defaulting to None ("add no clause") and nothing set it, so archived
+sessions rendered mixed in, unlabelled. Guard: `pnpm check:archived-items-law` in `desktop/`. A review uses file identity/size/mtime fences and does
 not reread the transcript corpus. `POST /coding-session/claude/history/prepare` content-hashes only
 the at-most-ten selected rows and refuses if their review fence changed. `POST
 /coding-session/claude/history/import` accepts those exact prepared revisions and atomically commits

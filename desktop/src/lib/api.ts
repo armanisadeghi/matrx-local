@@ -270,9 +270,26 @@ export interface ClaudeHistoryInventoryRow extends ClaudeHistorySessionInventory
   category: string | null;
 }
 
+/**
+ * THE ARCHIVED-ITEMS LAW's three states (Arman, 2026-09-09 —
+ * ../../../common-docs/policies/archived-items.md). The same three words the
+ * whole platform uses: `ArchivedFilter` in matrx-frontend's lib/entity-list,
+ * `p_archived` in the agx_ and wfx_ list RPCs, `ArchiveFilter` in
+ * @ai-matrx/design-system, and now `archived=` on the engine's inventory route.
+ */
+export type ArchiveFilterValue = "active" | "archived" | "all";
+
 export interface ClaudeHistoryInventoryPage {
   scan_id: string;
   items: ClaudeHistoryInventoryRow[];
+  /** The archive state this page was READ under — echoed by the engine. */
+  archived: ArchiveFilterValue;
+  /**
+   * Rows each archive state would render under this page's OTHER filters.
+   * Counted by the engine over the same WHERE, differing only in the archive
+   * clause — so the control can print them without the screen lying.
+   */
+  archive_counts: Record<ArchiveFilterValue, number>;
   page: {
     returned: number;
     total: number;
@@ -2672,7 +2689,8 @@ class EngineAPI {
     changeTypes?: ClaudeHistoryChangeType[];
     project?: string;
     branch?: string;
-    archived?: boolean;
+    /** THE ARCHIVED-ITEMS LAW: three states, and omitting it HIDES archived. */
+    archived?: ArchiveFilterValue;
     importable?: boolean;
     includeMissing?: boolean;
     sort?: "modified" | "title" | "project" | "bytes" | "change";
@@ -2684,7 +2702,7 @@ class EngineAPI {
     filters.changeTypes?.forEach((value) => query.append("change_type", value));
     if (filters.project) query.set("project", filters.project);
     if (filters.branch) query.set("branch", filters.branch);
-    if (filters.archived !== undefined) query.set("archived", String(filters.archived));
+    if (filters.archived !== undefined) query.set("archived", filters.archived);
     if (filters.importable !== undefined) query.set("importable", String(filters.importable));
     if (filters.includeMissing) query.set("include_missing", "true");
     if (filters.sort) query.set("sort", filters.sort);

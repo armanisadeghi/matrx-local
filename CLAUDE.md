@@ -10,7 +10,7 @@
 4. **Nothing fails silently.** Every stand-in announces itself with a remedy; a screen is absent or honest — never dead, disabled-looking, or lying.
 5. **Think in platform primitives.** Never scope a capability to the feature that surfaced it; build it in the shared layer so every module and client app inherits it.
 6. **Opinions become knobs.** Behavioral choices are org-configurable settings; organizations decide — never agents, never hardcoded taste.
-7. **Delegate down, never sideways.** The session that starts a task owns it end to end (plan → dispatch → check → finish) using subagents, never chips; subagents return their work to the owner. Every dispatch names a provider-valid model and supported thinking effort: Claude Sonnet (Codex Luna) for simple/bounded work at low, Claude Opus (Codex Terra) for substantial reasoning at medium, and Claude Fable (Codex Astra) only when the owner itself would struggle, at high. A dispatch with no model or effort is a defect. `common-docs/policies/subagent-model-ladder.md`.
+7. **Delegate down, never sideways.** The session that starts a task owns it end to end (plan → dispatch → check → finish) using subagents, never chips; subagents return their work to the owner. Every dispatch names a provider-valid model: Claude Sonnet (Codex Luna) for routine work, Claude Opus (Codex Terra) for hard code, and Claude Fable (Codex Astra) only for exceptional work the owner itself would struggle with. Select effort independently: low for bounded work, medium by default, high only for substantial reasoning. A dispatch with no model or effort is a defect. `common-docs/policies/subagent-model-ladder.md`.
 
 
 **Why you're reading this: you are doing DESKTOP-APP work in this repo.** This file

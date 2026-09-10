@@ -73,8 +73,11 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   `/Users/armanisadeghi/code/common-docs/systems/agents/agent-variable-binding/FEATURE.md`
 - **Limits are knobs, and agents set them.** Never a hardcoded constant or an absent
   control. → `/Users/armanisadeghi/code/common-docs/policies/limits-are-knobs-agents-set-them.md`
-- **We don't do legacy.** Replaced systems are migrated, repointed, DELETED — never frozen or
-  kept "just in case". → `/Users/armanisadeghi/code/common-docs/policies/no-legacy.md`
+- **We don't do legacy — UNTIL GO-LIVE** (~90 days from 2026-09-10; nobody outside us depends on
+  us yet). Replaced systems are migrated, repointed, DELETED — never frozen or kept "just in
+  case"; every touched package moves to latest. On go-live day the customer-facing edges get
+  versioned stability — never quote this as permanent. →
+  `/Users/armanisadeghi/code/common-docs/policies/no-legacy.md` + `/Users/armanisadeghi/code/common-docs/policies/pre-launch-mode.md`
 - **Human steps are guided sessions.** Anything only Arman can do: one link, one task, what to
   look for, what to report — never a list or menu. →
   `/Users/armanisadeghi/code/common-docs/policies/human-steps-are-guided-sessions.md`
@@ -215,7 +218,11 @@ staleness instead.
 
 - **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
 
-## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned
+## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned (pre-launch rule)
+
+**Pre-launch rule:** absolute until go-live (~90 days from 2026-09-10) because no customer code depends
+on us yet; on go-live day the customer-facing edges get a versioned path while internals stay on latest.
+Never quote it as permanent: `../common-docs/policies/pre-launch-mode.md`.
 
 Every `@ai-matrx/*` dependency in this repo is declared `"latest"` — never a version, never a
 range. Guard: `pnpm check:matrx-packages` in `desktop/` (fails on any pin AND on an installed

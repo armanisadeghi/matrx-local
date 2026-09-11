@@ -31,6 +31,21 @@ import fixture from "./__fixtures__/server-render-blocks.json";
 type FixtureBlock = RenderBlockPayload;
 const BLOCKS = (fixture as { blocks: Record<string, FixtureBlock> }).blocks;
 
+/**
+ * The SAME production block as it arrives on a SHADOWED lane: no verified
+ * `__ir` (the browser never saw the text region that would have built one),
+ * the `superseded` terminal the fixture already carries, and the region's own
+ * closed JSON as the content. Nothing here is invented — the content is the
+ * production envelope's own `root.value`, serialized, which is exactly what a
+ * shadowed producer emits.
+ */
+function shadowed(block: FixtureBlock): FixtureBlock {
+  const metadata = { ...(block.metadata as Record<string, unknown>) };
+  const envelope = metadata.__ir as { root: { value: unknown } };
+  delete metadata.__ir;
+  return { ...block, content: JSON.stringify(envelope.root.value), metadata };
+}
+
 /** The LIVE rows, verbatim (migration 010_kind_component_desktop.sql). */
 const ROWS = [
   { kind: "flashcard_set", componentKey: "flashcard_set_desktop" },
@@ -84,6 +99,43 @@ describe("StreamBlockBuilder keeps structured content structured", () => {
       content: "just prose",
     };
     builder.applyRenderBlock(plain, "just prose", false);
+    expect(builder.snapshot()[0]!.type).toBe("text");
+  });
+
+  it("keeps a SHADOWED block structured on its superseded terminal alone", () => {
+    // THE SHADOWED LANE (@ai-matrx/content-ir-react 0.11.1). A producer that
+    // shadows its text channel never builds a verified `__ir` here — the only
+    // identity the block carries is the `superseded` terminal the production
+    // fixture already holds, plus its own closed JSON. Before this was wired,
+    // `kind` came back null and the builder flattened the deck to markdown:
+    // the reader got raw Shape JSON as prose.
+    const builder = new StreamBlockBuilder();
+    builder.applyRenderBlock(shadowed(BLOCKS.flashcard_set!), "raw json as text", false);
+    const blocks = builder.snapshot();
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "kind", kind: "flashcard_set" });
+  });
+
+  it("still flattens a RETRACTED terminal — a withdrawn kind is not a kind", () => {
+    // The mirror case, and the reason the gate names `superseded` explicitly:
+    // `retracted` says the announcement was WRONG. Routing it would show a
+    // component for a shape the producer just disowned.
+    const source = shadowed(BLOCKS.flashcard_set!);
+    const retracted = {
+      ...(source.metadata as Record<string, unknown>),
+      __ir_partial: {
+        v: 1,
+        engine: "py-block-detector",
+        state: "retracted",
+        seq: 2,
+        kind: "flashcard_set",
+        reason: "detector reversed itself",
+        becameKind: null,
+        becameBlockType: "text",
+      },
+    };
+    const builder = new StreamBlockBuilder();
+    builder.applyRenderBlock({ ...source, metadata: retracted }, "plain prose", false);
     expect(builder.snapshot()[0]!.type).toBe("text");
   });
 
@@ -145,6 +197,21 @@ describe("KindBlockView draws server-built kinds", () => {
     expect(text).toContain("Which pigment absorbs light?");
     expect(text).toContain("Carotene");
     expect(text).not.toContain("absorbs blue and red");
+  });
+
+  it("draws a SHADOWED deck from its superseded terminal, not raw Shape JSON", () => {
+    // The handoff `resolveSupersededKindRender` exists for. With `__ir` gone
+    // this block's only proof is the terminal; the package reconstructs a
+    // render-local complete envelope from the closed JSON and routes it to the
+    // same component the verified path uses. Without the call this renders the
+    // literal `{"__kind":"flashcard_set",…}` string.
+    const text = draw(shadowed(BLOCKS.flashcard_set!));
+    expect(text).toContain("What pigment absorbs light?");
+    expect(text).toContain("Show answer");
+    expect(text).not.toContain("__kind");
+    // A superseded terminal IS the proof the region closed, so the deck is
+    // interactive rather than stuck mid-stream.
+    expect(text).not.toContain("Still arriving");
   });
 
   it("refuses a typed component for a kind that FAILED its schema", () => {

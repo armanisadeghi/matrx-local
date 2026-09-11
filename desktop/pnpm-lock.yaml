@@ -258,8 +258,8 @@ packages:
     peerDependencies:
       react: '>=18.0.0'
 
-  '@ai-matrx/realtime@0.7.8':
-    resolution: {integrity: sha512-dba+Fwdn+DnfC6+wz0gO7VUpantAvkSiRlDEqkoBGF6CS3o9++WzhKZsY2kgoov6mF0e7458Uqa/yGK4M+U4kA==}
+  '@ai-matrx/realtime@0.7.9':
+    resolution: {integrity: sha512-AXxTa08cRlylPyRvWS20FWD6bC2nBdnAooW4AV+0ILrOdsTYJaxyRjTvnLbjl19ab6R7poMtlQmZwQvbrLmxyg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3619,7 +3619,7 @@ snapshots:
 
   '@ai-matrx/data@0.11.1(@supabase/supabase-js@2.116.0)(react@19.2.4)':
     dependencies:
-      '@ai-matrx/realtime': 0.7.8(react@19.2.4)
+      '@ai-matrx/realtime': 0.7.9(react@19.2.4)
       '@supabase/ssr': 0.12.7(@supabase/supabase-js@2.116.0)
     optionalDependencies:
       react: 19.2.4
@@ -3673,7 +3673,7 @@ snapshots:
       jsqr: 1.4.0
       react: 19.2.4
 
-  '@ai-matrx/realtime@0.7.8(react@19.2.4)':
+  '@ai-matrx/realtime@0.7.9(react@19.2.4)':
     optionalDependencies:
       react: 19.2.4
 

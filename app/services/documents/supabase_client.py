@@ -250,6 +250,7 @@ class SupabaseDocClient:
             "folder_id": folder_id,
             "file_path": file_path,
             "tags": tags or [],
+            # CONVERGE: C-7 — caller-supplied metadata written with no reserved-key guard; metadata is system-only — declared 2026-09-10, Data Doctrine §3.2. Register: /projects/data-doctrine-adoption/REGISTER.md#DD-060
             "metadata": metadata or {},
             "content_hash": _content_hash(content),
             "sync_version": 1,
@@ -285,6 +286,7 @@ class SupabaseDocClient:
             "folder_id": folder_id,
             "file_path": file_path,
             "tags": tags or [],
+            # CONVERGE: C-7 — caller-supplied metadata written with no reserved-key guard; metadata is system-only — declared 2026-09-10, Data Doctrine §3.2. Register: /projects/data-doctrine-adoption/REGISTER.md#DD-060
             "metadata": metadata or {},
             "content_hash": _content_hash(content),
             "last_device_id": device_id,

@@ -6,7 +6,7 @@
  *
  * Flow (Tauri production — all platforms):
  *   1. App generates PKCE code_verifier + code_challenge, stores verifier in
- *      sessionStorage, constructs the Supabase authorize URL with:
+ *      local transaction storage, constructs the Supabase authorize URL with:
  *        redirect_uri = aimatrx://auth/callback
  *   2. shell.open() opens the URL in the system browser (NOT the webview).
  *   3. Supabase validates params and redirects the browser to the consent UI
@@ -76,25 +76,46 @@ export async function generateCodeChallenge(verifier: string): Promise<string> {
 //     the seconds between clicking "Sign in" and the code returning.
 // ---------------------------------------------------------------------------
 
-const VERIFIER_KEY = "matrx_oauth_code_verifier";
-const STATE_KEY = "matrx_oauth_state";
+const TRANSACTION_KEY = "matrx_oauth_transaction";
 
-export function saveOAuthState(verifier: string, state: string): void {
-  localStorage.setItem(VERIFIER_KEY, verifier);
-  localStorage.setItem(STATE_KEY, state);
-}
-
-export function loadOAuthState(): { verifier: string | null; state: string | null } {
-  return {
-    verifier: localStorage.getItem(VERIFIER_KEY),
-    state: localStorage.getItem(STATE_KEY),
-  };
+export function saveOAuthState(verifier: string, state: string, redirectUri: string): void {
+  localStorage.setItem(TRANSACTION_KEY, JSON.stringify({ verifier, state, redirectUri }));
 }
 
 export function clearOAuthState(): void {
-  localStorage.removeItem(VERIFIER_KEY);
-  localStorage.removeItem(STATE_KEY);
+  localStorage.removeItem(TRANSACTION_KEY);
+  // Remove values left by an interrupted older build; never accept them.
+  localStorage.removeItem("matrx_oauth_code_verifier");
+  localStorage.removeItem("matrx_oauth_state");
   localStorage.removeItem(PENDING_KEY);
+}
+
+function pendingOAuthVerifier(state: string, redirectUri: string): string {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(localStorage.getItem(TRANSACTION_KEY) ?? "null");
+  } catch {
+    throw new Error("Sign-in session unavailable. Please start sign-in again.");
+  }
+  if (!stored || typeof stored !== "object" ||
+      !("state" in stored) || stored.state !== state || !state ||
+      !("redirectUri" in stored) || stored.redirectUri !== redirectUri ||
+      !("verifier" in stored) || typeof stored.verifier !== "string" || !stored.verifier) {
+    throw new Error("Sign-in callback does not match this session. Please start sign-in again.");
+  }
+  return stored.verifier;
+}
+
+export function isCurrentOAuthCallback(state: string, redirectUri: string): boolean {
+  try { pendingOAuthVerifier(state, redirectUri); return true; }
+  catch { return false; }
+}
+
+/** Claim one locally initiated transaction before the first network await. */
+function takeOAuthVerifier(state: string, redirectUri: string): string {
+  const verifier = pendingOAuthVerifier(state, redirectUri);
+  localStorage.removeItem(TRANSACTION_KEY);
+  return verifier;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,16 +162,8 @@ export async function buildOAuthAuthorizeUrl(
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await generateCodeChallenge(codeVerifier);
 
-  // Encode the verifier directly into the state parameter so it survives the
-  // cross-origin browser navigation in the web dev flow. Browsers may clear
-  // localStorage/sessionStorage across aimatrx.com → localhost round trips.
-  // The state is echoed back verbatim by Supabase, so the verifier travels
-  // in the URL itself — no storage required.
-  //
-  // Format: "<verifier>.<random-nonce>"
-  // The nonce provides the CSRF protection that state is meant to give.
-  const nonce = base64URLEncode(crypto.getRandomValues(new Uint8Array(16)));
-  const state = `${codeVerifier}.${nonce}`;
+  // Independent state binds the callback; the PKCE verifier stays local.
+  const state = base64URLEncode(crypto.getRandomValues(new Uint8Array(32)));
 
   // Do NOT include "openid" — it requires asymmetric JWT signing keys (RS256/ES256)
   // which Supabase must be explicitly migrated to. With the default HS256 key,
@@ -176,17 +189,6 @@ export async function buildOAuthAuthorizeUrl(
   };
 }
 
-/**
- * Extract the code_verifier from the echoed state parameter.
- * State format: "<verifier>.<nonce>" — split on the first dot only,
- * since base64url characters don't include dots.
- */
-export function extractVerifierFromState(state: string): string | null {
-  const dotIdx = state.indexOf(".");
-  if (dotIdx === -1) return null;
-  return state.slice(0, dotIdx) || null;
-}
-
 // ---------------------------------------------------------------------------
 // Token exchange
 // ---------------------------------------------------------------------------
@@ -200,9 +202,11 @@ export interface OAuthTokens {
 
 export async function exchangeOAuthCode(
   code: string,
-  codeVerifier: string,
+  returnedState: string,
   redirectUri: string
 ): Promise<OAuthTokens> {
+  if (!code) throw new Error("Sign-in callback is missing its authorization code.");
+  const codeVerifier = takeOAuthVerifier(returnedState, redirectUri);
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: CLIENT_ID,
@@ -218,15 +222,20 @@ export async function exchangeOAuthCode(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
+    throw new Error(`Sign-in exchange failed (HTTP ${response.status}). Please try again.`);
   }
 
-  const data = (await response.json()) as OAuthTokens;
-
-  if (!data.access_token || !data.refresh_token) {
-    throw new Error("Token response missing access_token or refresh_token");
+  let data: unknown;
+  try { data = await response.json(); }
+  catch { throw new Error("Sign-in service returned an invalid response. Please try again."); }
+  if (!data || typeof data !== "object" ||
+      !("access_token" in data) || typeof data.access_token !== "string" || !data.access_token ||
+      !("refresh_token" in data) || typeof data.refresh_token !== "string" || !data.refresh_token ||
+      !("expires_in" in data) || typeof data.expires_in !== "number" || !Number.isFinite(data.expires_in) || data.expires_in <= 0 ||
+      !("token_type" in data) || typeof data.token_type !== "string") {
+    throw new Error("Sign-in service returned an invalid response. Please try again.");
   }
+  return { access_token: data.access_token, refresh_token: data.refresh_token,
+    expires_in: data.expires_in, token_type: data.token_type };
 
-  return data;
 }

@@ -89,13 +89,20 @@ Each span = first write statement → `await self._db.commit()`; wrap each in
 boundary exactly where it is. Proof: `grep -c "write_gate()"` == number of
 commit sites (13), plus the existing tests green.
 
-### 3. Cold start — [ ]
-First open reads 46k index files (~25s) on a cold engine. It runs off the
-event loop and is cached after that, but the first open of the day should
-not be a spinner. Warm `_session_index()` in a background task at engine
-startup (see `app/main.py` lifespan; the cache invalidates itself by
-fingerprint so warming early is safe). Proof: first page open after engine
-start returns in < 2s.
+### 3. Cold start — [x] code landed, live timing still owed
+`claude_overview.warm_index_cache()` is the public warm-up; `app/main.py`'s
+lifespan fires it as a background task at Phase 2h.2, so the read happens
+while nobody is waiting and the first open hits a warm cache. It never blocks
+startup and logs a warning if it fails (the screen still reads on demand).
+Unit proof: `tests/unit/test_claude_overview_state.py::test_warm_index_cache_fills_the_cache_so_the_first_screen_open_is_free`.
+
+Two related fixes went with it: `MAX_INDEX_FILES` is 250,000 (this Mac's
+50,000+ records were hitting the old 50,000 cap and silently truncating the
+list), and the overview now reports `totals.index_limit_reached` so the screen
+says so out loud if it is ever hit again.
+
+**Still owed (needs a running engine — item 4's lane):** the live timing, first
+page open after engine start returns in < 2s.
 
 ### 4. Verify on the real thing — [ ]
 Web smoke has no engine, so `e2e/coding-sessions-diagnosis.spec.ts` can only

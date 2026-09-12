@@ -37,6 +37,7 @@ import {
   FolderSync,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, BasicInput as Input, Label, ScrollArea, Separator, Slider, Switch } from "@ai-matrx/design-system";
 import { NumberInput } from "@/components/ui/number-input";
@@ -55,6 +56,7 @@ import {
 } from "@/hooks/use-configurations";
 import { useConfigCatalogs } from "@/hooks/use-config-catalogs";
 import { FileSyncPanel } from "@/components/files/FileSyncPanel";
+import { ChatMirrorSyncPause } from "@/components/chat/ChatMirrorSyncPause";
 import type { AppSettings, SyncResult } from "@/lib/settings";
 import {
   MAX_CONCURRENCY,
@@ -354,10 +356,15 @@ function ConcurrencyRow({
   );
 }
 
-/** Format bytes to human-readable size */
+/**
+ * Sizes arrive in GB; THE package formatter takes BYTES and picks the unit.
+ *
+ * The same collapse its two siblings got in the 2026-09-11 pass
+ * (`Devices.tsx`'s `fmtStorage`, `Voice.tsx`'s `formatRam`); this one was
+ * missed, so it still printed "12.0 GB" where they printed "12 GB".
+ */
 function fmtSize(gb: number): string {
-  if (gb < 1) return `${Math.round(gb * 1024)} MB`;
-  return `${gb.toFixed(1)} GB`;
+  return formatFileSize(gb * 1024 ** 3);
 }
 
 // ── Compact fields for horizontal layouts ───────────────────────────────────
@@ -1595,6 +1602,8 @@ export function Configurations() {
                 />
               </CardContent>
             </Card>
+
+            <ChatMirrorSyncPause />
 
             {/* ── File Sync ──────────────────────────────────── */}
             <Card>

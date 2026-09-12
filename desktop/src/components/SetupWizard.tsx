@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge, Button, Progress } from "@ai-matrx/design-system";
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { engine } from "@/lib/api";
 import type {
   SetupStatus,
@@ -537,16 +538,23 @@ export function SetupWizard({
       (event) => {
         const p = event.payload;
         setLlmDownloadProgress(p);
-        const mbDone = (p.bytes_downloaded / 1e6).toFixed(0);
-        const mbTotal =
-          p.total_bytes > 0 ? `/ ${(p.total_bytes / 1e6).toFixed(0)} MB` : "";
+        // Bytes are formatFileSize's; it picks the unit and never prints a
+        // confident zero. `total_bytes` is 0 when the server sent no
+        // content-length, and the body this replaced then rendered
+        // "Downloading: 614 " — a bare number with NO UNIT AT ALL. An unknown
+        // total says so out loud rather than vanishing.
+        const done = formatFileSize(p.bytes_downloaded);
+        const ofTotal =
+          p.total_bytes > 0
+            ? ` / ${formatFileSize(p.total_bytes)}`
+            : " (total size unknown)";
         const partNote =
           p.total_parts > 1 ? ` (part ${p.part}/${p.total_parts})` : "";
         setProgress((prev) => ({
           ...prev,
           local_llm: {
             status: "installing",
-            message: `Downloading${partNote}: ${mbDone} ${mbTotal}`,
+            message: `Downloading${partNote}: ${done}${ofTotal}`,
             percent: Math.round(p.percent),
           },
         }));

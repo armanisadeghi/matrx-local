@@ -69,6 +69,21 @@ import {
  * size must read as an em-dash rather than a confident "0 B", so the sentinel
  * becomes `null` — which is exactly what `formatFileSize` renders as "—".
  * Returns a number, never a unit string.
+ *
+ * THE RECORD OF THAT COLLAPSE WAS BACKWARDS, corrected here 2026-09-11 because
+ * a commit message cannot be rewritten. Commit `7fb48bde6` says deleting
+ * `formatGb` made a model read "644 MB" → "614 MB", i.e. that sub-gigabyte
+ * sizes SHRANK. They GREW, by 2.4%. The old body took `bytes / 1024 ** 3` and
+ * printed `Math.round(gb * 1000)` MB — an effective divisor of 1,073,741.824 —
+ * while `formatFileSize` divides by 1,048,576, which is SMALLER. So "644 MB"
+ * now reads "659 MB", and the companion claim that 1.02e9 bytes went
+ * "1.0 GB" → "976 MB" is wrong on both sides: that value took the old sub-1GB
+ * branch and printed "950 MB", and now prints "973 MB".
+ *
+ * The collapse was still right. The old number was neither decimal MB (691.5)
+ * nor binary MiB (659.5): it mixed a binary input with a decimal scale and so
+ * matched no unit definition at all. The new number is the one convention the
+ * whole platform prints. Only the DIRECTION was misreported.
  */
 export function gbToBytes(gb: number): number | null {
   return gb > 0 ? gb * 1024 ** 3 : null;

@@ -1,0 +1,22 @@
+[package]
+name = "native-vault-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+coset = "0.4"
+passkey-authenticator = "0.5.0"
+p256 = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[patch.crates-io]
+passkey-authenticator = { path = "vendor/passkey-authenticator" }

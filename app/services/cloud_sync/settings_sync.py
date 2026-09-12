@@ -468,6 +468,12 @@ class SettingsSync:
             # which is shared with a person-driven API route and threads the
             # declaration explicitly per call instead).
             "x-matrx-actor-tier": "code",
+            # DD-131/B-56 (chair ruling): a person's write has no system; this
+            # client's writes are never a person's, so the system name rides
+            # unconditionally alongside the tier, read by
+            # platform.declared_actor_system() the same way the tier header
+            # is read above.
+            "x-matrx-actor-system": "matrx-local:sync",
         }
 
     def _log_http_error(self, operation: str, resp: Any) -> str:

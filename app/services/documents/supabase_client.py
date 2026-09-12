@@ -102,6 +102,14 @@ class SupabaseDocClient:
         # never sent unless a caller asked for it by name.
         if actor_tier:
             h["x-matrx-actor-tier"] = actor_tier
+            # DD-131/B-56 (chair ruling): a person's write has no system; an
+            # agent/code write names its system through x-matrx-actor-system,
+            # read by platform.declared_actor_system() exactly the way
+            # platform.declared_actor_tier() reads x-matrx-actor-tier above.
+            # The only caller that ever passes actor_tier here is this
+            # engine's own sync reconciliation, so the system name is fixed.
+            if actor_tier == "code":
+                h["x-matrx-actor-system"] = "matrx-local:sync"
         return h
 
     async def _request(

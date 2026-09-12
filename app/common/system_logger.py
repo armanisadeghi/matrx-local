@@ -4,6 +4,7 @@ import sys
 import time
 import traceback
 import re
+from urllib.parse import unquote_plus
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from app.config import LOG_LEVEL, LOG_DIR, MAX_LOG_FILE_SIZE, BACKUP_COUNT, LOCAL_DEV
 
@@ -63,55 +64,88 @@ class SensitiveDataFilter(logging.Filter):
     """Mask tokens in log messages."""
 
     def filter(self, record):
-        # Sanitize the message template
-        if isinstance(record.msg, str):
-            record.msg = self._sanitize(record.msg)
-
-        # Sanitize any arguments passed to the log call
-        if isinstance(record.args, dict):
-            # Logging stores a lone mapping argument as the mapping itself so
-            # ``%(name)s`` formatting keeps working. Iterating it into a tuple
-            # turns its keys into extra positional arguments and makes even a
-            # plain ``%s`` log fail with "not all arguments converted".
-            record.args = {
-                key: self._sanitize(value) if isinstance(value, str) else value
-                for key, value in record.args.items()
-            }
-        elif record.args:
-            new_args = []
-            for arg in record.args:
-                if isinstance(arg, str):
-                    new_args.append(self._sanitize(arg))
-                else:
-                    new_args.append(arg)
-            record.args = tuple(new_args)
-
+        # Expand mappings/objects before redaction: credentials can be nested in
+        # dict arguments, and mapping-style logging must retain its semantics.
+        message = record.getMessage()
+        if record.exc_info:
+            exc_type, exc, _traceback = record.exc_info
+            if exc is not None:
+                reason = f"{exc_type.__name__}: {exc}"
+                if str(exc) and str(exc) not in message:
+                    message = f"{message} — {reason}"
+            # Every formatter receives this same LogRecord.  Leaving raw
+            # ``exc_info`` or a cached ``exc_text`` on it lets a later handler
+            # append the unredacted traceback after this filter ran.
+            formatted_traceback = self.sanitize(
+                logging.Formatter().formatException(record.exc_info)
+            )
+            message = f"{message}\n{formatted_traceback}"
+        record.exc_info = None
+        record.exc_text = None
+        # ``SystemLogger._log`` stores this for Activity consumers.  Keep that
+        # diagnostic channel safe too, rather than relying on today's handler
+        # format strings to ignore it.
+        if isinstance(getattr(record, "traceback", None), str):
+            record.traceback = self.sanitize(record.traceback)
+        if isinstance(record.stack_info, str):
+            record.stack_info = self.sanitize(record.stack_info)
+        record.msg = self.sanitize(message)
+        record.args = ()
         return True
 
-    def _sanitize(self, text: str) -> str:
-        """Apply multiple regex masks to a string."""
-        # Mask query param: token=...
-        text = re.sub(
-            r"([?&]token=)([^& \t\n\r\f\v\"]+)",
-            lambda m: m.group(1) + self._truncate(m.group(2)),
-            text,
+    @staticmethod
+    def _is_sensitive_key(key: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]", "", unquote_plus(key).lower())
+        if normalized in {"code", "state"}:
+            return True
+        return any(
+            marker in normalized
+            for marker in (
+                "token", "secret", "password", "passwd", "credential",
+                "apikey", "authorization", "cookie",
+            )
         )
-        # Mask Bearer tokens: Bearer eyJ...
+
+    def sanitize(self, text: str, known_values: tuple[str, ...] = ()) -> str:
+        """Fully redact credential values while preserving diagnostic context."""
+        def redact_encoded_query(match: re.Match[str]) -> str:
+            if self._is_sensitive_key(match.group("key")):
+                return f"{match.group('prefix')}{match.group('key')}=[REDACTED]"
+            return match.group(0)
+
+        # Recognize percent-encoded key names (for example ``%43oDe``) before
+        # the plain-key patterns below.  Decode only the key to classify it;
+        # never decode or retain the value.
         text = re.sub(
-            r"([Bb]earer\s+)([A-Za-z0-9._\-\/]+)",
-            lambda m: (
-                m.group(1) + self._truncate(m.group(2))
-                if len(m.group(2)) > 30
-                else m.group(0)
-            ),
+            r"(?P<prefix>(?:[?&]|\s|^))(?P<key>(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.-])+)=((?!\[REDACTED\])[^&\s]+)",
+            redact_encoded_query,
             text,
+            flags=re.IGNORECASE | re.MULTILINE,
         )
+        sensitive_key = r"(?:code|state|[A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|authorization|cookie)[A-Za-z0-9_-]*)"
+        text = re.sub(
+            rf"((?:[?&]|^){sensitive_key}=)((?!\[REDACTED\]|%5BREDACTED%5D)[^&\s]+)",
+            r"\1[REDACTED]", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+        text = re.sub(
+            rf"([\"']?{sensitive_key}[\"']?\s*[:=]\s*)([\"'])(.*?)\2",
+            lambda m: m.group(1) + m.group(2) + "[REDACTED]" + m.group(2),
+            text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"([\"']?{sensitive_key}[\"']?\s*[:=]\s*)((?!\[REDACTED\]|[\"']\[REDACTED\][\"']|[\"'])[^\s,}}\]]+)",
+            r"\1[REDACTED]", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text)
+        for value in known_values:
+            if value:
+                text = text.replace(value, "[REDACTED]")
         return text
 
-    def _truncate(self, val: str) -> str:
-        if len(val) < 40:
-            return val
-        return f"{val[:10]}...{val[-10:]}"
+    # Kept private as a compatibility seam for existing callers/tests.
+    def _sanitize(self, text: str) -> str:
+        return self.sanitize(text)
 
 
 class ConsoleDedup(logging.Filter):

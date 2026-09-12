@@ -270,6 +270,17 @@ held 1,671 of those conversations:
   preserved) · `not_in_cloud` (nothing anywhere) · `unknown` (the server could not be
   asked — `overview.cloud.reason/detail` say exactly why; the screen never guesses
   "not synced" from silence).
+- **Nothing on disk is hidden (2026-09-12).** The overview lists Claude's sidebar
+  index AND every transcript with no index record — a session started from the plain
+  `claude` CLI never gets a sidebar record, so 80 of them (113 MB) were invisible.
+  Transcript-only rows carry `in_claude_sidebar: false`, are titled by their first
+  human message (the shared summary reader's fallback, so the import agrees), and open
+  a full diagnosis like any other row. `totals.transcript_only` / `transcripts_on_disk`
+  count them; guard: `tests/unit/test_claude_overview_nothing_hidden.py`.
+- **The index is warmed at engine start** (`warm_index_cache`, app/main.py Phase 2h.2)
+  so the first open is not a ~25s spinner; the reader cap is 250,000 records (this Mac
+  holds 55,000+ across eight accounts) and `totals.index_limit_reached` makes the screen
+  say so rather than showing a silently short list.
 - **Both spellings of a session are one session.** A hook mirror binds the raw
   Claude UUID; a history import binds `claude-sdk:<sha256(project)>:<b64(uuid)>`.
   `raw_session_id()` reduces either to the UUID before any cloud or queue lookup.

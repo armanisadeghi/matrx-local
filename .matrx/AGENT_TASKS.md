@@ -1,4 +1,5 @@
 # Agent Tasks — Matrx Local
+- 2026-09-12 — Coding Sessions closed out: every transcript on disk is listed (80 CLI-only sessions surfaced + titled by first prompt), each opens a diagnosis (no 404s), the index is warmed at engine start and its cap raised 50k→250k with a loud limit banner, and MXL-D-085's last title_sync write spans are gated. Commits 25eaf78d4, c4e7bfc63, aa2c8f76d (+ sibling fffbb839e/7cacf502a). MXL-D-085 closed; MXL-D-087 (agent-picker boot gate) left to that lane.
 
 > **The ONLY Arman-approved worklist.** If you are doing related work and see a
 > matching open task here, TAKE IT and do it. Do not add tasks without Arman —

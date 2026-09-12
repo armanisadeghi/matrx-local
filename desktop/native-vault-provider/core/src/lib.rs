@@ -25,13 +25,23 @@ struct SourceV1 {
     credential_id: String,
     rp_id: String,
     user_handle: String,
+    #[serde(deserialize_with = "required_option")]
     username: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     display_name: Option<String>,
     private_cose_key: String,
     counter: Option<u32>,
     extensions: serde_json::Map<String, serde_json::Value>,
     backup_eligible: bool,
     backup_state: bool,
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 /// Validate and retain the exact canonical source bytes supplied by the future provider adapter.

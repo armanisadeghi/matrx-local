@@ -874,24 +874,6 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Coding sessions / Claude Code tab (root-caused 2026-08-30 from Arman's "it gives me nothing" report)
 
-- **MXL-D-085 — Nine `title_sync` write transactions still race the bridge's
-  BEGIN IMMEDIATE connections.**
-  Area: coding_sessions. Status: `open`.
-  Analyzed 2026-08-30 — verified in code.
-  Symptom: residue of the "database is locked" failure fixed in commit
-  `a916aeaf6`. That commit put every short-connection durable write and
-  `title_sync._start_operation` behind the process-wide gate
-  (`app/services/local_db/write_gate.py`), which removes the observed failure.
-  Eleven further shared-connection write spans in
-  `app/services/coding_sessions/title_sync.py` (commit sites at lines ~324,
-  456, 543, 676, 769, 799, 826, 860, 937, 1155, 1242, 1306) still write without
-  taking the gate and remain theoretically contendable under heavy hook load.
-  They were left alone deliberately: each needs its transaction span read
-  individually to place the gate correctly, and mis-scoping a lock is worse
-  than the race it fixes.
-  Fix shape: wrap each span `first write statement → commit` in
-  `async with write_gate():`, one at a time, with a test per span.
-
 - **MXL-D-087 — Repo smoke gate red: offline agent catalog logs a deliberate
   `console.error` that the boot test treats as fatal.**
   Area: agent picker / boot gate. Status: `open` — NOT the Coding Sessions lane.

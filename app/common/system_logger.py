@@ -68,16 +68,7 @@ class SensitiveDataFilter(logging.Filter):
             record.msg = self._sanitize(record.msg)
 
         # Sanitize any arguments passed to the log call
-        if isinstance(record.args, dict):
-            # Logging stores a lone mapping argument as the mapping itself so
-            # ``%(name)s`` formatting keeps working. Iterating it into a tuple
-            # turns its keys into extra positional arguments and makes even a
-            # plain ``%s`` log fail with "not all arguments converted".
-            record.args = {
-                key: self._sanitize(value) if isinstance(value, str) else value
-                for key, value in record.args.items()
-            }
-        elif record.args:
+        if record.args:
             new_args = []
             for arg in record.args:
                 if isinstance(arg, str):

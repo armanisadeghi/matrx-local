@@ -555,10 +555,7 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                     />
                     <span className="text-muted-foreground">
                       {status?.content_entries.toLocaleString() ?? "0"} files ·{" "}
-                      {((status?.content_bytes ?? 0) / (1024 * 1024)).toFixed(
-                        1,
-                      )}{" "}
-                      MiB used
+                      {formatFileSize(status?.content_bytes)} used
                       {status?.content_failures
                         ? ` · ${status.content_failures.toLocaleString()} retrying`
                         : ""}

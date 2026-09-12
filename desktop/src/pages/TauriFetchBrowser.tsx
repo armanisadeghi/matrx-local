@@ -29,6 +29,9 @@ import {
     Loader2,
     Zap,
 } from "lucide-react";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { isTauri } from "@/lib/sidecar";
 
 const DEFAULT_URL = "https://www.aimatrx.com";
@@ -272,7 +275,7 @@ export function TauriFetchBrowser() {
 
                 {page && (
                     <span className="text-[10px] text-muted-foreground shrink-0">
-                        HTTP {page.status} · {(page.byteCount / 1024).toFixed(1)} KB
+                        HTTP {page.status} · {formatFileSize(page.byteCount)}
                     </span>
                 )}
 

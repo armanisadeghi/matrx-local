@@ -8,6 +8,9 @@
 
 import type { LlmHardwareResult } from "./types";
 import { engine } from "@/lib/api";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 // ── Request / response types ───────────────────────────────────────────────
 
@@ -127,13 +130,14 @@ export async function analyzeModelRepo(
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
 
-/** Format bytes to a human-readable GB/MB string. */
+/**
+ * A repo size, with this API's `0` sentinel spelled out. The byte→unit body is
+ * THE package formatter (`@ai-matrx/kit/format`); the only thing local here is
+ * the domain fact that the model-repo API reports an unknown size as `0`.
+ */
 export function formatRepoBytes(bytes: number): string {
   if (bytes === 0) return "Unknown size";
-  const gb = bytes / 1024 ** 3;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / 1024 ** 2;
-  return `${mb.toFixed(0)} MB`;
+  return formatFileSize(bytes);
 }
 
 /** Badge color class for a compatibility status. */

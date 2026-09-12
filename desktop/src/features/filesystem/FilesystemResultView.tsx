@@ -14,6 +14,9 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button, Checkbox } from "@ai-matrx/design-system";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -118,19 +121,6 @@ function PathActions({ path, onReference }: { path: string; onReference: () => v
       </button>
     </div>
   );
-}
-
-function formatSize(bytes?: number | null): string | null {
-  if (bytes == null || bytes < 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let index = 0;
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024;
-    index += 1;
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
 export function mergeFilesystemEntries(
@@ -269,9 +259,9 @@ function EntryRow({
         >
           {entry.name}
         </button>
-        {formatSize(entry.size) && (
+        {entry.size != null && (
           <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">
-            {formatSize(entry.size)}
+            {formatFileSize(entry.size)}
           </span>
         )}
         <div className="opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">

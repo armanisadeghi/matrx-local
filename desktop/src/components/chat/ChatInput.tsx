@@ -10,6 +10,9 @@ import {
   X,
 } from "lucide-react";
 import { AgentListDropdown } from "@ai-matrx/agents/catalog/react";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
 import { LOCAL_MODEL_PREFIX, type ChatMode } from "@/hooks/use-chat";
 
@@ -59,11 +62,6 @@ interface ChatInputProps {
   onRemoveGoogleFile?: (fileId: string) => void;
   /** Append a filesystem reference to the current draft without taking control of it. */
   draftInsertion?: { id: number; text: string } | null;
-}
-
-function formatAttachmentSize(size: number): string {
-  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
-  return `${size} B`;
 }
 
 const modeLabels: Record<ChatMode, string> = {
@@ -229,7 +227,7 @@ export function ChatInput({
                 <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <span className="truncate">{file.name}</span>
                 <span className="shrink-0 text-[10px] text-muted-foreground">
-                  {formatAttachmentSize(file.size)}
+                  {formatFileSize(file.size)}
                 </span>
                 {onRemoveAttachment && (
                   <button

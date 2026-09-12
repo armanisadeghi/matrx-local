@@ -29,6 +29,9 @@ import {
   type CompatibilityStatus,
 } from "@/lib/llm/repoAnalyzer";
 import type { LlmHardwareResult, LlmDownloadProgress } from "@/lib/llm/types";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -459,10 +462,10 @@ export function ModelRepoAnalyzer({
   const hardwareLabel: string | null = result?.hardware_label ?? (
     hw
       ? hw.is_apple_silicon
-        ? `Apple Silicon, ${(hw.total_ram_mb / 1024).toFixed(0)} GB`
+        ? `Apple Silicon, ${formatFileSize(hw.total_ram_mb * 1024 * 1024)}`
         : hw.supports_cuda && hw.gpu_vram_mb
-        ? `NVIDIA GPU, ${(hw.gpu_vram_mb / 1024).toFixed(0)} GB VRAM`
-        : `CPU, ${(hw.total_ram_mb / 1024).toFixed(0)} GB RAM`
+        ? `NVIDIA GPU, ${formatFileSize(hw.gpu_vram_mb * 1024 * 1024)} VRAM`
+        : `CPU, ${formatFileSize(hw.total_ram_mb * 1024 * 1024)} RAM`
       : null
   );
 

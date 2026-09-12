@@ -4,6 +4,9 @@
  * import cycle. The ONE implementation of the 20 MB image-picking guard.
  */
 
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body, not even inside a sentence.
+import { formatFileSize } from "@ai-matrx/kit/format";
 import type { PickedImage } from "@/hooks/use-media-gen";
 
 /** 20 MB guard shared by every image-picking path (base64 is ~1.33x). */
@@ -20,7 +23,7 @@ export function readPickedImage(
 ): void {
   if (file.size > MAX_INPUT_IMAGE_BYTES) {
     onError(
-      `That image is ${(file.size / (1024 * 1024)).toFixed(1)} MB — please choose one under 20 MB.`,
+      `That image is ${formatFileSize(file.size)} — please choose one under 20 MB.`,
     );
     return;
   }
@@ -57,7 +60,7 @@ export async function pickedImageFromUrl(
     const blob = await resp.blob();
     if (blob.size > MAX_INPUT_IMAGE_BYTES) {
       onError(
-        `That image is ${(blob.size / (1024 * 1024)).toFixed(1)} MB — inputs must be under 20 MB.`,
+        `That image is ${formatFileSize(blob.size)} — inputs must be under 20 MB.`,
       );
       return null;
     }

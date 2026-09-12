@@ -48,6 +48,9 @@ import {
   actionNeededFromPermission,
   actionNeededStore,
 } from "@/features/action-needed";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 const TRIGGER_REQUIRED_KEYS = new Set<string>([
   "screen_recording",
@@ -1809,9 +1812,8 @@ function SystemResourcesCard({ engineStatus }: { engineStatus: EngineStatus }) {
   const diskUsed = Number(resources.disk_used_gb ?? 0);
   const diskTotal = Number(resources.disk_total_gb ?? 0);
 
-  // Format storage values: show TB when >= 1000 GB for readability
-  const fmtStorage = (gb: number) =>
-    gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${gb.toFixed(0)} GB`;
+  // Sizes arrive in GB; THE package formatter takes BYTES and picks the unit.
+  const fmtStorage = (gb: number) => formatFileSize(gb * 1024 ** 3);
 
   const cpuDetail = cpuCores
     ? `${cpuPercent.toFixed(0)}% · ${cpuCores}c/${cpuLogical ?? cpuCores}t${cpuFreq ? ` · ${cpuFreq}` : ""}`

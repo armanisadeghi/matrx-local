@@ -429,7 +429,9 @@ function SetupTab() {
               <div>
                 <p className="text-muted-foreground text-xs">RAM</p>
                 <p className="font-medium">
-                  {(hardwareResult.hardware.total_ram_mb / 1024).toFixed(0)} GB
+                  {formatFileSize(
+                    hardwareResult.hardware.total_ram_mb * 1024 * 1024,
+                  )}
                 </p>
               </div>
               <div>
@@ -444,9 +446,9 @@ function SetupTab() {
                   {hardwareResult.hardware.is_apple_silicon
                     ? "Apple Silicon (Metal)"
                     : hardwareResult.hardware.supports_cuda
-                      ? `CUDA${hardwareResult.hardware.gpu_name ? ` — ${hardwareResult.hardware.gpu_name}` : ""} — ${((hardwareResult.hardware.gpu_vram_mb ?? 0) / 1024).toFixed(0)} GB VRAM`
+                      ? `CUDA${hardwareResult.hardware.gpu_name ? ` — ${hardwareResult.hardware.gpu_name}` : ""} — ${formatFileSize((hardwareResult.hardware.gpu_vram_mb ?? 0) * 1024 * 1024)} VRAM`
                       : hardwareResult.hardware.supports_vulkan
-                        ? `Vulkan${hardwareResult.hardware.gpu_name ? ` — ${hardwareResult.hardware.gpu_name}` : ""}${hardwareResult.hardware.gpu_vram_mb ? ` — ${(hardwareResult.hardware.gpu_vram_mb / 1024).toFixed(0)} GB VRAM` : ""}`
+                        ? `Vulkan${hardwareResult.hardware.gpu_name ? ` — ${hardwareResult.hardware.gpu_name}` : ""}${hardwareResult.hardware.gpu_vram_mb ? ` — ${formatFileSize(hardwareResult.hardware.gpu_vram_mb * 1024 * 1024)} VRAM` : ""}`
                         : "No GPU detected — CPU inference"}
                 </p>
                 {!hardwareResult.hardware.is_apple_silicon &&
@@ -6425,16 +6427,18 @@ function HardwareTab() {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Total RAM</span>
                   <span className="font-medium">
-                    {(hardwareResult.hardware.total_ram_mb / 1024).toFixed(1)}{" "}
-                    GB
+                    {formatFileSize(
+                      hardwareResult.hardware.total_ram_mb * 1024 * 1024,
+                    )}
                   </span>
                 </div>
                 {hardwareResult.hardware.gpu_vram_mb && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">GPU VRAM</span>
                     <span className="font-medium">
-                      {(hardwareResult.hardware.gpu_vram_mb / 1024).toFixed(1)}{" "}
-                      GB
+                      {formatFileSize(
+                        hardwareResult.hardware.gpu_vram_mb * 1024 * 1024,
+                      )}
                     </span>
                   </div>
                 )}

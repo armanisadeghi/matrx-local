@@ -1694,8 +1694,8 @@ export function Settings({
                               {gpu.vram_mb != null && (
                                 <p>
                                   {gpu.vram_note === "unified_memory"
-                                    ? `${(gpu.vram_mb / 1024).toFixed(0)} GB unified memory`
-                                    : `${(gpu.vram_mb / 1024).toFixed(1)} GB VRAM`}
+                                    ? `${formatFileSize(gpu.vram_mb * 1024 * 1024)} unified memory`
+                                    : `${formatFileSize(gpu.vram_mb * 1024 * 1024)} VRAM`}
                                 </p>
                               )}
                               {gpu.driver_version && (
@@ -1730,10 +1730,9 @@ export function Settings({
                                 Total
                               </span>
                               <p className="font-medium">
-                                {(hardwareProfile.ram.total_mb / 1024).toFixed(
-                                  1,
-                                )}{" "}
-                                GB
+                                {formatFileSize(
+                                  hardwareProfile.ram.total_mb * 1024 * 1024,
+                                )}
                               </p>
                             </div>
                             {hardwareProfile.ram.available_mb != null && (
@@ -1742,10 +1741,11 @@ export function Settings({
                                   Available
                                 </span>
                                 <p className="font-medium">
-                                  {(
-                                    hardwareProfile.ram.available_mb / 1024
-                                  ).toFixed(1)}{" "}
-                                  GB
+                                  {formatFileSize(
+                                    hardwareProfile.ram.available_mb *
+                                      1024 *
+                                      1024,
+                                  )}
                                 </p>
                               </div>
                             )}
@@ -3418,11 +3418,7 @@ export function Settings({
                       </div>
                       <div className="rounded-lg bg-muted/50 p-2">
                         <p className="text-lg font-semibold">
-                          {proxyStatus.bytes_forwarded > 1048576
-                            ? `${(proxyStatus.bytes_forwarded / 1048576).toFixed(1)}MB`
-                            : proxyStatus.bytes_forwarded > 1024
-                              ? `${(proxyStatus.bytes_forwarded / 1024).toFixed(1)}KB`
-                              : `${proxyStatus.bytes_forwarded}B`}
+                          {formatFileSize(proxyStatus.bytes_forwarded)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           Forwarded

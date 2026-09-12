@@ -36,6 +36,9 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranscriptionApp } from "@/contexts/TranscriptionContext";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 interface NoteEditorProps {
   note: DocNote;
@@ -554,7 +557,7 @@ export function NoteEditor({
                 <FileWarning className="h-8 w-8 opacity-40" />
                 <p className="text-sm">
                   Live preview paused — this note is{" "}
-                  {Math.round(content.length / 1024)} KB and rendering it on
+                  {formatFileSize(content.length)} and rendering it on
                   every keystroke would freeze the editor.
                 </p>
                 <button

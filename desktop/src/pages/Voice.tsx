@@ -97,6 +97,7 @@ import type {
 // 2026-09-07). THE UNIT LAW: the unit is in the name.
 import {
   formatDurationSeconds,
+  formatFileSize,
   formatRelativeTime,
 } from "@ai-matrx/kit/format";
 const TABS = [
@@ -3840,9 +3841,9 @@ function tierLabel(tier: WhisperModelTier): string {
   }
 }
 
+/** RAM arrives in MB; THE package formatter takes BYTES and picks the unit. */
 function formatRam(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${mb} MB`;
+  return formatFileSize(mb * 1024 * 1024);
 }
 
 const formatDuration = (secs: number): string =>

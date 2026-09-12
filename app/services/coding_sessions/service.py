@@ -153,6 +153,13 @@ DELIVERY_CONCURRENCY_SETTING = "coding_session_delivery_concurrency"
 DELIVERY_CONCURRENCY_DEFAULT = 8
 DELIVERY_CONCURRENCY_MIN = 1
 DELIVERY_CONCURRENCY_MAX = 32
+# There is no Settings control for this yet, and a remedy that points at one
+# would be a lie. It names the key and the file that holds it instead.
+_DELIVERY_CONCURRENCY_REMEDY = (
+    "Set coding_session_delivery_concurrency to a whole number between 1 and 32 "
+    "in the Matrx Local settings store (~/.matrx/settings.json) to choose your "
+    "own fan-out."
+)
 
 
 def delivery_concurrency() -> int:
@@ -173,28 +180,37 @@ def delivery_concurrency() -> int:
             numeric = None
     if numeric is None:
         logger.warning(
-            "[coding_session_bridge] settings value %s=%r is not a number — "
-            "delivering %d lanes at a time instead. Set it to a whole number "
-            "between %d and %d in Settings to choose your own fan-out.",
+            "[coding_session_bridge] setting %s=%r is not a number — delivering "
+            "%d lanes at a time instead. %s",
             DELIVERY_CONCURRENCY_SETTING,
             raw,
             DELIVERY_CONCURRENCY_DEFAULT,
-            DELIVERY_CONCURRENCY_MIN,
-            DELIVERY_CONCURRENCY_MAX,
+            _DELIVERY_CONCURRENCY_REMEDY,
         )
         return DELIVERY_CONCURRENCY_DEFAULT
     lanes = int(numeric)
-    clamped = min(max(lanes, DELIVERY_CONCURRENCY_MIN), DELIVERY_CONCURRENCY_MAX)
-    if clamped != numeric:
+    if lanes != numeric:
+        # Say what actually happened. "Outside the band" would be a lie about a
+        # value that is inside it and merely fractional.
         logger.warning(
-            "[coding_session_bridge] settings value %s=%s is outside the "
-            "supported %d–%d band — delivering %d lanes at a time instead. "
-            "Change it in Settings to a value inside that band.",
+            "[coding_session_bridge] setting %s=%s is not a whole number of "
+            "lanes — delivering %d at a time instead. %s",
             DELIVERY_CONCURRENCY_SETTING,
             numeric,
+            min(max(lanes, DELIVERY_CONCURRENCY_MIN), DELIVERY_CONCURRENCY_MAX),
+            _DELIVERY_CONCURRENCY_REMEDY,
+        )
+    clamped = min(max(lanes, DELIVERY_CONCURRENCY_MIN), DELIVERY_CONCURRENCY_MAX)
+    if clamped != lanes:
+        logger.warning(
+            "[coding_session_bridge] setting %s=%s is outside the supported "
+            "%d–%d band — delivering %d lanes at a time instead. %s",
+            DELIVERY_CONCURRENCY_SETTING,
+            lanes,
             DELIVERY_CONCURRENCY_MIN,
             DELIVERY_CONCURRENCY_MAX,
             clamped,
+            _DELIVERY_CONCURRENCY_REMEDY,
         )
     return clamped
 
@@ -681,7 +697,10 @@ class CodingSessionBridgeOutbox:
         self._last_tick_sent = 0
         self._last_tick_failed = 0
         self._last_tick_blocked: str | None = None
-        self._last_tick_eligible = 0
+        self._last_tick_eligible: int | None = None
+        # Eligible lane heads counted by the tick in flight, or None while it
+        # has not reached (or will never reach) the delivery path.
+        self._tick_eligible: int | None = None
         self._last_delivery_at: str | None = None
         self._last_error: dict[str, str] | None = None
         self._last_idle_tick_log = 0.0
@@ -1867,13 +1886,13 @@ class CodingSessionBridgeOutbox:
         sent, what blocked it, and the most recent per-row failure.
         """
         started = time.monotonic()
-        eligible = await self._eligible_lane_head_count()
+        self._tick_eligible = None
         result: dict[str, Any] | None = None
         try:
             result = await self._sync_pending_once(limit=limit)
             return result
         finally:
-            self._record_tick(started=started, eligible=eligible, result=result)
+            await self._record_tick(started=started, result=result)
 
     async def _sync_pending_once(self, *, limit: int | None = None) -> dict[str, Any]:
         """One delivery tick: fan out ACROSS lanes, never inside one."""
@@ -2000,6 +2019,12 @@ class CodingSessionBridgeOutbox:
             concurrency = delivery_concurrency()
             self._delivery_concurrency = concurrency
             semaphore = asyncio.Semaphore(concurrency)
+            # Counted HERE — on the delivery path, inside the lock. It is a full
+            # lane-head sweep (~276ms on a 200k-row queue), so a wake that is
+            # only going to hit a blocker or an open circuit never pays for it;
+            # those ticks report `last_tick_eligible: null` and the once-a-minute
+            # idle line falls back to the indexed "is anything ready" probe.
+            self._tick_eligible = await self._eligible_lane_head_count()
 
             sent = 0
             failed = 0
@@ -2007,6 +2032,7 @@ class CodingSessionBridgeOutbox:
             offline_failures = 0
             blocked: str | None = None
             halt = False
+            cancelled: asyncio.CancelledError | None = None
             # THE IN-FLIGHT WINDOW. A tick never opens at full width: one
             # envelope proves the transport, and only then does the window
             # double toward `concurrency`. The same caution as the half-open
@@ -2020,19 +2046,48 @@ class CodingSessionBridgeOutbox:
                 if not heads:
                     break
                 processed += len(heads)
-                outcomes = await asyncio.gather(
+                raw_outcomes = await asyncio.gather(
                     *(
                         self._deliver_envelope(row, client, access_token, semaphore)
                         for row in heads
-                    )
+                    ),
+                    return_exceptions=True,
                 )
+                # EVERY outcome of a wave is booked, ALWAYS. A sibling whose
+                # POST already reached the server must never be forgotten
+                # because another row of the same wave failed — it would be
+                # uploaded a second time on the next tick, and a failed sibling
+                # would lose its attempt and its backoff. `halt` and `blocked`
+                # can only stop the NEXT wave, never this wave's bookkeeping.
+                booked: list[
+                    tuple[Any, BridgeRequest | None, Any, Exception | None]
+                ] = []
+                for row, outcome in zip(heads, raw_outcomes):
+                    if isinstance(outcome, asyncio.CancelledError):
+                        # Book the siblings first, then let the cancellation
+                        # finish the tick.
+                        cancelled = outcome
+                        continue
+                    if isinstance(outcome, BaseException):
+                        booked.append(
+                            (
+                                row,
+                                None,
+                                None,
+                                outcome
+                                if isinstance(outcome, Exception)
+                                else RuntimeError(repr(outcome)),
+                            )
+                        )
+                        continue
+                    booked.append(outcome)
+
                 wave_sent = 0
                 wave_offline = 0
-                # Bookkeeping runs sequentially in row order. Only the POST is
-                # concurrent: every durable write, blocker and circuit decision
-                # below is exactly the one the one-at-a-time publisher made.
+                credential_rejected = False
+                organization_refused = False
                 for row, persisted_request, response, exc in sorted(
-                    outcomes, key=lambda outcome: int(outcome[0]["id"])
+                    booked, key=lambda outcome: int(outcome[0]["id"])
                 ):
                     if exc is not None:
                         self._note_delivery_error(exc)
@@ -2047,7 +2102,6 @@ class CodingSessionBridgeOutbox:
                             )
                             failed += 1
                             halt = True
-                            break
                         continue
                     if isinstance(exc, (AIDreamOfflineError, AIDreamError)):
                         provider = (
@@ -2056,20 +2110,29 @@ class CodingSessionBridgeOutbox:
                             else "unknown"
                         )
                         if isinstance(exc, AIDreamError) and exc.status == 401:
+                            # A publisher-wide blocker is set ONCE, by the first
+                            # row that met it. Charging the whole wave would
+                            # burn N rows toward quarantine for one rejected
+                            # credential and leave the blocker naming whichever
+                            # row happened to be last.
+                            failed += 1
+                            if credential_rejected:
+                                continue
+                            credential_rejected = True
                             if blocked is None:
-                                self._credential_blocker = {
-                                    "code": "cloud_credentials_rejected",
-                                    "message": (
-                                        "AI Matrx rejected the stored session. Sign in "
-                                        "again to resume delivery; queued events remain "
-                                        "safe on this Mac."
-                                    ),
-                                    "http_status": 401,
-                                    "receipt_id": int(row["id"]),
-                                    "provider": provider,
-                                }
-                                self._blocked_token_hash = token_hash
                                 blocked = "cloud_credentials_rejected"
+                            self._credential_blocker = {
+                                "code": "cloud_credentials_rejected",
+                                "message": (
+                                    "AI Matrx rejected the stored session. Sign in "
+                                    "again to resume delivery; queued events remain "
+                                    "safe on this Mac."
+                                ),
+                                "http_status": 401,
+                                "receipt_id": int(row["id"]),
+                                "provider": provider,
+                            }
+                            self._blocked_token_hash = token_hash
                             try:
                                 await self._record_failure(
                                     int(row["id"]), int(row["attempts"]), exc
@@ -2080,12 +2143,17 @@ class CodingSessionBridgeOutbox:
                                     "credential rejection for id=%s",
                                     int(row["id"]),
                                 )
-                            failed += 1
                             continue
                         if (
                             isinstance(exc, AIDreamError)
                             and _ORGANIZATION_UNRESOLVED_MARKER in str(exc)
                         ):
+                            failed += 1
+                            if organization_refused:
+                                continue
+                            organization_refused = True
+                            if blocked is None:
+                                blocked = _ORGANIZATION_BLOCKER_CODE
                             try:
                                 await self._set_organization_blocker(row, provider)
                             except Exception:
@@ -2094,9 +2162,6 @@ class CodingSessionBridgeOutbox:
                                     "organization pause for id=%s",
                                     int(row["id"]),
                                 )
-                            if blocked is None:
-                                blocked = _ORGANIZATION_BLOCKER_CODE
-                            failed += 1
                             continue
                         if _is_terminal_rejection(exc, int(row["attempts"])):
                             try:
@@ -2109,7 +2174,6 @@ class CodingSessionBridgeOutbox:
                                 )
                                 failed += 1
                                 halt = True
-                                break
                             # The next row in this lane, plus every unrelated
                             # lane, can now advance.
                             continue
@@ -2123,33 +2187,15 @@ class CodingSessionBridgeOutbox:
                             # about a failure become a worse failure.
                             logger.exception(
                                 "[coding_session_bridge] could not record the "
-                                "failure for id=%s — backing off this tick",
+                                "failure for id=%s — backing off after this wave",
                                 int(row["id"]),
                             )
                             failed += 1
                             halt = True
-                            break
+                            continue
                         failed += 1
                         if isinstance(exc, AIDreamOfflineError):
-                            offline_failures += 1
                             wave_offline += 1
-                            self._circuit_failure_count = offline_failures
-                            if (
-                                self._circuit_state == "half_open"
-                                or offline_failures
-                                >= self._circuit_config.offline_failures_to_open
-                            ):
-                                self._open_transport_circuit()
-                                if blocked is None:
-                                    blocked = "transport_offline"
-                                continue
-                            # One transport-shaped failure is not proof that the
-                            # whole service is offline. A size-specific TLS/proxy
-                            # failure must not stop unrelated lanes, so probe the
-                            # smallest other eligible lane head next. A second
-                            # failure opens the bounded global circuit instead of
-                            # burning every lane.
-                            probe_smallest = True
                         continue
                     if exc is not None:
                         # An UNEXPECTED failure must degrade to a deferred row,
@@ -2177,7 +2223,7 @@ class CodingSessionBridgeOutbox:
                                 int(row["id"]),
                             )
                             halt = True
-                            break
+                            continue
                         failed += 1
                         continue
 
@@ -2195,24 +2241,60 @@ class CodingSessionBridgeOutbox:
                         sent += 1
                         wave_sent += 1
                         self._last_delivery_at = _utc_now_iso()
-                        if self._circuit_state != "closed" or offline_failures:
-                            self._close_transport_circuit()
-                        offline_failures = 0
-                        probe_smallest = False
+                        # Delivery works again — the screen must stop showing
+                        # the last blip forever.
+                        self._last_error = None
                         continue
 
                     # The delete lost the write lock. The row is DELIVERED, so it
-                    # must never be uploaded again — remember it and stop this
-                    # tick. The next tick retries the delete before any upload.
+                    # must never be uploaded again — remember it and stop after
+                    # this wave. The next tick retries the delete before any
+                    # upload.
                     self._delivered_undeleted.add(int(row["id"]))
                     failed += 1
                     halt = True
-                    break
 
-                if wave_offline:
+                # THE CIRCUIT IS DECIDED ONCE PER WAVE, from what the whole wave
+                # saw. Deciding it per row let one wave open, close and reopen
+                # it, and could return blocked="transport_offline" while the
+                # state said "closed".
+                if wave_offline and wave_sent:
+                    # The transport plainly works: other lanes were accepted in
+                    # the very same wave. These failures belong to their own
+                    # envelopes (a size-specific TLS/proxy failure), so probe
+                    # the smallest next instead of burning every lane.
+                    offline_failures = 0
+                    self._circuit_failure_count = 0
+                    if self._circuit_state != "closed":
+                        self._close_transport_circuit()
+                    probe_smallest = True
+                    window = 1
+                elif wave_offline:
+                    offline_failures += wave_offline
+                    self._circuit_failure_count = offline_failures
+                    if (
+                        self._circuit_state == "half_open"
+                        or offline_failures
+                        >= self._circuit_config.offline_failures_to_open
+                    ):
+                        self._open_transport_circuit()
+                        if blocked is None:
+                            blocked = "transport_offline"
+                    else:
+                        # One transport-shaped failure is not proof that the
+                        # whole service is offline. A second one opens the
+                        # bounded global circuit instead of burning every lane.
+                        probe_smallest = True
                     window = 1
                 elif wave_sent:
+                    if self._circuit_state != "closed" or offline_failures:
+                        self._close_transport_circuit()
+                    offline_failures = 0
+                    probe_smallest = False
                     window = min(concurrency, window * 2)
+
+                if cancelled is not None:
+                    raise cancelled
             if processed >= limit and await self._has_ready_lane_head():
                 self._continue_immediately = True
             return {"sent": sent, "failed": failed, "blocked": blocked}
@@ -2336,14 +2418,14 @@ class CodingSessionBridgeOutbox:
             ),
         }
 
-    def _record_tick(
+    async def _record_tick(
         self,
         *,
         started: float,
-        eligible: int,
         result: dict[str, Any] | None,
     ) -> None:
         """Close the books on one tick and scream once a minute if it idled."""
+        eligible = self._tick_eligible
         self._ticks_total += 1
         self._last_tick_at = _utc_now_iso()
         self._last_tick_duration_ms = round((time.monotonic() - started) * 1000.0, 3)
@@ -2353,17 +2435,24 @@ class CodingSessionBridgeOutbox:
         self._last_tick_sent = sent
         self._last_tick_failed = failed
         self._last_tick_blocked = blocked
+        # None = this tick never reached delivery (blocked, or the circuit was
+        # open), so nothing was counted. Never a silent zero.
         self._last_tick_eligible = eligible
-        if sent or not eligible:
+        if sent or eligible == 0:
             return
         now = time.monotonic()
         if now - self._last_idle_tick_log < 60.0:
             return
+        if eligible is None:
+            # Only when a line is actually due: one indexed LIMIT 1 probe, not
+            # the full sweep, so a blocked publisher stays cheap to poll.
+            if not await self._has_ready_lane_head():
+                return
         self._last_idle_tick_log = now
         logger.info(
             "[coding_session_bridge] publisher tick: 0 sent, %s eligible, "
             "blocked=%s, last_error=%s",
-            eligible,
+            eligible if eligible is not None else "1+",
             blocked,
             self._last_error["code"] if self._last_error else None,
         )

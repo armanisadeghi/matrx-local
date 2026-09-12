@@ -537,13 +537,21 @@ export function CodingSessions() {
               delivers nothing while rows are eligible used to be invisible on
               every screen and in every log.
             */}
-            {bridge && (
+            {bridge?.publisher.ticks && (
               <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-                Publisher: last tick {formatStamp(bridge.publisher.ticks.last_tick_at)}{" "}
-                · sent {bridge.publisher.ticks.last_tick_sent.toLocaleString()} ·
-                eligible {bridge.publisher.ticks.last_tick_eligible.toLocaleString()} ·
-                concurrency{" "}
-                {bridge.publisher.transport_circuit.config.delivery_concurrency}
+                Publisher: last tick{" "}
+                {formatStamp(bridge.publisher.ticks.last_tick_at)} · sent{" "}
+                {bridge.publisher.ticks.last_tick_sent.toLocaleString()} · eligible{" "}
+                {bridge.publisher.ticks.last_tick_eligible === null
+                  ? "not measured"
+                  : bridge.publisher.ticks.last_tick_eligible.toLocaleString()}
+                {/* The one field that explains a zero. */}
+                {bridge.publisher.ticks.last_tick_blocked
+                  ? ` · blocked: ${bridge.publisher.ticks.last_tick_blocked}`
+                  : ""}
+                {bridge.publisher.transport_circuit.config.delivery_concurrency
+                  ? ` · concurrency ${bridge.publisher.transport_circuit.config.delivery_concurrency}`
+                  : ""}
                 {bridge.publisher.ticks.last_error
                   ? ` · ${bridge.publisher.ticks.last_error.message}`
                   : ""}

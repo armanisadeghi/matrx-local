@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from app.services.aidream.client import AIDreamOfflineError
+from app.services.aidream.client import AIDreamError, AIDreamOfflineError
 from app.services.coding_sessions import service as service_module
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.service import (
@@ -623,4 +623,346 @@ def test_delivery_concurrency_knob_clamps_loudly(
     text = logs.text
     assert "is outside the supported 1–32 band" in text
     assert "is not a number" in text
-    assert "Change it in Settings" in text
+    # The remedy names what actually exists. There is no Settings control for
+    # this key, and a remedy that claimed one would be a lie.
+    assert "Change it in Settings" not in text
+    assert "coding_session_delivery_concurrency to a whole number" in text
+    assert "~/.matrx/settings.json" in text
+
+
+def test_fractional_delivery_concurrency_is_truncated_not_called_out_of_band(
+    monkeypatch: pytest.MonkeyPatch, logs: Any
+) -> None:
+    _use_settings(monkeypatch, {DELIVERY_CONCURRENCY_SETTING: 4.5})
+
+    assert delivery_concurrency() == 4
+
+    text = logs.text
+    # 4.5 IS inside the band. Saying otherwise would describe a different bug.
+    assert "is outside the supported" not in text
+    assert "is not a whole number of lanes" in text
+    assert "delivering 4 at a time" in text
+
+
+# --------------------------------------------------------------------------
+# THE WAVE-BOOKKEEPING RULE. Concurrency makes siblings, and a sibling whose
+# POST already reached the server must be BOOKED even when another row of the
+# same wave fails — otherwise it is uploaded a second time on the next tick and
+# a failed sibling silently loses its attempt and its backoff.
+# --------------------------------------------------------------------------
+
+
+class _SelectiveClient:
+    """Fails the lanes (or the calls) it is told to, succeeds otherwise."""
+
+    def __init__(
+        self,
+        *,
+        offline_lanes: frozenset[str] = frozenset(),
+        unauthorized_lanes: frozenset[str] = frozenset(),
+        offline_after: int | None = None,
+        hold_seconds: float = 0.002,
+    ) -> None:
+        self.calls: list[str] = []
+        self.offline_lanes = offline_lanes
+        self.unauthorized_lanes = unauthorized_lanes
+        self.offline_after = offline_after
+        self.hold_seconds = hold_seconds
+
+    async def post(
+        self,
+        _path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        lane = str(payload["provider_session_id"])
+        prompt = str(payload["hook_event"]["payload"]["prompt"])
+        index = len(self.calls)
+        self.calls.append(prompt)
+        await asyncio.sleep(self.hold_seconds)
+        if self.offline_after is not None and index >= self.offline_after:
+            raise AIDreamOfflineError("service unreachable")
+        if lane in self.offline_lanes:
+            raise AIDreamOfflineError("service unreachable")
+        if lane in self.unauthorized_lanes:
+            raise AIDreamError(401, "HTTP 401 rejected")
+        return _ack(payload)
+
+
+def _count_circuit_calls(
+    outbox: CodingSessionBridgeOutbox, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, int]:
+    counts = {"open": 0, "close": 0}
+    real_open = outbox._open_transport_circuit
+    real_close = outbox._close_transport_circuit
+
+    def _open() -> None:
+        counts["open"] += 1
+        real_open()
+
+    def _close() -> None:
+        counts["close"] += 1
+        real_close()
+
+    monkeypatch.setattr(outbox, "_open_transport_circuit", _open)
+    monkeypatch.setattr(outbox, "_close_transport_circuit", _close)
+    return counts
+
+
+@pytest.mark.anyio
+async def test_a_lost_delete_never_discards_its_siblings_bookkeeping(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One row's delete losing the write lock must not re-upload the others.
+
+    The first concurrent publisher stopped the whole wave on this path, so a
+    sibling that aidream had ALREADY accepted was never retired and went up a
+    second time on the next tick.
+    """
+    _use_concurrency(monkeypatch, 4)
+    client = _LaneConcurrencyClient(hold_seconds=0.002)
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(),
+    )
+    for lane in ("alpha", "beta", "gamma", "delta"):
+        await _enqueue_lane(outbox, lane, 1)
+    wedged = 2  # beta's row id — a middle row, so it has siblings on both sides
+
+    async def _retire(
+        self: Any, *, outbox_id: int, request: Any, response: Any
+    ) -> bool:
+        if outbox_id == wedged:
+            return False
+        return await original(
+            self, outbox_id=outbox_id, request=request, response=response
+        )
+
+    original = CodingSessionBridgeOutbox._retire_delivered_row
+    monkeypatch.setattr(CodingSessionBridgeOutbox, "_retire_delivered_row", _retire)
+
+    first = await outbox.sync_pending()
+
+    # Every sibling POSTed in that wave was retired, not abandoned: only the
+    # wedged row is still in the outbox among the rows that were sent.
+    assert first["failed"] == 1
+    assert first["sent"] == len(client.calls) - 1
+    remaining = {
+        int(row["id"])
+        for row in await circuit_db.fetchall(
+            "SELECT id FROM coding_session_bridge_outbox"
+        )
+    }
+    assert wedged in remaining
+    posted_first = [call["prompt"] for call in client.calls]
+
+    await outbox.sync_pending()
+
+    # The wedged row is DELIVERED: later ticks retry its DELETE and never its
+    # upload. Nothing is ever POSTed twice.
+    posted = [call["prompt"] for call in client.calls]
+    assert len(posted) == len(set(posted)), f"an envelope was uploaded twice: {posted}"
+    assert posted[: len(posted_first)] == posted_first
+    assert await outbox.pending_count() == 0
+
+
+@pytest.mark.anyio
+async def test_a_credential_rejection_mid_wave_blocks_once_and_charges_one_row(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_concurrency(monkeypatch, 4)
+    # beta and gamma are rejected; delta — the LAST row of the same wave —
+    # succeeds, and its retirement must survive the blocker.
+    client = _SelectiveClient(unauthorized_lanes=frozenset({"beta", "gamma"}))
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(),
+    )
+    # Three acknowledgements widen the window, then ONE wave carries
+    # beta (rejected, lowest id), delta (accepted) and gamma (rejected).
+    for lane in ("ok-1", "ok-2", "ok-3", "beta", "delta", "gamma"):
+        await _enqueue_lane(outbox, lane, 1)
+
+    result = await outbox.sync_pending()
+
+    assert result["blocked"] == "cloud_credentials_rejected"
+    blocker = outbox.publisher_blocker
+    assert blocker is not None
+    assert blocker["code"] == "cloud_credentials_rejected"
+    # The FIRST rejected row names the blocker, never whichever finished last.
+    beta_head = await circuit_db.fetchone(
+        "SELECT id FROM coding_session_bridge_outbox WHERE lane_key LIKE '%beta%'"
+    )
+    assert blocker["receipt_id"] == int(beta_head["id"])
+    attempts = await circuit_db.fetchall(
+        """SELECT id, attempts FROM coding_session_bridge_outbox
+           WHERE attempts > 0 ORDER BY id"""
+    )
+    # Exactly ONE row was charged an attempt for one rejected credential.
+    assert [(int(row["id"]), int(row["attempts"])) for row in attempts] == [
+        (int(beta_head["id"]), 1)
+    ]
+    # And the sibling delivered in that same wave was still retired — a blocker
+    # never discards an envelope aidream has already accepted.
+    delta_rows = await circuit_db.fetchall(
+        "SELECT id FROM coding_session_bridge_outbox WHERE lane_key LIKE '%delta%'"
+    )
+    assert delta_rows == []
+    assert "delta-1" in client.calls
+
+
+@pytest.mark.anyio
+async def test_the_circuit_is_decided_once_per_wave_and_agrees_with_blocked(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_concurrency(monkeypatch, 4)
+    # Two of four lanes fail transport-shaped while two succeed in the SAME
+    # wave: the transport is demonstrably alive, so nothing may open.
+    client = _SelectiveClient(offline_lanes=frozenset({"gamma", "delta"}))
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(offline_failures_to_open=2),
+    )
+    for lane in ("alpha", "beta", "gamma", "delta"):
+        await _enqueue_lane(outbox, lane, 4)
+    counts = _count_circuit_calls(outbox, monkeypatch)
+
+    mixed = await outbox.sync_pending()
+
+    circuit = (await outbox.delivery_status())["publisher"]["transport_circuit"]
+    assert counts["open"] == 0
+    assert circuit["state"] == "closed"
+    assert mixed["blocked"] is None
+    assert mixed["sent"] >= 2
+    # Both failures were recorded — neither sibling was dropped.
+    charged = await circuit_db.fetchall(
+        "SELECT attempts FROM coding_session_bridge_outbox WHERE attempts > 0"
+    )
+    assert [int(row["attempts"]) for row in charged] == [1, 1]
+
+
+@pytest.mark.anyio
+async def test_a_whole_wave_offline_opens_the_circuit_exactly_once(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_concurrency(monkeypatch, 4)
+    # Three acknowledgements widen the window to four, then the network dies
+    # under a full four-lane wave.
+    client = _SelectiveClient(offline_after=3)
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(
+            offline_failures_to_open=2,
+            offline_cooldown_seconds=60,
+        ),
+    )
+    for lane in ("alpha", "beta", "gamma", "delta"):
+        await _enqueue_lane(outbox, lane, 3)
+    counts = _count_circuit_calls(outbox, monkeypatch)
+
+    result = await outbox.sync_pending()
+
+    circuit = (await outbox.delivery_status())["publisher"]["transport_circuit"]
+    assert len(client.calls) == 7
+    assert result == {"sent": 3, "failed": 4, "blocked": "transport_offline"}
+    # Decided ONCE, and what the tick reports agrees with what the circuit says.
+    assert counts["open"] == 1
+    assert circuit["state"] == "open"
+    assert circuit["failure_count"] == 4
+    # All four failures are on the books.
+    charged = await circuit_db.fetchall(
+        "SELECT attempts FROM coding_session_bridge_outbox WHERE attempts > 0"
+    )
+    assert [int(row["attempts"]) for row in charged] == [1, 1, 1, 1]
+
+
+@pytest.mark.anyio
+async def test_a_successful_delivery_clears_the_stale_last_error(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One blip must not sit on the screen forever."""
+    _use_concurrency(monkeypatch, 1)
+    client = _SelectiveClient(offline_lanes=frozenset({"alpha"}))
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(offline_failures_to_open=2),
+    )
+    await _enqueue_lane(outbox, "alpha", 1)
+
+    await outbox.sync_pending()
+
+    ticks = (await outbox.delivery_status())["publisher"]["ticks"]
+    assert ticks["last_tick_sent"] == 0
+    assert ticks["last_error"] == {
+        "code": "cloud_delivery_failed",
+        "message": (
+            "Cloud delivery failed; the event remains local and will be retried."
+        ),
+    }
+
+    await _enqueue_lane(outbox, "beta", 1)
+    recovered = await outbox.sync_pending()
+
+    assert recovered["sent"] == 1
+    ticks_after = (await outbox.delivery_status())["publisher"]["ticks"]
+    assert ticks_after["last_error"] is None
+
+
+@pytest.mark.anyio
+async def test_a_blocked_tick_does_not_pay_for_the_eligibility_sweep(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cloud off means the tick never reaches delivery — and never counts."""
+    _use_concurrency(monkeypatch, 4)
+    client = _LaneConcurrencyClient()
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=False,
+        circuit_config=PublisherCircuitConfig(),
+    )
+    await _enqueue_lane(outbox, "alpha", 2)
+    swept = 0
+    original = CodingSessionBridgeOutbox._eligible_lane_head_count
+
+    async def _counted(self: Any) -> int:
+        nonlocal swept
+        swept += 1
+        return await original(self)
+
+    monkeypatch.setattr(
+        CodingSessionBridgeOutbox, "_eligible_lane_head_count", _counted
+    )
+
+    result = await outbox.sync_pending()
+
+    assert result["blocked"] == "cloud_participation_disabled"
+    assert swept == 0
+    ticks = (await outbox.delivery_status())["publisher"]["ticks"]
+    # Never a silent zero: nothing was measured, and it says so.
+    assert ticks["last_tick_eligible"] is None
+    assert ticks["last_tick_blocked"] == "cloud_participation_disabled"

@@ -54,6 +54,7 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
     "chatDefaultSystemPromptId",
     "claude_label_sync_auto_enabled",
     "claude_label_sync_interval_minutes",
+    "coding_session_delivery_concurrency",
   ],
   localLlm: [
     "llmDefaultModel",

@@ -96,9 +96,25 @@ envelopes across ~1,160 lanes, measured 2026-09-12 on 1.4.89.
 
 - **The knob:** user setting `coding_session_delivery_concurrency`, default 8,
   clamped 1–32. Read fresh on every tick through the standard settings store, so
-  a change needs no engine restart; a non-numeric or out-of-band value is
-  clamped LOUDLY at WARNING with the remedy. The effective value is reported as
+  a change needs no engine restart; a non-numeric, fractional or out-of-band
+  value is announced LOUDLY at WARNING, each saying what actually happened (a
+  fractional value is truncated, not called out of band) with a remedy that
+  names the settings key — there is no Settings control for it yet, and a remedy
+  that claimed one would be a lie. The effective value is reported as
   `delivery_status()["publisher"]["transport_circuit"]["config"]["delivery_concurrency"]`.
+- **EVERY outcome of a wave is booked, always.** A sibling whose POST already
+  reached the server is retired even when another row of the same wave fails;
+  otherwise it would be uploaded a second time on the next tick, and a failed
+  sibling would lose its attempt and its backoff. A publisher-wide blocker
+  (credential rejection, organization refusal) or a lost delete stops the NEXT
+  wave, never this wave's bookkeeping, and such a blocker is recorded ONCE — by
+  the first row that met it, so the blocker names that row and only that row is
+  charged an attempt.
+- **The circuit is decided once per wave**, from what the whole wave saw. If any
+  lane was accepted in the same wave the transport is proven alive, so nothing
+  opens and the suspect envelope is re-probed smallest-first; only a wave with
+  no acceptance counts toward opening. `blocked` and `transport_circuit.state`
+  can therefore never disagree.
 - **A tick never opens at full width.** The in-flight window starts at 1 and
   doubles toward the configured value only after a delivery is acknowledged; any
   transport-offline failure resets it to 1. Same caution as the half-open probe,
@@ -109,9 +125,13 @@ envelopes across ~1,160 lanes, measured 2026-09-12 on 1.4.89.
 - **Every tick leaves a trace** in `delivery_status()["publisher"]["ticks"]`
   (`GET /coding-session/status`): `last_tick_at`, `last_tick_duration_ms`,
   `last_tick_sent`, `last_tick_failed`, `last_tick_blocked`,
-  `last_tick_eligible` (eligible lane heads when the tick started),
-  `ticks_total`, `last_delivery_at`, and `last_error` (the display-safe
-  `{code, message}` of the most recent per-row failure). A tick that delivered
+  `last_tick_eligible` (eligible lane heads, counted on the delivery path inside
+  the lock — `null` when the tick was blocked before it got there, never a
+  silent zero, because that sweep is a full lane-head scan and an idle-poll wake
+  must not pay for it), `ticks_total`, `last_delivery_at`, and `last_error` (the
+  display-safe `{code, message}` of the most recent per-row failure, cleared by
+  the next successful delivery so one blip cannot sit on the screen forever). A
+  tick that delivered
   nothing while rows were eligible also logs one INFO line, at most once a
   minute. This closes a live hole: on 2026-09-12 the publisher sat idle for
   minutes with eligible rows and neither the log nor the status endpoint said

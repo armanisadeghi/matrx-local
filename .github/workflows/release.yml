@@ -215,6 +215,13 @@ jobs:
       # one host profile cannot authorize both code objects. Keep both private
       # profile inputs off the checkout and make their CMS envelopes a release
       # prerequisite before Tauri performs the host's final signing pass.
+      #
+      # The native Vault provider is not release-ready (its frozen design in
+      # common-docs says "no release workflow/job"), so its profiles are the
+      # provider's inputs, not the host's. Both absent → the host ships exactly
+      # as v1.4.89 did, without the provider, and says so in the job summary.
+      # Both present → the provider is sealed and every check below applies.
+      # One of the two → a half-configured release is refused.
       - name: Materialize macOS host and Vault provider profiles
         if: matrix.platform == 'macos-15'
         env:
@@ -223,17 +230,26 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          if [[ -z "$APPLE_HOST_PROVISIONING_PROFILE" && -z "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]]; then
+            NOTICE="native Vault provider NOT shipped in this release: repository secrets APPLE_HOST_PROVISIONING_PROFILE and APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE are not set. The host app is built and verified without the provider. Set both secrets to seal the provider into the next release."
+            echo "::warning::$NOTICE"
+            echo "⚠️ $NOTICE" >> "$GITHUB_STEP_SUMMARY"
+            echo "MATRX_NATIVE_VAULT_PROVIDER=absent" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          [[ -n "$APPLE_HOST_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_HOST_PROVISIONING_PROFILE is required when APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is set (half-configured Vault provider release refused)." >&2; exit 1; }
+          [[ -n "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is required when APPLE_HOST_PROVISIONING_PROFILE is set (half-configured Vault provider release refused)." >&2; exit 1; }
           HOST_PROFILE="desktop/src-tauri/release-signing/host.provisionprofile"
           PROVIDER_PROFILE="$RUNNER_TEMP/vault-provider.provisionprofile"
           mkdir -p "$(dirname "$HOST_PROFILE")"
-          [[ -n "$APPLE_HOST_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_HOST_PROVISIONING_PROFILE is required for macOS releases." >&2; exit 1; }
-          [[ -n "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is required for macOS releases." >&2; exit 1; }
           printf '%s' "$APPLE_HOST_PROVISIONING_PROFILE" | base64 --decode > "$HOST_PROFILE"
           printf '%s' "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" | base64 --decode > "$PROVIDER_PROFILE"
           [[ -s "$HOST_PROFILE" ]] || { echo "ERROR: host provisioning profile decoded empty." >&2; exit 1; }
           [[ -s "$PROVIDER_PROFILE" ]] || { echo "ERROR: Vault provider provisioning profile decoded empty." >&2; exit 1; }
           security cms -D -u 9 -i "$HOST_PROFILE" -o /dev/null
           security cms -D -u 9 -i "$PROVIDER_PROFILE" -o /dev/null
+          echo "MATRX_NATIVE_VAULT_PROVIDER=sealed" >> "$GITHUB_ENV"
+          echo "✅ native Vault provider profiles verified; provider will be sealed into this release" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build Python sidecar binary
         env:
@@ -514,8 +530,11 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          MATRX_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          MATRX_VAULT_PROVIDER_PROFILE_FILE: ${{ runner.temp }}/vault-provider.provisionprofile
+          # Provider signing inputs exist only when the provider is sealed; the
+          # build hook refuses a half-supplied pair, so both are gated together.
+          MATRX_NATIVE_VAULT_PROVIDER: ${{ env.MATRX_NATIVE_VAULT_PROVIDER }}
+          MATRX_APPLE_SIGNING_IDENTITY: ${{ env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          MATRX_VAULT_PROVIDER_PROFILE_FILE: ${{ env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && format('{0}/vault-provider.provisionprofile', runner.temp) || '' }}
           # macOS notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -533,7 +552,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
+          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
 
       # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
       # The build scripts sign; this step PROVES the shipped artifact honors

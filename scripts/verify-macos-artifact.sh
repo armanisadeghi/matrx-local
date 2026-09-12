@@ -64,7 +64,17 @@ echo "    Expected identifier: $PARENT_IDENTIFIER"
 HELPER_APP="$APP_PATH/Contents/Frameworks/Matrx Engine.app"
 [[ -d "$HELPER_APP" ]] || { echo "ERROR: nested helper missing at $HELPER_APP" >&2; exit 1; }
 VAULT_PROVIDER="$APP_PATH/Contents/PlugIns/AI Matrx Vault Provider.appex"
-[[ -d "$VAULT_PROVIDER" ]] || { echo "ERROR: native Vault provider missing at $VAULT_PROVIDER" >&2; exit 1; }
+# Release CI sets MATRX_NATIVE_VAULT_PROVIDER=absent when the provider's
+# profiles were not supplied: the host then ships without the provider and an
+# unverified provider must not be present. Any other value keeps the provider
+# a hard requirement.
+NATIVE_VAULT_PROVIDER="${MATRX_NATIVE_VAULT_PROVIDER:-}"
+if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
+    [[ ! -e "$VAULT_PROVIDER" ]] || { echo "ERROR: native Vault provider present at $VAULT_PROVIDER although its release inputs were absent — an unverified provider must never ship" >&2; exit 1; }
+    echo "    ⚠️  native Vault provider NOT shipped (release inputs absent); host-only verification"
+else
+    [[ -d "$VAULT_PROVIDER" ]] || { echo "ERROR: native Vault provider missing at $VAULT_PROVIDER" >&2; exit 1; }
+fi
 
 # 1. Deep, strict signature verification (covers every nested code object).
 echo "--- [1/6] codesign --verify --deep --strict"
@@ -124,6 +134,15 @@ fi
 # Apple CMS signature, current validity, exact team/bundle/capabilities, and
 # the certificate that actually signed that code object.
 echo "--- [4/6] native Vault provider boundary"
+if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
+    echo "    ⚠️  SKIPPED: provider not shipped in this artifact (release inputs absent)"
+    if [[ "$DEV_MODE" == "--dev" ]]; then
+        echo "--- [5/6] spctl assess: SKIPPED (--dev)"
+        echo "--- [6/6] stapler validate: SKIPPED (--dev)"
+        echo "=== ✅ artifact verification passed (dev mode: signature + identity only)"
+        exit 0
+    fi
+else
 PROVIDER_INFO="$VAULT_PROVIDER/Contents/Info.plist"
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 [[ "$(plist_value "$PROVIDER_INFO" CFBundleIdentifier)" == "com.aimatrx.desktop.vault-provider" ]] || { echo "ERROR: unexpected Vault provider bundle identifier" >&2; exit 1; }
@@ -148,6 +167,7 @@ python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
 python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
     --kind provider --profile "$PROVIDER_PROFILE" --code "$VAULT_PROVIDER"
 echo "    ✅ provider bundle, typed entitlement split, profiles, and signed certificates verified"
+fi
 
 # 4. Gatekeeper acceptance — proves notarization is visible to the OS.
 echo "--- [5/6] spctl --assess"

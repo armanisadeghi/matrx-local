@@ -49,3 +49,30 @@ Live verification still owed by whoever runs after the next release reaches the 
 - Server `coding_session_bridge_failed` in `ownership.resolve_coding_session_organization_id`
   (1 in 30 min on 2026-09-12) — rare 500, retried by the client; worth a look by
   whoever next touches aidream ownership.
+
+## Live proof on localhost — 2026-09-12 13:10–13:25 PDT (Arman's ruling: prove it on a real server)
+
+Source engine at origin/main (3f089c2aa+) run against a VACUUM-INTO replica of the real
+~/.matrx/matrx.db (4.4 GB, 191,082 queued envelopes), cloud delivery on, default concurrency 8:
+
+| Measure | Old publisher (1.4.89, installed) | New publisher (localhost) |
+|---|---|---|
+| Delivered per minute, steady state | 12 | **149** |
+| 100-row tick | n/a (one row per query) | 43.5 s |
+| Ticks record | none |  populated (sent/failed/eligible/blocked) |
+| Transient TLS failure | silent | logged as a deferral, circuit stayed closed |
+
+Every endpoint the Coding Sessions page calls answered with real data on the localhost engine:
+status, overview, providers/readiness, delivery/envelopes, claude/history/status,
+claude/labels/status. Server-side latency is ~3.5 s per bridge request — the next lever is on
+aidream (), not here. At 149/min the 191k backlog drains in ~21 h;
+raising  to 16 is the first thing to try on the installed
+app once this is released.
+
+Also found and repaired the same afternoon, on the LIVE machine:  had
+five corrupt indexes (: rows missing from idx_tool_trace_created_by,
+idx_request_snapshot_created_by, …) — the source of every "database disk image is malformed"
+crash in chat_sync since 09:05. Backed up with VACUUM INTO, , integrity_check → ok,
+chat_sync pulling again. Root cause is the SIGKILL orphan sweep the Sync session fixed in
+c20c9ccf8; a startup integrity check + auto-REINDEX for mirror DBs is the class fix still owed.
+

@@ -26,6 +26,7 @@ import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type { ActionNeeded } from "@/features/action-needed";
 import type { ChatMessageBlock } from "@/lib/chat-blocks";
+import type { RequestInitiation } from "@/lib/api/routes/ai";
 import { buildConversationStartRequest } from "@/lib/conversation-start";
 import { parseAIDreamStream, stringifyStreamDetail } from "@/lib/aidream-stream";
 
@@ -216,7 +217,18 @@ export function buildEngineChatRequest(
   conv: Conversation,
   userContent: string,
   currentModel: string,
-  options?: { agentId?: string; variables?: Record<string, string> },
+  options?: {
+    agentId?: string;
+    variables?: Record<string, string>;
+    /**
+     * Provenance attestation — see `RequestInitiation`. Defaults to `"user"`:
+     * ChatPanel's composer submit and suggestion click are the only drivers.
+     * The local engine mirrors aidream's `ScopedRequest`, so it accepts the
+     * field today; deriving `origin_class` from it there lands with the next
+     * matrx-* catch-up wave (FOUND_DEFECTS.md MXL-D-088).
+     */
+    initiation?: RequestInitiation;
+  },
   allMessages?: ChatMessage[],
 ): {
   url: string;
@@ -225,6 +237,7 @@ export function buildEngineChatRequest(
 } {
   const serverConvId = conv.serverConversationId;
   const hasAgent = !!options?.agentId;
+  const initiation: RequestInitiation = options?.initiation ?? "user";
 
   if (serverConvId) {
     return {
@@ -232,6 +245,7 @@ export function buildEngineChatRequest(
       body: {
         user_input: userContent,
         stream: true,
+        initiation,
       },
     };
   }
@@ -239,6 +253,7 @@ export function buildEngineChatRequest(
   if (hasAgent) {
     const body: Record<string, unknown> = {
       stream: true,
+      initiation,
     };
     if (userContent) {
       body.user_input = userContent;
@@ -257,6 +272,7 @@ export function buildEngineChatRequest(
     messages: toApiMessages(allMessages ?? []),
     stream: true,
     max_iterations: 20,
+    initiation,
   });
 }
 
@@ -485,6 +501,8 @@ export function useChat({ engineUrl }: UseChatOptions) {
       options?: {
         agentId?: string;
         variables?: Record<string, string>;
+        /** Provenance attestation — see `RequestInitiation`; defaults to "user". */
+        initiation?: RequestInitiation;
       }
     ) => {
       const trimmed = content.trim();

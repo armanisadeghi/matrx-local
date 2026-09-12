@@ -8,6 +8,7 @@ import {
 import { mandateKeyFromAgentRef } from "@/lib/mandates";
 import {
   CHAT_PATH,
+  type RequestInitiation,
   agentTargetExecutePath,
   aiRequestUrl,
   conversationContinuePath,
@@ -222,6 +223,13 @@ export function buildCloudChatRequest(
         variables?: Record<string, string>;
         /** Required by aidream on every NEW cloud conversation (resolved from /auth/whoami). */
         organizationId?: string;
+        /**
+         * Provenance attestation for this send — see `RequestInitiation`.
+         * Defaults to `"user"` because every path into `sendMessage` today is a
+         * composer submit or a suggestion click. Automation added later MUST
+         * pass `"auto"` rather than inherit the human default.
+         */
+        initiation?: RequestInitiation;
       }
     | undefined,
   allMessages: ChatMessage[],
@@ -245,6 +253,10 @@ export function buildCloudChatRequest(
   // package's v2 allowlist is expressed in whole `/ai/...` paths — a base that
   // swallowed `/ai` would hide every path from it.
   const root = target === "local" ? `${engineUrl}` : `${cloudServerUrl}/api`;
+  // Stamped on EVERY body below — continue, agent start, and plain chat, cloud
+  // and local. Omitting it on any one of them silently files that run as an
+  // unattested API caller instead of the person who sent it.
+  const initiation: RequestInitiation = options?.initiation ?? "user";
   const conversationId =
     target === "local"
       ? conversation.localConversationId
@@ -296,6 +308,7 @@ export function buildCloudChatRequest(
         stream: true,
         source_app: CLOUD_SOURCE_APP,
         source_feature: CLOUD_SOURCE_FEATURE,
+        initiation,
         ...(configOverrides ? { config_overrides: configOverrides } : {}),
         ...clientEnvelope,
         ...contextEnvelope,
@@ -312,6 +325,7 @@ export function buildCloudChatRequest(
       stream: true,
       source_app: CLOUD_SOURCE_APP,
       source_feature: CLOUD_SOURCE_FEATURE,
+      initiation,
       ...organizationField,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
       ...clientEnvelope,
@@ -344,6 +358,7 @@ export function buildCloudChatRequest(
     max_iterations: 20,
     source_app: CLOUD_SOURCE_APP,
     source_feature: CLOUD_SOURCE_FEATURE,
+    initiation,
     ...organizationField,
     ...(configOverrides ? { config_overrides: configOverrides } : {}),
     ...clientEnvelope,
@@ -1312,6 +1327,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         agentId?: string;
         variables?: Record<string, string>;
         attachments?: ChatAttachment[];
+        /**
+         * Provenance attestation — see `RequestInitiation`. Defaults to
+         * `"user"`: ChatPanel's suggestion click and CloudChat's composer
+         * submit are the only callers, and both are direct human gestures.
+         */
+        initiation?: RequestInitiation;
       },
     ) => {
       const trimmed = content.trim();
@@ -2258,6 +2279,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           requestBody = {
             user_request_id: userRequestId,
             stream: true,
+            // 'auto': a /resume segment is opened by desktop code after the
+            // local delegation engine answered a tool call — never a gesture.
+            initiation: "auto" satisfies RequestInitiation,
             ...(clientContext ? { client: clientContext } : {}),
           };
         }

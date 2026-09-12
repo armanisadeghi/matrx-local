@@ -262,3 +262,95 @@ describe("legacy Chat request contract", () => {
     expect(request.body).not.toHaveProperty("is_new");
   });
 });
+
+/**
+ * PROVENANCE ATTESTATION — every AI body this desktop sends carries
+ * `initiation`. aidream derives `origin_class` from it (`"user"` → human,
+ * `"auto"` → client_auto); an OMITTED field silently classes the run `api`,
+ * so this block captures each outgoing body and asserts the field is present
+ * with the honest value. Cloud AND local mirror, all body shapes.
+ */
+describe("Cloud Chat provenance attestation", () => {
+  const cases: Array<{
+    name: string;
+    conv: Conversation;
+    target: "cloud" | "local";
+    opts: { agentId?: string; initiation?: "user" | "auto" } | undefined;
+  }> = [
+    { name: "bare chat start (cloud)", conv: conversation(), target: "cloud", opts: undefined },
+    { name: "agent start (cloud)", conv: conversation(), target: "cloud", opts: { agentId: "agent-1" } },
+    { name: "mandate start (cloud)", conv: conversation(), target: "cloud", opts: { agentId: "mandate:local.cloud_chat" } },
+    {
+      name: "continue (cloud)",
+      conv: conversation({ cloudConversationId: "existing" }),
+      target: "cloud",
+      opts: undefined,
+    },
+    { name: "bare chat start (local mirror)", conv: conversation(), target: "local", opts: undefined },
+    {
+      name: "continue (local mirror)",
+      conv: conversation({ localConversationId: "existing-local" }),
+      target: "local",
+      opts: undefined,
+    },
+  ];
+
+  for (const c of cases) {
+    it(`sends initiation="user" by default on ${c.name}`, () => {
+      const request = buildCloudChatRequest(
+        c.conv,
+        "hi",
+        "test-model",
+        c.target,
+        c.target === "local" ? "local-model" : null,
+        "http://127.0.0.1:22240",
+        "https://api.example.test",
+        c.opts,
+        [],
+        null,
+        RUN_CONTROLS,
+        [],
+      );
+      expect(request.body.initiation).toBe("user");
+    });
+  }
+
+  it("honours an explicit initiation=\"auto\" from an automated caller", () => {
+    const request = buildCloudChatRequest(
+      conversation(),
+      "hi",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      { agentId: "agent-1", initiation: "auto" },
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+    );
+    expect(request.body.initiation).toBe("auto");
+  });
+
+  it("legacy engine builder stamps initiation on all three shapes", () => {
+    const start = buildEngineChatRequest("http://127.0.0.1:22240", conversation(), "hi", "m");
+    const agent = buildEngineChatRequest("http://127.0.0.1:22240", conversation(), "hi", "m", {
+      agentId: "agent-1",
+    });
+    const cont = buildEngineChatRequest(
+      "http://127.0.0.1:22240",
+      conversation({ serverConversationId: "existing" }),
+      "hi",
+      "m",
+    );
+    expect(start.body.initiation).toBe("user");
+    expect(agent.body.initiation).toBe("user");
+    expect(cont.body.initiation).toBe("user");
+    expect(
+      buildEngineChatRequest("http://127.0.0.1:22240", conversation(), "hi", "m", {
+        initiation: "auto",
+      }).body.initiation,
+    ).toBe("auto");
+  });
+});

@@ -24,6 +24,25 @@ import { mandateKeyFromAgentRef } from "@/lib/mandates";
 export type AiExecutionTarget = "cloud" | "local";
 
 /**
+ * Provenance attestation carried on the body of EVERY AI request this desktop
+ * sends — cloud and local alike. It is the ONLY input a client has into the
+ * server's `origin_class`: `"user"` means a person directly triggered the run
+ * (typed and sent, clicked a suggestion), `"auto"` means desktop code did (a
+ * mount effect, a timer, a delegated-tool continuation).
+ *
+ * OMIT the field and aidream classes the traffic `api` — an unattested HTTP
+ * caller — which is why every honest human chat from this app used to be filed
+ * as a robot. The field is an attestation, not a label: aidream derives the
+ * real class from this plus its own witnessed facts (route, auth type, process
+ * role) and overrules a background caller that claims `"user"`, so a dishonest
+ * stamp buys nothing and corrupts the platform's human/automation split.
+ *
+ * Declared here, not taken from `src/types/python-generated/api-types.ts`:
+ * that file is generated from aidream's OpenAPI and is never hand-edited.
+ */
+export type RequestInitiation = "user" | "auto";
+
+/**
  * THE ONE DOOR from an in-app v1 AI path to the URL this desktop calls.
  *
  * `root` is `${cloudServerUrl}/api` for the cloud target and the engine's base

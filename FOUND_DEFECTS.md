@@ -195,6 +195,15 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## AI / local LLM runtime
 
+### MXL-D-088 — Local `/ai/*` runs carry the client's `initiation` attestation but the sidecar never derives `origin_class` from it
+- **Area:** `app/services/ai/local_ai_task.py` `_apply_request_scope` (the local mirror of aidream's `apply_scope`); `app/api/ai_routes.py` `LocalScopedRequest.initiation`
+- **Symptom:** The desktop UI now sends `initiation: "user" | "auto"` on every AI body, cloud AND local (`desktop/src/hooks/use-cloud-chat.ts`, 2026-09-11). On the cloud target aidream derives `origin_class` (`human` / `client_auto`) from it. On the local target the sidecar accepts the field (mirrored on `LocalScopedRequest`) but `_apply_request_scope` only copies `organization_id/project_id/task_id/source_app/source_feature` — every local run is persisted with an underived (machine) origin class, so the human/automation split is wrong for local-model chats.
+- **Evidence:** `_apply_request_scope` field list (local_ai_task.py ~L269-276) has no provenance step; `uv.lock` pins `matrx-connect 0.1.25` / `matrx-ai 0.4.18` (2026-07-18 wave) — `matrx_connect.context.provenance.derive_http_origin_class` (the ONE derivation, never reimplemented client-side) exists only from matrx-connect 0.1.87, and the persistence-gate stamping (`conversation_gate._stamp_origin`) is newer than the pinned matrx-ai. `uv run python -c "import matrx_connect.context.provenance"` → `ModuleNotFoundError` on this lock.
+- **Fix:** In the next matrx-* catch-up wave (THE CATCH-UP RULE), after the lock moves to matrx-connect ≥ 0.1.87 / current matrx-ai: in `_apply_request_scope`, when `ctx.origin_class` is empty, call `derive_http_origin_class(route=ctx.route, auth_type=ctx.auth_type, initiation=request.initiation)` and set `origin_class` in the overrides — byte-for-byte what aidream's `conversation_context/scope.py` does. Do NOT hand-roll the derivation or add a try/except-ImportError fallback (silent-fallback + reimplementation, both forbidden).
+- **Status:** open (blocked on the package wave; the wire half is shipped so no client change is needed when it lands)
+- **Analyzed 2026-09-11 — verified in code and by import against the lock.** Owner hint: whoever runs the next matrx-* Python catch-up wave in this repo.
+
+
 ### MXL-D-055 — `get_local_llm_status()` is a status *getter* with a destructive side-effect; can self-deregister a healthy/cold llama-server
 - **Area:** `app/services/ai/local_llm_registry.py` `get_local_llm_status()` (lines ~226-255); caller `app/api/chat_routes.py` `/local-llm/connect` (~519-521)
 - **Symptom:** `get_local_llm_status()` does a live `_probe_llama_server()`

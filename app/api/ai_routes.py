@@ -50,7 +50,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -93,6 +93,17 @@ class LocalScopedRequest(BaseModel):
     scope_ids: list[str] | None = None
     source_app: str | None = None
     source_feature: str | None = None
+    # Mirror of aidream ScopedRequest.initiation — the client's provenance
+    # attestation ("user" = a person triggered this run, "auto" = client
+    # code did). The desktop UI sends it on every local request exactly as it
+    # does on every cloud one, so the two surfaces stay byte-compatible.
+    # NOT YET DERIVED INTO origin_class HERE: that derivation is
+    # matrx_connect.context.provenance.derive_http_origin_class, which ships
+    # from matrx-connect 0.1.87 while this repo's lock still pins 0.1.25 /
+    # matrx-ai 0.4.18 (the persistence gate that stamps origin_class is newer
+    # too). Wire it in _apply_request_scope (local_ai_task.py) as part of the
+    # next matrx-* catch-up wave — tracked in FOUND_DEFECTS.md.
+    initiation: Literal["user", "auto"] | None = None
 
 
 class LocalAgentStartRequest(LocalScopedRequest):

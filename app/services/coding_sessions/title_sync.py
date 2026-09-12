@@ -314,16 +314,17 @@ class ClaudeSessionMetadataReconciler:
         }
 
     async def _record_pushed(self, provider_session_id: str, digest: str) -> None:
-        await self._db.execute(
-            """INSERT INTO claude_session_title_pushed
-                   (provider_session_id, title_sha256, updated_at)
-               VALUES (?, ?, datetime('now'))
-               ON CONFLICT(provider_session_id) DO UPDATE SET
-                   title_sha256 = excluded.title_sha256,
-                   updated_at = excluded.updated_at""",
-            (provider_session_id, digest),
-        )
-        await self._db.commit()
+        async with write_gate():
+            await self._db.execute(
+                """INSERT INTO claude_session_title_pushed
+                       (provider_session_id, title_sha256, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(provider_session_id) DO UPDATE SET
+                       title_sha256 = excluded.title_sha256,
+                       updated_at = excluded.updated_at""",
+                (provider_session_id, digest),
+            )
+            await self._db.commit()
 
     async def _identities(self) -> list[dict[str, Any]]:
         token_row = await self._tokens.get()
@@ -379,87 +380,88 @@ class ClaudeSessionMetadataReconciler:
             return 0
         self._recovery_checked = True
         now = _utc_now()
-        cursor = await self._db.execute(
-            """UPDATE coding_session_metadata_sync_operations
-               SET status='failed', completed_at=?,
-                   error_message=COALESCE(error_message, 'engine_interrupted_before_completion')
-               WHERE status='running'""",
-            (now,),
-        )
-        recovered = max(0, int(cursor.rowcount or 0))
-        if recovered:
-            intents = await self._db.fetchall(
-                """SELECT intents.*
-                   FROM coding_session_title_push_intents AS intents
-                   JOIN coding_session_metadata_sync_operations AS operations
-                     ON operations.operation_id = intents.operation_id
-                   WHERE operations.status='failed'
-                     AND operations.error_message='engine_interrupted_before_completion'
-                     AND intents.status IN ('planned', 'local_write_succeeded')"""
-            )
-            for intent in intents:
-                previous_status = str(intent["status"])
-                error = (
-                    "write_outcome_unknown_after_restart"
-                    if previous_status == "planned"
-                    else "enqueue_state_unknown_after_restart"
-                )
-                await self._db.execute(
-                    """UPDATE coding_session_title_push_intents
-                       SET status='recovery_required',
-                           error_message=COALESCE(error_message, ?), updated_at=?
-                       WHERE intent_id=?""",
-                    (error, now, intent["intent_id"]),
-                )
-                existing = await self._db.fetchone(
-                    """SELECT 1 FROM coding_session_metadata_sync_rows
-                       WHERE operation_id=? AND provider_session_id=?""",
-                    (intent["operation_id"], intent["provider_session_id"]),
-                )
-                if existing is None:
-                    desired = json.loads(str(intent["desired_payload_json"]))
-                    copy_outcome = (
-                        json.loads(str(intent["copy_outcomes_json"]))
-                        if intent["copy_outcomes_json"] is not None
-                        else None
-                    )
-                    await self._record_operation_row(
-                        operation_id=str(intent["operation_id"]),
-                        provider_session_id=str(intent["provider_session_id"]),
-                        local_values={},
-                        cloud_values={},
-                        chosen_values=desired,
-                        direction="ai_matrx_to_claude",
-                        action="retry_write_and_observe",
-                        reason="engine_interrupted_before_completion",
-                        state="recovery_required",
-                        receipt_id=(
-                            int(intent["receipt_id"])
-                            if intent["receipt_id"] is not None
-                            else None
-                        ),
-                        write_intent_id=str(intent["intent_id"]),
-                        outcome=copy_outcome,
-                    )
-            await self._db.execute(
+        async with write_gate():
+            cursor = await self._db.execute(
                 """UPDATE coding_session_metadata_sync_operations
-                   SET bound_sessions = MAX(bound_sessions, (
-                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
-                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
-                       )),
-                       compared_sessions = MAX(compared_sessions, (
-                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
-                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
-                       )),
-                       failed_sessions = MAX(failed_sessions, (
-                           SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
-                           WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
-                             AND rows.state IN ('failed', 'blocked', 'recovery_required')
-                       ))
-                   WHERE status='failed'
-                     AND error_message='engine_interrupted_before_completion'"""
+                   SET status='failed', completed_at=?,
+                       error_message=COALESCE(error_message, 'engine_interrupted_before_completion')
+                   WHERE status='running'""",
+                (now,),
             )
-            await self._db.commit()
+            recovered = max(0, int(cursor.rowcount or 0))
+            if recovered:
+                intents = await self._db.fetchall(
+                    """SELECT intents.*
+                       FROM coding_session_title_push_intents AS intents
+                       JOIN coding_session_metadata_sync_operations AS operations
+                         ON operations.operation_id = intents.operation_id
+                       WHERE operations.status='failed'
+                         AND operations.error_message='engine_interrupted_before_completion'
+                         AND intents.status IN ('planned', 'local_write_succeeded')"""
+                )
+                for intent in intents:
+                    previous_status = str(intent["status"])
+                    error = (
+                        "write_outcome_unknown_after_restart"
+                        if previous_status == "planned"
+                        else "enqueue_state_unknown_after_restart"
+                    )
+                    await self._db.execute(
+                        """UPDATE coding_session_title_push_intents
+                           SET status='recovery_required',
+                               error_message=COALESCE(error_message, ?), updated_at=?
+                           WHERE intent_id=?""",
+                        (error, now, intent["intent_id"]),
+                    )
+                    existing = await self._db.fetchone(
+                        """SELECT 1 FROM coding_session_metadata_sync_rows
+                           WHERE operation_id=? AND provider_session_id=?""",
+                        (intent["operation_id"], intent["provider_session_id"]),
+                    )
+                    if existing is None:
+                        desired = json.loads(str(intent["desired_payload_json"]))
+                        copy_outcome = (
+                            json.loads(str(intent["copy_outcomes_json"]))
+                            if intent["copy_outcomes_json"] is not None
+                            else None
+                        )
+                        await self._record_operation_row(
+                            operation_id=str(intent["operation_id"]),
+                            provider_session_id=str(intent["provider_session_id"]),
+                            local_values={},
+                            cloud_values={},
+                            chosen_values=desired,
+                            direction="ai_matrx_to_claude",
+                            action="retry_write_and_observe",
+                            reason="engine_interrupted_before_completion",
+                            state="recovery_required",
+                            receipt_id=(
+                                int(intent["receipt_id"])
+                                if intent["receipt_id"] is not None
+                                else None
+                            ),
+                            write_intent_id=str(intent["intent_id"]),
+                            outcome=copy_outcome,
+                        )
+                await self._db.execute(
+                    """UPDATE coding_session_metadata_sync_operations
+                       SET bound_sessions = MAX(bound_sessions, (
+                               SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                               WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                           )),
+                           compared_sessions = MAX(compared_sessions, (
+                               SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                               WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                           )),
+                           failed_sessions = MAX(failed_sessions, (
+                               SELECT count(*) FROM coding_session_metadata_sync_rows AS rows
+                               WHERE rows.operation_id = coding_session_metadata_sync_operations.operation_id
+                                 AND rows.state IN ('failed', 'blocked', 'recovery_required')
+                           ))
+                       WHERE status='failed'
+                         AND error_message='engine_interrupted_before_completion'"""
+                )
+                await self._db.commit()
         return recovered
 
     async def _record_operation_row(
@@ -518,35 +520,36 @@ class ClaudeSessionMetadataReconciler:
         index_writable: bool,
         error_message: str | None = None,
     ) -> None:
-        await self._db.execute(
-            """UPDATE coding_session_metadata_sync_operations SET
-                   status=?, completed_at=?, bound_sessions=?,
-                   compared_sessions=?, detected_sessions=?,
-                   enqueued_sessions=?, acknowledged_sessions=?,
-                   verified_sessions=?, failed_sessions=?, index_files=?,
-                   index_records=?, index_unreadable=?, index_truncated=?,
-                   index_writable=?, error_message=?
-               WHERE operation_id=?""",
-            (
-                status,
-                _utc_now(),
-                bound_sessions,
-                compared_sessions,
-                detected_sessions,
-                enqueued_sessions,
-                acknowledged_sessions,
-                verified_sessions,
-                failed_sessions,
-                int(index_totals.get("files", 0)),
-                int(index_totals.get("records", 0)),
-                int(index_totals.get("unreadable", 0)),
-                int(_index_truncated(index_totals)),
-                int(index_writable),
-                error_message,
-                operation_id,
-            ),
-        )
-        await self._db.commit()
+        async with write_gate():
+            await self._db.execute(
+                """UPDATE coding_session_metadata_sync_operations SET
+                       status=?, completed_at=?, bound_sessions=?,
+                       compared_sessions=?, detected_sessions=?,
+                       enqueued_sessions=?, acknowledged_sessions=?,
+                       verified_sessions=?, failed_sessions=?, index_files=?,
+                       index_records=?, index_unreadable=?, index_truncated=?,
+                       index_writable=?, error_message=?
+                   WHERE operation_id=?""",
+                (
+                    status,
+                    _utc_now(),
+                    bound_sessions,
+                    compared_sessions,
+                    detected_sessions,
+                    enqueued_sessions,
+                    acknowledged_sessions,
+                    verified_sessions,
+                    failed_sessions,
+                    int(index_totals.get("files", 0)),
+                    int(index_totals.get("records", 0)),
+                    int(index_totals.get("unreadable", 0)),
+                    int(_index_truncated(index_totals)),
+                    int(index_writable),
+                    error_message,
+                    operation_id,
+                ),
+            )
+            await self._db.commit()
 
     async def operation(
         self,
@@ -668,18 +671,19 @@ class ClaudeSessionMetadataReconciler:
                 if entry is None:
                     unmatched.append(provider_session_id)
                     failed += 1
-                    await self._record_operation_row(
-                        operation_id=operation_id,
-                        provider_session_id=provider_session_id,
-                        local_values={},
-                        cloud_values=cloud_values,
-                        chosen_values=cloud_values,
-                        direction="blocked",
-                        action="none",
-                        reason="local_session_not_found",
-                        state="blocked",
-                    )
-                    await self._db.commit()
+                    async with write_gate():
+                        await self._record_operation_row(
+                            operation_id=operation_id,
+                            provider_session_id=provider_session_id,
+                            local_values={},
+                            cloud_values=cloud_values,
+                            chosen_values=cloud_values,
+                            direction="blocked",
+                            action="none",
+                            reason="local_session_not_found",
+                            state="blocked",
+                        )
+                        await self._db.commit()
                     continue
 
                 matched += 1
@@ -755,24 +759,25 @@ class ClaudeSessionMetadataReconciler:
                             "title_origin": TITLE_ORIGIN_AI_MATRX_USER,
                         }
                         now = _utc_now()
-                        await self._db.execute(
-                            """INSERT INTO coding_session_title_push_intents (
-                                   intent_id, operation_id, provider_session_id,
-                                   cli_session_id, desired_title,
-                                   desired_payload_json, status, created_at, updated_at
-                               ) VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?)""",
-                            (
-                                intent_id,
-                                operation_id,
-                                provider_session_id,
-                                entry.cli_session_id,
-                                target_title,
-                                json.dumps(desired_payload, sort_keys=True),
-                                now,
-                                now,
-                            ),
-                        )
-                        await self._db.commit()  # intent exists before file access
+                        async with write_gate():
+                            await self._db.execute(
+                                """INSERT INTO coding_session_title_push_intents (
+                                       intent_id, operation_id, provider_session_id,
+                                       cli_session_id, desired_title,
+                                       desired_payload_json, status, created_at, updated_at
+                                   ) VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?)""",
+                                (
+                                    intent_id,
+                                    operation_id,
+                                    provider_session_id,
+                                    entry.cli_session_id,
+                                    target_title,
+                                    json.dumps(desired_payload, sort_keys=True),
+                                    now,
+                                    now,
+                                ),
+                            )
+                            await self._db.commit()  # intent exists before file access
                         result = self._writer.write_title(
                             cli_session_id=entry.cli_session_id,
                             title=target_title,
@@ -791,18 +796,19 @@ class ClaudeSessionMetadataReconciler:
                             # If enqueue fails or the process exits, retry can
                             # safely re-fence/rewrite and re-enqueue without a
                             # false claim that convergence was queued.
-                            await self._db.execute(
-                                """UPDATE coding_session_title_push_intents SET
-                                       status='local_write_succeeded',
-                                       copy_outcomes_json=?, error_message=NULL,
-                                       updated_at=? WHERE intent_id=?""",
-                                (
-                                    json.dumps(outcome, sort_keys=True),
-                                    _utc_now(),
-                                    intent_id,
-                                ),
-                            )
-                            await self._db.commit()
+                            async with write_gate():
+                                await self._db.execute(
+                                    """UPDATE coding_session_title_push_intents SET
+                                           status='local_write_succeeded',
+                                           copy_outcomes_json=?, error_message=NULL,
+                                           updated_at=? WHERE intent_id=?""",
+                                    (
+                                        json.dumps(outcome, sort_keys=True),
+                                        _utc_now(),
+                                        intent_id,
+                                    ),
+                                )
+                                await self._db.commit()
                             request = session_metadata_request(
                                 provider_session_id=provider_session_id,
                                 provider_project_key=project_key,
@@ -816,20 +822,21 @@ class ClaudeSessionMetadataReconciler:
                                 state = "failed"
                                 reason = "local_write_succeeded_enqueue_failed"
                                 intent_status = "enqueue_failed"
-                                await self._db.execute(
-                                    """UPDATE coding_session_title_push_intents SET
-                                           status=?, receipt_id=NULL,
-                                           copy_outcomes_json=?, error_message=?,
-                                           updated_at=? WHERE intent_id=?""",
-                                    (
-                                        intent_status,
-                                        json.dumps(outcome, sort_keys=True),
-                                        intent_error,
-                                        _utc_now(),
-                                        intent_id,
-                                    ),
-                                )
-                                await self._db.commit()
+                                async with write_gate():
+                                    await self._db.execute(
+                                        """UPDATE coding_session_title_push_intents SET
+                                               status=?, receipt_id=NULL,
+                                               copy_outcomes_json=?, error_message=?,
+                                               updated_at=? WHERE intent_id=?""",
+                                        (
+                                            intent_status,
+                                            json.dumps(outcome, sort_keys=True),
+                                            intent_error,
+                                            _utc_now(),
+                                            intent_id,
+                                        ),
+                                    )
+                                    await self._db.commit()
                             else:
                                 receipt_id = receipt.receipt_id
                                 queued += int(not receipt.duplicate)
@@ -848,22 +855,23 @@ class ClaudeSessionMetadataReconciler:
                                 refusal_reasons[refusal] = (
                                     refusal_reasons.get(refusal, 0) + 1
                                 )
-                        await self._db.execute(
-                            """UPDATE coding_session_title_push_intents SET
-                                   status=?, receipt_id=?, copy_outcomes_json=?,
-                                   error_message=?, updated_at=? WHERE intent_id=?""",
-                            (
-                                intent_status,
-                                receipt_id,
-                                json.dumps(outcome, sort_keys=True),
-                                intent_error
-                                if result.applied
-                                else "one_or_more_copies_refused",
-                                _utc_now(),
-                                intent_id,
-                            ),
-                        )
-                        await self._db.commit()
+                        async with write_gate():
+                            await self._db.execute(
+                                """UPDATE coding_session_title_push_intents SET
+                                       status=?, receipt_id=?, copy_outcomes_json=?,
+                                       error_message=?, updated_at=? WHERE intent_id=?""",
+                                (
+                                    intent_status,
+                                    receipt_id,
+                                    json.dumps(outcome, sort_keys=True),
+                                    intent_error
+                                    if result.applied
+                                    else "one_or_more_copies_refused",
+                                    _utc_now(),
+                                    intent_id,
+                                ),
+                            )
+                            await self._db.commit()
                 elif user_title_candidate:
                     # Claude moved too, or moved after an earlier write-down.
                     # Its local value wins and travels upward this pass.
@@ -926,21 +934,22 @@ class ClaudeSessionMetadataReconciler:
                             "title": entry.title,
                         }
                     )
-                await self._record_operation_row(
-                    operation_id=operation_id,
-                    provider_session_id=provider_session_id,
-                    local_values=local_values,
-                    cloud_values=cloud_values,
-                    chosen_values=chosen_values,
-                    direction=direction,
-                    action=action,
-                    reason=reason,
-                    state=state,
-                    receipt_id=receipt_id,
-                    write_intent_id=intent_id,
-                    outcome=outcome,
-                )
-                await self._db.commit()
+                async with write_gate():
+                    await self._record_operation_row(
+                        operation_id=operation_id,
+                        provider_session_id=provider_session_id,
+                        local_values=local_values,
+                        cloud_values=cloud_values,
+                        chosen_values=chosen_values,
+                        direction=direction,
+                        action=action,
+                        reason=reason,
+                        state=state,
+                        receipt_id=receipt_id,
+                        write_intent_id=intent_id,
+                        outcome=outcome,
+                    )
+                    await self._db.commit()
 
             if not dry_run:
                 await self._sync_meta.set_last_sync(
@@ -1138,27 +1147,28 @@ class ClaudeSessionMetadataReconciler:
                 else:
                     failed += 1
 
-                await self._record_operation_row(
-                    operation_id=verification_id,
-                    provider_session_id=provider_session_id,
-                    local_values=current_local,
-                    cloud_values=current_cloud,
-                    chosen_values=chosen,
-                    direction=str(prior["direction"]),
-                    action="verify",
-                    reason=reason,
-                    state=state,
-                    receipt_id=receipt_id,
-                    write_intent_id=intent_id,
-                    outcome=outcome,
-                )
-                if intent_id is not None and state in {"verified", "acknowledged"}:
-                    await self._db.execute(
-                        """UPDATE coding_session_title_push_intents
-                           SET status=?, updated_at=? WHERE intent_id=?""",
-                        (state, _utc_now(), intent_id),
+                async with write_gate():
+                    await self._record_operation_row(
+                        operation_id=verification_id,
+                        provider_session_id=provider_session_id,
+                        local_values=current_local,
+                        cloud_values=current_cloud,
+                        chosen_values=chosen,
+                        direction=str(prior["direction"]),
+                        action="verify",
+                        reason=reason,
+                        state=state,
+                        receipt_id=receipt_id,
+                        write_intent_id=intent_id,
+                        outcome=outcome,
                     )
-                await self._db.commit()
+                    if intent_id is not None and state in {"verified", "acknowledged"}:
+                        await self._db.execute(
+                            """UPDATE coding_session_title_push_intents
+                               SET status=?, updated_at=? WHERE intent_id=?""",
+                            (state, _utc_now(), intent_id),
+                        )
+                    await self._db.commit()
 
             await self._finish_operation(
                 verification_id,
@@ -1238,14 +1248,15 @@ class ClaudeSessionMetadataReconciler:
                         for item in result.outcomes
                     ],
                 }
-                await self._db.execute(
-                    """UPDATE coding_session_title_push_intents SET
-                           status='local_write_succeeded',
-                           copy_outcomes_json=?, error_message=NULL,
-                           updated_at=? WHERE intent_id=?""",
-                    (json.dumps(outcome, sort_keys=True), _utc_now(), intent_id),
-                )
-                await self._db.commit()
+                async with write_gate():
+                    await self._db.execute(
+                        """UPDATE coding_session_title_push_intents SET
+                               status='local_write_succeeded',
+                               copy_outcomes_json=?, error_message=NULL,
+                               updated_at=? WHERE intent_id=?""",
+                        (json.dumps(outcome, sort_keys=True), _utc_now(), intent_id),
+                    )
+                    await self._db.commit()
                 request = session_metadata_request(
                     provider_session_id=str(intent["provider_session_id"]),
                     provider_project_key=(
@@ -1276,40 +1287,41 @@ class ClaudeSessionMetadataReconciler:
                         for item in result.outcomes
                     ],
                 }
-            await self._db.execute(
-                """UPDATE coding_session_title_push_intents SET
-                       status=?, receipt_id=?, copy_outcomes_json=?,
-                       error_message=?, updated_at=? WHERE intent_id=?""",
-                (
+            async with write_gate():
+                await self._db.execute(
+                    """UPDATE coding_session_title_push_intents SET
+                           status=?, receipt_id=?, copy_outcomes_json=?,
+                           error_message=?, updated_at=? WHERE intent_id=?""",
                     (
-                        "convergence_queued"
-                        if result.applied and enqueue_error is None
-                        else "enqueue_failed"
-                        if result.applied
-                        else "refused"
+                        (
+                            "convergence_queued"
+                            if result.applied and enqueue_error is None
+                            else "enqueue_failed"
+                            if result.applied
+                            else "refused"
+                        ),
+                        receipt_id,
+                        json.dumps(outcome, sort_keys=True),
+                        enqueue_error if result.applied else "one_or_more_copies_refused",
+                        _utc_now(),
+                        intent_id,
                     ),
-                    receipt_id,
-                    json.dumps(outcome, sort_keys=True),
-                    enqueue_error if result.applied else "one_or_more_copies_refused",
-                    _utc_now(),
-                    intent_id,
-                ),
-            )
-            await self._record_operation_row(
-                operation_id=retry_id,
-                provider_session_id=str(intent["provider_session_id"]),
-                local_values=entry.metadata_payload(),
-                cloud_values=_cloud_detail_values(identity),
-                chosen_values={**entry.metadata_payload(), "title": title},
-                direction="ai_matrx_to_claude",
-                action="retry_write_and_observe",
-                reason="user_retried_push_intent",
-                state=state,
-                receipt_id=receipt_id,
-                write_intent_id=intent_id,
-                outcome=outcome,
-            )
-            await self._db.commit()
+                )
+                await self._record_operation_row(
+                    operation_id=retry_id,
+                    provider_session_id=str(intent["provider_session_id"]),
+                    local_values=entry.metadata_payload(),
+                    cloud_values=_cloud_detail_values(identity),
+                    chosen_values={**entry.metadata_payload(), "title": title},
+                    direction="ai_matrx_to_claude",
+                    action="retry_write_and_observe",
+                    reason="user_retried_push_intent",
+                    state=state,
+                    receipt_id=receipt_id,
+                    write_intent_id=intent_id,
+                    outcome=outcome,
+                )
+                await self._db.commit()
             await self._finish_operation(
                 retry_id,
                 status="completed" if state == "enqueued" else "partial",

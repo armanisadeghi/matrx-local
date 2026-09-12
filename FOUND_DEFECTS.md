@@ -883,6 +883,23 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   Fix shape: wrap each span `first write statement → commit` in
   `async with write_gate():`, one at a time, with a test per span.
 
+- **MXL-D-087 — Repo smoke gate red: offline agent catalog logs a deliberate
+  `console.error` that the boot test treats as fatal.**
+  Area: agent picker / boot gate. Status: `open` — NOT the Coding Sessions lane.
+  Analyzed 2026-09-11 — verified by running `./scripts/smoke.sh` on `main`.
+  Symptom: `e2e/boot.spec.ts` "authenticated shell boots with no crash and no
+  uncaught errors" fails with `[agent-catalog:local] default_row_unresolved:
+  agx_resolve_agent_address … is not served by the offline agent catalog …
+  {mandateKey: local.cloud_chat}`.
+  Evidence: `desktop/src/lib/agent-catalog.ts` § FAILURE POSTURE documents
+  that an un-mirrored RPC answers with a real error "and the package reports
+  it" — that report is a `console.error`, and `boot.spec.ts`'s fatal-error
+  collector counts every `console.error`. Two lanes' contracts disagree; the
+  test is right to be strict and the catalog is right to be loud.
+  Fix shape (agent picker lane): either resolve the default row only when
+  online, or report the known offline limitation as a STATE (warn-level /
+  structured) rather than an error. Do not weaken the boot test.
+
 ## Cross-repo
 
 ### MXL-D-083 — stream-events.ts carries a registry-INDEPENDENT copy of every block's data shape, and nothing imports it

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use coset::{CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate, iana};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -52,6 +53,7 @@ pub fn canonical_source(
     if max_source_bytes == 0 || bytes.len() > max_source_bytes {
         return Err(FixedError::InvalidSource);
     }
+    reject_duplicate_source_keys(bytes)?;
     let value: SourceV1 = serde_json::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
     if value.version != 1
         || value.counter.is_some()
@@ -77,6 +79,30 @@ pub fn canonical_source(
         return Err(FixedError::InvalidSource);
     }
     Ok(Zeroizing::new(canonical))
+}
+
+fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
+    struct UniqueKeys;
+    impl<'de> Visitor<'de> for UniqueKeys {
+        type Value = ();
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a source object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+            let mut seen = std::collections::BTreeSet::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if !seen.insert(key) {
+                    return Err(A::Error::custom("duplicate source key"));
+                }
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(())
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    serde::de::Deserializer::deserialize_map(&mut deserializer, UniqueKeys)
+        .map_err(|_| FixedError::InvalidSource)?;
+    deserializer.end().map_err(|_| FixedError::InvalidSource)
 }
 
 fn validate_cose_key(bytes: &[u8]) -> Result<(), FixedError> {
@@ -216,6 +242,14 @@ impl<R> CommittedRegistration<R> {
 mod tests {
     use super::*;
     use coset::{CoseKeyBuilder, iana};
+    use std::{
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::Poll,
+    };
     struct Fails;
     #[async_trait]
     impl RegistrationPersister for Fails {
@@ -232,9 +266,42 @@ mod tests {
         ));
     }
 
+    struct Pending(Arc<AtomicBool>);
+    #[async_trait]
+    impl RegistrationPersister for Pending {
+        async fn persist(&mut self, _: &[u8]) -> Result<(), FixedError> {
+            self.0.store(true, Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_pending_commit_releases_no_response() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let mut persister = Pending(entered.clone());
+        let mut commit =
+            Box::pin(PreparedRegistration::new(vec![1], "response").commit_with(&mut persister));
+        std::future::poll_fn(|context| {
+            assert!(matches!(commit.as_mut().poll(context), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        drop(commit);
+        assert!(entered.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn rejects_noncanonical_and_invalid_rp_source() {
         let source = br#"{\"version\":1,\"credential_id\":\"MDEyMzQ1Njc4OWFiY2RlZg\",\"rp_id\":\"Example.com\",\"user_handle\":\"dXNlcg\",\"username\":null,\"display_name\":null,\"private_cose_key\":\"AQ\",\"counter\":null,\"extensions\":{},\"backup_eligible\":true,\"backup_state\":true}"#;
+        assert_eq!(
+            canonical_source(source, 4096),
+            Err(FixedError::InvalidSource)
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_source_keys() {
+        let source = br#"{\"version\":1,\"version\":1,\"credential_id\":\"MDEyMzQ1Njc4OWFiY2RlZg\",\"rp_id\":\"example.com\",\"user_handle\":\"dXNlcg\",\"username\":null,\"display_name\":null,\"private_cose_key\":\"AQ\",\"counter\":null,\"extensions\":{},\"backup_eligible\":true,\"backup_state\":true}"#;
         assert_eq!(
             canonical_source(source, 4096),
             Err(FixedError::InvalidSource)

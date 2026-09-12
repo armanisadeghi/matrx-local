@@ -4,6 +4,7 @@ import sys
 import time
 import traceback
 import re
+from urllib.parse import unquote_plus
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from app.config import LOG_LEVEL, LOG_DIR, MAX_LOG_FILE_SIZE, BACKUP_COUNT, LOCAL_DEV
 
@@ -72,12 +73,55 @@ class SensitiveDataFilter(logging.Filter):
                 reason = f"{exc_type.__name__}: {exc}"
                 if str(exc) and str(exc) not in message:
                     message = f"{message} — {reason}"
+            # Every formatter receives this same LogRecord.  Leaving raw
+            # ``exc_info`` or a cached ``exc_text`` on it lets a later handler
+            # append the unredacted traceback after this filter ran.
+            formatted_traceback = self.sanitize(
+                logging.Formatter().formatException(record.exc_info)
+            )
+            message = f"{message}\n{formatted_traceback}"
+        record.exc_info = None
+        record.exc_text = None
+        # ``SystemLogger._log`` stores this for Activity consumers.  Keep that
+        # diagnostic channel safe too, rather than relying on today's handler
+        # format strings to ignore it.
+        if isinstance(getattr(record, "traceback", None), str):
+            record.traceback = self.sanitize(record.traceback)
+        if isinstance(record.stack_info, str):
+            record.stack_info = self.sanitize(record.stack_info)
         record.msg = self.sanitize(message)
         record.args = ()
         return True
 
+    @staticmethod
+    def _is_sensitive_key(key: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]", "", unquote_plus(key).lower())
+        if normalized in {"code", "state"}:
+            return True
+        return any(
+            marker in normalized
+            for marker in (
+                "token", "secret", "password", "passwd", "credential",
+                "apikey", "authorization", "cookie",
+            )
+        )
+
     def sanitize(self, text: str, known_values: tuple[str, ...] = ()) -> str:
         """Fully redact credential values while preserving diagnostic context."""
+        def redact_encoded_query(match: re.Match[str]) -> str:
+            if self._is_sensitive_key(match.group("key")):
+                return f"{match.group('prefix')}{match.group('key')}=[REDACTED]"
+            return match.group(0)
+
+        # Recognize percent-encoded key names (for example ``%43oDe``) before
+        # the plain-key patterns below.  Decode only the key to classify it;
+        # never decode or retain the value.
+        text = re.sub(
+            r"(?P<prefix>(?:[?&]|\s|^))(?P<key>(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.-])+)=((?!\[REDACTED\])[^&\s]+)",
+            redact_encoded_query,
+            text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
         sensitive_key = r"(?:code|state|[A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|authorization|cookie)[A-Za-z0-9_-]*)"
         text = re.sub(
             rf"((?:[?&]|^){sensitive_key}=)((?!\[REDACTED\]|%5BREDACTED%5D)[^&\s]+)",
@@ -90,7 +134,7 @@ class SensitiveDataFilter(logging.Filter):
             text, flags=re.IGNORECASE,
         )
         text = re.sub(
-            rf"([\"']?{sensitive_key}[\"']?\s*[:=]\s*)((?!\[REDACTED\])[^\s,}}\]]+)",
+            rf"([\"']?{sensitive_key}[\"']?\s*[:=]\s*)((?!\[REDACTED\]|[\"']\[REDACTED\][\"']|[\"'])[^\s,}}\]]+)",
             r"\1[REDACTED]", text, flags=re.IGNORECASE,
         )
         text = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text)

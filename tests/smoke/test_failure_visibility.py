@@ -111,26 +111,89 @@ def test_failure_diagnostics_redact_captured_request_credentials() -> None:
     assert "RuntimeError" in detail
 
 
-def test_exception_logging_includes_and_redacts_the_root_reason(caplog) -> None:
-    """A generic exc_info log line stays actionable without leaking credentials."""
+def test_formatted_handler_redacts_exception_traceback_and_keeps_location() -> None:
+    """A formatter must not append the raw exc_info after the filter ran."""
+    import io
     import logging
 
     from app.common.system_logger import SensitiveDataFilter
 
-    logger = logging.getLogger("failure-visibility-test")
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger = logging.getLogger("failure-visibility-formatted-handler-test")
     logger.handlers.clear()
-    logger.propagate = True
+    logger.propagate = False
     logger.addFilter(SensitiveDataFilter())
-    with caplog.at_level(logging.WARNING, logger="failure-visibility-test"):
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
         try:
             raise RuntimeError("sync failed x-api-key=exception-secret")
         except RuntimeError:
             logger.warning("chat sync tick crashed", exc_info=True)
+    finally:
+        logger.removeHandler(handler)
 
-    message = caplog.records[-1].getMessage()
+    message = output.getvalue()
     assert "RuntimeError: sync failed" in message
     assert "exception-secret" not in message
     assert "[REDACTED]" in message
+
+
+def test_filter_clears_cached_exception_text_and_redacts_activity_traceback() -> None:
+    """Cached formatter state and Activity metadata cannot retain credentials."""
+    import logging
+    import sys
+
+    from app.common.system_logger import SensitiveDataFilter
+
+    try:
+        raise RuntimeError("sync failed x-api-key=exception-secret")
+    except RuntimeError:
+        record = logging.LogRecord(
+            "failure-visibility-cached-traceback-test",
+            logging.ERROR,
+            __file__,
+            1,
+            "sync failed",
+            (),
+            exc_info=sys.exc_info(),
+        )
+    record.exc_text = "cached exception-secret"
+    record.traceback = "activity x-api-key=exception-secret"
+
+    assert SensitiveDataFilter().filter(record)
+    assert record.exc_info is None
+    assert record.exc_text is None
+    assert "exception-secret" not in record.traceback
+    assert "[REDACTED]" in record.traceback
+
+
+def test_formatted_handler_redacts_percent_encoded_sensitive_key() -> None:
+    """Percent-encoding a credential key cannot bypass global log redaction."""
+    import io
+    import logging
+
+    from app.common.system_logger import SensitiveDataFilter
+
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger("failure-visibility-encoded-key-test")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addFilter(SensitiveDataFilter())
+    logger.addHandler(handler)
+    try:
+        logger.error("callback query %43oDe=encoded-secret&safe=kept")
+    finally:
+        logger.removeHandler(handler)
+
+    rendered = output.getvalue()
+    assert "encoded-secret" not in rendered
+    assert "%43oDe=[REDACTED]" in rendered
+    assert "safe=kept" in rendered
 
 
 def test_unhandled_exception_is_recorded_in_the_access_log(failing_app: FastAPI) -> None:
@@ -144,6 +207,54 @@ def test_unhandled_exception_is_recorded_in_the_access_log(failing_app: FastAPI)
 
     asyncio.run(_run())
     assert 500 in _recent_statuses(), "a 500 must be visible in the access log"
+
+
+def test_reflected_post_secret_is_absent_from_response_and_formatted_logs() -> None:
+    """Raw POST bodies must survive long enough to redact reflected errors."""
+    import io
+    import logging
+
+    from app.main import _log_requests_dispatch
+
+    app = FastAPI()
+
+    @app.post("/reflect")
+    async def reflect(body: dict[str, str]) -> None:
+        raise RuntimeError(f"upstream rejected client_secret={body['client_secret']}")
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests_dispatch)
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    app_logger = logging.getLogger("system_logger")
+    app_logger.addHandler(handler)
+
+    async def _run() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://engine.test",
+            timeout=30.0,
+        ) as client:
+            return await client.post(
+                "/reflect",
+                json={"client_secret": "body-secret", "context": "preserved-context"},
+            )
+
+    try:
+        response = asyncio.run(_run())
+    finally:
+        app_logger.removeHandler(handler)
+
+    payload = response.json()
+    rendered = f"{response.text}\n{output.getvalue()}"
+    assert response.status_code == 500
+    assert "body-secret" not in rendered
+    assert payload["failure_id"]
+    assert payload["method"] == "POST"
+    assert payload["path"] == "/reflect"
+    assert "RuntimeError" in payload["detail"]
+    assert "Traceback" in rendered
+    assert "preserved-context" in rendered
 
 
 def test_callback_credentials_are_absent_from_request_and_structured_access_logs(caplog) -> None:

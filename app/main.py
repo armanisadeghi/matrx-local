@@ -2211,12 +2211,16 @@ async def _log_requests_dispatch(request: Request, call_next):
     log = logger.debug if (path in _SILENT_PATHS or is_options) else logger.info
 
     # Read body for mutating methods (doesn't consume the ASGI stream).
+    # Keep the parsed request body until the error boundary has collected all
+    # credential values.  The display copy is intentionally separate: replacing
+    # ``body`` here used to make reflected exception text impossible to redact.
     body = None
+    body_for_log = None
     try:
         if request.method in ("POST", "PUT", "PATCH"):
             body = await request.json()
             if body is not None:
-                body = _request_body_for_log(path, body)
+                body_for_log = _request_body_for_log(path, body)
     except Exception:
         pass
 
@@ -2224,8 +2228,8 @@ async def _log_requests_dispatch(request: Request, call_next):
     # At INFO level: compact single line (method + path). Full body goes to DEBUG
     # only, avoiding kilobytes of JSON flooding the INFO stream for every POST.
     log("→ %s %s", request.method, display_path)
-    if body is not None:
-        body_str = _json.dumps(body, indent=2, ensure_ascii=False)
+    if body_for_log is not None:
+        body_str = _json.dumps(body_for_log, indent=2, ensure_ascii=False)
         logger.debug("   body: %s", body_str)
 
     # An unhandled exception used to unwind past CORSMiddleware to Starlette's
@@ -2255,7 +2259,17 @@ async def _log_requests_dispatch(request: Request, call_next):
             detail,
         )
         logger.error("  %s", _format_request_details(request, body))
-        logger.error("  traceback:\n%s", _traceback.format_exc())
+        # Tracebacks may repeat a request value in the exception message.  The
+        # global logger filter defends every handler too; sanitize here with
+        # values only this request boundary can know.
+        from app.common.system_logger import SensitiveDataFilter
+
+        logger.error(
+            "  traceback:\n%s",
+            SensitiveDataFilter().sanitize(
+                _traceback.format_exc(), _request_secret_values(request, body)
+            ),
+        )
         access_log.record(
             method=request.method,
             path=path,

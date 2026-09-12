@@ -143,3 +143,43 @@ def test_warm_index_cache_fills_the_cache_so_the_first_screen_open_is_free(
     screen_entries, screen_totals = claude_overview._session_index(root)
     assert screen_entries is entries
     assert screen_totals is totals
+
+
+def test_a_cli_only_session_opens_a_diagnosis_instead_of_a_404(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every listed row must open. A CLI-only row used to 404 because the
+    diagnosis looked the session up in the sidebar index alone."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    async def _no_cloud():
+        return {}, {"checked": False, "reason": "test"}
+
+    async def _none(*_a, **_k):
+        return []
+
+    async def _empty(*_a, **_k):
+        return {}
+
+    monkeypatch.setattr(overview_module, "cloud_inventory", _no_cloud)
+    monkeypatch.setattr(overview_module, "_session_envelopes", _none)
+    monkeypatch.setattr(overview_module, "_capture_facts", _empty)
+    monkeypatch.setattr(overview_module, "_label_facts", _empty)
+    monkeypatch.setattr(overview_module, "_delivered_by_this_mac", _empty)
+
+    class _Outbox:
+        publisher_blocker = None
+
+    import app.services.coding_sessions.service as service_module
+    monkeypatch.setattr(service_module, "get_coding_session_bridge_outbox", lambda: _Outbox())
+
+    out = asyncio.run(overview_module.session_diagnosis(claude_tree["cli_only"]))
+    assert out is not None, "a listed CLI-only session must open a diagnosis"
+    assert out["index"]["in_claude_sidebar"] is False
+    assert out["index"]["title"] == "Please audit the billing module for double charges"
+    assert out["index"]["accounts"] == []  # the dialog's row must not crash
+    assert out["transcript"]["on_disk"] is True
+
+    # And a session that exists nowhere is still unknown.
+    missing = asyncio.run(overview_module.session_diagnosis("99999999-9999-4999-8999-999999999999"))
+    assert missing is None

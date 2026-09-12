@@ -799,6 +799,10 @@ export interface ClaudeSessionDiagnosis {
   state: ClaudeSessionState;
   verdict: { summary: string; remedy: string | null };
   index: {
+    /** false = no Claude sidebar record; the transcript alone is the evidence. */
+    in_claude_sidebar: boolean;
+    /** Present only when in_claude_sidebar is false: the plain reason. */
+    note?: string;
     title: string | null;
     title_source: string | null;
     project: string | null;

@@ -668,6 +668,7 @@ def _index_facts(entry: ClaudeSessionIndexEntry) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 — a malformed path is not worth failing on
             continue
     return {
+        "in_claude_sidebar": True,
         "title": entry.title,
         "title_source": entry.title_source,
         "project": entry.workspace_name,
@@ -911,10 +912,20 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
 
     entries, _totals = await asyncio.to_thread(_session_index, default_sessions_root())
     entry = entries.get(session_id)
-    if entry is None:
-        return None
     transcripts = await asyncio.to_thread(_transcripts)
     size, mtime_ns = transcripts.get(session_id, (0, 0))
+    # A CLI-only session has a transcript and no sidebar record. It is listed
+    # on the screen, so its diagnosis must open too — a row that opens into a
+    # 404 is a screen that lies. Only "no record AND no transcript" is unknown.
+    if entry is None and size == 0:
+        return None
+    if entry is None:
+        transcript_row = (
+            await asyncio.to_thread(_transcript_only_rows, [session_id], transcripts)
+        )
+        summary = transcript_row[0] if transcript_row else None
+    else:
+        summary = None
     cloud, cloud_meta = await cloud_inventory()
     binding = cloud.get(session_id)
     envelopes = await _session_envelopes(session_id)
@@ -925,7 +936,9 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
     state = _session_state(
         cloud_checked=bool(cloud_meta["checked"]),
         binding=binding,
-        activity_ns=int(entry.last_activity_at or 0) * 1_000_000,
+        activity_ns=(
+            int(entry.last_activity_at or 0) * 1_000_000 if entry is not None else int(mtime_ns)
+        ),
         queue=queue,
     )
     capture = await _capture_facts(session_id)
@@ -946,7 +959,32 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
             publisher_blocker=publisher_blocker,
             on_disk=size > 0,
         ),
-        "index": _index_facts(entry),
+        "index": (
+            _index_facts(entry)
+            if entry is not None
+            else {
+                # Same shape as an indexed session so the dialog renders every
+                # row; the values are honest ("none", not invented).
+                "in_claude_sidebar": False,
+                "title": summary["title"] if summary else None,
+                "title_source": None,
+                "project": summary["project"] if summary else None,
+                "git_branch": None,
+                "worktree_name": None,
+                "pinned": False,
+                "pinned_rank": None,
+                "category": None,
+                "archived": False,
+                "last_activity_at": int(mtime_ns // 1_000_000),
+                "record_count": 0,
+                "accounts": [],
+                "note": (
+                    "Claude's sidebar has no record of this session — it was "
+                    "started from the command line. It is on this Mac and syncs "
+                    "like any other."
+                ),
+            }
+        ),
         "transcript": {
             "on_disk": size > 0,
             "bytes": size,

@@ -317,7 +317,7 @@ async def claude_session_diagnosis(session_id: str) -> dict[str, object]:
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No Claude Code session with that id exists in the sidebar index on this Mac.",
+            detail="No Claude Code session with that id exists on this Mac: no sidebar record and no transcript.",
         )
     return result
 

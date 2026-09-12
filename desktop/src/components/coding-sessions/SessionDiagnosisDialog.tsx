@@ -243,7 +243,11 @@ export function SessionDiagnosisDialog({
               <Row label="Category">{data.index.category ?? "—"}</Row>
               <Row label="Archived">{data.index.archived ? "Yes" : "No"}</Row>
               <Row label="Last activity">{when(data.index.last_activity_at)}</Row>
-              <Row label="Index records">{data.index.record_count} across {data.index.accounts.length} account folder{data.index.accounts.length === 1 ? "" : "s"}</Row>
+              {data.index.in_claude_sidebar ? (
+                <Row label="Index records">{data.index.record_count} across {data.index.accounts.length} account folder{data.index.accounts.length === 1 ? "" : "s"}</Row>
+              ) : (
+                <Row label="Claude sidebar">{data.index.note ?? "No record — started from the command line."}</Row>
+              )}
             </Section>
 
             <Section title="Delivery from this Mac">

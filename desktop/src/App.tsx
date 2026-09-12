@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
-import { TooltipProvider } from "@ai-matrx/design-system";
+import { ConfirmDialogHost, TooltipProvider } from "@ai-matrx/design-system";
 import { AgentCatalogProvider } from "@ai-matrx/agents/catalog/react";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
@@ -657,6 +657,8 @@ function AppInner() {
           <DownloadManagerModal />
           <DevTerminalPanel />
           <OrganizationPickerDialog />
+          {/* One host owns every imperative confirmation in this window. */}
+          <ConfirmDialogHost />
         </HashRouter>
       </AccessHealthProvider>
       </AgentCatalogProvider>

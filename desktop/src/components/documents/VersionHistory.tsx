@@ -1,5 +1,6 @@
 import { Clock, RotateCcw, User } from "lucide-react";
 import type { DocVersion } from "@/lib/api";
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 
 interface VersionHistoryProps {
   versions: DocVersion[];
@@ -40,10 +41,16 @@ export function VersionHistory({ versions, onRevert }: VersionHistoryProps) {
             </div>
           </div>
           <button
-            onClick={() => {
-              if (confirm(`Revert to version ${v.version_number}?`)) {
-                onRevert(v.version_number);
-              }
+            onClick={async () => {
+              const confirmed = await confirm({
+                title: `Revert to version ${v.version_number}?`,
+                description:
+                  "This replaces the current text. A recoverable copy of the current text is not guaranteed.",
+                confirmLabel: "Revert version",
+                variant: "destructive",
+              });
+              if (!confirmed) return;
+              onRevert(v.version_number);
             }}
             className="opacity-0 group-hover:opacity-100 rounded p-1 hover:bg-background transition-opacity"
             title="Revert to this version"

@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 import { useDocuments } from "@/hooks/use-documents";
 import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 import { deriveAccessPresentation } from "@/hooks/use-access-health";
@@ -275,15 +276,16 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
               </button>
 
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (docs.activeNote) {
-                    if (
-                      confirm(
-                        `Delete "${docs.activeNote.label}"? This cannot be undone.`,
-                      )
-                    ) {
-                      docs.deleteNote(docs.activeNote.id);
-                    }
+                    const confirmed = await confirm({
+                      title: `Delete “${docs.activeNote.label}”?`,
+                      description: "This cannot be undone.",
+                      confirmLabel: "Delete note",
+                      variant: "destructive",
+                    });
+                    if (!confirmed) return;
+                    docs.deleteNote(docs.activeNote.id);
                   }
                 }}
                 className="rounded-md p-1.5 hover:bg-accent text-muted-foreground hover:text-destructive"

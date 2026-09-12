@@ -29,7 +29,9 @@
     "check:canonical-pickers": "node scripts/check-canonical-pickers.mjs",
     "check:canonical-pickers:self-test": "node scripts/check-canonical-pickers.mjs --self-test",
     "check:package-twins": "node scripts/check-package-twins.mjs --strict",
-    "check:package-twins:self-test": "node scripts/check-package-twins.mjs --self-test"
+    "check:package-twins:self-test": "node scripts/check-package-twins.mjs --self-test",
+    "check:native-confirm": "node scripts/check-native-confirm.mjs",
+    "check:native-confirm:self-test": "node scripts/check-native-confirm.mjs --self-test"
   },
   "dependencies": {
     "@ai-matrx/agents": "latest",

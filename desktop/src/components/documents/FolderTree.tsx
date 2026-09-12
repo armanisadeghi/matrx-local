@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DocFolder } from "@/lib/api";
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 
 interface FolderTreeProps {
   folders: DocFolder[];
@@ -124,15 +125,16 @@ export const FolderTree = memo(function FolderTree({
     setInlineRename(null);
   };
 
-  const handleDelete = (folderId: string, folderName: string) => {
+  const handleDelete = async (folderId: string, folderName: string) => {
     setContextMenu(null);
-    if (
-      confirm(
-        `Delete folder "${folderName}"? Notes inside will become unfiled.`,
-      )
-    ) {
-      onDelete(folderId);
-    }
+    const confirmed = await confirm({
+      title: `Delete folder and contents?`,
+      description: `“${folderName}” and its contents will be deleted. This cannot be undone.`,
+      confirmLabel: "Delete folder and contents",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    onDelete(folderId);
   };
 
   const renderFolder = (folder: DocFolder, depth = 0) => {

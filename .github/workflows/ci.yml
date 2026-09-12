@@ -83,6 +83,11 @@ jobs:
       - name: TypeScript typecheck
         run: pnpm tsc -b
 
+      - name: Native browser confirmations are forbidden
+        run: pnpm check:native-confirm
+      - name: the native-confirm guard can still fail (self-test)
+        run: pnpm check:native-confirm:self-test
+
       # THERE IS ONE AGENT PICKER — `@ai-matrx/agents/catalog/react` (rulings
       # D1/D4, 2026-09-08: matrx-local is never an exception; offline is a data
       # location, not a different list). This desktop shipped a 912-line

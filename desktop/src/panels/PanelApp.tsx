@@ -19,7 +19,7 @@ import {
   ActionNeededSources,
   actionNeededStore,
 } from "@/features/action-needed";
-import { TooltipProvider } from "@ai-matrx/design-system";
+import { ConfirmDialogHost, TooltipProvider } from "@ai-matrx/design-system";
 import { useAuth } from "@/hooks/use-auth";
 import { useEngine } from "@/hooks/use-engine";
 import { useTheme } from "@/hooks/use-theme";
@@ -45,6 +45,8 @@ export function PanelApp({ page }: { page: PanelPage }) {
     <ErrorBoundary>
       <TooltipProvider delayDuration={150}>
         <PanelInner page={page} />
+        {/* Panel windows have their own React root, so they need their own host. */}
+        <ConfirmDialogHost />
       </TooltipProvider>
     </ErrorBoundary>
   );

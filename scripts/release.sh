@@ -785,6 +785,10 @@ info "Checking @ai-matrx packages are npm latest..."
 # collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
 # run means the guard can actually fail.
 (cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || fail "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
+# Native browser confirmations block the renderer and bypass the app's dialog
+# stack. The package opener plus one host per React root is the only approved
+# path; run the self-test first so this release gate proves it can fail.
+(cd desktop && pnpm check:native-confirm:self-test && pnpm check:native-confirm) || fail "A native browser confirm is back in desktop/src. Import confirm from @ai-matrx/kit/confirm-opener and use the mounted ConfirmDialogHost."
 # THERE IS ONE AGENT PICKER (ruling D1) and matrx-local is NEVER an exception
 # (ruling D4). This desktop shipped a 912-line hand-rolled AgentPicker with its
 # own sorts, filters and a hardcoded default-agent NAME; the guard is what stops

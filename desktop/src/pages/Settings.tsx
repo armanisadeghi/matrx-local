@@ -75,7 +75,11 @@ import type {
 import type { useAuth } from "@/hooks/use-auth";
 import type { Theme } from "@/hooks/use-theme";
 
-import { isTauri } from "@/lib/sidecar";
+import {
+  getNativeVaultProviderStatus,
+  isTauri,
+  type NativeVaultProviderStatus,
+} from "@/lib/sidecar";
 import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import type {
   AutoUpdateState,
@@ -358,6 +362,9 @@ export function Settings({
     ok: boolean;
     text: string;
   } | null>(null);
+  const [nativeVaultProvider, setNativeVaultProvider] =
+    useState<NativeVaultProviderStatus | null>(null);
+  const [nativeVaultChecking, setNativeVaultChecking] = useState(false);
 
   // Hardware profile state
   const [hardwareProfile, setHardwareProfile] =
@@ -443,6 +450,21 @@ export function Settings({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, engineStatus]);
+
+  const loadNativeVaultProvider = useCallback(async () => {
+    setNativeVaultChecking(true);
+    try {
+      setNativeVaultProvider(await getNativeVaultProviderStatus());
+    } finally {
+      setNativeVaultChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "vault" && isTauri()) {
+      void loadNativeVaultProvider();
+    }
+  }, [activeTab, loadNativeVaultProvider]);
 
   // Load hardware profile when the system tab becomes active.
   useEffect(() => {
@@ -1268,6 +1290,7 @@ export function Settings({
     { value: "system", label: "System" },
     { value: "voice-assistant", label: "Voice Assistant" },
     { value: "api-keys", label: "API Keys" },
+    { value: "vault", label: "Vault" },
     { value: "storage", label: "Storage" },
     { value: "proxy", label: "Proxy" },
     { value: "remote", label: "Remote Access" },
@@ -3018,6 +3041,76 @@ export function Settings({
                 </CardContent>
               </Card>
             </>
+          )}
+
+          {activeTab === "vault" && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Shield className="h-4 w-4 text-primary" />
+                    Native Vault AutoFill
+                  </CardTitle>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs shrink-0"
+                    disabled={nativeVaultChecking || !isTauri()}
+                    onClick={() => void loadNativeVaultProvider()}
+                  >
+                    {nativeVaultChecking ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    Check status
+                  </Button>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Password and passkey filling will use a native macOS provider.
+                  This shell does not create, reveal, or connect any Vault credentials.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {!isTauri() ? (
+                  <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Open AI Matrx Desktop on macOS to inspect the native provider.
+                  </div>
+                ) : nativeVaultProvider === null ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Checking the native provider…
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-2 text-xs sm:grid-cols-2">
+                      <div className="rounded-lg border border-border px-3 py-2">
+                        <p className="font-medium">Provider build</p>
+                        <p className="mt-0.5 text-muted-foreground">
+                          {nativeVaultProvider.artifact === "built" ? "Built into this app" : "Not built into this app"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border px-3 py-2">
+                        <p className="font-medium">macOS enablement</p>
+                        <p className="mt-0.5 text-muted-foreground">Not yet verified</p>
+                      </div>
+                      <div className="rounded-lg border border-border px-3 py-2">
+                        <p className="font-medium">Vault connection</p>
+                        <p className="mt-0.5 text-muted-foreground">Not connected</p>
+                      </div>
+                      <div className="rounded-lg border border-border px-3 py-2">
+                        <p className="font-medium">Signed provider profile</p>
+                        <p className="mt-0.5 text-muted-foreground">Not yet verified</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{nativeVaultProvider.message}</span>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
           )}
 
           {/* ── Storage Tab ────────────────────────────────── */}

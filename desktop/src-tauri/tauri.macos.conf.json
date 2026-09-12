@@ -12,7 +12,8 @@
     },
     "macOS": {
       "files": {
-        "Frameworks/Matrx Engine.app": "sidecar/Matrx Engine.app"
+        "Frameworks/Matrx Engine.app": "sidecar/Matrx Engine.app",
+        "PlugIns/AI Matrx Vault Provider.appex": "../native-vault-provider/build/AI Matrx Vault Provider.appex"
       }
     }
   }

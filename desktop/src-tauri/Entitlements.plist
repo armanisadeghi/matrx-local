@@ -55,5 +55,12 @@
     <!-- Outbound network connections (API calls, engine discovery) -->
     <key>com.apple.security.network.client</key>
     <true/>
+
+    <!-- The host sees only nonsecret provider status/invalidation state. The
+         provider-only Keychain access group remains absent from this target. -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.aimatrx.desktop.vault-status</string>
+    </array>
 </dict>
 </plist>

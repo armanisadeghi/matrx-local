@@ -105,6 +105,64 @@ struct FetchResponse {
     final_url: String,
 }
 
+/// Measured host-side facts only. This command does not inspect Keychain,
+/// communicate with the provider, or infer OS enablement.
+#[derive(Serialize)]
+struct NativeVaultProviderStatus {
+    supported: bool,
+    artifact: &'static str,
+    os_enablement: &'static str,
+    enrollment: &'static str,
+    signing_profile: &'static str,
+    ready: bool,
+    message: String,
+}
+
+#[cfg(target_os = "macos")]
+fn native_vault_provider_appex_path() -> Option<std::path::PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let contents = executable.parent()?.parent()?;
+    Some(
+        contents
+            .join("PlugIns")
+            .join("AI Matrx Vault Provider.appex"),
+    )
+}
+
+#[tauri::command]
+fn native_vault_provider_status() -> NativeVaultProviderStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let built = native_vault_provider_appex_path().is_some_and(|path| path.is_dir());
+        return NativeVaultProviderStatus {
+            supported: true,
+            artifact: if built { "built" } else { "not_built" },
+            // There is no host-only proof of macOS enablement for this shell.
+            // Reporting ready here would turn a source build into a false
+            // installed-provider claim.
+            os_enablement: "unverified",
+            enrollment: "not_connected",
+            signing_profile: "not_verified",
+            ready: false,
+            message: if built {
+                "The native provider is packaged, but macOS enablement, signed-profile verification, and enrollment have not been proven. It is not ready to fill credentials.".into()
+            } else {
+                "This build does not include the native Vault provider. A packaged macOS build is required before enablement can be checked.".into()
+            },
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    NativeVaultProviderStatus {
+        supported: false,
+        artifact: "not_supported",
+        os_enablement: "not_supported",
+        enrollment: "not_supported",
+        signing_profile: "not_supported",
+        ready: false,
+        message: "Native Vault AutoFill is currently a macOS-only provider shell.".into(),
+    }
+}
+
 // ── Engine termination ladder (shared by the launch sweep and the quit path) ─
 //
 // An engine process that is SIGKILLed mid-teardown never runs the FastAPI
@@ -2147,6 +2205,7 @@ pub fn run() {
             set_close_to_tray,
             get_close_to_tray,
             check_for_updates,
+            native_vault_provider_status,
             set_compact_mode,
             proxy_fetch,
             get_pending_oauth_url,

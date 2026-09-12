@@ -48,6 +48,24 @@ export function isTauri(): boolean {
   return typeof tauriWindow.__TAURI_INTERNALS__?.invoke === "function";
 }
 
+/** Host-measured status for the native Vault provider shell. It deliberately
+ * has no token, credential identity, or OS-enablement claim. */
+export interface NativeVaultProviderStatus {
+  supported: boolean;
+  artifact: "built" | "not_built" | "not_supported";
+  os_enablement: "unverified" | "not_supported";
+  enrollment: "not_connected" | "not_supported";
+  signing_profile: "not_verified" | "not_supported";
+  ready: false;
+  message: string;
+}
+
+export async function getNativeVaultProviderStatus(): Promise<NativeVaultProviderStatus | null> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return null;
+  return inv<NativeVaultProviderStatus>("native_vault_provider_status");
+}
+
 /**
  * Invoke a required desktop command through the checked runtime boundary.
  *

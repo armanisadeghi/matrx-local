@@ -513,7 +513,12 @@ JSON record per session at
 carries `cliSessionId` — the UUID naming `~/.claude/projects/<cwd-slug>/<cliSessionId>.jsonl` —
 which is the identity the bridge already binds, so the join is exact.
 
-One explicit pass (`POST /coding-session/claude/labels/sync`) reconciles both directions.
+One pass (`POST /coding-session/claude/labels/sync`) reconciles both directions. **It also runs
+on a timer**: `ClaudeSessionMetadataReconciler.start_background()` (Phase 2j in `app/main.py`) runs
+the same pass every `claude_label_sync_interval_minutes` (default 15, clamped 1–1440) while
+`claude_label_sync_auto_enabled` is on — both read fresh per tick from the standard settings store,
+no restart. A tick stands down while the page's own sync holds the operation lock, and a blocked
+pass (signed out, offline, unconfigured) logs the `session_blocker` payload at info, never ERROR.
 Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`
 § "The session label".
 
@@ -771,3 +776,10 @@ gates, resume truth, a REAL importer→outbox mirror pass) and
 production (`fidelity=native`, marker text projected), NATIVE RESUME appending
 to the same binding (entries 10→17, history marker repeated), CANCEL settling
 as `cancelled`, outbox drained to zero with validated receipts.
+
+## Change log
+
+- 2026-09-12 — Claude pin/title/archive reconciliation now runs on a background loop (Phase 2j),
+  not only when someone presses Sync on the Coding Sessions page; interval and on/off are user
+  settings (`claude_label_sync_interval_minutes`, `claude_label_sync_auto_enabled`). Guard:
+  `tests/unit/test_claude_label_sync_loop.py`.

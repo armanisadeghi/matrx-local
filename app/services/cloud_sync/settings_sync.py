@@ -141,6 +141,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "tts_auto_clean_markdown": False,
     # Extension bridge
     "extension_broadcast_enabled": True,
+    # Coding sessions — the background loop that keeps Claude Code's pin,
+    # title and archive state identical to AI Matrx's. Read fresh on every
+    # tick by app/services/coding_sessions/title_sync.py, so both take effect
+    # without an engine restart. Interval is whole minutes, clamped to 1–1440.
+    "claude_label_sync_auto_enabled": True,
+    "claude_label_sync_interval_minutes": 15,
     # Cloud agent tools — which advertised local tools cloud agents may run on
     # THIS machine via the delegation engine (app/services/delegation/engine.py).
     # Shape: {"disabled_tools": ["<cloud_name>", ...]} where each entry is a

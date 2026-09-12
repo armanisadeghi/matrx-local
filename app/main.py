@@ -1009,6 +1009,49 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("claude_capture_reconciler", exc)
 
+    # Phase 2j: Claude label reconciler. The pin/title/archive reconciler used
+    # to run ONLY when someone opened the Coding Sessions page and pressed
+    # Sync, so pins sat days stale with nothing looking broken (2026-09-12).
+    # This loop runs the SAME pass on a user-set interval (default 15 minutes,
+    # `claude_label_sync_auto_enabled` / `claude_label_sync_interval_minutes`),
+    # serialized against page clicks by the reconciler's own operation lock.
+    _registry.starting("claude_label_reconciler")
+    try:
+        from app.services.coding_sessions.title_sync import (
+            get_claude_session_metadata_reconciler,
+        )
+
+        _label_reconciler = get_claude_session_metadata_reconciler()
+        await _label_reconciler.start_background()
+        if _label_reconciler.active:
+            _registry.ready(
+                "claude_label_reconciler",
+                source="claude_desktop_session_index",
+                upstream="/api/coding-sessions/bridge",
+            )
+            logger.info("[app/main.py] Phase 2j: Claude label reconciler started ✓")
+        else:
+            # Never report ready for something that is not running: the knob is
+            # off, and the status surface must say so rather than imply a loop.
+            _registry.degraded(
+                "claude_label_reconciler",
+                "turned off in Settings (claude_label_sync_auto_enabled=false) — "
+                "pins and titles sync only when Sync is pressed on the Coding "
+                "Sessions page",
+                source="claude_desktop_session_index",
+            )
+            logger.info(
+                "[app/main.py] Phase 2j: Claude label reconciler OFF by setting"
+            )
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2j: Claude label reconciler FAILED to start — "
+            "Claude Code pins, titles and archive state will only reach AI Matrx "
+            "when someone presses Sync on the Coding Sessions page",
+            exc_info=True,
+        )
+        _registry.failed("claude_label_reconciler", exc)
+
     # Phase 3: Start scraper engine
     print("[phase:scraper] Starting scraper engine...", flush=True)
     logger.info("[app/main.py] Phase 3: Starting scraper engine...")
@@ -1729,6 +1772,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "[app/main.py] Claude capture reconciler did not stop cleanly: %s", exc
         )
         _registry.stopped("claude_capture_reconciler")
+
+    try:
+        from app.services.coding_sessions.title_sync import (
+            get_claude_session_metadata_reconciler as _get_label_reconciler,
+        )
+
+        _label_reconciler = _get_label_reconciler()
+        if _label_reconciler.active:
+            _registry.stopping("claude_label_reconciler")
+            await asyncio.wait_for(_label_reconciler.stop(), timeout=3.0)
+            _registry.stopped("claude_label_reconciler")
+            logger.info("[app/main.py] Claude label reconciler stopped ✓")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning(
+            "[app/main.py] Claude label reconciler did not stop cleanly: %s", exc
+        )
+        _registry.stopped("claude_label_reconciler")
 
     try:
         from app.services.artifacts import get_artifact_service as _get_artifacts

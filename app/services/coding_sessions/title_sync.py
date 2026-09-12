@@ -84,8 +84,10 @@ from app.services.coding_sessions.service import (
     CodingSessionBridgeOutbox,
     get_coding_session_bridge_outbox,
 )
+from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
+from app.services.session_freshness import session_blocker
 
 logger = get_logger()
 
@@ -98,6 +100,83 @@ TITLE_SOURCE_USER = "user"
 # Marks the observation sent right after a write-down, so the server records
 # the user tier instead of demoting the label to `provider`.
 TITLE_ORIGIN_AI_MATRX_USER = "ai_matrx_user"
+
+
+# --------------------------------------------------------------------------
+# The background loop's two knobs.
+#
+# Until 2026-09-12 this reconciler ran ONLY when the Coding Sessions page
+# called `POST /coding-session/claude/labels/sync`. Nothing looked broken while
+# a pin sat four days stale, because nothing was scheduled to notice. The loop
+# below closes that hole; both of its behavioural choices are user settings
+# (Opinions become knobs), read fresh on every tick through the SAME
+# `~/.matrx/settings.json` + cloud-settings store every other gate uses — see
+# `is_broadcast_enabled` in app/api/extension_broadcast.py. No engine restart
+# is needed to toggle either one.
+# --------------------------------------------------------------------------
+AUTO_LABEL_SYNC_ENABLED_SETTING = "claude_label_sync_auto_enabled"
+AUTO_LABEL_SYNC_INTERVAL_SETTING = "claude_label_sync_interval_minutes"
+AUTO_LABEL_SYNC_DEFAULT_ENABLED = True
+AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES = 15
+# A pin that is one minute stale is not a defect; a loop that fires every few
+# seconds is. Anything outside the band is clamped LOUDLY (see below).
+AUTO_LABEL_SYNC_MIN_INTERVAL_MINUTES = 1
+AUTO_LABEL_SYNC_MAX_INTERVAL_MINUTES = 24 * 60
+# While the pass is blocked on an ordinary desktop state (signed out, offline,
+# server unconfigured) the loop retries sooner than the full interval, so the
+# first reconcile lands right after the user signs in instead of up to N
+# minutes later.
+AUTO_LABEL_SYNC_BLOCKED_RETRY_SECONDS = 60.0
+
+
+def is_auto_label_sync_enabled() -> bool:
+    """Live state of the automatic pin/title reconcile loop (default: ON)."""
+    return bool(
+        get_settings_sync().get(
+            AUTO_LABEL_SYNC_ENABLED_SETTING, AUTO_LABEL_SYNC_DEFAULT_ENABLED
+        )
+    )
+
+
+def auto_label_sync_interval_seconds() -> float:
+    """Live loop interval in seconds, clamped to the supported band.
+
+    A garbage or out-of-band value never silently becomes "some other number":
+    it is clamped and announced at WARNING with the remedy.
+    """
+    raw = get_settings_sync().get(
+        AUTO_LABEL_SYNC_INTERVAL_SETTING, AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES
+    )
+    try:
+        minutes = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[title_sync] settings value %s=%r is not a number — falling back to "
+            "%d minutes. Set it to a whole number of minutes between %d and %d "
+            "in Settings to choose your own interval.",
+            AUTO_LABEL_SYNC_INTERVAL_SETTING,
+            raw,
+            AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES,
+            AUTO_LABEL_SYNC_MIN_INTERVAL_MINUTES,
+            AUTO_LABEL_SYNC_MAX_INTERVAL_MINUTES,
+        )
+        minutes = float(AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES)
+    clamped = min(
+        max(minutes, float(AUTO_LABEL_SYNC_MIN_INTERVAL_MINUTES)),
+        float(AUTO_LABEL_SYNC_MAX_INTERVAL_MINUTES),
+    )
+    if clamped != minutes:
+        logger.warning(
+            "[title_sync] settings value %s=%s is outside the supported %d–%d "
+            "minute band — using %s minutes instead. Change it in Settings to a "
+            "value inside that band.",
+            AUTO_LABEL_SYNC_INTERVAL_SETTING,
+            minutes,
+            AUTO_LABEL_SYNC_MIN_INTERVAL_MINUTES,
+            AUTO_LABEL_SYNC_MAX_INTERVAL_MINUTES,
+            clamped,
+        )
+    return clamped * 60.0
 
 
 class ClaudeTitleSyncBlocked(RuntimeError):
@@ -296,6 +375,8 @@ class ClaudeSessionMetadataReconciler:
         self._sync_meta = SyncMetaRepo(self._db)
         self._sync_lock = asyncio.Lock()
         self._recovery_checked = False
+        self._task: asyncio.Task[None] | None = None
+        self._stopping = False
 
     async def _sent_digests(self) -> dict[str, str]:
         rows = await self._db.fetchall(
@@ -1337,6 +1418,101 @@ class ClaudeSessionMetadataReconciler:
             )
             return await self.operation(retry_id)
 
+    # ---------------------------------------------------------- loop lifecycle
+
+    @property
+    def active(self) -> bool:
+        """True while the background reconcile loop is running."""
+        return self._task is not None and not self._task.done()
+
+    async def start_background(self) -> None:
+        """Start the periodic reconcile loop (no-op when the knob is off)."""
+        if self.active:
+            return
+        if not is_auto_label_sync_enabled():
+            logger.info(
+                "[title_sync] automatic pin/title reconcile is OFF — Claude Code "
+                "pins, titles and archive state will only reach AI Matrx when "
+                "someone presses Sync on the Coding Sessions page. Turn %s back "
+                "on in Settings to restore the %d-minute loop.",
+                AUTO_LABEL_SYNC_ENABLED_SETTING,
+                AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES,
+            )
+            return
+        self._stopping = False
+        self._task = asyncio.create_task(
+            self._loop(), name="claude_session_metadata_reconciler"
+        )
+
+    async def stop(self) -> None:
+        self._stopping = True
+        task = self._task
+        self._task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+    async def _loop(self) -> None:
+        """One reconcile per tick, serialized against every UI-triggered sync."""
+        while not self._stopping:
+            delay = auto_label_sync_interval_seconds()
+            if not is_auto_label_sync_enabled():
+                # The knob is read fresh every tick, so turning it off takes
+                # effect without a restart — and turning it back on resumes.
+                logger.debug(
+                    "[title_sync] tick skipped — %s is off in Settings; turn it "
+                    "on to resume automatic pin/title reconciliation.",
+                    AUTO_LABEL_SYNC_ENABLED_SETTING,
+                )
+            elif self._sync_lock.locked():
+                # A Coding Sessions page click owns the reconciler right now.
+                # Overlapping the two is exactly what the operation lock exists
+                # to prevent, so this tick stands down; the next one picks it up.
+                logger.debug(
+                    "[title_sync] tick skipped — a sync started from the Coding "
+                    "Sessions page is still running; retrying in %.0fs.",
+                    delay,
+                )
+            else:
+                try:
+                    await self.sync()
+                except ClaudeTitleSyncBlocked as exc:
+                    # Signed out, offline, or unconfigured are ordinary desktop
+                    # states, never ERRORs. They are also why the retry is
+                    # short: the first pass should land right after sign-in.
+                    delay = min(delay, AUTO_LABEL_SYNC_BLOCKED_RETRY_SECONDS)
+                    if exc.reason == "no_active_user_jwt":
+                        logger.info(
+                            "[title_sync] pass skipped: %s",
+                            session_blocker(lane="claude_label_sync"),
+                        )
+                    else:
+                        logger.debug(
+                            "[title_sync] pass skipped: %s — retrying in %.0fs.",
+                            exc.reason,
+                            delay,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    # A real failure. The operation record the Coding Sessions
+                    # page reads already carries the per-pass evidence; this is
+                    # the loud copy so it is never only visible in the UI.
+                    logger.error(
+                        "[title_sync] automatic pin/title reconcile pass FAILED — "
+                        "Claude Code pins, titles and archive state are NOT "
+                        "reaching AI Matrx. Open the Coding Sessions page and "
+                        "press Sync to see the failing operation.",
+                        exc_info=True,
+                    )
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                raise
+
     async def status(self) -> dict[str, Any]:
         await self._recover_interrupted_operations()
         index, index_totals = self._index_reader()
@@ -1358,6 +1534,12 @@ class ClaudeSessionMetadataReconciler:
         return {
             "schema_version": 3,
             "source": "claude_desktop_session_index",
+            # Additive (no version bump): the background loop's live state, so
+            # the Coding Sessions page can say plainly whether pins reconcile
+            # on their own and how often.
+            "auto_sync_enabled": is_auto_label_sync_enabled(),
+            "auto_sync_running": self.active,
+            "auto_sync_interval_seconds": auto_label_sync_interval_seconds(),
             "index_writable": _record_paths_writable(index),
             "pushed_sessions": int(pushed["n"]) if pushed else 0,
             "index_available": index_totals["files"] > 0,
@@ -1388,9 +1570,18 @@ def get_claude_session_metadata_reconciler() -> ClaudeSessionMetadataReconciler:
 
 
 __all__ = [
+    "AUTO_LABEL_SYNC_BLOCKED_RETRY_SECONDS",
+    "AUTO_LABEL_SYNC_DEFAULT_ENABLED",
+    "AUTO_LABEL_SYNC_DEFAULT_INTERVAL_MINUTES",
+    "AUTO_LABEL_SYNC_ENABLED_SETTING",
+    "AUTO_LABEL_SYNC_INTERVAL_SETTING",
+    "AUTO_LABEL_SYNC_MAX_INTERVAL_MINUTES",
+    "AUTO_LABEL_SYNC_MIN_INTERVAL_MINUTES",
     "ClaudeSessionMetadataReconciler",
     "ClaudeTitleSyncBlocked",
+    "auto_label_sync_interval_seconds",
     "get_claude_session_metadata_reconciler",
+    "is_auto_label_sync_enabled",
     "payload_digest",
     "raw_session_id",
     "session_metadata_request",

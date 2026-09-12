@@ -145,6 +145,12 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
     "User";
 
   const avatarUrl = user?.user_metadata?.avatar_url;
+  // NOT swapped to `@ai-matrx/kit/format`'s `getInitials` (census H1
+  // 2026-09-07): this sidebar deliberately shows a ONE-letter avatar badge
+  // (just the first character of the resolved display name), while the
+  // package always returns up to two letters for a multi-word name. Swapping
+  // would visibly grow every multi-word user's sidebar avatar from one
+  // letter to two; that is a product decision, not a mechanical one.
   const initials = (displayName[0] ?? "U").toUpperCase();
 
   return (

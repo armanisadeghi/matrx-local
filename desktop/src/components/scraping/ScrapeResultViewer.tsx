@@ -30,6 +30,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { Badge, Button } from "@ai-matrx/design-system";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). The local `formatElapsed` twin was deleted; `compact` is the elapsed-
+// work voice (`250ms`, `5.2s`, `1m 30s`).
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { openExternal } from "@/lib/open-external";
 import { cn } from "@/lib/utils";
 import type { ScrapeResultViewData as ScrapeResultData } from "@/lib/scrape-result";
@@ -66,11 +70,6 @@ interface ViewTab {
   label: string;
   icon: React.ReactNode;
   count?: number;
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function statusCodeColor(code: number): string {
@@ -271,7 +270,7 @@ export function ScrapeResultViewer({
           {result.elapsed_ms > 0 && (
             <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
               <Clock className="h-3 w-3" />
-              {formatElapsed(result.elapsed_ms)}
+              {formatDurationMs(result.elapsed_ms, { style: "compact" })}
             </span>
           )}
           {result.title && (

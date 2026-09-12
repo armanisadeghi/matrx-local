@@ -6,6 +6,9 @@ import { useTts } from "@/hooks/use-tts";
 import type { TtsVoice } from "@/lib/tts/types";
 import type { TtsHistoryEntry, TtsPlaybackState } from "@/hooks/use-tts";
 import { Button, Slider } from "@ai-matrx/design-system";
+// THE package percentage formatter (`@ai-matrx/kit/format`, kit 0.12.0).
+// `FromFraction` names the unit: these blend weights are 0..1.
+import { formatPercentFromFraction } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
 import { parseMarkdownToText } from "@/lib/parse-markdown-for-speech";
 import {
@@ -1159,7 +1162,7 @@ function BlendTab({
                   ))}
                 </select>
                 <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">
-                  {(comp.weight * 100).toFixed(0)}%
+                  {formatPercentFromFraction(comp.weight)}
                 </span>
                 {components.length > 2 && (
                   <button

@@ -8,6 +8,9 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `compact` is the elapsed-work voice (`250ms`, `5.2s`, `1m 30s`).
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { MediaThumb } from "@/components/media/MediaThumb";
 import { ActionNeededCard } from "@/features/action-needed";
 import {
@@ -118,7 +121,7 @@ export function ToolExecutionCard({
         )}
         {elapsedMs != null && (
           <span className="text-[10px] tabular-nums text-muted-foreground">
-            {elapsedMs < 1000 ? `${elapsedMs} ms` : `${(elapsedMs / 1000).toFixed(1)} s`}
+            {formatDurationMs(elapsedMs, { style: "compact" })}
           </span>
         )}
         <span className="ml-auto text-muted-foreground">

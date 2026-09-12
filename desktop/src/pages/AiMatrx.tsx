@@ -1,6 +1,10 @@
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `long` is the prose voice this diagnostic line speaks; `signed` keeps
+// an ALREADY-EXPIRED token readable ("-3 minutes") instead of an em-dash.
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 import supabase from "@/lib/supabase";
 import { getAppRuntimeConfig, getWebAppOrigin } from "@/lib/app-config";
 
@@ -45,7 +49,13 @@ async function buildIframeSrc(
   const expiresAt = session.expires_at ?? 0;
   const nowSeconds = Math.floor(Date.now() / 1000);
   const secondsUntilExpiry = expiresAt - nowSeconds;
-  addLog(secondsUntilExpiry > 0, `Token expires in ${secondsUntilExpiry}s`);
+  addLog(
+    secondsUntilExpiry > 0,
+    `Token expires in ${formatDurationSeconds(secondsUntilExpiry, {
+      style: "long",
+      signed: true,
+    })}`,
+  );
 
   let finalSession = session;
   if (secondsUntilExpiry < 300) {

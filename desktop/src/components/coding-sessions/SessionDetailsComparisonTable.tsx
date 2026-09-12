@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, RotateCw } from "lucide-react";
 import { Badge, Button } from "@ai-matrx/design-system";
+// THE package count formatter (`@ai-matrx/kit/format`, kit 0.12.0) owns the
+// grouped-number voice, and refuses to print a confident number for a value
+// nobody measured. A measured `0` still reads "0".
+import { formatCount } from "@ai-matrx/kit/format";
 import { engine } from "@/lib/api";
 import type { ClaudeLabelSyncResult, ClaudeSessionDetailComparison } from "@/lib/api";
 
@@ -115,9 +119,9 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
   return (
     <div className="space-y-3">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {stats.map(([label, count, filter]) => <button type="button" key={label} onClick={() => setRowFilter(filter)} className={`rounded-md border p-2 text-left transition-colors hover:bg-muted/40 ${rowFilter === filter ? "border-blue-500/50 bg-blue-500/5" : ""}`}><p className="text-xs text-muted-foreground">{label} · inspect</p><p className="text-lg font-semibold">{count.toLocaleString()}</p></button>)}
+        {stats.map(([label, count, filter]) => <button type="button" key={label} onClick={() => setRowFilter(filter)} className={`rounded-md border p-2 text-left transition-colors hover:bg-muted/40 ${rowFilter === filter ? "border-blue-500/50 bg-blue-500/5" : ""}`}><p className="text-xs text-muted-foreground">{label} · inspect</p><p className="text-lg font-semibold">{formatCount(count)}</p></button>)}
       </div>
-      <p className="text-xs text-muted-foreground">Showing {visibleRows.length.toLocaleString()} matching rows from {rows.length.toLocaleString()} loaded for this operation. Summary counts cover the complete operation; load additional pages when offered.</p>
+      <p className="text-xs text-muted-foreground">Showing {formatCount(visibleRows.length)} matching rows from {formatCount(rows.length)} loaded for this operation. Summary counts cover the complete operation; load additional pages when offered.</p>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">Operation <span className="font-mono">{result.operation_id}</span> · {result.operation.status}</p>
         {!result.dry_run && <Button type="button" variant="outline" size="sm" onClick={() => void verify()} disabled={busy || loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Reread both sides and verify</Button>}

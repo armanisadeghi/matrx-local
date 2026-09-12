@@ -1,3 +1,8 @@
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `long` is the prose voice — "No response within 30 seconds", correctly
+// singularised at one second.
+import { formatDurationMs } from "@ai-matrx/kit/format";
+
 export type RecoveryLevel =
   | "refresh-surface"
   | "reset-surface"
@@ -82,7 +87,7 @@ class RecoveryService {
       await Promise.race([
         Promise.resolve().then(action),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`No response within ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+          timer = setTimeout(() => reject(new Error(`No response within ${formatDurationMs(timeoutMs, { style: "long" })}`)), timeoutMs);
         }),
       ]);
       operation.status = "succeeded";

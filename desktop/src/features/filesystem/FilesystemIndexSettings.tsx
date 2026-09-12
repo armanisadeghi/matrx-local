@@ -27,7 +27,13 @@ import {
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+// `formatCount` (kit 0.12.0) now OWNS the em-dash convention these metrics
+// hand-rolled, and closes the inverse hole beside it: a status nobody has
+// fetched reads "—", never a confident "0 files".
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
+// THE ONE confirmation (`@ai-matrx/kit/confirm-opener` + design-system's
+// `ConfirmDialogHost`, mounted in App/PanelApp). Never `window.confirm`.
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 function pathLabel(path: string): string {
   const clean = path.replace(/[\\/]+$/, "");
   const parts = clean.split(/[\\/]/);
@@ -292,20 +298,26 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
 
   const controlIndex = useCallback(
     async (action: "pause" | "resume" | "rebuild" | "clear") => {
-      if (
-        action === "rebuild" &&
-        !window.confirm(
-          "Rebuild the local filesystem index from scratch? Direct file browsing will keep working.",
-        )
-      )
-        return;
-      if (
-        action === "clear" &&
-        !window.confirm(
-          "Clear the local filesystem index and pause background indexing? Downloaded model files are not removed.",
-        )
-      )
-        return;
+      if (action === "rebuild") {
+        const ok = await confirm({
+          title: "Rebuild the local filesystem index?",
+          description:
+            "The existing index is discarded and rebuilt from scratch, so indexed search stays incomplete until the rebuild finishes. Direct file browsing keeps working throughout.",
+          confirmLabel: "Rebuild index",
+          variant: "destructive",
+        });
+        if (!ok) return;
+      }
+      if (action === "clear") {
+        const ok = await confirm({
+          title: "Clear the local filesystem index?",
+          description:
+            "The index is deleted and background indexing is paused, so indexed search stops returning results until you resume it. Your files and downloaded model files are not touched.",
+          confirmLabel: "Clear index",
+          variant: "destructive",
+        });
+        if (!ok) return;
+      }
       const operation = requestFence.beginMutation();
       if (operation === null) return;
       setIndexAction(action);
@@ -384,19 +396,19 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
           <>
             <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
               <Metric
-                value={status?.entries.toLocaleString() ?? "—"}
+                value={formatCount(status?.entries)}
                 label="Indexed entries"
               />
               <Metric
-                value={status?.directories_pending.toLocaleString() ?? "—"}
+                value={formatCount(status?.directories_pending)}
                 label="Directories pending"
               />
               <Metric
-                value={status?.directories_failed.toLocaleString() ?? "—"}
+                value={formatCount(status?.directories_failed)}
                 label="Directories blocked"
               />
               <Metric
-                value={discoveredCount || "—"}
+                value={formatCount(discoveredCount)}
                 label="Available locations"
               />
               <div className="rounded-md border bg-muted/20 p-3">
@@ -554,10 +566,10 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                       }}
                     />
                     <span className="text-muted-foreground">
-                      {status?.content_entries.toLocaleString() ?? "0"} files ·{" "}
+                      {formatCount(status?.content_entries)} files ·{" "}
                       {formatFileSize(status?.content_bytes)} used
                       {status?.content_failures
-                        ? ` · ${status.content_failures.toLocaleString()} retrying`
+                        ? ` · ${formatCount(status.content_failures)} retrying`
                         : ""}
                     </span>
                   </label>
@@ -580,10 +592,10 @@ export function FilesystemIndexSettings({ connected }: { connected: boolean }) {
                       }}
                     />
                     <span className="text-muted-foreground">
-                      {status?.embedding_entries.toLocaleString() ?? "0"} files
+                      {formatCount(status?.embedding_entries)} files
                       embedded
                       {status?.embedding_failures
-                        ? ` · ${status.embedding_failures.toLocaleString()} retrying`
+                        ? ` · ${formatCount(status.embedding_failures)} retrying`
                         : ""}
                     </span>
                   </label>

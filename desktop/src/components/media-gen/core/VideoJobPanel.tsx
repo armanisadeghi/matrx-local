@@ -21,6 +21,13 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
+// THE package formatters (`@ai-matrx/kit/format`). `FromFraction` names the
+// unit this progress value is in; `compact` is the elapsed-work duration
+// voice, which reads a two-minute render as "2m 05s", never "125s".
+import {
+  formatDurationSeconds,
+  formatPercentFromFraction,
+} from "@ai-matrx/kit/format";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { VideoGenJob } from "@/lib/api";
 import { useMediaActions } from "@/components/media/MediaActionsProvider";
@@ -316,11 +323,13 @@ function VideoJobEntry({
           {job.status === "failed"
             ? (job.error ?? "failed")
             : job.status === "completed"
-              ? `${job.elapsed_seconds.toFixed(0)}s`
+              ? formatDurationSeconds(job.elapsed_seconds, {
+                  style: "compact",
+                })
               : cancelling
                 ? "cancelling…"
                 : active
-                  ? `${Math.round(job.progress * 100)}%`
+                  ? formatPercentFromFraction(job.progress)
                   : job.status}
         </p>
       </div>

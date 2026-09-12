@@ -1,3 +1,6 @@
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `long` is the prose voice this stream-timeout sentence is written in.
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { engine } from "@/lib/api";
 import supabase from "@/lib/supabase";
 import {
@@ -274,7 +277,7 @@ export async function* synthesizeStream(
       if ("timedOut" in result && result.timedOut) {
         throw new TtsStreamError(
           "frame_timeout",
-          `No data received from TTS server for ${FRAME_READ_TIMEOUT_MS / 1000}s`,
+          `No data received from TTS server for ${formatDurationMs(FRAME_READ_TIMEOUT_MS, { style: "long" })}`,
         );
       }
       const r = result as ReadableStreamReadResult<Uint8Array>;

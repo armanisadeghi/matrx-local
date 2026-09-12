@@ -5,7 +5,7 @@ import { MatrxDataTable, type MatrxColumnDef, type MatrxDataTableQueryState } fr
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { engine } from "@/lib/api";
 import type { ArchiveFilterValue, ClaudeHistoryChangeType, ClaudeHistoryInventoryPage, ClaudeHistoryInventoryRow, ClaudeHistoryReview } from "@/lib/api";
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 import { capHistorySelection, inventoryQueryChanged, inventoryRequestFilters, inventorySortFromTableQuery } from "./history-inventory-table-adapter";
 
 const INITIAL_QUERY: MatrxDataTableQueryState = { page: 1, pageSize: 50, search: "", anyOf: "", columnFilters: {}, sort: { id: "modified", direction: "desc" } };
@@ -136,6 +136,6 @@ export function HistoryInventoryTable({ review, selected, onSelectedChange, onPa
       }}
       rowActions={(row) => <Button variant="ghost" size="sm" onClick={() => void copyResume(row.session_id)}><Copy className="mr-1 h-3.5 w-3.5" />Resume</Button>}
     />
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm"><span className="text-muted-foreground">Page {pageIndex + 1} · {pageData.page.returned} rows · {pageData.page.total.toLocaleString()} match this view · {selected.size} selected ({formatFileSize(selectedBytes)} on this page)</span><div className="flex items-center gap-2"><Select value={String(tableQuery.pageSize)} onValueChange={(value) => { onTableQueryChange({ ...tableQuery, pageSize: Number(value) }); }}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent>{[25, 50, 100, 200].map((size) => <SelectItem key={size} value={String(size)}>{size} rows</SelectItem>)}</SelectContent></Select><Button variant="outline" size="sm" disabled={pageIndex === 0 || loading} onClick={() => setPageIndex((value) => value - 1)}>Previous</Button><Button variant="outline" size="sm" disabled={!pageData.page.has_more || loading} onClick={nextPage}>Next</Button></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm"><span className="text-muted-foreground">Page {pageIndex + 1} · {pageData.page.returned} rows · {formatCount(pageData.page.total)} match this view · {selected.size} selected ({formatFileSize(selectedBytes)} on this page)</span><div className="flex items-center gap-2"><Select value={String(tableQuery.pageSize)} onValueChange={(value) => { onTableQueryChange({ ...tableQuery, pageSize: Number(value) }); }}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent>{[25, 50, 100, 200].map((size) => <SelectItem key={size} value={String(size)}>{size} rows</SelectItem>)}</SelectContent></Select><Button variant="outline" size="sm" disabled={pageIndex === 0 || loading} onClick={() => setPageIndex((value) => value - 1)}>Previous</Button><Button variant="outline" size="sm" disabled={!pageData.page.has_more || loading} onClick={nextPage}>Next</Button></div></div>
   </div>;
 }

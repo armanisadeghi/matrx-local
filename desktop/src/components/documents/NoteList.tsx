@@ -10,6 +10,13 @@ import {
   Check,
   X,
 } from "lucide-react";
+// THE ONE confirmation (`@ai-matrx/kit/confirm-opener` + design-system's
+// `ConfirmDialogHost`, mounted in App/PanelApp). Never `window.confirm`.
+import { confirm } from "@ai-matrx/kit/confirm-opener";
+// THE package relative-time formatter (`@ai-matrx/kit/format`, duplication
+// census H1). The hand-rolled `timeAgo` cascade below was deleted; the
+// package owns the "2m ago" / "3d ago" voice for the whole fleet.
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
 import type { DocNote, DocFolder } from "@/lib/api";
 
@@ -21,20 +28,6 @@ interface NoteListProps {
   onDelete: (noteId: string) => void;
   onRename: (noteId: string, newLabel: string) => void;
   onMove: (noteId: string, folderId: string | null, folderName: string) => void;
-}
-
-function timeAgo(dateStr: string): string {
-  const d = new Date(dateStr);
-  const now = Date.now();
-  const diff = now - d.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  return d.toLocaleDateString();
 }
 
 interface ContextMenuState {
@@ -116,9 +109,17 @@ export const NoteList = memo(function NoteList({
   const handleDelete = (noteId: string) => {
     setContextMenu(null);
     const note = notes.find((n) => n.id === noteId);
-    if (note && confirm(`Delete "${note.label}"? This cannot be undone.`)) {
-      onDelete(noteId);
-    }
+    if (!note) return;
+    void (async () => {
+      const ok = await confirm({
+        title: `Delete "${note.label}"?`,
+        description:
+          "The note's file is removed from this machine and the note is deleted in the cloud on your other devices. This cannot be undone.",
+        confirmLabel: "Delete note",
+        variant: "destructive",
+      });
+      if (ok) onDelete(noteId);
+    })();
   };
 
   const handleMove = (
@@ -204,7 +205,7 @@ export const NoteList = memo(function NoteList({
                   <div className="flex items-center gap-3 pl-5">
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
-                      {timeAgo(note.updated_at)}
+                      {formatRelativeTime(note.updated_at)}
                     </span>
                     {note.folder_name && note.folder_name !== "General" && (
                       <span className="text-xs text-muted-foreground truncate">

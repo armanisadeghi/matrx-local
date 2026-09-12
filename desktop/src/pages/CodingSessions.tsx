@@ -57,7 +57,7 @@ import { requestOrganizationPicker } from "@/lib/org/active-org";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatFileSize, formatRelativeTime } from "@ai-matrx/kit/format";
 
 const PROVIDERS: CodingSessionProvider[] = [
   "claude_code",
@@ -84,16 +84,14 @@ const STATE_CARDS: ClaudeSessionState[] = [
 
 type ListFilter = ClaudeSessionState | "pinned" | "all";
 
+/**
+ * A wrapper that BINDS the "0 means never stamped" guard and delegates the
+ * voice to THE package formatter — `0` is an epoch timestamp to
+ * `formatRelativeTime`, not an absence, so the guard cannot move into it.
+ */
 function formatWhen(ms: number): string {
   if (!ms) return "—";
-  const minutes = Math.round((Date.now() - ms) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString();
+  return formatRelativeTime(ms);
 }
 
 function formatStamp(value: string | null | undefined): string {

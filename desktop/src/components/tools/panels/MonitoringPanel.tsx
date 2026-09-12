@@ -11,7 +11,16 @@ import { cn } from "@/lib/utils";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+// The percentage formatter carries the SAME contract (kit 0.12.0): an
+// unmeasured value reads as an em-dash, never a confident "0.0%", and a
+// measured zero still reads "0.0%". `safeRatio` is what turns a nullable
+// 0..100 reading into the 0..1 fraction without inventing one.
+import {
+  formatDurationSeconds,
+  formatFileSize,
+  formatPercentFromFraction,
+  safeRatio,
+} from "@ai-matrx/kit/format";
 interface MonitoringPanelProps {
   onInvoke: (toolName: string, params: Record<string, unknown>) => Promise<void>;
   loading: boolean;
@@ -43,15 +52,6 @@ interface ProcessRow {
 }
 
 const MAX_HISTORY = 30;
-
-function formatUptime(seconds: number) {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 
 export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelProps) {
@@ -181,21 +181,21 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
               <div className="rounded-xl border bg-card/50 p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">CPU</span>
-                  <span className="text-xs font-bold text-violet-700 dark:text-violet-400 tabular-nums">{Math.round(cpu)}%</span>
+                  <span className="text-xs font-bold text-violet-700 dark:text-violet-400 tabular-nums">{formatPercentFromFraction(safeRatio(resources?.cpu_percent, 100))}</span>
                 </div>
                 <Sparkline data={cpuHistory} width={160} height={36} color="violet" min={0} max={100} />
               </div>
               <div className="rounded-xl border bg-card/50 p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Memory</span>
-                  <span className="text-xs font-bold text-blue-700 dark:text-blue-400 tabular-nums">{Math.round(mem)}%</span>
+                  <span className="text-xs font-bold text-blue-700 dark:text-blue-400 tabular-nums">{formatPercentFromFraction(safeRatio(resources?.memory_percent, 100))}</span>
                 </div>
                 <Sparkline data={memHistory} width={160} height={36} color="blue" min={0} max={100} />
               </div>
               <div className="rounded-xl border bg-card/50 p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Disk</span>
-                  <span className="text-xs font-bold text-teal-700 dark:text-teal-400 tabular-nums">{Math.round(disk)}%</span>
+                  <span className="text-xs font-bold text-teal-700 dark:text-teal-400 tabular-nums">{formatPercentFromFraction(safeRatio(resources?.disk_percent, 100))}</span>
                 </div>
                 <Sparkline data={diskHistory} width={160} height={36} color="teal" min={0} max={100} />
               </div>
@@ -222,7 +222,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
               <div className="rounded-xl border bg-card/40 px-3 py-2.5 text-center">
                 <p className="text-[10px] text-muted-foreground font-medium">Uptime</p>
                 <p className="text-sm font-bold tabular-nums">
-                  {resources.uptime_seconds ? formatUptime(resources.uptime_seconds) : "—"}
+                  {formatDurationSeconds(resources.uptime_seconds, { style: "coarse", round: "down" })}
                 </p>
               </div>
               <div className="rounded-xl border bg-card/40 px-3 py-2.5 text-center">
@@ -247,8 +247,8 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
                   <div key={p.pid ?? i} className="flex items-center gap-3 px-4 py-2 hover:bg-muted/20 transition-colors">
                     <span className="text-[10px] w-4 text-center text-muted-foreground tabular-nums">{i + 1}</span>
                     <span className="flex-1 text-xs font-medium truncate">{p.name ?? "unknown"}</span>
-                    <span className="text-[11px] tabular-nums text-violet-700 dark:text-violet-400 w-14 text-right">{(p.cpu_percent ?? 0).toFixed(1)}%</span>
-                    <span className="text-[11px] tabular-nums text-blue-700 dark:text-blue-400 w-14 text-right">{(p.memory_percent ?? 0).toFixed(1)}%</span>
+                    <span className="text-[11px] tabular-nums text-violet-700 dark:text-violet-400 w-14 text-right">{formatPercentFromFraction(safeRatio(p.cpu_percent, 100), { digits: 1 })}</span>
+                    <span className="text-[11px] tabular-nums text-blue-700 dark:text-blue-400 w-14 text-right">{formatPercentFromFraction(safeRatio(p.memory_percent, 100), { digits: 1 })}</span>
                   </div>
                 ))}
               </div>

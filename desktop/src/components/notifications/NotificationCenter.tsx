@@ -10,6 +10,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
+// THE package relative-time formatter (`@ai-matrx/kit/format`, duplication
+// census H1). The hand-rolled `timeAgo` cascade below was deleted.
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import {
   Popover,
   PopoverContent,
@@ -53,15 +56,6 @@ const LEVEL_CONFIG: Record<
     barClass: "bg-red-500",
   },
 };
-
-function timeAgo(ts: number): string {
-  const diff = Math.floor((Date.now() - ts) / 1000);
-  if (diff < 5) return "just now";
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
 
 // ── Toast (auto-dismiss popup) ────────────────────────────────────────────
 
@@ -286,7 +280,7 @@ export function NotificationCenter({
                         </Button>
                       )}
                       <p className="mt-1 text-[10px] text-muted-foreground/60">
-                        {timeAgo(n.timestamp)}
+                        {formatRelativeTime(n.timestamp)}
                       </p>
                     </div>
                     <button

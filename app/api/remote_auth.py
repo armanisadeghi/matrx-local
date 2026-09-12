@@ -102,12 +102,26 @@ TokenVerificationStatus = Literal[
     "invalid",
     "unavailable",
     "unconfigured",
+    "misconfigured",
 ]
 
 
 @dataclass(frozen=True)
 class TokenVerificationResult:
-    """Issuer-verification result with invalid and unavailable kept distinct."""
+    """Issuer-verification result.
+
+    The four failure statuses answer four different questions and must never
+    be collapsed:
+
+    ``invalid``       the ISSUER judged the USER's token bad (expired, revoked,
+                      malformed, wrong project). Signing in again fixes it.
+    ``misconfigured`` the issuer rejected *our* ``apikey`` — the engine's
+                      publishable key is wrong, missing, or has been rotated.
+                      Nothing the user does fixes this, and their stored
+                      session is not at fault, so it must never be erased.
+    ``unavailable``   the issuer could not be reached / returned 5xx.
+    ``unconfigured``  this engine has no Supabase URL or publishable key at all.
+    """
 
     status: TokenVerificationStatus
     user: Optional[VerifiedUser] = None
@@ -155,6 +169,41 @@ def _cache_put(key: str, value: Optional[VerifiedUser]) -> None:
     _verify_cache[key] = (time.monotonic() + ttl, value)
 
 
+# GoTrue answers a bad USER token with 403 ``bad_jwt`` (or a 401 about the
+# token); the API gateway in front of it answers a bad/missing ``apikey`` with
+# 401 and a body that names the API key. Classification is positive-evidence
+# only: anything we cannot positively tie to our own key stays a session verdict.
+_API_KEY_ERROR_CODES = {"no_api_key", "invalid_api_key", "api_key_invalid"}
+
+
+def _issuer_error_fields(resp) -> tuple[str, str]:
+    """Return (error_code, message) from an issuer error body; never raises."""
+    try:
+        body = resp.json()
+    except Exception:
+        return "", ""
+    if not isinstance(body, dict):
+        return "", ""
+    raw_code = body.get("error_code") or body.get("error") or body.get("code")
+    error_code = raw_code if isinstance(raw_code, str) else ""
+    for field in ("message", "msg", "error_description", "hint"):
+        value = body.get(field)
+        if isinstance(value, str) and value:
+            return error_code, value
+    return error_code, ""
+
+
+def _rejection_is_about_our_api_key(
+    status_code: int, error_code: str, message: str
+) -> bool:
+    """True when the issuer rejected OUR apikey rather than the user's token."""
+    if status_code != 401:
+        return False
+    if error_code.lower() in _API_KEY_ERROR_CODES:
+        return True
+    return "api key" in message.lower()
+
+
 async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
     """Validate a token against the configured Supabase Auth issuer.
 
@@ -190,6 +239,37 @@ async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
         return TokenVerificationResult("unavailable")
 
     if resp.status_code in {401, 403}:
+        error_code, message = _issuer_error_fields(resp)
+        if _rejection_is_about_our_api_key(resp.status_code, error_code, message):
+            # OUR configuration is broken, not the user's session. Never cache
+            # this against the token and never let a caller treat it as a bad
+            # session: with a rotated/incorrect publishable key EVERY user would
+            # otherwise be told to sign in again, forever, for no reason.
+            logger.warning(
+                "[remote_auth] issuer rejected token introspection "
+                "(HTTP %s error_code=%s message=%s)",
+                resp.status_code,
+                error_code or "-",
+                message or "-",
+            )
+            logger.error(
+                "[remote_auth] MISCONFIGURATION: %s rejected this engine's "
+                "Supabase apikey (HTTP %s: %s). No user session is at fault and "
+                "signing in again cannot help. Remedy: correct/rotate "
+                "SUPABASE_PUBLISHABLE_KEY for %s and restart the engine.",
+                SUPABASE_URL,
+                resp.status_code,
+                message or error_code or "no detail returned",
+                SUPABASE_URL,
+            )
+            return TokenVerificationResult("misconfigured")
+        logger.warning(
+            "[remote_auth] issuer rejected this session as invalid "
+            "(HTTP %s error_code=%s message=%s)",
+            resp.status_code,
+            error_code or "-",
+            message or "-",
+        )
         _cache_put(key, None)
         return TokenVerificationResult("invalid")
     if resp.status_code != 200:

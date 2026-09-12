@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -286,3 +288,187 @@ async def test_verifier_does_not_cache_transient_issuer_failure(
     assert unavailable.status == "unavailable"
     assert verified.status == "verified"
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Our API key being rejected is a CONFIGURATION fault, never "your session is
+# bad". Measured against https://db.matrxserver.com/auth/v1/user on 2026-09-12:
+#   valid apikey + bad bearer -> 403 {"error_code": "bad_jwt", ...}
+#   bogus apikey              -> 401 {"message": "Invalid API key", ...}
+#   no apikey                 -> 401 {"message": "No API key found in request"}
+# Collapsing all of these into "invalid" told every user to sign in again,
+# forever, whenever the engine's publishable key was wrong or rotated.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _engine_logs():
+    """Capture the engine logger's records (it never propagates to root)."""
+    records: list[logging.LogRecord] = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    sink = _Sink(logging.DEBUG)
+    engine_logger = logging.getLogger("system_logger")
+    previous = engine_logger.level
+    engine_logger.addHandler(sink)
+    engine_logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        engine_logger.removeHandler(sink)
+        engine_logger.setLevel(previous)
+
+
+def _text(records: list[logging.LogRecord]) -> str:
+    return "\n".join(f"{r.levelname} {r.getMessage()}" for r in records)
+
+
+def _issuer_returning(monkeypatch: pytest.MonkeyPatch, *responses: _Response):
+    calls: list[dict[str, Any]] = []
+    queue = list(responses)
+    remote_auth._verify_cache.clear()
+    monkeypatch.setattr(remote_auth, "SUPABASE_URL", "https://configured.example")
+    monkeypatch.setattr(remote_auth, "SUPABASE_PUBLISHABLE_KEY", "publishable-key")
+    monkeypatch.setattr(
+        remote_auth.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _HTTPClient(queue, calls),
+    )
+    return calls
+
+
+@pytest.mark.anyio
+async def test_bogus_api_key_is_a_configuration_fault_not_an_invalid_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _issuer_returning(
+        monkeypatch,
+        _Response(
+            401,
+            {
+                "message": "Invalid API key",
+                "hint": "Double check your Supabase `anon` or `service_role` API key.",
+            },
+        ),
+    )
+
+    with _engine_logs() as records:
+        result = await remote_auth.verify_supabase_token_result("perfectly-good-token")
+
+    assert result.status == "misconfigured"
+    assert result.user is None
+    text = _text(records)
+    assert "WARNING" in text and "ERROR" in text
+    assert "MISCONFIGURATION" in text
+    assert "401" in text and "Invalid API key" in text
+    assert "SUPABASE_PUBLISHABLE_KEY" in text  # the remedy is named
+
+
+@pytest.mark.anyio
+async def test_missing_api_key_is_a_configuration_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _issuer_returning(
+        monkeypatch,
+        _Response(401, {"message": "No API key found in request"}),
+    )
+
+    result = await remote_auth.verify_supabase_token_result("perfectly-good-token")
+
+    assert result.status == "misconfigured"
+
+
+@pytest.mark.anyio
+async def test_configuration_fault_is_never_cached_against_the_users_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fixed key must work on the very next call — no cached 'invalid'."""
+    calls = _issuer_returning(
+        monkeypatch,
+        _Response(401, {"message": "Invalid API key"}),
+        _Response(200, {"id": "project-user", "role": "authenticated"}),
+    )
+
+    broken = await remote_auth.verify_supabase_token_result("access-token")
+    fixed = await remote_auth.verify_supabase_token_result("access-token")
+
+    assert broken.status == "misconfigured"
+    assert fixed.status == "verified"
+    assert len(calls) == 2
+
+
+@pytest.mark.anyio
+async def test_bad_user_jwt_is_still_invalid_and_is_logged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _issuer_returning(
+        monkeypatch,
+        _Response(
+            403,
+            {
+                "code": 403,
+                "error_code": "bad_jwt",
+                "msg": "invalid JWT: unable to parse or verify signature",
+            },
+        ),
+    )
+
+    with _engine_logs() as records:
+        result = await remote_auth.verify_supabase_token_result("expired-token")
+    logged = _text(records)
+
+    assert result.status == "invalid"
+    assert "WARNING" in logged
+    assert "MISCONFIGURATION" not in logged
+    assert "bad_jwt" in logged and "403" in logged
+
+
+@pytest.mark.anyio
+async def test_token_401_about_the_token_stays_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive evidence only: a 401 that is about the token is not our fault."""
+    _issuer_returning(
+        monkeypatch,
+        _Response(401, {"error_code": "bad_jwt", "msg": "invalid JWT"}),
+    )
+
+    result = await remote_auth.verify_supabase_token_result("expired-token")
+
+    assert result.status == "invalid"
+
+
+@pytest.mark.anyio
+async def test_api_key_rejection_keeps_the_stored_session_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+    token_route_fakes,
+) -> None:
+    """save_token must not sign the user out over OUR broken API key."""
+    repo, outbox = token_route_fakes
+    repo.row = {"access_token": "posted-token", "user_id": "user-1"}
+    invalidated: list[str] = []
+    monkeypatch.setattr(token_routes, "invalidate_token", invalidated.append)
+
+    async def _verify(_token: str) -> TokenVerificationResult:
+        return TokenVerificationResult("misconfigured")
+
+    monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
+    with pytest.raises(HTTPException) as raised:
+        await token_routes.save_token(
+            token_routes.TokenRequest(access_token="posted-token", user_id="user-1")
+        )
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail["code"] == "account_service_key_rejected"
+    assert (
+        "signing in again will not help" in raised.value.detail["message"].lower()
+    )
+    # Even though the stored copy IS the posted token, it survives: the token
+    # was never judged bad.
+    assert repo.cleared == 0
+    assert repo.row is not None and repo.row["access_token"] == "posted-token"
+    assert invalidated == []
+    assert outbox.credential_changes == 0

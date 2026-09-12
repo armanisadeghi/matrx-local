@@ -73,6 +73,32 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     next scheduled sync interval.
     """
     verification = await verify_supabase_token_result(req.access_token)
+    if verification.status == "misconfigured":
+        # The account service rejected THIS APP's API key, not the user's
+        # session. Telling them to sign in again would be a lie they could
+        # never act on, and clearing the stored token would destroy a session
+        # that is very probably fine. Say what actually happened, keep the
+        # stored session, and leave the verification cache alone.
+        logger.error(
+            "[token_routes] session verification blocked by a configuration "
+            "fault: the account service rejected this engine's API key. "
+            "Stored session kept; user_id=%s was NOT signed out. "
+            "Remedy: fix the engine's Supabase publishable key.",
+            req.user_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "account_service_key_rejected",
+                "message": (
+                    "The AI Matrx account service rejected this app's API key, "
+                    "so your sign-in could not be verified. This is a problem "
+                    "with the app's configuration, not with your account — "
+                    "signing in again will not help, and your saved session "
+                    "was left untouched."
+                ),
+            },
+        )
     if verification.status in {"unavailable", "unconfigured"}:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

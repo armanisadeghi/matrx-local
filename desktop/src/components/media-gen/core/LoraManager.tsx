@@ -30,8 +30,11 @@ import {
   loraVisibleForModel,
   modelLoraFamily,
 } from "@/lib/image-gen/lora-compatibility";
-import { ErrorNote, formatGb } from "@/components/media-gen/shared";
+import { ErrorNote } from "@/components/media-gen/shared";
 import type { ImageGenController } from "./imageController";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 const PAGE_SIZE = 75;
 
@@ -120,7 +123,7 @@ function InstalledLoraRow({
           <p className="truncate text-[10px] text-muted-foreground">
             {lora.repo_id}
             {lora.size_bytes > 0
-              ? ` · ${formatGb(lora.size_bytes / 1024 ** 3)}`
+              ? ` · ${formatFileSize(lora.size_bytes)}`
               : ""}
             {lora.source ? ` · ${lora.source}` : ""}
           </p>

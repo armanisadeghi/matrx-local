@@ -32,7 +32,10 @@ import {
 } from "@/components/ui/dialog";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { CustomImageModelInspectResult } from "@/lib/api";
-import { ErrorNote, formatGb } from "@/components/media-gen/shared";
+import { ErrorNote, gbToBytes } from "@/components/media-gen/shared";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 function ProposalBadge({ children }: { children: React.ReactNode }) {
   return (
@@ -173,7 +176,7 @@ export function AddCustomModelDialog({
                 </ProposalBadge>
                 <ProposalBadge>{proposal.entry.pipeline_type}</ProposalBadge>
                 <ProposalBadge>
-                  {formatGb(proposal.entry.size_gb)} download
+                  {formatFileSize(gbToBytes(proposal.entry.size_gb))} download
                 </ProposalBadge>
               </div>
               {proposal.entry.requires_hf_token && (
@@ -226,7 +229,8 @@ export function AddCustomModelDialog({
                   ) : (
                     <Download className="mr-1.5 h-3.5 w-3.5" />
                   )}
-                  Add &amp; download ({formatGb(proposal.entry.size_gb)})
+                  Add &amp; download (
+                  {formatFileSize(gbToBytes(proposal.entry.size_gb))})
                 </Button>
               </div>
             </div>

@@ -51,7 +51,6 @@ import {
   QueueNotice,
   ResetButton,
   SeedInput,
-  formatGb,
 } from "@/components/media-gen/shared";
 import {
   ImagePromptToolbar,
@@ -68,6 +67,9 @@ import {
   PROMPT_TEXTAREA_KEYS,
   ResizablePromptTextarea,
 } from "@/components/media-gen/prompts/ResizablePromptTextarea";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
@@ -534,7 +536,7 @@ export function AlternativeTextEncodersSection({
                     <Badge variant="secondary" className="text-[9px]">
                       <Download className="mr-1 h-2.5 w-2.5" />
                       {encoder.download_size_gb > 0
-                        ? formatGb(encoder.download_size_gb)
+                        ? formatFileSize(encoder.download_size_gb * 1024 ** 3)
                         : "On demand"}
                     </Badge>
                   )}

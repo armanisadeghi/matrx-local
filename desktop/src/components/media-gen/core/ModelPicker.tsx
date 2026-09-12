@@ -39,12 +39,15 @@ import {
   ResetButton,
   StarRating,
   findModelDownload,
-  formatGb,
+  gbToBytes,
   openExternalUrl,
 } from "@/components/media-gen/shared";
 import type { ImageGenController } from "./imageController";
 import type { VideoGenController } from "./videoController";
 import { AddCustomModelDialog } from "./AddCustomModelDialog";
+// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
+// census H1) — never a local byte→unit body.
+import { formatFileSize } from "@ai-matrx/kit/format";
 
 export type ModelPickerLayout = "grid" | "rows";
 
@@ -217,7 +220,7 @@ function ModelEntry({
         onClick={onDownload}
       >
         <Download className="h-3.5 w-3.5 mr-1.5" />
-        Download ({formatGb(model.download_size_gb)})
+        Download ({formatFileSize(gbToBytes(model.download_size_gb))})
       </Button>
     ) : (
       <Button
@@ -282,7 +285,8 @@ function ModelEntry({
               )}
             </p>
             <p className="text-[11px] text-muted-foreground truncate">
-              {model.provider} · {formatGb(model.download_size_gb)}
+              {model.provider} ·{" "}
+              {formatFileSize(gbToBytes(model.download_size_gb))}
               {model.requires_hf_token ? " · HF token" : ""}
               {imageToVideo ? " · image→video" : ""}
               {img2img ? " · img2img" : ""}
@@ -370,7 +374,7 @@ function ModelEntry({
       </div>
       <div className="flex flex-wrap gap-1.5 text-[10px]">
         <span className="rounded bg-muted px-1.5 py-0.5">
-          {formatGb(model.download_size_gb)} download
+          {formatFileSize(gbToBytes(model.download_size_gb))} download
         </span>
         <span className="rounded bg-muted px-1.5 py-0.5">
           VRAM: {model.vram_gb} GB

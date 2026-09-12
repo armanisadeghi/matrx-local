@@ -58,12 +58,20 @@ import {
   ResizablePromptTextarea,
 } from "@/components/media-gen/prompts/ResizablePromptTextarea";
 
-// ── Formatting helpers ───────────────────────────────────────────────────────
+// ── Unit conversion ──────────────────────────────────────────────────────────
 
-export function formatGb(gb: number): string {
-  if (gb <= 0) return "—";
-  if (gb < 1) return `${Math.round(gb * 1000)} MB`;
-  return `${gb.toFixed(1)} GB`;
+/**
+ * GB → bytes, for THE package byte formatter. `formatFileSize` takes BYTES
+ * (THE UNIT LAW), so the conversion belongs at the call site, not inside a
+ * second formatter — a local GB→string body is the twin this replaced.
+ *
+ * The media-gen APIs report an UNKNOWN download size as `0`, and an unknown
+ * size must read as an em-dash rather than a confident "0 B", so the sentinel
+ * becomes `null` — which is exactly what `formatFileSize` renders as "—".
+ * Returns a number, never a unit string.
+ */
+export function gbToBytes(gb: number): number | null {
+  return gb > 0 ? gb * 1024 ** 3 : null;
 }
 
 // ── Download matching ────────────────────────────────────────────────────────

@@ -58,12 +58,19 @@ def test_source_keychain_helper_reexecutes_run_entrypoint(
     assert command[2] == keychain_helper.HELPER_ARGUMENT
 
 
-def test_keychain_timeout_disables_encryption_without_retrying(
+def test_keychain_timeout_backs_off_then_retries_and_names_the_cause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(secret_store, "_fernet", None)
-    monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
+    monkeypatch.setattr(secret_store, "_fernet_unavailable_until", 0.0)
+    monkeypatch.setattr(secret_store, "_fernet_failures", 0)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        secret_store.logger, "warning", lambda msg, *args, **kw: warnings.append(msg % args)
+    )
     monkeypatch.setattr(secret_store.sys, "platform", "darwin")
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(secret_store.time, "monotonic", lambda: clock["now"])
     attempts: list[bool] = []
 
     def timeout():
@@ -74,21 +81,29 @@ def test_keychain_timeout_disables_encryption_without_retrying(
 
     with pytest.raises(secret_store.SecretEncryptionUnavailableError) as exc:
         secret_store.encryption_backend_or_raise()
-    with pytest.raises(secret_store.SecretEncryptionUnavailableError):
+    # Inside the back-off window the keychain is not hammered again…
+    with pytest.raises(secret_store.SecretEncryptionUnavailableError) as again:
         secret_store.encryption_backend_or_raise()
     assert attempts == [True]
-    assert secret_store._fernet_unavailable is True
+    assert "keychain helper timed out" in str(again.value)
+    # …and the cause is on the record instead of swallowed.
+    assert any("keychain helper timed out" in line for line in warnings)
     message = str(exc.value)
     assert "OS keychain" in message
     assert "cryptography plus keyring" in message
     assert "unpersisted" in message
+    # Once the window passes a fresh attempt is made — never a life-long refusal.
+    clock["now"] += secret_store._RETRY_BASE_SECONDS + 1
+    with pytest.raises(secret_store.SecretEncryptionUnavailableError):
+        secret_store.encryption_backend_or_raise()
+    assert attempts == [True, True]
 
 
 def test_product_code_has_no_isolated_test_plaintext_toggle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(secret_store, "_fernet", None)
-    monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
+    monkeypatch.setattr(secret_store, "_fernet_unavailable_until", 0.0)
     monkeypatch.setattr(
         secret_store,
         "read_key_from_helper",
@@ -105,7 +120,7 @@ def test_safe_encryption_path_still_round_trips(monkeypatch: pytest.MonkeyPatch)
     from cryptography.fernet import Fernet
 
     monkeypatch.setattr(secret_store, "_fernet", Fernet(Fernet.generate_key()))
-    monkeypatch.setattr(secret_store, "_fernet_unavailable", False)
+    monkeypatch.setattr(secret_store, "_fernet_unavailable_until", 0.0)
     stored = secret_store.protect("required-secret")
     assert stored and stored.startswith("enc:v1:")
     assert stored != "required-secret"

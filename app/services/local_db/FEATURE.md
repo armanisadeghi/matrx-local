@@ -42,7 +42,11 @@ phrase in the sync directories.
   leave the machine.** Credential writes raise `SecretEncryptionUnavailableError`
   when the OS keychain/Fernet backend is unavailable; plaintext/base64 is not an
   equivalent fallback. Historical plaintext remains readable but is never newly written.
-  Do not merge these secrets into the synced settings blob.
+  Do not merge these secrets into the synced settings blob. **A failed keychain read is
+  never permanent:** the backend retries after a bounded back-off (30 s doubling to
+  5 min) and logs the actual cause on every attempt — on 2026-09-12 one slow helper
+  answer at engine start was cached for the life of the process and every token save
+  returned 500 for hours with the cause swallowed. The macOS helper budget is 45 s.
 - `agents` — the EXACT offline mirror of `agx_get_list_full()`: the 19
   platform columns with the platform's names, the optional platform column
   `orchestra` (V33), plus `user_id`, `catalog_position`, `raw_json`,
@@ -121,6 +125,11 @@ conversation, not a test edit.
 
 ## Change log
 
+- 2026-09-12 — Token persistence and every chat-mirror write span now take the
+  process-wide SQLite gate. The gate is task-reentrant so a batched chat pull
+  can call a gated repository helper without deadlocking itself; this closes
+  the direct `POST /auth/token` and chat-sync bypasses that could still lose
+  the coding-session durable writer's lock.
 - 2026-09-12 — Lock errors on the shared connection roll the open transaction
   back (was: one lost race poisoned every later write with
   `SQLITE_BUSY_SNAPSHOT` until restart — catalog/tools sync, token save,
@@ -136,3 +145,4 @@ conversation, not a test edit.
   `agx_get_list_full()`; its source moved off the aidream `GET /agents` route,
   which could not see shared or org-shared agents (ruling D4).
 - 2026-08-21 — Credential writes refuse plaintext/base64 substitution when keychain encryption is unavailable.
+- 2026-09-12 — Keychain failures back off and retry instead of disabling encryption for the process; the cause is logged; helper budget 15 s → 45 s.

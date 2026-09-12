@@ -27,7 +27,10 @@ KEYRING_USERNAME = "db-encryption-key"
 # the boundary finite (the backend can still wait forever in
 # SecItemCopyMatching), but allow enough time for both bootstrap and a normal
 # Keychain round trip.
-KEYCHAIN_TIMEOUT_SECONDS = 15
+# Raised 15 → 45 on 2026-09-12: on a cold app start the helper competes with
+# the startup index warm-up and the SQLite repair for disk, and one answer
+# slower than 15 s cost every cloud lane its session for hours.
+KEYCHAIN_TIMEOUT_SECONDS = 45
 
 
 @contextmanager

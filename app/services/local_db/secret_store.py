@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 
 from app.common.keychain_helper import (
     KEYRING_SERVICE as _KEYRING_SERVICE,
@@ -36,11 +37,18 @@ from app.common.system_logger import get_logger
 logger = get_logger()
 
 _ENC_PREFIX = "enc:v1:"
-# Cache the resolved Fernet instance and unavailable state
-# so we hit the keychain at most once per process.
+# Cache the resolved Fernet instance. A FAILED keychain read is remembered
+# only for a bounded window and then retried: on 2026-09-12 one slow helper
+# answer at engine start (the helper competes with the startup index warm-up
+# for disk) was cached as "unavailable" for the life of the process, every
+# token save 500'd for hours, and nothing ever logged the actual cause.
 _fernet: object | None = None
-_fernet_unavailable = False
+_fernet_unavailable_until: float = 0.0
+_fernet_failures = 0
+_fernet_last_cause: str | None = None
 _fernet_lock = threading.Lock()
+_RETRY_BASE_SECONDS = 30.0
+_RETRY_MAX_SECONDS = 300.0
 
 
 class SecretEncryptionUnavailableError(RuntimeError):
@@ -55,22 +63,23 @@ def encryption_backend_or_raise():
     write. Plaintext is not equivalent encryption; restore keychain access or
     leave the credential unpersisted and re-authenticate.
     """
-    global _fernet, _fernet_unavailable
+    global _fernet, _fernet_unavailable_until, _fernet_failures, _fernet_last_cause
     if _fernet is not None:
         return _fernet
-    if _fernet_unavailable:
+    if time.monotonic() < _fernet_unavailable_until:
         raise SecretEncryptionUnavailableError(
             "Credential encryption was requested, but the OS keychain-backed "
-            "Fernet backend is unavailable. Unlock/repair the OS keychain and "
-            "install cryptography plus keyring (non-macOS), then retry. The honest "
-            "alternative is to leave the credential unpersisted and re-authenticate; "
-            "plaintext storage is refused."
+            f"Fernet backend is unavailable (last cause: {_fernet_last_cause}; "
+            f"retrying in {max(0.0, _fernet_unavailable_until - time.monotonic()):.0f}s). "
+            "Unlock/repair the OS keychain and install cryptography plus keyring "
+            "(non-macOS), then retry. The honest alternative is to leave the "
+            "credential unpersisted and re-authenticate; plaintext storage is refused."
         )
 
     with _fernet_lock:
         if _fernet is not None:
             return _fernet
-        if _fernet_unavailable:
+        if time.monotonic() < _fernet_unavailable_until:
             return encryption_backend_or_raise()
 
         try:
@@ -89,9 +98,29 @@ def encryption_backend_or_raise():
                         "[secret_store] generated new DB encryption key in OS keychain"
                     )
             _fernet = Fernet(key.encode("ascii"))
+            if _fernet_failures:
+                logger.info(
+                    "[secret_store] OS keychain is back after %s failed attempt(s)",
+                    _fernet_failures,
+                )
+            _fernet_failures = 0
+            _fernet_last_cause = None
             return _fernet
         except Exception as exc:
-            _fernet_unavailable = True
+            _fernet_failures += 1
+            _fernet_last_cause = f"{type(exc).__name__}: {exc}"[:300]
+            backoff = min(
+                _RETRY_MAX_SECONDS, _RETRY_BASE_SECONDS * (2 ** (_fernet_failures - 1))
+            )
+            _fernet_unavailable_until = time.monotonic() + backoff
+            # Every caller used to swallow the cause. It is the ONE fact anyone
+            # debugging this needs, so it is logged here, once per attempt.
+            logger.warning(
+                "[secret_store] OS keychain DEK unavailable (attempt %s, retry in %.0fs): %s",
+                _fernet_failures,
+                backoff,
+                _fernet_last_cause,
+            )
             raise SecretEncryptionUnavailableError(
                 "Credential encryption was requested, but the OS keychain-backed "
                 f"Fernet backend could not be loaded ({exc}). Unlock/repair the OS "

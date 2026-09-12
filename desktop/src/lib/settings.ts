@@ -70,6 +70,8 @@ export interface AppSettings {
   chatDefaultSystemPromptId: string; // "" = use builtin assistant
   claude_label_sync_auto_enabled: boolean;
   claude_label_sync_interval_minutes: number;
+  /** Delivery lanes the coding-session bridge publishes at once (1-32). */
+  coding_session_delivery_concurrency: number;
 
   // ── Local LLM inference ─────────────────────────────────────────────
   llmDefaultModel: string; // filename of preferred local model ("" = auto)
@@ -200,6 +202,7 @@ const DEFAULTS: AppSettings = {
   chatDefaultSystemPromptId: "",
   claude_label_sync_auto_enabled: true,
   claude_label_sync_interval_minutes: 15,
+  coding_session_delivery_concurrency: 8,
   // Local LLM
   llmDefaultModel: "",
   llmDefaultGpuLayers: -1,
@@ -805,6 +808,11 @@ export function mergeCloudSettings(
       "claude_label_sync_interval_minutes",
       local.claude_label_sync_interval_minutes,
     ),
+    coding_session_delivery_concurrency: cloudNum(
+      cloud,
+      "coding_session_delivery_concurrency",
+      local.coding_session_delivery_concurrency,
+    ),
     // UI
     sidebarCollapsed: cloudBool(
       cloud,
@@ -903,6 +911,8 @@ export function settingsToCloud(
     claude_label_sync_auto_enabled: settings.claude_label_sync_auto_enabled,
     claude_label_sync_interval_minutes:
       settings.claude_label_sync_interval_minutes,
+    coding_session_delivery_concurrency:
+      settings.coding_session_delivery_concurrency,
     // UI
     sidebar_collapsed: settings.sidebarCollapsed,
   };

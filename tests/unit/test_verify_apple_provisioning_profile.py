@@ -86,13 +86,69 @@ def test_host_rejects_team_wildcard_instead_of_its_exact_signed_team() -> None:
         profile_verifier.assert_signed_contract("host", signed_host)
 
 
+def test_host_requires_type_exact_values_for_its_intended_claims() -> None:
+    _, expected_host, _ = profile_verifier.expected_contract("host")
+    signed_host = dict(expected_host)
+    signed_host["com.apple.security.application-groups"] = (profile_verifier.STATUS_GROUP,)
+
+    with pytest.raises(ValueError, match="must equal"):
+        profile_verifier.assert_signed_contract("host", signed_host)
+
+
+def test_host_allows_nonrestricted_runtime_claims_outside_its_intended_contract() -> None:
+    _, expected_host, _ = profile_verifier.expected_contract("host")
+    signed_host = dict(expected_host)
+    signed_host["com.apple.security.network.client"] = True
+
+    profile_verifier.assert_signed_contract("host", signed_host)
+
+
 def test_provider_rejects_unreviewed_healthkit_claim_even_when_profile_grants_it() -> None:
     signed = signed_provider()
     signed["com.apple.developer.healthkit"] = True
     profile = provider_profile()
     profile["com.apple.developer.healthkit"] = True
-    with pytest.raises(ValueError, match="com.apple.developer.healthkit.*outside the reviewed native contract"):
+    with pytest.raises(ValueError, match="exactly match"):
         profile_verifier.assert_signed_contract("provider", signed)
+
+
+@pytest.mark.parametrize(
+    "extra_claim",
+    [
+        "com.apple.security.cs.disable-library-validation",
+        "com.apple.security.cs.allow-unsigned-executable-memory",
+        "com.apple.security.network.server",
+        "com.apple.security.device.camera",
+    ],
+)
+def test_provider_rejects_each_runtime_privilege_outside_its_exact_signed_contract(
+    extra_claim: str,
+) -> None:
+    signed = signed_provider()
+    signed[extra_claim] = True
+
+    with pytest.raises(ValueError, match="exactly match"):
+        profile_verifier.assert_signed_contract("provider", signed)
+
+
+@pytest.mark.parametrize(
+    ("claim", "replacement"),
+    [
+        ("com.apple.security.app-sandbox", 1),
+        ("com.apple.security.network.client", 1),
+        ("com.apple.security.application-groups", (profile_verifier.STATUS_GROUP,)),
+    ],
+)
+def test_provider_requires_type_exact_signed_claim_values(claim: str, replacement: object) -> None:
+    signed = signed_provider()
+    signed[claim] = replacement
+
+    with pytest.raises(ValueError, match="exactly match"):
+        profile_verifier.assert_signed_contract("provider", signed)
+
+
+def test_provider_accepts_the_complete_exact_seven_claim_contract() -> None:
+    profile_verifier.assert_signed_contract("provider", signed_provider())
 
 
 def test_sandbox_and_network_are_signed_requirements_not_profile_requirements() -> None:

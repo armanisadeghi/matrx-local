@@ -145,10 +145,28 @@ def is_restricted_signed_entitlement(key: object) -> bool:
     )
 
 
+def values_are_type_exact(actual: object, expected: object) -> bool:
+    """Compare plist values without Python's bool/int equivalence loophole."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            values_are_type_exact(actual[key], value) for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            values_are_type_exact(value, expected_value)
+            for value, expected_value in zip(actual, expected, strict=True)
+        )
+    return actual == expected
+
+
 def assert_signed_contract(kind: str, signed_entitlements: dict[object, object]) -> None:
     _, expected_signed, _ = expected_contract(kind)
+    if kind == "provider" and not values_are_type_exact(signed_entitlements, expected_signed):
+        fail("signed provider entitlements must exactly match the reviewed native contract")
     for key, expected_value in expected_signed.items():
-        if signed_entitlements.get(key) != expected_value:
+        if not values_are_type_exact(signed_entitlements.get(key), expected_value):
             fail(f"signed {kind} entitlement {key!r} must equal {expected_value!r}")
     if kind == "host":
         for key in ("keychain-access-groups", "com.apple.security.keychain-access-groups"):

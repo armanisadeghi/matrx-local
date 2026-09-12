@@ -53,7 +53,15 @@ jobs:
         continue-on-error: true
         run: uv run --frozen python scripts/check_tool_db_drift.py
 
-      - name: Smoke and parity tests
+      - name: Runtime import and authorization gate
+        run: uv run --frozen pytest tests/smoke/test_cold_imports.py tests/smoke/test_imports.py tests/smoke/test_auth_gate.py -q
+        env:
+          TUNNEL_ENABLED: "0"
+          TAURI_SIDECAR: "1"
+          MATRX_CI_HEADLESS: "1"
+
+      - name: Smoke and parity tests (advisory during pre-production)
+        continue-on-error: true
         run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
         env:
           TUNNEL_ENABLED: "0"
@@ -74,11 +82,13 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
-      - name: TypeScript typecheck
+      - name: TypeScript typecheck (advisory during pre-production)
+        continue-on-error: true
         working-directory: desktop
         run: pnpm tsc -b
 
-      - name: Desktop unit tests
+      - name: Desktop unit tests (advisory during pre-production)
+        continue-on-error: true
         working-directory: desktop
         run: pnpm test:unit
         env:

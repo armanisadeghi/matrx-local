@@ -721,6 +721,8 @@ export interface ClaudeConversation {
   pinned_rank: number | null;
   category: string | null;
   archived: boolean;
+  /** false = the transcript exists on disk but Claude's sidebar never indexed it (CLI-only). */
+  in_claude_sidebar: boolean;
   cloud: {
     conversation_id: string | null;
     fidelity: string | null;
@@ -756,6 +758,9 @@ export interface ClaudeOverview {
     conversations: number;
     pinned: number;
     index_files_read: number;
+    /** Transcripts on disk with no Claude sidebar record — listed, never hidden. */
+    transcript_only: number;
+    transcripts_on_disk: number;
     unreadable: number;
     in_cloud: number;
     changed: number;

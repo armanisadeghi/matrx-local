@@ -313,11 +313,14 @@ def _read_summary(
                     break
                 candidates.append(line)
                 remaining -= len(line)
+    first_prompt: str | None = None
     for raw in candidates:
         record = _safe_json(raw)
         if record is None:
             continue
         record_type = record.get("type")
+        if first_prompt is None and record_type == "user":
+            first_prompt = _first_prompt_text(record)
         candidate_title = (
             record.get("customTitle")
             if record_type == "custom-title"
@@ -332,7 +335,51 @@ def _read_summary(
         if isinstance(record.get("gitBranch"), str) and record["gitBranch"]:
             git_branch = record["gitBranch"][:160]
     project_name = Path(cwd).name if cwd else "Local Claude project"
-    return title or f"Claude session {session_id[:8]}", project_name, git_branch
+    # A session started from the plain `claude` CLI has no title record at all.
+    # Claude's own sidebar names such a session by its opening message, and so
+    # does this — a placeholder id told nobody what 80 conversations were.
+    return (
+        title or first_prompt or f"Claude session {session_id[:8]}",
+        project_name,
+        git_branch,
+    )
+
+
+_MACHINE_PROMPT_PREFIXES = (
+    "<task-notification>",
+    "<system-reminder>",
+    "<command-name>",
+    "<local-command",
+    "Caveat: The messages below",
+)
+
+
+def _first_prompt_text(record: dict[str, Any]) -> str | None:
+    """The user's opening words, or None if this record is not a human turn."""
+    if record.get("isMeta") or record.get("isSidechain"):
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                return None
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        text = " ".join(parts)
+    else:
+        return None
+    text = " ".join(text.split()).strip()
+    if not text or text.startswith(_MACHINE_PROMPT_PREFIXES):
+        return None
+    return text[:160]
 
 
 def _discover_sources(

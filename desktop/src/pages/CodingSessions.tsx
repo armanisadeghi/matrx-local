@@ -638,6 +638,14 @@ export function CodingSessions() {
                     </td>
                     <td className="max-w-md truncate px-4 py-2">
                       {row.title}
+                      {!row.in_claude_sidebar && (
+                        <span
+                          className="ml-2 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+                          title="On this Mac, but Claude's sidebar never listed it (started from the CLI). It syncs like any other."
+                        >
+                          CLI only
+                        </span>
+                      )}
                       {row.category && (
                         <span className="ml-2 text-xs text-muted-foreground">
                           {row.category}

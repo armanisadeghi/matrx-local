@@ -68,6 +68,8 @@ export interface AppSettings {
   chatDefaultMode: "chat" | "co-work" | "code";
   chatMaxConversations: number;
   chatDefaultSystemPromptId: string; // "" = use builtin assistant
+  claude_label_sync_auto_enabled: boolean;
+  claude_label_sync_interval_minutes: number;
 
   // ── Local LLM inference ─────────────────────────────────────────────
   llmDefaultModel: string; // filename of preferred local model ("" = auto)
@@ -196,6 +198,8 @@ const DEFAULTS: AppSettings = {
   chatDefaultMode: "chat",
   chatMaxConversations: 100,
   chatDefaultSystemPromptId: "",
+  claude_label_sync_auto_enabled: true,
+  claude_label_sync_interval_minutes: 15,
   // Local LLM
   llmDefaultModel: "",
   llmDefaultGpuLayers: -1,
@@ -790,6 +794,17 @@ export function mergeCloudSettings(
       "extension_broadcast_enabled",
       local.extensionBroadcastEnabled,
     ),
+    // Claude Code metadata reconciliation
+    claude_label_sync_auto_enabled: cloudBool(
+      cloud,
+      "claude_label_sync_auto_enabled",
+      local.claude_label_sync_auto_enabled,
+    ),
+    claude_label_sync_interval_minutes: cloudNum(
+      cloud,
+      "claude_label_sync_interval_minutes",
+      local.claude_label_sync_interval_minutes,
+    ),
     // UI
     sidebarCollapsed: cloudBool(
       cloud,
@@ -884,6 +899,10 @@ export function settingsToCloud(
     file_sync_mode: settings.fileSyncMode,
     // Extension bridge
     extension_broadcast_enabled: settings.extensionBroadcastEnabled,
+    // Claude Code metadata reconciliation
+    claude_label_sync_auto_enabled: settings.claude_label_sync_auto_enabled,
+    claude_label_sync_interval_minutes:
+      settings.claude_label_sync_interval_minutes,
     // UI
     sidebar_collapsed: settings.sidebarCollapsed,
   };

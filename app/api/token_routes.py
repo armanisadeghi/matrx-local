@@ -23,8 +23,15 @@ from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
 from app.api.remote_auth import (
     invalidate_token,
+    missing_supabase_config,
     verify_supabase_token_result,
 )
+from app.services.action_needed import (
+    ActionNeeded,
+    ActionNeededAction,
+    ActionNeededKind,
+)
+from app.services.action_needed.registry import get_action_needed_registry
 from app.services.local_db.repositories import TokenRepo
 from app.services.ai.engine import clear_jwt_cache, set_jwt_cache
 
@@ -44,6 +51,55 @@ def _broadcast_enabled() -> bool:
     from app.api.extension_broadcast import is_broadcast_enabled
 
     return is_broadcast_enabled()
+
+
+# A configuration fault that no user can act on still has to reach a human.
+# The canonical way to do that is an action-needed item: the desktop harvests
+# `detail.action_needed` off any non-OK response body and renders a persistent,
+# remedy-bearing card (desktop/src/lib/api.ts), and the registry keeps it in the
+# reconnect snapshot until this same operation succeeds. Both are existing
+# platform primitives — no client code exists for this case.
+_SESSION_VERIFICATION_OPERATION = "auth:session-verification"
+
+
+def _config_fault_action_needed(
+    *, code: str, message: str, details: dict[str, Any]
+) -> ActionNeeded:
+    """Build the one card for 'the account service will not talk to this app'."""
+    return ActionNeeded(
+        # Source-owned and stable: the same fault arriving over another lane or
+        # after a reconnect is shown once, not once per sign-in attempt.
+        fingerprint=f"auth-config:{code}",
+        code=code,
+        kind=ActionNeededKind.API_KEY,
+        feature="Sign-in",
+        title="This app cannot reach your AI Matrx account",
+        message=message,
+        action=ActionNeededAction(
+            kind="settings_cloud_account",
+            label="Open Cloud & Account",
+            route="/settings?tab=cloud",
+        ),
+        source="auth",
+        details=details,
+    )
+
+
+async def _raise_config_fault(
+    *, code: str, message: str, details: dict[str, Any]
+) -> None:
+    item = _config_fault_action_needed(code=code, message=message, details=details)
+    await get_action_needed_registry().reconcile_operation(
+        _SESSION_VERIFICATION_OPERATION, item
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": code,
+            "message": message,
+            "action_needed": item.model_dump(mode="json", exclude_none=True),
+        },
+    )
 
 
 class TokenRequest(BaseModel):
@@ -73,12 +129,12 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     next scheduled sync interval.
     """
     verification = await verify_supabase_token_result(req.access_token)
+    # Two OUR-CONFIGURATION faults, neither of them the user's session. Telling
+    # them to sign in again would be a lie they could never act on, and clearing
+    # the stored token would destroy a session that is very probably fine. Both
+    # keep the stored session, leave the verification cache alone, and raise a
+    # persistent action-needed card instead of a message only the log file sees.
     if verification.status == "misconfigured":
-        # The account service rejected THIS APP's API key, not the user's
-        # session. Telling them to sign in again would be a lie they could
-        # never act on, and clearing the stored token would destroy a session
-        # that is very probably fine. Say what actually happened, keep the
-        # stored session, and leave the verification cache alone.
         logger.error(
             "[token_routes] session verification blocked by a configuration "
             "fault: the account service rejected this engine's API key. "
@@ -86,20 +142,41 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
             "Remedy: fix the engine's Supabase publishable key.",
             req.user_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "account_service_key_rejected",
-                "message": (
-                    "The AI Matrx account service rejected this app's API key, "
-                    "so your sign-in could not be verified. This is a problem "
-                    "with the app's configuration, not with your account — "
-                    "signing in again will not help, and your saved session "
-                    "was left untouched."
-                ),
-            },
+        await _raise_config_fault(
+            code="account_service_key_rejected",
+            message=(
+                "The AI Matrx account service rejected this app's API key, so "
+                "your sign-in could not be verified. This is a problem with the "
+                "app's configuration, not with your account — signing in again "
+                "will not help, and your saved session was left untouched. "
+                "Update AI Matrx, or contact support if it is already current."
+            ),
+            details={"reason": "api_key_rejected"},
         )
-    if verification.status in {"unavailable", "unconfigured"}:
+    if verification.status == "unconfigured":
+        missing = missing_supabase_config()
+        logger.error(
+            "[token_routes] session verification blocked by a configuration "
+            "fault: this engine has no account-service configuration (%s). "
+            "Stored session kept; user_id=%s was NOT signed out. "
+            "Remedy: ship/restore that configuration and restart the engine.",
+            ", ".join(missing) or "unknown",
+            req.user_id,
+        )
+        await _raise_config_fault(
+            code="account_service_not_configured",
+            message=(
+                "This copy of AI Matrx has no account-service settings, so it "
+                "cannot verify any sign-in. This is a problem with the app's "
+                "configuration, not with your account — signing in again will "
+                "not help, and your saved session was left untouched. Update "
+                "AI Matrx, or contact support if it is already current."
+            ),
+            details={"reason": "not_configured", "missing": missing},
+        )
+    if verification.status == "unavailable":
+        # Genuinely a network/issuer outage — the one case where "check the
+        # connection and try again" is honest advice.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -164,6 +241,11 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     )
     # Keep the in-memory cache hot so matrx-ai picks up the new token immediately.
     set_jwt_cache(req.access_token)
+    # The source owns the requirement through retry success: a verification that
+    # worked is the proof the configuration fault is gone, so the card clears.
+    await get_action_needed_registry().reconcile_operation(
+        _SESSION_VERIFICATION_OPERATION, None
+    )
     logger.info(
         "[token_routes] JWT saved for user_id=%s expires_at=%s — triggering background agent sync",
         req.user_id,

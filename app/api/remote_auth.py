@@ -176,6 +176,39 @@ def _cache_put(key: str, value: Optional[VerifiedUser]) -> None:
 _API_KEY_ERROR_CODES = {"no_api_key", "invalid_api_key", "api_key_invalid"}
 
 
+def missing_supabase_config() -> list[str]:
+    """Name the account-service settings this engine is missing (in order)."""
+    missing: list[str] = []
+    if not SUPABASE_URL:
+        missing.append("SUPABASE_URL")
+    if not SUPABASE_PUBLISHABLE_KEY:
+        missing.append("SUPABASE_PUBLISHABLE_KEY")
+    return missing
+
+
+# The unconfigured check is purely local, so it can be reached on EVERY
+# authenticated request. Announce it loudly once per process (the persistent
+# action-needed card raised by token_routes is the surface that keeps saying
+# it), then stay at DEBUG so one broken build cannot bury the log file.
+_unconfigured_logged: set[str] = set()
+
+
+def _log_unconfigured_once() -> None:
+    missing = missing_supabase_config()
+    signature = ",".join(missing)
+    message = (
+        "[remote_auth] MISCONFIGURATION: this engine cannot verify any session "
+        "because its account-service configuration is missing (%s). No user "
+        "session is at fault and signing in again cannot help. Remedy: set %s "
+        "for https://db.matrxserver.com and restart the engine."
+    )
+    if signature in _unconfigured_logged:
+        logger.debug(message, signature, signature)
+        return
+    _unconfigured_logged.add(signature)
+    logger.error(message, signature, signature)
+
+
 def _issuer_error_fields(resp) -> tuple[str, str]:
     """Return (error_code, message) from an issuer error body; never raises."""
     try:
@@ -215,6 +248,7 @@ async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
     if not token:
         return TokenVerificationResult("invalid")
     if not (SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY):
+        _log_unconfigured_once()
         return TokenVerificationResult("unconfigured")
 
     key = _token_key(token)

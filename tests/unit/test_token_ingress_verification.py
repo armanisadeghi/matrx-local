@@ -472,3 +472,206 @@ async def test_api_key_rejection_keeps_the_stored_session_and_says_so(
     assert repo.row is not None and repo.row["access_token"] == "posted-token"
     assert invalidated == []
     assert outbox.credential_changes == 0
+
+
+# ---------------------------------------------------------------------------
+# A configuration fault the user cannot act on still has to reach a human:
+# both our-fault statuses raise the canonical action-needed card on the 503
+# body (harvested by desktop/src/lib/api.ts) and register it so it survives a
+# reconnect. And "we were never configured at all" is the same class as "our
+# key was rejected" — it must never be dressed up as a network problem the
+# user should re-authenticate through.
+# ---------------------------------------------------------------------------
+
+
+class _BrokenBodyResponse:
+    """An issuer error whose body is not JSON at all (gateway HTML, etc.)."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    def json(self) -> dict[str, Any]:
+        raise ValueError("not JSON")
+
+
+@pytest.fixture
+def clean_action_needed_registry():
+    from app.services.action_needed.registry import get_action_needed_registry
+
+    registry = get_action_needed_registry()
+    yield registry
+
+
+async def _registered_auth_items(registry) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for snapshot in await registry.snapshots():
+        if snapshot.get("type") != "action_needed_snapshot":
+            continue
+        items.extend(
+            item
+            for item in snapshot.get("items", [])
+            if str(item.get("fingerprint", "")).startswith("auth-config:")
+        )
+    return items
+
+
+@pytest.mark.anyio
+async def test_unparseable_error_body_stays_an_invalid_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No positive evidence about our key -> never blamed on our configuration."""
+    _issuer_returning(monkeypatch)
+    monkeypatch.setattr(
+        remote_auth.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _HTTPClient([_BrokenBodyResponse(401)], []),
+    )
+
+    result = await remote_auth.verify_supabase_token_result("some-token")
+
+    assert result.status == "invalid"
+
+
+@pytest.mark.anyio
+async def test_missing_account_service_config_is_logged_with_its_remedy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote_auth._verify_cache.clear()
+    monkeypatch.setattr(remote_auth, "_unconfigured_logged", set())
+    monkeypatch.setattr(remote_auth, "SUPABASE_URL", "https://configured.example")
+    monkeypatch.setattr(remote_auth, "SUPABASE_PUBLISHABLE_KEY", "")
+
+    with _engine_logs() as records:
+        result = await remote_auth.verify_supabase_token_result("any-token")
+        repeat = await remote_auth.verify_supabase_token_result("any-token")
+
+    assert result.status == "unconfigured"
+    assert repeat.status == "unconfigured"
+    errors = [r for r in records if r.levelno >= logging.ERROR]
+    # Loud once per process; the persistent card is what keeps saying it.
+    assert len(errors) == 1
+    text = errors[0].getMessage()
+    assert "MISCONFIGURATION" in text
+    assert "SUPABASE_PUBLISHABLE_KEY" in text
+    assert "SUPABASE_URL" not in text  # only what is ACTUALLY missing
+    assert "restart the engine" in text
+
+
+@pytest.mark.anyio
+async def test_unconfigured_engine_is_a_config_fault_not_a_connection_problem(
+    monkeypatch: pytest.MonkeyPatch,
+    token_route_fakes,
+    clean_action_needed_registry,
+) -> None:
+    repo, outbox = token_route_fakes
+    invalidated: list[str] = []
+    monkeypatch.setattr(token_routes, "invalidate_token", invalidated.append)
+    monkeypatch.setattr(
+        token_routes, "missing_supabase_config", lambda: ["SUPABASE_PUBLISHABLE_KEY"]
+    )
+
+    async def _verify(_token: str) -> TokenVerificationResult:
+        return TokenVerificationResult("unconfigured")
+
+    monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
+    with pytest.raises(HTTPException) as raised:
+        await token_routes.save_token(
+            token_routes.TokenRequest(access_token="previous-token", user_id="user-1")
+        )
+
+    detail = raised.value.detail
+    assert raised.value.status_code == 503
+    assert detail["code"] == "account_service_not_configured"
+    assert "signing in again will not help" in detail["message"].lower()
+    assert "check the connection" not in detail["message"].lower()
+    # The card the desktop harvests off the error body.
+    card = detail["action_needed"]
+    assert card["kind"] == "api_key"
+    assert card["fingerprint"] == "auth-config:account_service_not_configured"
+    assert card["action"]["route"] == "/settings?tab=cloud"
+    assert card["details"]["missing"] == ["SUPABASE_PUBLISHABLE_KEY"]
+    # Stored session untouched even though it IS the posted token.
+    assert repo.cleared == 0
+    assert repo.row is not None and repo.row["access_token"] == "previous-token"
+    assert invalidated == []
+    assert outbox.credential_changes == 0
+
+    registered = await _registered_auth_items(clean_action_needed_registry)
+    assert [item["code"] for item in registered] == ["account_service_not_configured"]
+
+
+@pytest.mark.anyio
+async def test_real_invalid_api_key_response_reaches_the_user_as_a_card(
+    monkeypatch: pytest.MonkeyPatch,
+    token_route_fakes,
+    clean_action_needed_registry,
+) -> None:
+    """End to end: the issuer's real 401 body drives the whole save_token path.
+
+    Nothing between the HTTP response and the 503 is mocked — this is the seam
+    the classifier and the route meet at.
+    """
+    repo, _outbox = token_route_fakes
+    _issuer_returning(
+        monkeypatch,
+        _Response(
+            401,
+            {
+                "message": "Invalid API key",
+                "hint": "Double check your Supabase `anon` or `service_role` API key.",
+            },
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await token_routes.save_token(
+            token_routes.TokenRequest(access_token="previous-token", user_id="user-1")
+        )
+
+    detail = raised.value.detail
+    assert raised.value.status_code == 503
+    assert detail["code"] == "account_service_key_rejected"
+    assert "sign in again" not in detail["message"].lower().replace(
+        "signing in again will not help", ""
+    )
+    card = detail["action_needed"]
+    assert card["kind"] == "api_key"
+    assert card["code"] == "account_service_key_rejected"
+    assert card["action"]["label"] == "Open Cloud & Account"
+    assert repo.cleared == 0
+    assert repo.row is not None and repo.row["access_token"] == "previous-token"
+
+    registered = await _registered_auth_items(clean_action_needed_registry)
+    assert [item["code"] for item in registered] == ["account_service_key_rejected"]
+
+
+@pytest.mark.anyio
+async def test_a_working_sign_in_clears_the_configuration_card(
+    monkeypatch: pytest.MonkeyPatch,
+    token_route_fakes,
+    clean_action_needed_registry,
+) -> None:
+    """The source owns the requirement through retry success."""
+    _repo, _outbox = token_route_fakes
+
+    async def _broken(_token: str) -> TokenVerificationResult:
+        return TokenVerificationResult("misconfigured")
+
+    monkeypatch.setattr(token_routes, "verify_supabase_token_result", _broken)
+    with pytest.raises(HTTPException):
+        await token_routes.save_token(
+            token_routes.TokenRequest(access_token="posted", user_id="user-1")
+        )
+    assert await _registered_auth_items(clean_action_needed_registry)
+
+    async def _fixed(_token: str) -> TokenVerificationResult:
+        return TokenVerificationResult(
+            "verified", VerifiedUser(user_id="user-1", email=None, is_anon=False)
+        )
+
+    monkeypatch.setattr(token_routes, "verify_supabase_token_result", _fixed)
+    await token_routes.save_token(
+        token_routes.TokenRequest(access_token="posted", user_id="user-1")
+    )
+
+    assert await _registered_auth_items(clean_action_needed_registry) == []

@@ -11,11 +11,6 @@ contract: `app/services/coding_sessions/FEATURE.md`.
 
 ## OAuth callback handling
 
-`auth.py::oauth_callback` forwards only a nonempty PKCE `code` and `state`
-pair to direct local WebSocket clients. It refuses implicit-token or incomplete
-callbacks and never forwards arbitrary query parameters or logs callback values.
-The remote/tunnel exclusion remains mandatory.
-
 The desktop's `src/lib/oauth.ts` retains one local transaction containing an
 independent random state, verifier and exact redirect URI. Both web and native
 callback consumers claim that transaction before exchanging a code; the verifier
@@ -24,6 +19,12 @@ state before consuming an early callback, so stale callbacks cannot steal a new
 sign-in attempt. `AuthCallback.tsx` uses Supabase `setSession`, not hand-written
 SDK storage. These are existing desktop sign-in mechanics, not a native passkey
 provider implementation or secure native Keychain session claim.
+
+There is no engine `/auth/callback` or WebSocket callback transport. Web
+development binds exactly `http://localhost:1420/auth/callback`; packaged Tauri
+uses exactly `aimatrx://auth/callback` through the native deep-link event. The
+engine's request and structured access logs redact `code`, `state`, and token
+values for every route.
 
 ## Coding-session command-hook ingress
 

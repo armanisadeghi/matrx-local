@@ -74,7 +74,63 @@ def test_unhandled_exception_returns_a_cors_visible_500(failing_app: FastAPI) ->
     assert body["failure_id"], "a failure must be traceable to a log line"
     assert body["path"] == "/boom"
     assert body["method"] == "GET"
-    assert "detail" in body
+    assert "database is locked" in body["detail"]
+    assert "Retry the operation" in body["hint"]
+
+
+def test_failure_diagnostics_redact_captured_request_credentials() -> None:
+    """A real request shape must not leak opaque header/query/body secrets."""
+    from starlette.requests import Request
+
+    from app.main import _failure_description, _format_request_details
+
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/boom",
+        "query_string": b"x-api-key=query-secret&safe=ok",
+        "headers": [
+            (b"x-api-key", b"header-secret"),
+            (b"authorization", b"Bearer bearer-secret"),
+        ],
+        "scheme": "http",
+        "server": ("engine.test", 80),
+    })
+    diagnostics = _format_request_details(
+        request,
+        {"nested": {"refreshToken": "body-secret"}, "safe": "ok"},
+    )
+    detail, hint = _failure_description(
+        RuntimeError("remote response x-api-key=exception-secret"), "POST", "/boom",
+        secret_values=("exception-secret",),
+    )
+
+    for secret in ("query-secret", "header-secret", "bearer-secret", "body-secret", "exception-secret"):
+        assert secret not in f"{diagnostics} {detail} {hint}"
+    assert "[REDACTED]" in diagnostics
+    assert "RuntimeError" in detail
+
+
+def test_exception_logging_includes_and_redacts_the_root_reason(caplog) -> None:
+    """A generic exc_info log line stays actionable without leaking credentials."""
+    import logging
+
+    from app.common.system_logger import SensitiveDataFilter
+
+    logger = logging.getLogger("failure-visibility-test")
+    logger.handlers.clear()
+    logger.propagate = True
+    logger.addFilter(SensitiveDataFilter())
+    with caplog.at_level(logging.WARNING, logger="failure-visibility-test"):
+        try:
+            raise RuntimeError("sync failed x-api-key=exception-secret")
+        except RuntimeError:
+            logger.warning("chat sync tick crashed", exc_info=True)
+
+    message = caplog.records[-1].getMessage()
+    assert "RuntimeError: sync failed" in message
+    assert "exception-secret" not in message
+    assert "[REDACTED]" in message
 
 
 def test_unhandled_exception_is_recorded_in_the_access_log(failing_app: FastAPI) -> None:
@@ -88,6 +144,49 @@ def test_unhandled_exception_is_recorded_in_the_access_log(failing_app: FastAPI)
 
     asyncio.run(_run())
     assert 500 in _recent_statuses(), "a 500 must be visible in the access log"
+
+
+def test_callback_credentials_are_absent_from_request_and_structured_access_logs(caplog) -> None:
+    """The actual middleware must never log any OAuth callback value or fragment."""
+    import logging
+    import app.common.access_log as access_log
+
+    from app.main import _log_requests_dispatch
+
+    callback_app = FastAPI()
+
+    @callback_app.get("/auth/callback")
+    async def callback() -> None:
+        raise RuntimeError("callback failed")
+
+    callback_app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests_dispatch)
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=callback_app, raise_app_exceptions=False),
+            base_url="http://engine.test",
+            timeout=30.0,
+        ) as client:
+            await client.get(
+                "/auth/callback?code=test-oauth-code&state=test-oauth-state&token=test-oauth-token&safe=ok"
+            )
+
+    app_logger = logging.getLogger("system_logger")
+    app_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="system_logger"):
+            asyncio.run(_run())
+    finally:
+        app_logger.removeHandler(caplog.handler)
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    entry = access_log.recent(1)[0]
+    serialized_entry = str(entry)
+    for secret in ("test-oauth-code", "test-oauth-state", "test-oauth-token"):
+        assert secret not in messages
+        assert secret not in serialized_entry
+    assert "code=[REDACTED]" in messages
+    assert entry["query"] == "code=%5BREDACTED%5D&state=%5BREDACTED%5D&token=%5BREDACTED%5D&safe=ok"
 
 
 def test_auth_rejection_is_recorded_in_the_access_log() -> None:
@@ -116,3 +215,10 @@ def test_auth_rejection_is_recorded_in_the_access_log() -> None:
 
     assert response.status_code == 401
     assert 401 in _recent_statuses()
+
+
+def test_engine_has_no_public_oauth_callback_transport() -> None:
+    """OAuth callbacks are delivered only to Vite or the native deep-link handler."""
+    from app.main import app
+
+    assert "/auth/callback" not in app.openapi()["paths"]

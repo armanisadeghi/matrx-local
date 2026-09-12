@@ -37,7 +37,6 @@
  * Registered redirect URIs on OAuth client af37ec97-...:
  *   - http://localhost:1420/auth/callback   (Vite dev)
  *   - aimatrx://auth/callback              (Tauri production, all platforms)
- *   (keep http://localhost:22140/auth/callback for fallback/testing)
  *
  * Email / password still uses supabase.auth.signInWithPassword() directly —
  * that flow does not go through OAuth.

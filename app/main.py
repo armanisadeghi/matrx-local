@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import sys
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -27,7 +28,7 @@ from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
-from app.api.auth import AuthMiddleware, auth_router
+from app.api.auth import AuthMiddleware
 from app.launcher import get_registry as _get_launcher_registry
 from app.api.token_routes import router as token_router
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
@@ -215,62 +216,108 @@ async def _ensure_playwright_browsers() -> None:
     _browser_install_task.add_done_callback(lambda _: None)  # suppress GC warning
 
 
-# JWT truncation for verbose request logging (show first/last parts only)
-_JWT_HEAD = 20
-_JWT_TAIL = 12
+# Request diagnostics retain the failure, never credentials or their fragments.
+_SENSITIVE_LOG_KEYS = frozenset({
+    "authorization", "proxy_authorization", "cookie", "set_cookie", "password",
+    "passwd", "secret", "client_secret", "token", "access_token", "refresh_token",
+    "id_token", "api_key", "apikey", "code", "credential", "credentials",
+})
 
 
-def _truncate_jwt(val: str) -> str:
-    """Truncate JWT-like strings for logging: first N + ... + last M chars."""
-    if len(val) < 60:
-        return val
-    parts = val.split(".")
-    if len(parts) != 3:
-        # Check if it's a long string that looks like a token even if not 3 parts
-        if len(val) > 100:
-            return f"{val[:_JWT_HEAD]}...{val[-_JWT_TAIL:]}"
-        return val
-    if not all(re.match(r"^[A-Za-z0-9_-]+$", p) for p in parts):
-        return val
-    return f"{val[:_JWT_HEAD]}...{val[-_JWT_TAIL:]}"
+def _is_sensitive_log_key(key: object) -> bool:
+    """Return whether a diagnostic field name can carry a credential."""
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    if normalized in {"code", "state"}:
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "token", "secret", "password", "passwd", "credential",
+            "apikey", "authorization", "cookie",
+        )
+    )
 
 
 def _sanitize_url(url: str | object) -> str:
-    """Hide sensitive query params in URLs for logging.
+    parsed = urlsplit(str(url))
+    query = _sanitize_query(parsed.query)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
 
-    Covers ``token`` plus the OAuth credentials that flow through
-    /auth/callback (``code``, ``access_token``, ``refresh_token``) — these
-    previously landed in the access log in plaintext because only ``token``
-    was matched.
-    """
-    url_str = str(url)
 
-    def _redact(m: "re.Match") -> str:
-        val = m.group(2)
-        # Always redact — OAuth codes are often short and would slip past the
-        # length-gated JWT truncator, ending up in the log verbatim.
-        if len(val) <= 12:
-            shown = f"{val[:2]}…"
-        else:
-            shown = f"{val[:_JWT_HEAD]}…{val[-_JWT_TAIL:]}"
-        return m.group(1) + shown
-
-    return re.sub(
-        r"([?&](?:token|code|access_token|refresh_token)=)([^&]+)",
-        _redact,
-        url_str,
+def _sanitize_query(query: str) -> str:
+    """Return a query string that retains names but never credential values."""
+    return urlencode(
+        [
+            (key, "[REDACTED]" if _is_sensitive_log_key(key) else value)
+            for key, value in parse_qsl(query, keep_blank_values=True)
+        ]
     )
 
 
 def _sanitize_body_for_log(obj):
-    """Recursively sanitize body for logging: truncate JWTs only."""
+    """Redact credential fields recursively, including short opaque tokens."""
     if isinstance(obj, dict):
-        return {k: _sanitize_body_for_log(v) for k, v in obj.items()}
+        return {
+            k: "[REDACTED]" if _is_sensitive_log_key(k)
+            else _sanitize_body_for_log(v)
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
         return [_sanitize_body_for_log(v) for v in obj]
     if isinstance(obj, str):
-        return _truncate_jwt(obj)
+        return re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", obj)
     return obj
+
+
+def _request_secret_values(request: Request, body: object) -> tuple[str, ...]:
+    """Collect values that must remain redacted even when an exception echoes them."""
+    values: list[str] = []
+
+    for key, value in request.headers.items():
+        if _is_sensitive_log_key(key) and value:
+            values.append(value)
+    for key, value in parse_qsl(request.url.query, keep_blank_values=True):
+        if _is_sensitive_log_key(key) and value:
+            values.append(value)
+
+    def collect(value: object, *, sensitive: bool = False) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                collect(child, sensitive=sensitive or _is_sensitive_log_key(key))
+        elif isinstance(value, list):
+            for child in value:
+                collect(child, sensitive=sensitive)
+        elif sensitive and isinstance(value, str) and value:
+            values.append(value)
+
+    collect(body)
+    return tuple(sorted(set(values), key=len, reverse=True))
+
+
+def _failure_description(
+    exc: Exception, method: str, path: str, *, secret_values: tuple[str, ...] = ()
+) -> tuple[str, str]:
+    """Describe the actual failure after removing request credentials."""
+    from app.common.system_logger import SensitiveDataFilter
+
+    cause = exc
+    seen = set()
+    while cause.__cause__ is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        cause = cause.__cause__
+    reason = SensitiveDataFilter().sanitize(str(cause).strip(), secret_values)
+    if not reason:
+        reason = "the exception supplied no explanation"
+    detail = f"{method} {path} failed: {type(cause).__name__}: {reason}"
+    if "database is locked" in reason.lower() or "database table is locked" in reason.lower():
+        hint = "Another local database transaction held the write lock. Retry the operation; if this repeats, include the diagnostic reference when reporting it."
+    elif isinstance(cause, PermissionError):
+        hint = "Check access permissions for the resource named in this error, then retry."
+    elif isinstance(cause, (TimeoutError, ConnectionError)):
+        hint = "Check that the required service is reachable, then retry."
+    else:
+        hint = "Include this message and diagnostic reference when reporting the failure; the engine log contains the traceback."
+    return detail, hint
 
 
 def _request_body_for_log(path: str, body):
@@ -294,17 +341,8 @@ def _request_body_for_log(path: str, body):
 
 def _format_request_details(request: Request, body=None) -> str:
     """Format request headers and other metadata for detailed error logging."""
-    headers = dict(request.headers)
-    # Sanitize Authorization header
-    if "authorization" in headers:
-        auth = headers["authorization"]
-        if auth.lower().startswith("bearer "):
-            headers["authorization"] = f"Bearer {_truncate_jwt(auth[7:])}"
-        else:
-            headers["authorization"] = _truncate_jwt(auth)
-
-    # Filter out other sensitive headers if any (already handled standard ones)
-    return f"Method: {request.method} | URL: {_sanitize_url(request.url)} | Headers: {headers} | Body: {body}"
+    headers = _sanitize_body_for_log(dict(request.headers))
+    return f"Method: {request.method} | URL: {_sanitize_url(request.url)} | Headers: {headers} | Body: {_sanitize_body_for_log(body)}"
 
 
 @asynccontextmanager
@@ -2031,7 +2069,6 @@ async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedErro
     )
 
 
-app.include_router(auth_router)  # OAuth callback — must be before AuthMiddleware
 app.include_router(token_router)  # Token sync — React pushes JWT to Python
 # Admin endpoints (/admin/status, /admin/shutdown, /admin/diagnose) — used by
 # the Tauri shell to coordinate engine lifecycle without reaching across to
@@ -2117,7 +2154,8 @@ async def _log_requests_dispatch(request: Request, call_next):
     t0 = _time.monotonic()
     path = request.url.path
     query = str(request.url.query) if request.url.query else ""
-    display_path = f"{path}?{query}" if query else path
+    safe_query = _sanitize_query(query)
+    display_path = f"{path}?{safe_query}" if safe_query else path
 
     # High-frequency polling routes and CORS preflights — log at DEBUG to keep
     # the terminal readable.  Only genuinely interesting one-off requests stay at INFO.
@@ -2199,22 +2237,29 @@ async def _log_requests_dispatch(request: Request, call_next):
     # HERE still flows out through auth and CORS and gets its headers.
     try:
         response = await call_next(request)
-    except Exception:
+    except Exception as exc:
         duration_ms = (_time.monotonic() - t0) * 1000
         failure_id = _uuid.uuid4().hex[:12]
+        detail, hint = _failure_description(
+            exc,
+            request.method,
+            path,
+            secret_values=_request_secret_values(request, body),
+        )
         logger.error(
-            "\u2190 500 %s %s  (%.0fms)  failure_id=%s",
+            "\u2190 500 %s %s  (%.0fms)  failure_id=%s — %s",
             request.method,
             display_path,
             duration_ms,
             failure_id,
+            detail,
         )
         logger.error("  %s", _format_request_details(request, body))
         logger.error("  traceback:\n%s", _traceback.format_exc())
         access_log.record(
             method=request.method,
             path=path,
-            query=_sanitize_url(query),
+            query=safe_query,
             origin=request.headers.get("origin", ""),
             user_agent=request.headers.get("user-agent", ""),
             status=500,
@@ -2223,14 +2268,11 @@ async def _log_requests_dispatch(request: Request, call_next):
         return _JSONResponse(
             status_code=500,
             content={
-                "detail": "The local engine failed while handling this request.",
+                "detail": detail,
                 "failure_id": failure_id,
                 "path": path,
                 "method": request.method,
-                "hint": (
-                    "Search the engine log for this failure_id to see the exact "
-                    "traceback."
-                ),
+                "hint": hint,
             },
         )
     duration_ms = (_time.monotonic() - t0) * 1000
@@ -2261,7 +2303,7 @@ async def _log_requests_dispatch(request: Request, call_next):
     access_log.record(
         method=request.method,
         path=path,
-        query=_sanitize_url(query),
+        query=safe_query,
         origin=request.headers.get("origin", ""),
         user_agent=request.headers.get("user-agent", ""),
         status=response.status_code,

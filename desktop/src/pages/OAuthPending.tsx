@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { engine } from "@/lib/api";
 import { isCurrentOAuthCallback } from "@/lib/oauth";
 import { Zap, ArrowLeft, ExternalLink, CheckCircle2, RefreshCw } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
@@ -83,7 +82,6 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
         if (handled.current) return;
 
         let tauriUnlisten: (() => void) | null = null;
-        let wsOff: (() => void) | null = null;
         let pollTimer: ReturnType<typeof setInterval> | null = null;
 
         function extractCallback(urlStr: string): { code: string; state: string } | null {
@@ -103,7 +101,6 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
             if (handled.current || !isCurrentOAuthCallback(state, TAURI_REDIRECT_URI)) return;
             handled.current = true;
             tauriUnlisten?.();
-            wsOff?.();
             if (pollTimer !== null) {
                 clearInterval(pollTimer);
                 pollTimer = null;
@@ -188,20 +185,10 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
             void invokeAvailable;
         }
 
-        // ── Fallback: WebSocket broadcast ───────────────────────────────────
-        // Used when testing with a localhost:22140 redirect URI instead of the
-        // aimatrx:// deep link (e.g. when VITE_DEV_WS_AUTH=1 is set).
-        wsOff = engine.on("message", (data: unknown) => {
-            const msg = data as Record<string, string>;
-            if (msg?.type !== "oauth-callback" || !msg.code || !msg.state) return;
-            handleCode(msg.code, msg.state);
-        });
-
         setup();
 
         return () => {
             tauriUnlisten?.();
-            wsOff?.();
             if (pollTimer !== null) clearInterval(pollTimer);
         };
     }, [completeOAuthExchange, onCancel]);

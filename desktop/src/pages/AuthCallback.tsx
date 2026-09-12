@@ -51,7 +51,9 @@ export function AuthCallback() {
 
       window.history.replaceState({}, "", `${window.location.pathname}#/auth/callback`);
       if (!code || !state) {
+        clearOAuthState();
         setErrorMsg("Sign-in callback is incomplete. Please start sign-in again.");
+        setTimeout(() => navigate("/login", { replace: true }), 4000);
         return;
       }
 

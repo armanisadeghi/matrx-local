@@ -53,8 +53,8 @@ jobs:
         continue-on-error: true
         run: uv run --frozen python scripts/check_tool_db_drift.py
 
-      - name: Runtime import and authorization gate
-        run: uv run --frozen pytest tests/smoke/test_cold_imports.py tests/smoke/test_imports.py tests/smoke/test_auth_gate.py -q
+      - name: Runtime import, authorization, parity, and unit test gate
+        run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
         env:
           TUNNEL_ENABLED: "0"
           TAURI_SIDECAR: "1"

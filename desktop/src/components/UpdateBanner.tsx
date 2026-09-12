@@ -29,6 +29,11 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
 
   const isInstalled = status?.status === "installed";
   const isDownloadingUi = showDownloadProgress && status?.status === "downloading";
+  // BYTES. The Tauri updater's `content_length` IS the HTTP Content-Length of
+  // the artifact; the byte-size formatter is right here and the local name
+  // says so, because `*_length` almost everywhere else in this fleet is a
+  // CHARACTER count (see the note on UpdateStatus in lib/sidecar.ts).
+  const totalBytes = status?.content_length;
   const showAsAvailable =
     status?.status === "available" ||
     (status?.status === "downloading" && !showDownloadProgress);
@@ -137,7 +142,8 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
             <span>{progress}%</span>
             {status?.content_length && status?.downloaded != null && (
               <span>
-                {formatFileSize(status.downloaded)} / {formatFileSize(status.content_length)}
+                {formatFileSize(status.downloaded)} /{" "}
+                {formatFileSize(totalBytes)}
               </span>
             )}
           </div>

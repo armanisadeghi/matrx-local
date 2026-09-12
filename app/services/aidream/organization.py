@@ -17,7 +17,15 @@ the guess this module replaces):
        — IF they are still a member.
     2. Exactly ONE active membership -> that organization (there is nothing
        to choose, so choosing it invents nothing).
-    3. Otherwise: refuse with ``VaultUnavailable("no_organization", ...)``
+    3. The user's OWN PERSONAL organization (``current_personal_org_id()``,
+       the same RPC matrx-frontend's resolver uses) — IF it is one of their
+       memberships. Every account has exactly one; this is the platform's
+       stated fallback (frontend rule b, and the server's own rule for
+       coding-session storage), not a guess. Added 2026-09-12: without it a
+       multi-org user with no stated default had file sync, screenshot
+       publishing and coding-session artifacts all parked on a question the
+       rest of the platform never asks.
+    4. Otherwise: refuse with ``VaultUnavailable("no_organization", ...)``
        naming the remedy. Never "first", "owner", "oldest", or "most
        recent".
 
@@ -123,6 +131,38 @@ async def _default_organization_id(jwt_value: str, user_id: str) -> str | None:
     return default_id if isinstance(default_id, str) and default_id else None
 
 
+async def _personal_organization_id(jwt_value: str) -> str | None:
+    """The caller's own personal organization via the canonical
+    ``current_personal_org_id()`` RPC (SECURITY DEFINER, no arguments).
+    Never raises — an RPC we cannot reach simply does not participate."""
+    import httpx
+
+    from app.config import (
+        SUPABASE_PROFILE_HEADERS,
+        SUPABASE_PUBLISHABLE_KEY,
+        SUPABASE_URL,
+    )
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/current_personal_org_id"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as http:
+            resp = await http.post(
+                url,
+                json={},
+                headers={
+                    "apikey": SUPABASE_PUBLISHABLE_KEY,
+                    **SUPABASE_PROFILE_HEADERS,
+                    "Authorization": f"Bearer {jwt_value}",
+                    "Content-Type": "application/json",
+                },
+            )
+        resp.raise_for_status()
+        value = resp.json()
+    except Exception:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
 class OrganizationNotResolvedError(Exception):
     """Raised when no organization resolves for this caller — never a guess.
 
@@ -173,6 +213,11 @@ async def resolve_active_organization_id(jwt_value: str) -> str:
         (only_id,) = by_id.keys()
         _org_cache[cache_key] = only_id
         return only_id
+
+    personal = await _personal_organization_id(jwt_value)
+    if personal and personal in by_id:
+        _org_cache[cache_key] = personal
+        return personal
 
     raise OrganizationNotResolvedError(
         "You belong to more than one organization and haven't set a default.",

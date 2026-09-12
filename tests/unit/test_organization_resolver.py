@@ -56,8 +56,12 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
+    personal_organization_id: str | None = None
+
     async def post(self, url, *, json, headers):
         _FakeAsyncClient.calls.append(("POST", url))
+        if url.endswith("/rpc/current_personal_org_id"):
+            return _FakeResponse(_FakeAsyncClient.personal_organization_id)
         # mbr_for_user RPC
         return _FakeResponse(
             [
@@ -84,6 +88,7 @@ def _reset(monkeypatch: pytest.MonkeyPatch):
     _FakeAsyncClient.calls = []
     _FakeAsyncClient.membership_ids = []
     _FakeAsyncClient.default_organization_id = None
+    _FakeAsyncClient.personal_organization_id = None
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
     yield
 
@@ -119,12 +124,29 @@ async def test_resolves_stated_default_for_multi_org_user() -> None:
 
 
 @pytest.mark.anyio
-async def test_multi_org_user_with_no_default_is_refused_with_a_remedy() -> None:
-    """A multi-org user with no stated default gets a refusal carrying a
-    plain-language remedy — never a guess (no owner-or-oldest, no first,
-    no most-recent)."""
+async def test_multi_org_user_with_no_default_resolves_own_personal_org() -> None:
+    """A multi-org user with no stated default lands in their OWN personal
+    organization — the platform's stated fallback (matrx-frontend rule b,
+    the server's coding-session rule) — never first/owner/oldest."""
+    _FakeAsyncClient.membership_ids = ["org-1", "org-2", "org-personal"]
+    _FakeAsyncClient.default_organization_id = None
+    _FakeAsyncClient.personal_organization_id = None
+    _FakeAsyncClient.personal_organization_id = "org-personal"
+
+    org_id = await resolve_active_organization_id(_jwt())
+
+    assert org_id == "org-personal"
+
+
+@pytest.mark.anyio
+async def test_multi_org_user_with_no_default_and_no_personal_membership_is_refused() -> None:
+    """When even the personal organization is not among the memberships (or
+    the RPC is unavailable), the refusal carries a plain-language remedy —
+    never a guess (no owner-or-oldest, no first, no most-recent)."""
     _FakeAsyncClient.membership_ids = ["org-1", "org-2"]
     _FakeAsyncClient.default_organization_id = None
+    _FakeAsyncClient.personal_organization_id = None
+    _FakeAsyncClient.personal_organization_id = "org-elsewhere"
 
     with pytest.raises(OrganizationNotResolvedError) as excinfo:
         await resolve_active_organization_id(_jwt())

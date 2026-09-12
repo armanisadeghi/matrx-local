@@ -541,7 +541,8 @@ export function CodingSessions() {
               <p className="border-t px-4 py-2 text-xs text-muted-foreground">
                 Publisher: last tick{" "}
                 {formatStamp(bridge.publisher.ticks.last_tick_at)} · sent{" "}
-                {bridge.publisher.ticks.last_tick_sent.toLocaleString()} · eligible{" "}
+                {bridge.publisher.ticks.last_tick_sent.toLocaleString()} · failed{" "}
+                {bridge.publisher.ticks.last_tick_failed.toLocaleString()} · eligible{" "}
                 {bridge.publisher.ticks.last_tick_eligible === null
                   ? "not measured"
                   : bridge.publisher.ticks.last_tick_eligible.toLocaleString()}

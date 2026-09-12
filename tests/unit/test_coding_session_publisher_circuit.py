@@ -966,3 +966,84 @@ async def test_a_blocked_tick_does_not_pay_for_the_eligibility_sweep(
     # Never a silent zero: nothing was measured, and it says so.
     assert ticks["last_tick_eligible"] is None
     assert ticks["last_tick_blocked"] == "cloud_participation_disabled"
+
+
+class _GatedClient:
+    """One lane answers at once; another hangs until the test releases it."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.hanging_started = asyncio.Event()
+        self.answered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.hold_lane = "l2"
+
+    async def post(
+        self,
+        _path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        lane = str(payload["provider_session_id"])
+        self.calls.append(str(payload["hook_event"]["payload"]["prompt"]))
+        if lane == self.hold_lane:
+            self.hanging_started.set()
+            await self.release.wait()
+            return _ack(payload)
+        self.answered.set()
+        return _ack(payload)
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_tick_still_retires_what_the_server_accepted(
+    circuit_db: LocalDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Engine quit cancels the publisher mid-wave — nothing may go up twice.
+
+    ``stop_background`` cancels the tick while a wave is in flight. A sibling
+    aidream has ALREADY accepted must be retired before the cancellation is
+    allowed through, or the next start uploads it a second time.
+    """
+    _use_concurrency(monkeypatch, 4)
+    client = _GatedClient()
+    outbox = CodingSessionBridgeOutbox(
+        db=circuit_db,
+        client=client,  # type: ignore[arg-type]
+        token_repo=_TokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+        circuit_config=PublisherCircuitConfig(),
+    )
+    # "warm" widens the window to two, so l1 and l2 share the next wave.
+    for lane in ("warm", "l1", "l2"):
+        await _enqueue_lane(outbox, lane, 1)
+
+    tick = asyncio.create_task(outbox.sync_pending())
+    await asyncio.wait_for(client.hanging_started.wait(), timeout=2)
+    await asyncio.wait_for(client.answered.wait(), timeout=2)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick
+
+    # l1 was accepted before the cancellation: its row is gone.
+    remaining = {
+        int(row["id"])
+        for row in await circuit_db.fetchall(
+            "SELECT id FROM coding_session_bridge_outbox"
+        )
+    }
+    l2_row = await circuit_db.fetchone(
+        "SELECT id FROM coding_session_bridge_outbox WHERE lane_key LIKE '%l2%'"
+    )
+    assert remaining == {int(l2_row["id"])}
+    assert client.calls.count("l1-1") == 1
+
+    client.release.set()
+    await outbox.sync_pending()
+
+    # Across the restart, the accepted envelope was never POSTed again.
+    assert client.calls.count("l1-1") == 1
+    assert client.calls.count("warm-1") == 1
+    assert await outbox.pending_count() == 0

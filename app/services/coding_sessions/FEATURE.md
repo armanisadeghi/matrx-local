@@ -109,7 +109,11 @@ envelopes across ~1,160 lanes, measured 2026-09-12 on 1.4.89.
   (credential rejection, organization refusal) or a lost delete stops the NEXT
   wave, never this wave's bookkeeping, and such a blocker is recorded ONCE — by
   the first row that met it, so the blocker names that row and only that row is
-  charged an attempt.
+  charged an attempt. **Including when the TICK ITSELF is cancelled** (engine
+  quit): the POSTs are explicit tasks, so every one that had already finished is
+  booked, the unfinished ones are cancelled untouched (no row, no attempt lost),
+  and the cancellation is re-raised afterwards. A `SystemExit`/`KeyboardInterrupt`
+  from a child is re-raised the same way, after the wave is booked.
 - **The circuit is decided once per wave**, from what the whole wave saw. If any
   lane was accepted in the same wave the transport is proven alive, so nothing
   opens and the suspect envelope is re-probed smallest-first; only a wave with
@@ -129,9 +133,11 @@ envelopes across ~1,160 lanes, measured 2026-09-12 on 1.4.89.
   the lock — `null` when the tick was blocked before it got there, never a
   silent zero, because that sweep is a full lane-head scan and an idle-poll wake
   must not pay for it), `ticks_total`, `last_delivery_at`, and `last_error` (the
-  display-safe `{code, message}` of the most recent per-row failure, cleared by
-  the next successful delivery so one blip cannot sit on the screen forever). A
-  tick that delivered
+  display-safe `{code, message}` of the most recent per-row failure, cleared
+  only once a whole wave came back with no failures at all, so neither a stale
+  blip nor a wave of seven failures beside one success can be read wrong). The
+  screen's line carries sent, failed, eligible and the blocker together for the
+  same reason. A tick that delivered
   nothing while rows were eligible also logs one INFO line, at most once a
   minute. This closes a live hole: on 2026-09-12 the publisher sat idle for
   minutes with eligible rows and neither the log nor the status endpoint said

@@ -698,9 +698,6 @@ class CodingSessionBridgeOutbox:
         self._last_tick_failed = 0
         self._last_tick_blocked: str | None = None
         self._last_tick_eligible: int | None = None
-        # Eligible lane heads counted by the tick in flight, or None while it
-        # has not reached (or will never reach) the delivery path.
-        self._tick_eligible: int | None = None
         self._last_delivery_at: str | None = None
         self._last_error: dict[str, str] | None = None
         self._last_idle_tick_log = 0.0
@@ -1886,15 +1883,21 @@ class CodingSessionBridgeOutbox:
         sent, what blocked it, and the most recent per-row failure.
         """
         started = time.monotonic()
-        self._tick_eligible = None
+        # Per-call scratch, never instance state: a concurrent caller (resume
+        # delivery, a manual sync) must not clear the running tick's count.
+        tick: dict[str, int | None] = {"eligible": None}
         result: dict[str, Any] | None = None
         try:
-            result = await self._sync_pending_once(limit=limit)
+            result = await self._sync_pending_once(limit=limit, tick=tick)
             return result
         finally:
-            await self._record_tick(started=started, result=result)
+            await self._record_tick(
+                started=started, eligible=tick["eligible"], result=result
+            )
 
-    async def _sync_pending_once(self, *, limit: int | None = None) -> dict[str, Any]:
+    async def _sync_pending_once(
+        self, *, limit: int | None = None, tick: dict[str, int | None]
+    ) -> dict[str, Any]:
         """One delivery tick: fan out ACROSS lanes, never inside one."""
         if limit is None:
             limit = self._circuit_config.batch_size
@@ -2024,7 +2027,7 @@ class CodingSessionBridgeOutbox:
             # only going to hit a blocker or an open circuit never pays for it;
             # those ticks report `last_tick_eligible: null` and the once-a-minute
             # idle line falls back to the indexed "is anything ready" probe.
-            self._tick_eligible = await self._eligible_lane_head_count()
+            tick["eligible"] = await self._eligible_lane_head_count()
 
             sent = 0
             failed = 0
@@ -2033,6 +2036,7 @@ class CodingSessionBridgeOutbox:
             blocked: str | None = None
             halt = False
             cancelled: asyncio.CancelledError | None = None
+            fatal: BaseException | None = None
             # THE IN-FLIGHT WINDOW. A tick never opens at full width: one
             # envelope proves the transport, and only then does the window
             # double toward `concurrency`. The same caution as the half-open
@@ -2046,13 +2050,39 @@ class CodingSessionBridgeOutbox:
                 if not heads:
                     break
                 processed += len(heads)
-                raw_outcomes = await asyncio.gather(
-                    *(
+                tasks = [
+                    asyncio.create_task(
                         self._deliver_envelope(row, client, access_token, semaphore)
-                        for row in heads
-                    ),
-                    return_exceptions=True,
-                )
+                    )
+                    for row in heads
+                ]
+                try:
+                    raw_outcomes: list[Any] = await asyncio.gather(
+                        *tasks, return_exceptions=True
+                    )
+                except asyncio.CancelledError as stop:
+                    # THE TICK ITSELF IS BEING TORN DOWN (engine quit cancels
+                    # the publisher task). Envelopes aidream has ALREADY
+                    # accepted must still be retired here, or the next start
+                    # uploads them a second time. Cancellation is delivered
+                    # once, so the bookkeeping awaits below still run; the
+                    # cancellation is re-raised after the wave is booked.
+                    cancelled = stop
+                    raw_outcomes = []
+                    for task in tasks:
+                        if not task.done():
+                            # Nothing is known about this envelope: it keeps its
+                            # row, its attempts and its place in the lane.
+                            task.cancel()
+                            raw_outcomes.append(asyncio.CancelledError())
+                            continue
+                        if task.cancelled():
+                            raw_outcomes.append(asyncio.CancelledError())
+                            continue
+                        error = task.exception()
+                        raw_outcomes.append(
+                            error if error is not None else task.result()
+                        )
                 # EVERY outcome of a wave is booked, ALWAYS. A sibling whose
                 # POST already reached the server must never be forgotten
                 # because another row of the same wave failed — it would be
@@ -2068,22 +2098,21 @@ class CodingSessionBridgeOutbox:
                         # finish the tick.
                         cancelled = outcome
                         continue
+                    if isinstance(outcome, BaseException) and not isinstance(
+                        outcome, Exception
+                    ):
+                        # SystemExit / KeyboardInterrupt belong to the process,
+                        # not to this envelope. Book the wave, then let it go.
+                        fatal = outcome
+                        continue
                     if isinstance(outcome, BaseException):
-                        booked.append(
-                            (
-                                row,
-                                None,
-                                None,
-                                outcome
-                                if isinstance(outcome, Exception)
-                                else RuntimeError(repr(outcome)),
-                            )
-                        )
+                        booked.append((row, None, None, outcome))
                         continue
                     booked.append(outcome)
 
                 wave_sent = 0
                 wave_offline = 0
+                failed_before_wave = failed
                 credential_rejected = False
                 organization_refused = False
                 for row, persisted_request, response, exc in sorted(
@@ -2241,9 +2270,6 @@ class CodingSessionBridgeOutbox:
                         sent += 1
                         wave_sent += 1
                         self._last_delivery_at = _utc_now_iso()
-                        # Delivery works again — the screen must stop showing
-                        # the last blip forever.
-                        self._last_error = None
                         continue
 
                     # The delete lost the write lock. The row is DELIVERED, so it
@@ -2293,8 +2319,16 @@ class CodingSessionBridgeOutbox:
                     probe_smallest = False
                     window = min(concurrency, window * 2)
 
+                # The screen must stop showing the last blip forever — but
+                # only once a whole wave came back clean. Clearing it beside
+                # six failures would be the same lie in the other direction.
+                if wave_sent and failed == failed_before_wave:
+                    self._last_error = None
+
                 if cancelled is not None:
                     raise cancelled
+                if fatal is not None:
+                    raise fatal
             if processed >= limit and await self._has_ready_lane_head():
                 self._continue_immediately = True
             return {"sent": sent, "failed": failed, "blocked": blocked}
@@ -2422,10 +2456,10 @@ class CodingSessionBridgeOutbox:
         self,
         *,
         started: float,
+        eligible: int | None,
         result: dict[str, Any] | None,
     ) -> None:
         """Close the books on one tick and scream once a minute if it idled."""
-        eligible = self._tick_eligible
         self._ticks_total += 1
         self._last_tick_at = _utc_now_iso()
         self._last_tick_duration_ms = round((time.monotonic() - started) * 1000.0, 3)

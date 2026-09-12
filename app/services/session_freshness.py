@@ -31,7 +31,7 @@ _MIN_INTERVAL_SECONDS = 60.0
 _last_request_at: dict[str, float] = {}
 
 
-def session_blocker(*, lane: str, since: float | None = None) -> dict[str, Any]:
+def session_blocker(*, lane: str, since: str | None = None) -> dict[str, Any]:
     """The one honest description of "no valid AI Matrx session on this Mac"."""
     return {
         "code": "no_active_user_jwt",

@@ -54,7 +54,8 @@ daemon, service, or database.
   `(provider, provider_project_key, provider_session_id)` across every action
   and subordinate stream. For the rare sessionless request, action plus source
   replaces the session identity.
-  The oldest eligible lane head is attempted first, but a deferred lane does
+  The oldest eligible lane heads are attempted first — several lanes at a time,
+  see *Delivery concurrency* below — but a deferred lane does
   not block another provider, session, or project. Every action/stream for the
   same real session deliberately shares a lane, so `SessionMetadata` cannot
   pass any transcript batch that creates its binding.
@@ -77,6 +78,71 @@ daemon, service, or database.
   issued by another project cannot silently enter the engine.
 - The task is registered as `coding_session_bridge` in the existing launcher
   registry and stops before SQLite closes. It owns no subprocess.
+
+### Delivery concurrency and tick observability
+
+**Order is a per-lane promise, never a global one.** Inside one `lane_key`
+exactly one envelope is ever in flight, and the next row of that lane becomes
+eligible only once its head is retired, quarantined or deferred. ACROSS lanes
+the publisher fans out: each tick takes up to `coding_session_delivery_concurrency`
+DIFFERENT lane heads (the lane-head query returns N rows, one per lane by
+construction) and POSTs them together under one `asyncio.Semaphore`. Every
+durable consequence — quarantine, deferral, retirement, credential and
+organization blockers, circuit decisions — is still applied sequentially in row
+order by the tick itself, so concurrency changes *when* a request is sent and
+nothing about what happens afterwards. Why: a strictly one-at-a-time publisher
+drained ~0.7 envelopes/second against a queue growing ~4/second — ~193,000
+envelopes across ~1,160 lanes, measured 2026-09-12 on 1.4.89.
+
+- **The knob:** user setting `coding_session_delivery_concurrency`, default 8,
+  clamped 1–32. Read fresh on every tick through the standard settings store, so
+  a change needs no engine restart; a non-numeric, fractional or out-of-band
+  value is announced LOUDLY at WARNING, each saying what actually happened (a
+  fractional value is truncated, not called out of band) with a remedy that
+  names the settings key — there is no Settings control for it yet, and a remedy
+  that claimed one would be a lie. The effective value is reported as
+  `delivery_status()["publisher"]["transport_circuit"]["config"]["delivery_concurrency"]`.
+- **EVERY outcome of a wave is booked, always.** A sibling whose POST already
+  reached the server is retired even when another row of the same wave fails;
+  otherwise it would be uploaded a second time on the next tick, and a failed
+  sibling would lose its attempt and its backoff. A publisher-wide blocker
+  (credential rejection, organization refusal) or a lost delete stops the NEXT
+  wave, never this wave's bookkeeping, and such a blocker is recorded ONCE — by
+  the first row that met it, so the blocker names that row and only that row is
+  charged an attempt. **Including when the TICK ITSELF is cancelled** (engine
+  quit): the POSTs are explicit tasks, so every one that had already finished is
+  booked, the unfinished ones are cancelled untouched (no row, no attempt lost),
+  and the cancellation is re-raised afterwards. A `SystemExit`/`KeyboardInterrupt`
+  from a child is re-raised the same way, after the wave is booked.
+- **The circuit is decided once per wave**, from what the whole wave saw. If any
+  lane was accepted in the same wave the transport is proven alive, so nothing
+  opens and the suspect envelope is re-probed smallest-first; only a wave with
+  no acceptance counts toward opening. `blocked` and `transport_circuit.state`
+  can therefore never disagree.
+- **A tick never opens at full width.** The in-flight window starts at 1 and
+  doubles toward the configured value only after a delivery is acknowledged; any
+  transport-offline failure resets it to 1. Same caution as the half-open probe,
+  for the same reason: fanning 8–32 POSTs into a network that is actually down
+  would burn attempts on every lane at once, while the bounded circuit is meant
+  to learn that from two. While the circuit is `half_open` the tick sends
+  exactly ONE probe — the smallest eligible envelope — before widening.
+- **Every tick leaves a trace** in `delivery_status()["publisher"]["ticks"]`
+  (`GET /coding-session/status`): `last_tick_at`, `last_tick_duration_ms`,
+  `last_tick_sent`, `last_tick_failed`, `last_tick_blocked`,
+  `last_tick_eligible` (eligible lane heads, counted on the delivery path inside
+  the lock — `null` when the tick was blocked before it got there, never a
+  silent zero, because that sweep is a full lane-head scan and an idle-poll wake
+  must not pay for it), `ticks_total`, `last_delivery_at`, and `last_error` (the
+  display-safe `{code, message}` of the most recent per-row failure, cleared
+  only once a whole wave came back with no failures at all, so neither a stale
+  blip nor a wave of seven failures beside one success can be read wrong). The
+  screen's line carries sent, failed, eligible and the blocker together for the
+  same reason. A tick that delivered
+  nothing while rows were eligible also logs one INFO line, at most once a
+  minute. This closes a live hole: on 2026-09-12 the publisher sat idle for
+  minutes with eligible rows and neither the log nor the status endpoint said
+  anything at all. The Coding Sessions screen shows it as one muted line under
+  the provider table.
 
 ### 🚨 THE POISON-ROW RULE — ordered delivery plus infinite retry means STOP
 
@@ -783,3 +849,8 @@ as `cancelled`, outbox drained to zero with validated receipts.
   not only when someone presses Sync on the Coding Sessions page; interval and on/off are user
   settings (`claude_label_sync_interval_minutes`, `claude_label_sync_auto_enabled`). Guard:
   `tests/unit/test_claude_label_sync_loop.py`.
+- 2026-09-12 — The bridge publisher delivers up to `coding_session_delivery_concurrency`
+  DIFFERENT lane heads per tick (default 8, clamped 1–32) instead of one envelope at a time;
+  per-lane order is unchanged. Every tick now records what it did in
+  `delivery_status()["publisher"]["ticks"]` and says so once a minute when it delivers nothing
+  while rows are eligible. Guard: `tests/unit/test_coding_session_publisher_circuit.py`.

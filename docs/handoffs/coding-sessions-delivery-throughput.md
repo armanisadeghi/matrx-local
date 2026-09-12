@@ -28,13 +28,14 @@ envelopes (Codex hook events, ~1,160 lanes), drained sequentially at ~0.7/s
 while Codex hooks enqueue up to ~4/s. Earlier the same morning the publisher
 idled for minutes with eligible rows and nothing on the status endpoint said so.
 
-Build in flight (Opus subagent, worktree): bounded concurrency across lanes
+MERGED to main 2026-09-12 (commits b22d175b4, 9ced9caa2, 330758c45, 3f089c2aa; 18 publisher
+tests, 81 across the surface, two independent review rounds): bounded concurrency across lanes
 (knob `coding_session_delivery_concurrency`, default 8, clamp 1–32, strict
 per-lane order kept), per-tick observability (`publisher.ticks` in
 `GET /coding-session/status`, a one-line INFO log when a tick sends nothing
 with eligible rows, one compact line on the Coding Sessions page).
 
-Verification once merged and the installed app carries it:
+Live verification still owed by whoever runs after the next release reaches the installed app:
 1. `GET /coding-session/status` (loopback bearer) → `publisher.ticks.last_tick_at`
    within the poll interval, `transport_circuit.config.delivery_concurrency` = 8.
 2. Outbox count (`select count(*) from coding_session_bridge_outbox`) falls by

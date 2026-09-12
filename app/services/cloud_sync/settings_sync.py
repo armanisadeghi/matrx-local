@@ -147,6 +147,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # without an engine restart. Interval is whole minutes, clamped to 1–1440.
     "claude_label_sync_auto_enabled": True,
     "claude_label_sync_interval_minutes": 15,
+    # Coding sessions — how many DIFFERENT delivery lanes the bridge publisher
+    # may have in flight at once. Per-lane order is never affected: one lane
+    # still delivers strictly one envelope at a time. Read fresh on every tick
+    # by app/services/coding_sessions/service.py, clamped to 1–32.
+    "coding_session_delivery_concurrency": 8,
     # Cloud agent tools — which advertised local tools cloud agents may run on
     # THIS machine via the delegation engine (app/services/delegation/engine.py).
     # Shape: {"disabled_tools": ["<cloud_name>", ...]} where each entry is a

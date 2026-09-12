@@ -392,6 +392,10 @@ class SyncEngine:
                         },
                         expected_content_hash=last_synced_hash,
                         device_id=self.device_id,
+                        # DD-131 (B-44): this loop is the engine's own
+                        # reconciliation, never a live keystroke — a job, not
+                        # a person.
+                        actor_tier="code",
                     )
                     if pushed_row is None:
                         # Precondition failed — remote moved since our last
@@ -423,7 +427,10 @@ class SyncEngine:
                         # soft-delete being revived by this edit.
 
                 if pushed_row is None:
-                    pushed_row = await self.sb.upsert_note(**upsert_body)
+                    # DD-131 (B-44): the sync loop's own push, not a person's.
+                    pushed_row = await self.sb.upsert_note(
+                        **upsert_body, actor_tier="code"
+                    )
 
                 result = pushed_row
                 result["_synced_to_cloud"] = True
@@ -681,15 +688,18 @@ class SyncEngine:
             # resulting realtime UPDATE reads as our own echo.
             try:
                 if note.get("_reroute_from"):
+                    # DD-131 (B-44): the sync loop repointing its own
+                    # bookkeeping column, never a person's edit.
                     won = await self.sb.set_file_path_if_matches(
                         note_id,
                         note["_reroute_from"],
                         file_path,
                         self.device_id,
+                        actor_tier="code",
                     )
                 else:
                     won = await self.sb.set_file_path_if_null(
-                        note_id, file_path, self.device_id
+                        note_id, file_path, self.device_id, actor_tier="code"
                     )
                 if not won:
                     logger.debug(
@@ -1049,7 +1059,9 @@ class SyncEngine:
                             )
                             continue
                         try:
-                            await self.sb.soft_delete_note(note_id, self.device_id)
+                            await self.sb.soft_delete_note(
+                                note_id, self.device_id, actor_tier="code"
+                            )
                             stats["deleted_local"] += 1
                         except Exception:
                             logger.debug(
@@ -1174,7 +1186,7 @@ class SyncEngine:
                             self._last_push_hashes[fp] = local["content_hash"]
                             try:
                                 await self.sb.set_file_path_if_null(
-                                    twin["id"], fp, self.device_id
+                                    twin["id"], fp, self.device_id, actor_tier="code"
                                 )
                             except Exception:
                                 logger.debug(
@@ -1614,7 +1626,9 @@ class SyncEngine:
                     # for explicit confirmation.
                     return
                 try:
-                    await self.sb.soft_delete_note(row["id"], self.device_id)
+                    await self.sb.soft_delete_note(
+                        row["id"], self.device_id, actor_tier="code"
+                    )
                 except Exception:
                     logger.debug(
                         "Could not propagate delete for %s (will retry on full_sync)",

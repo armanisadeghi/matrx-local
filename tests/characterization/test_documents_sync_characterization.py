@@ -166,6 +166,7 @@ class FakeSupabase:
         updates: dict[str, Any],
         expected_content_hash: str,
         device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> dict[str, Any] | None:
         if self.fail_pushes:
             raise RuntimeError("simulated network failure")
@@ -195,7 +196,9 @@ class FakeSupabase:
         self.notes[note_id] = row
         return row
 
-    async def soft_delete_note(self, note_id: str) -> None:
+    async def soft_delete_note(
+        self, note_id: str, device_id: str | None = None, actor_tier: str | None = None
+    ) -> None:
         self.calls.append(("soft_delete_note", {"note_id": note_id}))
 
 

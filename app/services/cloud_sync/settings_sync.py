@@ -453,6 +453,16 @@ class SettingsSync:
             # is not the default exposed schema in PostgREST config.
             "Accept-Profile": "public",
             "Content-Profile": "public",
+            # DD-131 (B-44): every request through THIS client is this
+            # instance's own background sync/heartbeat machinery — settings
+            # reconciliation, the instance heartbeat (instance_manager.py
+            # reuses these headers verbatim), the hardware-profile push
+            # (hardware_routes.py). No person ever types directly into the
+            # app_instances/app_settings rows this class writes, so the
+            # declaration is unconditional here (unlike the notes client,
+            # which is shared with a person-driven API route and threads the
+            # declaration explicitly per call instead).
+            "x-matrx-actor-tier": "code",
         }
 
     def _log_http_error(self, operation: str, resp: Any) -> str:

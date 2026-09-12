@@ -86,7 +86,7 @@ class SupabaseDocClient:
     def available(self) -> bool:
         return bool(_REST_BASE and self._jwt)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, actor_tier: str | None = None) -> dict[str, str]:
         h: dict[str, str] = {
             "apikey": SUPABASE_PUBLISHABLE_KEY,
             "Content-Type": "application/json",
@@ -94,6 +94,14 @@ class SupabaseDocClient:
         }
         if self._jwt:
             h["Authorization"] = f"Bearer {self._jwt}"
+        # DD-131 (B-44): the client-channel actor declaration. `actor_tier`
+        # is passed explicitly by the ONE caller that is this engine's own
+        # background reconciliation loop (sync_engine.py) — never by a
+        # person's own action reaching this client through document_routes.py.
+        # Absent means human; that is the whole contract, so this header is
+        # never sent unless a caller asked for it by name.
+        if actor_tier:
+            h["x-matrx-actor-tier"] = actor_tier
         return h
 
     async def _request(
@@ -105,13 +113,14 @@ class SupabaseDocClient:
         json_body: dict[str, Any] | list[dict[str, Any]] | None = None,
         extra_headers: dict[str, str] | None = None,
         schema: str | None = None,
+        actor_tier: str | None = None,
     ) -> list[dict[str, Any]]:
         if not _REST_BASE:
             raise RuntimeError("SUPABASE_URL not configured")
         if not self._jwt:
             raise RuntimeError("No JWT set — user must be authenticated")
 
-        headers = self._headers()
+        headers = self._headers(actor_tier)
         # Target the schema via the PostgREST profile headers. Accept-Profile
         # selects the schema to read from; Content-Profile the schema to write
         # to. ALWAYS explicit: the server's default exposed schema is no longer
@@ -271,11 +280,16 @@ class SupabaseDocClient:
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> dict[str, Any]:
         """Atomic insert-or-update (upsert ON CONFLICT DO UPDATE on primary key).
 
         Use this instead of get_note → create_note/update_note when you know
         the full desired state and do NOT need the old content for versioning.
+
+        ``actor_tier`` (DD-131, B-44): the sync engine's own reconciliation
+        loop is the only caller that passes ``"code"`` here — a job, not a
+        person.
         """
         body: dict[str, Any] = {
             "id": note_id,
@@ -304,6 +318,7 @@ class SupabaseDocClient:
                 "Prefer": "return=representation,resolution=merge-duplicates"
             },
             schema=_WORKBENCH,
+            actor_tier=actor_tier,
         )
         return rows[0] if rows else body
 
@@ -332,6 +347,7 @@ class SupabaseDocClient:
         updates: dict[str, Any],
         expected_content_hash: str,
         device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> dict[str, Any] | None:
         """Optimistic-concurrency update: PATCH only if the remote row still
         carries ``expected_content_hash`` and is live.
@@ -341,6 +357,9 @@ class SupabaseDocClient:
         soft-deleted) — the caller must then run the pull/conflict path
         instead of overwriting. This is what prevents silent cross-device
         last-writer-wins on user content (SYNC_CONTRACT).
+
+        ``actor_tier`` (DD-131, B-44): only the sync engine's own
+        reconciliation loop calls this with ``"code"``.
         """
         if "content" in updates:
             updates["content_hash"] = _content_hash(updates["content"])
@@ -356,11 +375,16 @@ class SupabaseDocClient:
             },
             json_body=updates,
             schema=_WORKBENCH,
+            actor_tier=actor_tier,
         )
         return rows[0] if rows else None
 
     async def set_file_path_if_null(
-        self, note_id: str, file_path: str, device_id: str | None = None
+        self,
+        note_id: str,
+        file_path: str,
+        device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> bool:
         """Write an allocated file_path back to a pathless cloud row.
 
@@ -369,6 +393,9 @@ class SupabaseDocClient:
         device-stamped so the resulting realtime UPDATE is recognized as this
         device's own write instead of triggering a pull storm. Returns True if
         this device won the write.
+
+        ``actor_tier`` (DD-131, B-44): only the sync engine's own
+        reconciliation loop calls this with ``"code"``.
         """
         body: dict[str, Any] = {"file_path": file_path}
         if device_id:
@@ -379,6 +406,7 @@ class SupabaseDocClient:
             params={"id": f"eq.{note_id}", "file_path": "is.null"},
             json_body=body,
             schema=_WORKBENCH,
+            actor_tier=actor_tier,
         )
         return bool(rows)
 
@@ -388,6 +416,7 @@ class SupabaseDocClient:
         expected_file_path: str,
         new_file_path: str,
         device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> bool:
         """Repoint a cloud row from a contested file_path to a freshly
         allocated one (CAS on the old path value).
@@ -399,6 +428,9 @@ class SupabaseDocClient:
         ``label_2_2_2.md`` chain of the 2026-07 duplicate factory. Conditional
         on the old value so a concurrent repoint from another device cannot be
         clobbered. Returns True if this device won the write.
+
+        ``actor_tier`` (DD-131, B-44): only the sync engine's own
+        reconciliation loop calls this with ``"code"``.
         """
         body: dict[str, Any] = {"file_path": new_file_path}
         if device_id:
@@ -412,10 +444,23 @@ class SupabaseDocClient:
             },
             json_body=body,
             schema=_WORKBENCH,
+            actor_tier=actor_tier,
         )
         return bool(rows)
 
-    async def soft_delete_note(self, note_id: str, device_id: str | None = None) -> None:
+    async def soft_delete_note(
+        self,
+        note_id: str,
+        device_id: str | None = None,
+        actor_tier: str | None = None,
+    ) -> None:
+        """
+        ``actor_tier`` (DD-131, B-44): the sync engine's own tombstone
+        reconciliation passes ``"code"``; a person deleting a note through
+        ``document_routes.py`` leaves this unset (absent means human) — the
+        SAME method serves both call paths, so the declaration travels as an
+        explicit argument, never a default.
+        """
         body: dict[str, Any] = {"deleted_at": _utcnow_iso()}
         # Stamp the deleting device so realtime consumers can classify the
         # event; without this a delete inherits the LAST CONTENT WRITER's id
@@ -428,6 +473,7 @@ class SupabaseDocClient:
             params={"id": f"eq.{note_id}"},
             json_body=body,
             schema=_WORKBENCH,
+            actor_tier=actor_tier,
         )
 
     async def hard_delete_note(self, note_id: str) -> None:

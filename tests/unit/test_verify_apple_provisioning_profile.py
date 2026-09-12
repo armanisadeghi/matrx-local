@@ -66,8 +66,33 @@ def test_host_rejects_provider_keychain_group_even_when_profile_can_grant_extra_
     _, expected_host, _ = profile_verifier.expected_contract("host")
     signed_host = dict(expected_host)
     signed_host["keychain-access-groups"] = [profile_verifier.PROVIDER_KEYCHAIN_GROUP]
-    with pytest.raises(ValueError, match="provider Keychain group"):
+    with pytest.raises(ValueError, match="never include a Keychain access group"):
         profile_verifier.assert_signed_contract("host", signed_host)
+
+
+def test_host_rejects_wildcard_keychain_grant_even_when_it_can_match_the_provider_group() -> None:
+    _, expected_host, _ = profile_verifier.expected_contract("host")
+    signed_host = dict(expected_host)
+    signed_host["keychain-access-groups"] = [f"{profile_verifier.TEAM_ID}.*"]
+    with pytest.raises(ValueError, match="never include a Keychain access group"):
+        profile_verifier.assert_signed_contract("host", signed_host)
+
+
+def test_host_rejects_team_wildcard_instead_of_its_exact_signed_team() -> None:
+    _, expected_host, _ = profile_verifier.expected_contract("host")
+    signed_host = dict(expected_host)
+    signed_host[profile_verifier.TEAM_ENTITLEMENT] = f"{profile_verifier.TEAM_ID}*"
+    with pytest.raises(ValueError, match="com.apple.developer.team-identifier"):
+        profile_verifier.assert_signed_contract("host", signed_host)
+
+
+def test_provider_rejects_unreviewed_healthkit_claim_even_when_profile_grants_it() -> None:
+    signed = signed_provider()
+    signed["com.apple.developer.healthkit"] = True
+    profile = provider_profile()
+    profile["com.apple.developer.healthkit"] = True
+    with pytest.raises(ValueError, match="com.apple.developer.healthkit.*outside the reviewed native contract"):
+        profile_verifier.assert_signed_contract("provider", signed)
 
 
 def test_sandbox_and_network_are_signed_requirements_not_profile_requirements() -> None:

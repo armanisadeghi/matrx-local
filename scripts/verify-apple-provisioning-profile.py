@@ -132,6 +132,19 @@ def profile_value_authorizes(allowed: object, requested: object) -> bool:
     return False
 
 
+def is_restricted_signed_entitlement(key: object) -> bool:
+    return isinstance(key, str) and (
+        key.startswith("com.apple.developer.")
+        or key in {
+            APPLICATION_IDENTIFIER,
+            "application-identifier",
+            "com.apple.security.application-groups",
+            "keychain-access-groups",
+            "com.apple.security.keychain-access-groups",
+        }
+    )
+
+
 def assert_signed_contract(kind: str, signed_entitlements: dict[object, object]) -> None:
     _, expected_signed, _ = expected_contract(kind)
     for key, expected_value in expected_signed.items():
@@ -139,11 +152,11 @@ def assert_signed_contract(kind: str, signed_entitlements: dict[object, object])
             fail(f"signed {kind} entitlement {key!r} must equal {expected_value!r}")
     if kind == "host":
         for key in ("keychain-access-groups", "com.apple.security.keychain-access-groups"):
-            values = signed_entitlements.get(key, [])
-            if values == PROVIDER_KEYCHAIN_GROUP or (
-                isinstance(values, list) and PROVIDER_KEYCHAIN_GROUP in values
-            ):
-                fail("host signed entitlements must never include the provider Keychain group")
+            if key in signed_entitlements:
+                fail("host signed entitlements must never include a Keychain access group")
+    for key in signed_entitlements:
+        if is_restricted_signed_entitlement(key) and key not in expected_signed:
+            fail(f"signed {kind} entitlement {key!r} is outside the reviewed native contract")
 
 
 def assert_profile_authorizes(kind: str, profile_entitlements: dict[object, object], signed_entitlements: dict[object, object]) -> None:

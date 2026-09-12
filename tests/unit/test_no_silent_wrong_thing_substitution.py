@@ -18,7 +18,8 @@ def test_real_token_write_refuses_plaintext_when_encryption_is_missing(
         db = LocalDatabase(tmp_path / "matrx.db")
         await db.connect()
         monkeypatch.setattr(secret_store, "_fernet", None)
-        monkeypatch.setattr(secret_store, "_fernet_unavailable", True)
+        monkeypatch.setattr(secret_store, "_fernet_unavailable_until", float("inf"))
+        monkeypatch.setattr(secret_store, "_fernet_last_cause", "forced unavailable")
         try:
             with pytest.raises(secret_store.SecretEncryptionUnavailableError) as exc:
                 await TokenRepo(db).save("access-secret", "user-1", "refresh-secret")

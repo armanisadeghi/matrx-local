@@ -125,14 +125,18 @@ class HistoryInventoryStore:
         previous_scan_id: str | None,
     ) -> str:
         scan_id = str(uuid4())
-        await self._db.execute(
-            """INSERT INTO coding_session_history_scans (
-                   scan_id, provider, provider_account_key, previous_scan_id,
-                   status, started_at
-               ) VALUES (?, ?, ?, ?, 'scanning', ?)""",
-            (scan_id, provider, provider_account_key, previous_scan_id, _now()),
-        )
-        await self._db.commit()
+        # Top-level write span. The hook bridge commits every hook on its own
+        # BEGIN IMMEDIATE connection; racing it here is how "Sync everything"
+        # died "database is locked" after 42s on 2026-09-12. Take the gate.
+        async with write_gate():
+            await self._db.execute(
+                """INSERT INTO coding_session_history_scans (
+                       scan_id, provider, provider_account_key, previous_scan_id,
+                       status, started_at
+                   ) VALUES (?, ?, ?, ?, 'scanning', ?)""",
+                (scan_id, provider, provider_account_key, previous_scan_id, _now()),
+            )
+            await self._db.commit()
         return scan_id
 
     async def complete_scan(
@@ -238,13 +242,15 @@ class HistoryInventoryStore:
         return summary
 
     async def fail_scan(self, scan_id: str, error: str) -> None:
-        await self._db.execute(
-            """UPDATE coding_session_history_scans
-               SET status = 'failed', completed_at = ?, error_message = ?
-               WHERE scan_id = ?""",
-            (_now(), error[:500], scan_id),
-        )
-        await self._db.commit()
+        # Sibling of begin_scan: same top-level write span, same gate.
+        async with write_gate():
+            await self._db.execute(
+                """UPDATE coding_session_history_scans
+                   SET status = 'failed', completed_at = ?, error_message = ?
+                   WHERE scan_id = ?""",
+                (_now(), error[:500], scan_id),
+            )
+            await self._db.commit()
 
     async def get_scan(self, scan_id: str) -> dict[str, Any] | None:
         row = await self._db.fetchone(
@@ -388,24 +394,27 @@ class HistoryInventoryStore:
         file change therefore cannot bless a revision for the wrong inventory
         row; the caller must review again.
         """
-        for item in revisions:
-            cursor = await self._db.execute(
-                """UPDATE coding_session_history_scan_rows
-                   SET source_revision = ?
-                   WHERE scan_id = ? AND session_id = ? AND project_key = ?
-                     AND source_state = ? AND present = 1""",
-                (
-                    item["source_revision"],
-                    scan_id,
-                    item["session_id"],
-                    item["project_key"],
-                    item["source_state"],
-                ),
-            )
-            if cursor.rowcount != 1:
-                await self._db.db.rollback()
-                raise ValueError("History inventory changed; review again")
-        await self._db.commit()
+        # One write transaction from the first UPDATE to the COMMIT; the gate
+        # spans all of it (a sub-step gate lets another writer interleave).
+        async with write_gate():
+            for item in revisions:
+                cursor = await self._db.execute(
+                    """UPDATE coding_session_history_scan_rows
+                       SET source_revision = ?
+                       WHERE scan_id = ? AND session_id = ? AND project_key = ?
+                         AND source_state = ? AND present = 1""",
+                    (
+                        item["source_revision"],
+                        scan_id,
+                        item["session_id"],
+                        item["project_key"],
+                        item["source_state"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    await self._db.db.rollback()
+                    raise ValueError("History inventory changed; review again")
+            await self._db.commit()
 
     async def _prune_completed(self, *, keep: int) -> None:
         await self._db.execute(

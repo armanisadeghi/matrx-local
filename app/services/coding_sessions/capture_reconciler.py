@@ -68,6 +68,7 @@ from app.services.coding_sessions.identity_client import (
 )
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
+from app.services.local_db.write_gate import write_gate
 
 logger = get_logger()
 
@@ -159,26 +160,29 @@ class ClaudeCaptureReconciler:
         counter, and a changed stat fence is a genuinely new input deserving a
         fresh budget.
         """
-        await self._db.execute(
-            """INSERT INTO claude_capture_backfill
-                   (session_key, source_revision, attempts, last_error,
-                    enqueued_at, updated_at)
-               VALUES (?, ?, CASE WHEN ? IS NULL THEN 0 ELSE 1 END, ?,
-                       datetime('now'), datetime('now'))
-               ON CONFLICT(session_key) DO UPDATE SET
-                   attempts = CASE
-                       WHEN excluded.last_error IS NULL THEN 0
-                       WHEN claude_capture_backfill.source_revision IS excluded.source_revision
-                       THEN claude_capture_backfill.attempts + 1
-                       ELSE 1
-                   END,
-                   source_revision = excluded.source_revision,
-                   last_error = excluded.last_error,
-                   enqueued_at = excluded.enqueued_at,
-                   updated_at = excluded.updated_at""",
-            (session_key, source_state, error, error),
-        )
-        await self._db.commit()
+        # Top-level write span on the shared connection; this insert lost the
+        # lock race to the hook bridge at startup on 2026-09-12 ("pass FAILED").
+        async with write_gate():
+            await self._db.execute(
+                """INSERT INTO claude_capture_backfill
+                       (session_key, source_revision, attempts, last_error,
+                        enqueued_at, updated_at)
+                   VALUES (?, ?, CASE WHEN ? IS NULL THEN 0 ELSE 1 END, ?,
+                           datetime('now'), datetime('now'))
+                   ON CONFLICT(session_key) DO UPDATE SET
+                       attempts = CASE
+                           WHEN excluded.last_error IS NULL THEN 0
+                           WHEN claude_capture_backfill.source_revision IS excluded.source_revision
+                           THEN claude_capture_backfill.attempts + 1
+                           ELSE 1
+                       END,
+                       source_revision = excluded.source_revision,
+                       last_error = excluded.last_error,
+                       enqueued_at = excluded.enqueued_at,
+                       updated_at = excluded.updated_at""",
+                (session_key, source_state, error, error),
+            )
+            await self._db.commit()
 
     # ------------------------------------------------------------------ cloud
 

@@ -97,10 +97,18 @@ class LocalDatabase:
     # ------------------------------------------------------------------
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
-        return await self.db.execute(sql, params)
+        try:
+            return await self.db.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            await self._discard_transaction_after(exc, sql)
+            raise
 
     async def executemany(self, sql: str, params_seq) -> aiosqlite.Cursor:
-        return await self.db.executemany(sql, params_seq)
+        try:
+            return await self.db.executemany(sql, params_seq)
+        except sqlite3.OperationalError as exc:
+            await self._discard_transaction_after(exc, sql)
+            raise
 
     async def fetchone(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
         self.db.row_factory = aiosqlite.Row
@@ -113,7 +121,64 @@ class LocalDatabase:
         return await cursor.fetchall()
 
     async def commit(self) -> None:
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except sqlite3.OperationalError as exc:
+            await self._discard_transaction_after(exc, "COMMIT")
+            raise
+
+    # Extended result codes meaning "another connection holds or held the
+    # lock". The busy handler covers plain BUSY; BUSY_SNAPSHOT is the one
+    # SQLite raises INSTANTLY, without consulting busy_timeout, when THIS
+    # connection's read snapshot went stale inside a still-open transaction.
+    _LOCK_ERROR_NAMES = frozenset({
+        "SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_RECOVERY",
+        "SQLITE_BUSY_TIMEOUT", "SQLITE_LOCKED", "SQLITE_LOCKED_SHAREDCACHE",
+    })
+
+    async def _discard_transaction_after(
+        self, exc: sqlite3.OperationalError, sql: str
+    ) -> None:
+        """Roll back the implicit transaction a failed write left open.
+
+        Why (measured 2026-09-12 on 1.4.86): Python's sqlite3 begins a
+        transaction before the first write and does NOT close it when that
+        write raises. After one lost lock race against the hook bridge's
+        BEGIN IMMEDIATE connections during the startup burst, this connection
+        stayed inside that transaction. Every later read then pinned a WAL
+        snapshot (a passive checkpoint sat at 147 pages while the log grew),
+        the next hook commit made the snapshot stale, and every write for the
+        rest of the process died in 0.00s with SQLITE_BUSY_SNAPSHOT: 18
+        failures across 10 callers -- catalog/tools sync, sync status, the
+        token save, the scraper store, the capture reconciler, the history
+        scan, the pin reconciler -- while an outside connection acquired the
+        write lock in 2 ms.
+
+        The caller still sees its original error. What changes is that the
+        NEXT writer is not doomed by it. Guard (fails without this):
+        tests/unit/test_local_db_lock_race_rollback.py
+        """
+        name = getattr(exc, "sqlite_errorname", None)
+        if name not in self._LOCK_ERROR_NAMES and "locked" not in str(exc).lower():
+            return
+        db = self._db
+        if db is None or not db.in_transaction:
+            return
+        head = " ".join(sql.split())[:80]
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001 -- the caller's original error is the one that matters
+            logger.error(
+                "[local_db] %s on %r and the rollback ALSO failed; later writes on "
+                "this connection may fail instantly (SQLITE_BUSY_SNAPSHOT) until restart",
+                name or exc, head, exc_info=True,
+            )
+            return
+        logger.warning(
+            "[local_db] %s on %r -- open transaction rolled back so this connection "
+            "is not poisoned; the caller sees the original error",
+            name or exc, head,
+        )
 
     # ------------------------------------------------------------------
     # Migrations

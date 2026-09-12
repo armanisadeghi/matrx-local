@@ -80,6 +80,17 @@ phrase in the sync directories.
   endpoint; an invalid authoritative definition is never partially executed.
   A complete hash-valid stale definition remains usable while offline, matching
   the first-access replica doctrine.
+- **A lock error on the shared connection is rolled back at the database
+  layer, never left open.** `LocalDatabase.execute/executemany/commit` roll the
+  implicit transaction back after `SQLITE_BUSY`/`SQLITE_LOCKED` and re-raise.
+  Why: Python's sqlite3 opens a transaction for the failed write and never
+  closes it; every later read then pins a WAL snapshot, the next hook commit
+  makes it stale, and every write on the connection fails instantly with
+  `SQLITE_BUSY_SNAPSHOT` (busy timeout never consulted) for the life of the
+  process -- 18 failures across 10 callers on 2026-09-12. Guard:
+  `tests/unit/test_local_db_lock_race_rollback.py` (fails without the rollback).
+  Top-level write spans still take `write_gate()`; the rollback is what stops
+  a lost race from becoming permanent.
 - **Offline skips are LOUD and recorded** in `sync_meta.status`
   (`skipped`/`offline`); stale cache is served, never wiped. Agents sync needs
   a user JWT (from `auth_tokens`); no token ⇒ loud skip, cache kept.
@@ -110,6 +121,12 @@ conversation, not a test edit.
 
 ## Change log
 
+- 2026-09-12 — Lock errors on the shared connection roll the open transaction
+  back (was: one lost race poisoned every later write with
+  `SQLITE_BUSY_SNAPSHOT` until restart — catalog/tools sync, token save,
+  history scan, pin reconciler, capture backfill all dead on 1.4.86). The
+  history-scan writers (`begin_scan`/`fail_scan`/`set_source_revisions`) and
+  the capture reconciler's `_record_attempt` took the write gate.
 - 2026-09-08 — Migration V33: the `agents` mirror tolerates a SUPERSET of the
   platform columns (`orchestra` promoted to a first-class nullable column;
   anything else rides `raw_json` verbatim); `agent_execution_details` replaced

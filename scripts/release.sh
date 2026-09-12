@@ -656,6 +656,11 @@ fi
 # ── Pre-flight checks ────────────────────────────────────────────────────────
 # The release is dispatched explicitly so its push can skip the redundant CI
 # workflow. Fail before changing anything if that dispatch is unavailable.
+# One central observer owns terminal build failures. Do not dispatch identical retries.
+if ! $DRY_RUN && [[ -f "/Users/armanisadeghi/Documents/Codex/2026-09-12/central-release-build-monitor-active-2/outputs/state.json" ]]; then
+    python3 "$REPO_ROOT/../common-docs/meta/scripts/release_build_monitor.py" guard --lane local
+fi
+
 if ! $DRY_RUN; then
     require_gh || exit 1
 fi

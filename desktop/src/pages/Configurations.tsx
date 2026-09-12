@@ -56,6 +56,7 @@ import {
 } from "@/hooks/use-configurations";
 import { useConfigCatalogs } from "@/hooks/use-config-catalogs";
 import { FileSyncPanel } from "@/components/files/FileSyncPanel";
+import { ChatMirrorSyncPause } from "@/components/chat/ChatMirrorSyncPause";
 import type { AppSettings, SyncResult } from "@/lib/settings";
 import {
   MAX_CONCURRENCY,
@@ -1601,6 +1602,8 @@ export function Configurations() {
                 />
               </CardContent>
             </Card>
+
+            <ChatMirrorSyncPause />
 
             {/* ── File Sync ──────────────────────────────────── */}
             <Card>

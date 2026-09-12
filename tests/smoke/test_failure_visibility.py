@@ -257,6 +257,75 @@ def test_reflected_post_secret_is_absent_from_response_and_formatted_logs() -> N
     assert "preserved-context" in rendered
 
 
+def test_private_v1_failure_excludes_all_body_values_and_exception_text() -> None:
+    """The real middleware keeps private OpenAI-compatible failures diagnosable."""
+    import io
+    import logging
+
+    from app.main import _log_requests_dispatch
+
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def private_completion(body: dict[str, object]) -> None:
+        messages = body["messages"]
+        assert isinstance(messages, list)
+        content = messages[0]["content"]  # type: ignore[index]
+        assert isinstance(content, str)
+        try:
+            raise ValueError(f"transformed private suffix: {content[7:]!r}")
+        except ValueError as cause:
+            raise RuntimeError(f"reflected request input: {body['input']!r}") from cause
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests_dispatch)
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    activity_logger = logging.getLogger("system_logger")
+    activity_logger.addHandler(handler)
+
+    request_body = {
+        "messages": [{"role": "user", "content": "ordinary-private-message"}],
+        "input": {"nested": ["ordinary-private-input"]},
+        "metadata": {"customer_note": "ordinary-private-note"},
+    }
+
+    async def _run() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://engine.test",
+            timeout=30.0,
+        ) as client:
+            return await client.post("/v1/chat/completions", json=request_body)
+
+    try:
+        response = asyncio.run(_run())
+    finally:
+        activity_logger.removeHandler(handler)
+
+    payload = response.json()
+    activity_rendered = output.getvalue()
+    rendered = f"{response.text}\n{activity_rendered}"
+    for private_value in (
+        "ordinary-private-message",
+        "private-message",
+        "ordinary-private-input",
+        "ordinary-private-note",
+        "reflected request input",
+        "transformed private suffix",
+    ):
+        assert private_value not in rendered
+    assert response.status_code == 500
+    assert payload["path"] == "/v1/chat/completions"
+    assert payload["method"] == "POST"
+    assert payload["failure_id"] in payload["detail"]
+    assert "RuntimeError" in payload["detail"]
+    assert "private and was excluded" in payload["detail"]
+    assert "stack locations:" in activity_rendered
+    assert ".py:" in activity_rendered
+    assert "Traceback (most recent call last)" not in activity_rendered
+
+
 def test_callback_credentials_are_absent_from_request_and_structured_access_logs(caplog) -> None:
     """The actual middleware must never log any OAuth callback value or fragment."""
     import logging

@@ -327,7 +327,7 @@ def _request_body_for_log(path: str, body):
     input, and multipart audio. Those payloads are private by default and can
     be large, so log shape only.
     """
-    if path == "/v1" or path.startswith("/v1/"):
+    if _has_private_request_body(path):
         if body is None:
             return None
         if isinstance(body, dict):
@@ -339,10 +339,45 @@ def _request_body_for_log(path: str, body):
     return _sanitize_body_for_log(body)
 
 
+def _has_private_request_body(path: str) -> bool:
+    """Whether this route's complete request body is private by contract."""
+    return path == "/v1" or path.startswith("/v1/")
+
+
 def _format_request_details(request: Request, body=None) -> str:
     """Format request headers and other metadata for detailed error logging."""
     headers = _sanitize_body_for_log(dict(request.headers))
-    return f"Method: {request.method} | URL: {_sanitize_url(request.url)} | Headers: {headers} | Body: {_sanitize_body_for_log(body)}"
+    safe_body = _request_body_for_log(request.url.path, body)
+    return f"Method: {request.method} | URL: {_sanitize_url(request.url)} | Headers: {headers} | Body: {safe_body}"
+
+
+def _private_failure_description(
+    exc: Exception, method: str, path: str, failure_id: str
+) -> tuple[str, str]:
+    """Describe a private-body failure without retaining exception text."""
+    detail = (
+        f"{method} {path} failed: {type(exc).__name__}. "
+        f"The request body is private and was excluded from diagnostics. "
+        f"Diagnostic reference: {failure_id}."
+    )
+    hint = (
+        "Retry the operation. If it repeats, include diagnostic reference "
+        f"{failure_id} when reporting the failure."
+    )
+    return detail, hint
+
+
+def _safe_exception_locations(exc: Exception) -> str:
+    """Return exception-stack locations without source lines or exception payloads."""
+    locations: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for frame in _traceback.extract_tb(current.__traceback__):
+            locations.append(f"{os.path.basename(frame.filename)}:{frame.lineno} in {frame.name}")
+        current = current.__cause__ or current.__context__
+    return "\n".join(f"  {location}" for location in locations) or "  no stack locations available"
 
 
 @asynccontextmanager
@@ -2244,12 +2279,18 @@ async def _log_requests_dispatch(request: Request, call_next):
     except Exception as exc:
         duration_ms = (_time.monotonic() - t0) * 1000
         failure_id = _uuid.uuid4().hex[:12]
-        detail, hint = _failure_description(
-            exc,
-            request.method,
-            path,
-            secret_values=_request_secret_values(request, body),
-        )
+        is_private_body = _has_private_request_body(path)
+        if is_private_body:
+            detail, hint = _private_failure_description(
+                exc, request.method, path, failure_id
+            )
+        else:
+            detail, hint = _failure_description(
+                exc,
+                request.method,
+                path,
+                secret_values=_request_secret_values(request, body),
+            )
         logger.error(
             "\u2190 500 %s %s  (%.0fms)  failure_id=%s — %s",
             request.method,
@@ -2259,17 +2300,20 @@ async def _log_requests_dispatch(request: Request, call_next):
             detail,
         )
         logger.error("  %s", _format_request_details(request, body))
-        # Tracebacks may repeat a request value in the exception message.  The
-        # global logger filter defends every handler too; sanitize here with
-        # values only this request boundary can know.
-        from app.common.system_logger import SensitiveDataFilter
+        if is_private_body:
+            logger.error("  stack locations:\n%s", _safe_exception_locations(exc))
+        else:
+            # Tracebacks may repeat a request value in the exception message.
+            # The global logger filter defends every handler too; sanitize here
+            # with values only this request boundary can know.
+            from app.common.system_logger import SensitiveDataFilter
 
-        logger.error(
-            "  traceback:\n%s",
-            SensitiveDataFilter().sanitize(
-                _traceback.format_exc(), _request_secret_values(request, body)
-            ),
-        )
+            logger.error(
+                "  traceback:\n%s",
+                SensitiveDataFilter().sanitize(
+                    _traceback.format_exc(), _request_secret_values(request, body)
+                ),
+            )
         access_log.record(
             method=request.method,
             path=path,

@@ -50,7 +50,14 @@ import {
 } from "@/features/action-needed";
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1) — never a local byte→unit body.
-import { formatFileSize } from "@ai-matrx/kit/format";
+// The percentage formatter carries the same contract (kit 0.12.0): an
+// unmeasured signal reads as an em-dash and a MEASURED 0% reads as "0%" —
+// the inverse lie a truthiness test on the number produced here.
+import {
+  formatFileSize,
+  formatPercentFromFraction,
+  safeRatio,
+} from "@ai-matrx/kit/format";
 
 const TRIGGER_REQUIRED_KEYS = new Set<string>([
   "screen_recording",
@@ -1211,9 +1218,10 @@ function WifiCard({ perm }: { perm: PermissionInfo | null }) {
               <p className="text-[10px] text-muted-foreground">
                 {connectedNet.rssi
                   ? `${connectedNet.rssi} dBm`
-                  : connectedNet.signal_percent
-                    ? `${connectedNet.signal_percent}%`
-                    : ""}
+                  : formatPercentFromFraction(
+                      safeRatio(Number(connectedNet.signal_percent ?? NaN), 100),
+                      { unknown: "" },
+                    )}
                 {connectedNet.channel
                   ? ` · Channel ${connectedNet.channel}`
                   : ""}
@@ -1246,9 +1254,13 @@ function WifiCard({ perm }: { perm: PermissionInfo | null }) {
             <tbody>
               {otherNets.map((net, i) => {
                 const rssi = Number(net.rssi ?? 0);
-                const sigPct = net.signal_percent
-                  ? Number(net.signal_percent)
-                  : null;
+                // `net.signal_percent ? …` reported a MEASURED 0% as unknown.
+                // Absence is the only thing that may read as unknown.
+                const sigPct =
+                  net.signal_percent === null ||
+                  net.signal_percent === undefined
+                    ? null
+                    : Number(net.signal_percent);
                 return (
                   <tr
                     key={i}
@@ -1258,7 +1270,9 @@ function WifiCard({ perm }: { perm: PermissionInfo | null }) {
                       {String(net.ssid ?? "(hidden)")}
                     </td>
                     <td className="px-3 py-2 font-mono text-emerald-500">
-                      {rssi ? rssiToBars(rssi) : sigPct ? `${sigPct}%` : "—"}
+                      {rssi
+                        ? rssiToBars(rssi)
+                        : formatPercentFromFraction(safeRatio(sigPct, 100))}
                       {rssi ? (
                         <span className="ml-1 text-[10px] text-muted-foreground">
                           {rssi} dBm
@@ -1795,6 +1809,9 @@ function SystemResourcesCard({ engineStatus }: { engineStatus: EngineStatus }) {
   if (!resources) return null;
 
   const cpuPercent = Number(resources.cpu_percent ?? 0);
+  // The BAR may clamp an unmeasured reading to empty — a bar is decoration.
+  // The LABEL beside it may not invent a "0%" for a reading nobody took.
+  const cpuMeasured = Number(resources.cpu_percent ?? NaN);
   const cpuCores = resources.cpu_cores as number | undefined;
   const cpuLogical = resources.cpu_logical as number | undefined;
   const cpuFreq = resources.cpu_freq as string | undefined;
@@ -1815,9 +1832,10 @@ function SystemResourcesCard({ engineStatus }: { engineStatus: EngineStatus }) {
   // Sizes arrive in GB; THE package formatter takes BYTES and picks the unit.
   const fmtStorage = (gb: number) => formatFileSize(gb * 1024 ** 3);
 
+  const cpuLoad = formatPercentFromFraction(safeRatio(cpuMeasured, 100));
   const cpuDetail = cpuCores
-    ? `${cpuPercent.toFixed(0)}% · ${cpuCores}c/${cpuLogical ?? cpuCores}t${cpuFreq ? ` · ${cpuFreq}` : ""}`
-    : `${cpuPercent.toFixed(0)}%`;
+    ? `${cpuLoad} · ${cpuCores}c/${cpuLogical ?? cpuCores}t${cpuFreq ? ` · ${cpuFreq}` : ""}`
+    : cpuLoad;
 
   return (
     <Card>

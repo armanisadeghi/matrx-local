@@ -1,3 +1,7 @@
+// THE package count formatter (`@ai-matrx/kit/format`, kit 0.12.0) owns the
+// grouped-number voice, and refuses to print a confident number for a value
+// nobody measured. A measured `0` still reads "0".
+import { formatCount } from "@ai-matrx/kit/format";
 import type { ChatMessage, ToolCall, ToolCallResult } from "@/hooks/use-chat";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type {
@@ -92,7 +96,7 @@ export function redactInlineBinary(value: unknown, key = ""): unknown {
     value.length > 4096 &&
     (key.toLowerCase().includes("base64") || /^[A-Za-z0-9+/=]+$/.test(value))
   ) {
-    return `[inline binary omitted: ${value.length.toLocaleString()} characters]`;
+    return `[inline binary omitted: ${formatCount(value.length)} characters]`;
   }
   if (Array.isArray(value)) return value.map((item) => redactInlineBinary(item));
   const item = record(value);

@@ -108,7 +108,7 @@ import { FilesystemIndexSettings } from "@/features/filesystem/FilesystemIndexSe
 
 // THE package formatters (`@ai-matrx/kit/format`, duplication census H1
 // 2026-09-07). THE UNIT LAW: the unit is in the name.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatDurationMs, formatFileSize } from "@ai-matrx/kit/format";
 type AuthActions = ReturnType<typeof useAuth>;
 
 /** Tri-state, mirroring the engine's ApiKeyValidation. `unknown` means we could
@@ -4746,15 +4746,15 @@ function VoiceAssistantSettingsTab({
               className="flex-1 h-2 rounded-lg accent-primary"
             />
             <span className="w-20 text-right text-sm font-mono tabular-nums text-foreground">
-              {silenceMs >= 1000
-                ? `${(silenceMs / 1000).toFixed(1)} s`
-                : `${silenceMs} ms`}
+              {formatDurationMs(silenceMs, { style: "compact" })}
             </span>
           </div>
           <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>0.4 s (fast)</span>
-            <span>1.4 s (default)</span>
-            <span>30 s (very slow)</span>
+            {/* Spelled the way the readout above spells them, so the scale
+                marks and the live value never disagree. */}
+            <span>400ms (fast)</span>
+            <span>1.4s (default)</span>
+            <span>30s (very slow)</span>
           </div>
 
           <Separator />

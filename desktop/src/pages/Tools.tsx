@@ -4,6 +4,9 @@ import * as LucideIcons from "lucide-react";
 import type { LucideProps } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Button, BasicInput as Input, ScrollArea } from "@ai-matrx/design-system";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `compact` is the elapsed-work voice (`250ms`, `5.2s`, `1m 30s`).
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { ToolDetailPanel } from "@/components/tools/ToolDetailPanel";
 import { MonitoringPanel } from "@/components/tools/panels/MonitoringPanel";
 import { GenericToolPanel } from "@/components/tools/panels/GenericToolPanel";
@@ -466,9 +469,9 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
                               </span>
                               {entry.elapsedMs != null && (
                                 <span className="text-[10px] text-muted-foreground tabular-nums">
-                                  {entry.elapsedMs < 1000
-                                    ? `${entry.elapsedMs}ms`
-                                    : `${(entry.elapsedMs / 1000).toFixed(1)}s`}
+                                  {formatDurationMs(entry.elapsedMs, {
+                                    style: "compact",
+                                  })}
                                 </span>
                               )}
                             </div>

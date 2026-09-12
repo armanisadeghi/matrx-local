@@ -116,76 +116,7 @@
       "why": "THE UNIT LAW: the fleet's ~35 duration twins variously took milliseconds, seconds and minutes behind an identical `formatDuration(n)` signature, so kit ships formatDurationMs / formatDurationSeconds / formatDurationMinutes and NO bare `formatDuration`. Two host copies had already re-grown under this exact name (observational-memory format.ts, marketing crawl-session-panels.tsx) and were deleted 2026-09-07. A local `formatDuration` that BINDS unit+style+fallback and delegates is an adapter, not a twin; a local `formatDurationMs` is always a twin.",
       "shapeWhy": "A millisecond count becoming a unit string is this capability whatever it is called. The name lane read GREEN on all four formatDuration* exports while aidream's dashboard carried SEVEN bodies under the private names fmtMs and fmtMsSummary, each with its own rounding, and 115 more files in this repo turned ms into `2.3s` / `1.5m` / `3m ago` inline. Pattern and its proof: scripts/duration-shape.mjs. Plain time arithmetic can never match \u2014 the rule requires a DIVISION, MODULO or THRESHOLD COMPARISON against a time base PAIRED with a duration unit label, so a timeout budget (30 * 1000), an API seconds field and a rate denominator all stay untouched. `shapeCensus` below is the pre-existing census, not an exemption: it is reported every run and is ratcheted shrink-only \u2014 a stale entry FAILS the guard.",
       "allow": [],
-      "shapeCensus": [
-        {
-          "file": "src/components/documents/NoteList.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/components/llm/ModelRepoAnalyzer.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/components/notifications/NotificationCenter.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/components/scraping/ScrapeResultViewer.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/components/scraping/ScrapeUrlList.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/components/tools/ToolExecutionCard.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/lib/api.ts",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/lib/background-tasks/orchestrator.ts",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/lib/recovery.ts",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/lib/tts/api.ts",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/AiMatrx.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/BridgeTest.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/CodingSessions.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/LocalModels.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/Scraping.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/Settings.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        },
-        {
-          "file": "src/pages/Tools.tsx",
-          "reason": "Pre-existing duration body, censused 2026-09-11 when the duration SHAPE lane was ported here. NOT an exemption: it belongs to @ai-matrx/kit/format and awaits the fleet-wide duration collapse campaign. Remove this entry when the file is collapsed."
-        }
-      ]
+      "shapeCensus": []
     },
     {
       "name": "formatDurationSeconds",

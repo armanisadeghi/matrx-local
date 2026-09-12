@@ -1,3 +1,6 @@
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `compact` is the elapsed-work voice this queue-completion line speaks.
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { emitClientLog } from "@/hooks/use-unified-log";
 
 export interface BackgroundTask {
@@ -56,10 +59,12 @@ class BackgroundOrchestrator {
 
     const runNext = (idx: number) => {
       if (this.aborted || idx >= queue.length) {
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        const elapsed = formatDurationMs(performance.now() - t0, {
+          style: "compact",
+        });
         emitClientLog(
           "success",
-          `Queue complete: ${ran} tasks in ${elapsed}s (${skipped} skipped, ${failed} failed)`,
+          `Queue complete: ${ran} tasks in ${elapsed} (${skipped} skipped, ${failed} failed)`,
           SOURCE,
         );
         this.running = false;

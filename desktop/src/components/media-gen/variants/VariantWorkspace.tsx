@@ -30,6 +30,10 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
+// THE package percentage formatter (`@ai-matrx/kit/format`, kit 0.12.0).
+// `FromFraction` is in the name because half the fleet's twins took a 0..1
+// fraction and half took 0..100 — a 100x error that renders plausibly.
+import { formatPercentFromFraction } from "@ai-matrx/kit/format";
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import { WorkflowSection } from "../WorkflowSection";
 import { MediaLibrarySection } from "../MediaLibrarySection";
@@ -324,7 +328,7 @@ function QueueFooter({ onJump }: { onJump: (id: NavId) => void }) {
               )}
               {videoActive && (
                 <span className="tabular-nums shrink-0">
-                  {Math.round(activeJob.progress * 100)}%
+                  {formatPercentFromFraction(activeJob.progress)}
                 </span>
               )}
             </button>

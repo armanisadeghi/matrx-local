@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Button, Label, Progress, ScrollArea, Separator, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `compact` is the elapsed-work voice (`250ms`, `5.2s`, `1m 30s`).
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { ScrapeResultViewer } from "@/components/scraping/ScrapeResultViewer";
 import { ScrapeUrlList } from "@/components/scraping/ScrapeUrlList";
 import { MethodSelector } from "@/components/scraping/MethodSelector";
@@ -226,9 +229,7 @@ function HistoryDrawer({
                   {h.elapsed_ms > 0 && (
                     <span>
                       ·{" "}
-                      {h.elapsed_ms < 1000
-                        ? `${h.elapsed_ms}ms`
-                        : `${(h.elapsed_ms / 1000).toFixed(1)}s`}
+                      {formatDurationMs(h.elapsed_ms, { style: "compact" })}
                     </span>
                   )}
                 </div>

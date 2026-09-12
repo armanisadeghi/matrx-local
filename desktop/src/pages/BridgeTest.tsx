@@ -44,6 +44,9 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Button, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
+// THE package relative-time formatter (`@ai-matrx/kit/format`, duplication
+// census H1). The hand-rolled "Xs ago" cascades below were deleted.
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NumberInput } from "@/components/ui/number-input";
 import {
@@ -96,11 +99,12 @@ const MAX_LOG_LINES = 500;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Binds the SECONDS→ms conversion the package formatter needs (a bare number
+ * is milliseconds to it) and delegates the voice.
+ */
 function formatRelative(secsSinceEpoch: number): string {
-  const ageSec = Math.max(0, Math.round(Date.now() / 1000 - secsSinceEpoch));
-  if (ageSec < 60) return `${ageSec}s ago`;
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ${ageSec % 60}s ago`;
-  return `${Math.floor(ageSec / 3600)}h ago`;
+  return formatRelativeTime(secsSinceEpoch * 1000);
 }
 
 function shortId(id: string): string {
@@ -1268,12 +1272,14 @@ function formatLatencyMs(value: number | null): string {
   return `${Math.round(value)} ms`;
 }
 
+/**
+ * Binds the "0 means never called" guard (an epoch `0` is a timestamp to the
+ * package formatter, not an absence) and the BARE stamp — this renders under a
+ * column header that already says "Last called".
+ */
 function formatLastCalled(unixMs: number): string {
   if (!unixMs) return "—";
-  const ageSec = Math.max(0, Math.round((Date.now() - unixMs) / 1000));
-  if (ageSec < 60) return `${ageSec}s ago`;
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
-  return `${Math.floor(ageSec / 3600)}h ago`;
+  return formatRelativeTime(unixMs, { suffix: false });
 }
 
 interface MetricsSectionProps {
@@ -1690,12 +1696,14 @@ function bootCheckStatusClass(status: "ok" | "warn" | "fail"): string {
   return "bg-red-500/15 text-red-700 dark:text-red-300";
 }
 
+/**
+ * Binds the "0 means never run" guard and the SECONDS→ms conversion the
+ * package formatter needs (a bare number is milliseconds to it). Renders
+ * inside a sentence, so it keeps the " ago" suffix.
+ */
 function formatBootCheckTimestamp(unixSec: number): string {
   if (!unixSec) return "—";
-  const ageSec = Math.max(0, Math.round(Date.now() / 1000 - unixSec));
-  if (ageSec < 60) return `${ageSec}s ago`;
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
-  return `${Math.floor(ageSec / 3600)}h ago`;
+  return formatRelativeTime(unixSec * 1000);
 }
 
 function BootCheckSection({

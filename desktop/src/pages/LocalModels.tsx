@@ -134,7 +134,7 @@ import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatDurationMs, formatFileSize } from "@ai-matrx/kit/format";
 // ── Shared LLM context (single hook instance for all tabs) ───────────────
 
 const LlmContext = createContext<[LlmState, LlmActions] | null>(null);
@@ -2082,9 +2082,7 @@ function AgenticToolCallCard({
         <span className="font-mono font-semibold">{toolName}</span>
         <span className="ml-auto text-muted-foreground flex items-center gap-1">
           <Timer className="h-2.5 w-2.5" />
-          {elapsedMs < 1000
-            ? `${elapsedMs}ms`
-            : `${(elapsedMs / 1000).toFixed(1)}s`}
+          {formatDurationMs(elapsedMs, { style: "compact" })}
         </span>
       </div>
 

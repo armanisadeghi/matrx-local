@@ -12,6 +12,10 @@ import {
   Clock,
 } from "lucide-react";
 import { Badge, ScrollArea } from "@ai-matrx/design-system";
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). The local `formatElapsed` twin was deleted; `compact` is the elapsed-
+// work voice (`250ms`, `5.2s`, `1m 30s`).
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
 import type { ScrapeEntry } from "@/hooks/use-scrape";
 
@@ -28,11 +32,6 @@ function statusCodeColor(code: number): string {
   if (code >= 400 && code < 500) return "text-amber-700 dark:text-amber-400";
   if (code >= 500) return "text-red-700 dark:text-red-400";
   return "text-muted-foreground";
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function ScrapeUrlList({
@@ -113,7 +112,9 @@ export function ScrapeUrlList({
             {/* Elapsed */}
             <span className="w-16 shrink-0 text-right pr-1 text-[10px] text-muted-foreground tabular-nums">
               {entry.result?.elapsed_ms
-                ? formatElapsed(entry.result.elapsed_ms)
+                ? formatDurationMs(entry.result.elapsed_ms, {
+                    style: "compact",
+                  })
                 : entry.status === "pending"
                   ? "—"
                   : null}

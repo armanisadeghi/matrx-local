@@ -29,9 +29,14 @@ import {
   type CompatibilityStatus,
 } from "@/lib/llm/repoAnalyzer";
 import type { LlmHardwareResult, LlmDownloadProgress } from "@/lib/llm/types";
-// THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
-// census H1) — never a local byte→unit body.
-import { formatFileSize } from "@ai-matrx/kit/format";
+// THE package byte-size and duration formatters (`@ai-matrx/kit/format`,
+// duplication census H1) — never a local byte→unit or ms→unit body. `long` is
+// the prose voice the timeout copy on this panel is written in.
+import {
+  formatDurationMs,
+  formatDurationSeconds,
+  formatFileSize,
+} from "@ai-matrx/kit/format";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -422,7 +427,7 @@ export function ModelRepoAnalyzer({
         (e instanceof Error && e.name === "AbortError");
       if (aborted && timedOutRef.current) {
         setError(
-          `Analysis timed out after ${ANALYZE_TIMEOUT_MS / 1000}s. The engine may be busy or unreachable — check that it's running, then retry.`,
+          `Analysis timed out after ${formatDurationMs(ANALYZE_TIMEOUT_MS, { style: "long" })}. The engine may be busy or unreachable — check that it's running, then retry.`,
         );
       } else if (aborted) {
         // User cancelled — leave the form clean for another attempt.
@@ -512,7 +517,9 @@ export function ModelRepoAnalyzer({
                   disabled
                 >
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span className="tabular-nums">{elapsedSec}s</span>
+                  <span className="tabular-nums">
+                    {formatDurationSeconds(elapsedSec, { style: "compact" })}
+                  </span>
                 </Button>
                 <Button
                   size="sm"
@@ -539,8 +546,10 @@ export function ModelRepoAnalyzer({
           {isAnalyzing && (
             <p className="text-[10px] text-muted-foreground flex items-center gap-1">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Analyzing repository… {elapsedSec}s elapsed (times out at{" "}
-              {ANALYZE_TIMEOUT_MS / 1000}s)
+              Analyzing repository…{" "}
+              {formatDurationSeconds(elapsedSec, { style: "long" })} elapsed
+              (times out at{" "}
+              {formatDurationMs(ANALYZE_TIMEOUT_MS, { style: "long" })})
             </p>
           )}
 

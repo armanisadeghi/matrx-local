@@ -5,6 +5,10 @@
  * In production, Tauri spawns it as a managed sidecar process.
  */
 
+// THE package duration formatter (`@ai-matrx/kit/format`, duplication census
+// H1). `long` is the prose voice these timeout sentences are written in —
+// "timed out after 30 seconds", never a bare "30s" mid-sentence.
+import { formatDurationMs } from "@ai-matrx/kit/format";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
 import { enginePortList } from "@/lib/engine-ports";
@@ -1010,7 +1014,7 @@ class EngineAPI {
             () =>
               reject(
                 new Error(
-                  `Authentication token lookup timed out after ${timeoutMs / 1000}s`,
+                  `Authentication token lookup timed out after ${formatDurationMs(timeoutMs, { style: "long" })}`,
                 ),
               ),
             timeoutMs,
@@ -3024,7 +3028,7 @@ class EngineAPI {
         (e.name === "TimeoutError" || e.name === "AbortError")
       ) {
         throw new Error(
-          `Engine request timed out after ${timeoutMs / 1000}s: ${path}`,
+          `Engine request timed out after ${formatDurationMs(timeoutMs, { style: "long" })}: ${path}`,
         );
       }
       throw e;
@@ -3045,7 +3049,13 @@ class EngineAPI {
         errorBody?.message ?? errorBody?.detail,
         `HTTP ${resp.status}`,
       );
-      throw new Error(`${init?.method ?? "GET"} ${path} failed: ${message}`);
+      const hint = typeof errorBody?.hint === "string" ? errorBody.hint : "";
+      const reference = typeof errorBody?.failure_id === "string"
+        ? `Diagnostic reference: ${errorBody.failure_id}.` : "";
+      throw new Error(
+        [`${init?.method ?? "GET"} ${path} failed: ${message}`, hint, reference]
+          .filter(Boolean).join(" "),
+      );
     }
     await resolveHttpActionNeeded(operationKey);
     return resp.json();
@@ -3141,6 +3151,11 @@ class EngineAPI {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
+  }
+
+  /** Get the local conversation mirror's background-sync state. */
+  async chatMirrorSyncStatus(): Promise<ChatMirrorSyncStatus> {
+    return this.request("/chat/mirror/status");
   }
 
   /**
@@ -3298,7 +3313,9 @@ class EngineAPI {
       });
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        throw new Error(`Documents API timed out after ${timeoutMs / 1000}s`);
+        throw new Error(
+          `Documents API timed out after ${formatDurationMs(timeoutMs, { style: "long" })}`,
+        );
       }
       throw err;
     } finally {
@@ -4806,8 +4823,28 @@ export interface FileSyncStatus {
   cursor: string | null;
   last_sync_status: string | null;
   last_sync_error: string | null;
+  pause: SyncOrganizationPause | null;
   // {} until the first cycle of this process completes.
   last_cycle: FileSyncCycleSummary | Record<string, never>;
+}
+
+/** A background sync is waiting for an explicit organization selection. */
+export interface SyncOrganizationPause {
+  code: "organization_not_resolved";
+  message: string;
+  remedy: string;
+}
+
+export interface ChatMirrorSyncStatus {
+  configured: boolean;
+  auto_sync_active: boolean;
+  interval_seconds: number;
+  pending_outbox: number;
+  conflicts: number;
+  dead_letter: number;
+  last_cycle: Record<string, unknown>;
+  tables: Record<string, unknown>;
+  pause: SyncOrganizationPause | null;
 }
 
 export interface FileSyncCycleSummary {
@@ -5724,7 +5761,7 @@ function mediaGenTimeoutError(
   } catch {
     // keep full url
   }
-  const msg = `Engine did not respond within ${Math.round(timeoutMs / 1000)}s (${method} ${path}) — the request was aborted so the UI never hangs`;
+  const msg = `Engine did not respond within ${formatDurationMs(timeoutMs, { style: "long" })} (${method} ${path}) — the request was aborted so the UI never hangs`;
   emitClientLog("error", `[${surface}] ${msg}`, "engine");
   return new Error(msg);
 }

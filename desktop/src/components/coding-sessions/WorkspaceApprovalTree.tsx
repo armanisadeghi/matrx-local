@@ -15,6 +15,13 @@ import {
 } from "lucide-react";
 
 import { Badge, Button, BasicInput as Input } from "@ai-matrx/design-system";
+// THE ONE confirmation (`@ai-matrx/kit/confirm-opener` + design-system's
+// `ConfirmDialogHost`, mounted in App/PanelApp). Never `window.confirm`.
+// THE package count formatter (`@ai-matrx/kit/format`, kit 0.12.0) owns the
+// grouped-number voice, and refuses to print a confident number for a value
+// nobody measured. A measured `0` still reads "0".
+import { formatCount } from "@ai-matrx/kit/format";
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { engine } from "@/lib/api";
 import type {
@@ -252,7 +259,15 @@ export function WorkspaceApprovalTree({
   };
 
   const mutateApproval = async (path: string, approve: boolean) => {
-    if (!approve && !window.confirm(`Revoke agent access to ${path}? Active runs are not stopped, but future runs will no longer be allowed to start there.`)) return;
+    if (!approve) {
+      const ok = await confirm({
+        title: "Revoke agent access to this folder?",
+        description: `Agents lose permission to start new runs in ${path}. Runs already in flight are not stopped, and re-approving the folder restores access.`,
+        confirmLabel: "Revoke access",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
     setBusyPath(path);
     try {
       if (approve) await engine.approveRuntimeFolder(path);
@@ -276,7 +291,13 @@ export function WorkspaceApprovalTree({
   };
 
   const removeRoot = async (path: string) => {
-    if (!window.confirm(`Remove ${path} from code locations? Existing folder approvals beneath it may become unusable until the location is added again.`)) return;
+    const ok = await confirm({
+      title: "Remove this code location?",
+      description: `${path} stops being a code location. Folder approvals beneath it may become unusable until the location is added again.`,
+      confirmLabel: "Remove location",
+      variant: "destructive",
+    });
+    if (!ok) return;
     setBusyPath(path);
     try {
       const result = await engine.removeRuntimeWorkspaceRoot(path);
@@ -452,13 +473,13 @@ export function WorkspaceApprovalTree({
 
       {discovery && (
         <p className="text-xs text-muted-foreground" aria-live="polite">
-          Found {discovery.project_count.toLocaleString()} projects across{" "}
-          {discovery.directory_count.toLocaleString()} folders.
+          Found {formatCount(discovery.project_count)} projects across{" "}
+          {formatCount(discovery.directory_count)} folders.
           {discovery.truncated
             ? " The safety scan limit was reached; choose a narrower location to see more."
             : ""}
           {discovery.skipped > 0
-            ? ` ${discovery.skipped.toLocaleString()} hidden, generated, linked, or unreadable folders were skipped.`
+            ? ` ${formatCount(discovery.skipped)} hidden, generated, linked, or unreadable folders were skipped.`
             : ""}
         </p>
       )}

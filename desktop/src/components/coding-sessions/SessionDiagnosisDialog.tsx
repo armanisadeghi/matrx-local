@@ -35,7 +35,10 @@ import {
   codingSessionSourceLabel,
   formatRetryDuration,
 } from "@/lib/coding-session-ui";
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
+// THE ONE confirmation (`@ai-matrx/kit/confirm-opener` + design-system's
+// `ConfirmDialogHost`, mounted in App/PanelApp). Never `window.confirm`.
+import { confirm } from "@ai-matrx/kit/confirm-opener";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
 
 export const SESSION_STATE_LABEL: Record<ClaudeSessionState, string> = {
@@ -137,11 +140,14 @@ export function SessionDiagnosisDialog({
         const preview = await engine.discardCodingSessionDeliveryEnvelope(receiptId, false);
         const impact = preview.impact;
         if (!impact) throw new Error("The engine did not return discard impact evidence.");
-        const confirmed = window.confirm(
-          `${impact.warning}\n\nDelivery #${impact.receipt_id} holds ${impact.item_count} event${
+        const confirmed = await confirm({
+          title: `Discard delivery #${impact.receipt_id}?`,
+          description: `${impact.warning} Delivery #${impact.receipt_id} holds ${impact.item_count} event${
             impact.item_count === 1 ? "" : "s"
-          } (${formatFileSize(impact.payload_bytes)}). Claude's own transcript is untouched.`,
-        );
+          } (${formatFileSize(impact.payload_bytes)}), and discarding removes them from this delivery for good. Claude's own transcript is untouched.`,
+          confirmLabel: "Discard delivery",
+          variant: "destructive",
+        });
         if (!confirmed) return;
         await engine.discardCodingSessionDeliveryEnvelope(receiptId, true);
       }
@@ -214,7 +220,7 @@ export function SessionDiagnosisDialog({
             <Section title="AI Matrx (the server's own record)">
               <Row label="Server asked">
                 {data.cloud.checked
-                  ? `Yes · ${when(data.cloud.checked_at)} · ${data.cloud.sessions.toLocaleString()} of your Claude Code sessions are bound there`
+                  ? `Yes · ${when(data.cloud.checked_at)} · ${formatCount(data.cloud.sessions)} of your Claude Code sessions are bound there`
                   : `No — ${data.cloud.detail ?? data.cloud.reason ?? "unknown reason"}`}
               </Row>
               {data.cloud.binding ? (

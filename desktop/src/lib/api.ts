@@ -757,6 +757,8 @@ export interface ClaudeOverview {
     pinned: number;
     index_files_read: number;
     unreadable: number;
+    /** True when Claude's index hit the reader's cap: this list is incomplete. */
+    index_limit_reached: boolean;
     in_cloud: number;
     changed: number;
     queued: number;

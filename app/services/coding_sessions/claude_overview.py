@@ -212,6 +212,18 @@ def _session_index(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
     return entries, totals
 
 
+async def warm_index_cache(root: Path | None = None) -> None:
+    """Read the index once at engine start so the FIRST screen open is instant.
+
+    Without this the first open after an engine start pays the whole cold read
+    (~47,000 records, ~25s here) while the person watches a spinner. The engine
+    has nothing else to do at startup, so it pays that cost before anyone asks.
+    Runs in a thread: the scan is pure blocking I/O and must never sit on the
+    event loop.
+    """
+    await asyncio.to_thread(_session_index, root or default_sessions_root())
+
+
 # ── Identity: the two spellings of one session ──────────────────────────────
 #
 # A hook-mirrored session is bound on the server under its raw Claude session
@@ -524,6 +536,10 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
             "pinned": pinned_total,
             "index_files_read": totals.get("files", 0),
             "unreadable": totals.get("unreadable", 0),
+            # A cap never lies: the reader stops at MAX_INDEX_FILES records, and
+            # when it does the list below is incomplete. Say so on the screen
+            # rather than quietly showing a short list.
+            "index_limit_reached": bool(totals.get("truncated")),
             **counts,
             # Whole-queue facts, every provider: what the bridge still has to
             # send, and what it is preserving because the server refused it.

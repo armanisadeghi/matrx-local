@@ -30,7 +30,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-MAX_INDEX_FILES = 50_000
+# Claude keeps one index record per account per conversation, so this cap is
+# multiplied by however many accounts are on the machine. This Mac already
+# holds 50,000+ records (eight accounts x ~1,900 conversations) and was
+# hitting the old 50,000 ceiling, which silently dropped conversations off
+# the end of the list. 250,000 leaves real headroom; when it IS hit the
+# overview reports ``index_limit_reached`` so the screen says so out loud.
+MAX_INDEX_FILES = 250_000
 MAX_INDEX_FILE_BYTES = 8_388_608
 MAX_LEDGER_BYTES = 33_554_432
 _TITLE_MAX_CHARS = 160

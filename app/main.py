@@ -959,6 +959,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("coding_session_local_runtime", exc)
 
+    # Phase 2h.2: warm Claude's sidebar index while nobody is waiting. The first
+    # open of the Coding Sessions screen otherwise pays the whole cold read
+    # (~47,000 index records, ~25s on this Mac) with a person watching a
+    # spinner. Fire-and-forget in a background task: it never blocks startup,
+    # and if it fails the only consequence is that the first open does the read
+    # itself, exactly as before.
+    async def _warm_claude_session_index() -> None:
+        try:
+            from app.services.coding_sessions.claude_overview import warm_index_cache
+
+            await warm_index_cache()
+            logger.info("[app/main.py] Phase 2h.2: Claude session index warmed ✓")
+        except Exception:
+            logger.warning(
+                "[app/main.py] Phase 2h.2: Claude session-index warm-up failed — "
+                "the first Coding Sessions open will do the full read itself",
+                exc_info=True,
+            )
+
+    # Keep a reference so the task is not garbage-collected mid-flight.
+    _claude_index_warm_task = asyncio.create_task(_warm_claude_session_index())
+    _claude_index_warm_task.add_done_callback(lambda _: None)
+
     # Phase 2i: capture reconciler. A failed Claude Code hook is NON-BLOCKING,
     # so the MCP-delivered hook path can stop mirroring permanently and
     # silently (23.5h lost on 2026-08-16). This loop diffs Claude's own local

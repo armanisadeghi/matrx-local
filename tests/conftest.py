@@ -310,6 +310,32 @@ TEST_ORGANIZATION_ID = "11111111-2222-4333-8444-555555555555"
 
 
 @pytest.fixture(autouse=True)
+def _claude_dirs_are_never_the_real_ones(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every unit test reads an EMPTY Claude home unless it sets its own.
+
+    Measured 2026-09-12: tests that never mentioned Claude's sidebar index
+    still walked the real one (~50,000 records across eight accounts, ~25 s)
+    through the default roots, and hit pytest's 30 s timeout the moment the
+    reader's cap was raised. A test that wants a Claude tree builds one under
+    tmp_path and sets these same variables itself (monkeypatch inside the test
+    wins over this fixture).
+    """
+    root = tmp_path_factory.mktemp("claude-home")
+    for name, sub in (
+        ("CLAUDE_CONFIG_DIR", "config"),
+        ("CLAUDE_DESKTOP_SESSIONS_DIR", "sessions"),
+    ):
+        if name not in os.environ:
+            target = root / sub
+            target.mkdir(parents=True, exist_ok=True)
+            monkeypatch.setenv(name, str(target))
+    if "CLAUDE_SIDEBAR_LEDGER" not in os.environ:
+        monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(root / "sidebar-ledger.json"))
+
+
+@pytest.fixture(autouse=True)
 def _organization_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.aidream import organization as organization_module
 

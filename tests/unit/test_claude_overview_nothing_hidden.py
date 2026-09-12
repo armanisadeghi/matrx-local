@@ -114,3 +114,32 @@ def test_cli_only_rows_are_marked_and_titled_by_their_opening_message(
     assert cli_only["project"] == "demo"
     assert cli_only["on_disk"] is True
     assert cli_only["pinned"] is False
+
+
+def test_warm_index_cache_fills_the_cache_so_the_first_screen_open_is_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine warms the index at startup; the first open must not re-parse."""
+    import app.services.coding_sessions.claude_overview as claude_overview
+
+    root = tmp_path / "claude-code-sessions"
+    _write_index_record(root, "11111111-1111-4111-8111-111111111111", "One")
+    _write_index_record(root, "22222222-2222-4222-8222-222222222222", "Two")
+    monkeypatch.setattr(claude_overview, "_INDEX_CACHE", None)
+    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(tmp_path / "absent-ledger.json"))
+
+    asyncio.run(claude_overview.warm_index_cache(root))
+
+    cached = claude_overview._INDEX_CACHE
+    assert cached is not None, "warm_index_cache left the cache cold"
+    fingerprint, entries, totals = cached
+    assert fingerprint[0] == 2
+    assert totals["files"] == 2
+    assert not totals.get("truncated")
+    assert {entry.title for entry in entries.values()} == {"One", "Two"}
+
+    # The warmed cache is what the screen's own read returns — the very same
+    # objects. Re-parsing would build new dicts; identity is the proof.
+    screen_entries, screen_totals = claude_overview._session_index(root)
+    assert screen_entries is entries
+    assert screen_totals is totals

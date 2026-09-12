@@ -761,6 +761,8 @@ export interface ClaudeOverview {
     /** Transcripts on disk with no Claude sidebar record — listed, never hidden. */
     transcript_only: number;
     transcripts_on_disk: number;
+    /** True when Claude's index hit the reader's cap: this list is incomplete. */
+    index_limit_reached: boolean;
     unreadable: number;
     in_cloud: number;
     changed: number;

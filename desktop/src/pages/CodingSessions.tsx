@@ -697,6 +697,14 @@ export function CodingSessions() {
 
           <AgentRuntimeCard />
 
+          {totals?.index_limit_reached && (
+            <p className="text-xs text-destructive">
+              Claude's index has more than 250,000 records; some conversations
+              may be missing from this list.
+            </p>
+          )}
+
+
           {totals && totals.unreadable > 0 && (
             <p className="text-xs text-muted-foreground">
               {totals.unreadable.toLocaleString()} of{" "}

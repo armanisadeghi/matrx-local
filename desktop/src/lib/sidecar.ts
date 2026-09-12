@@ -97,6 +97,9 @@ export interface UpdateStatus {
   status: "up_to_date" | "available" | "downloading" | "installed";
   version?: string;
   body?: string;
+  /** BYTES — the HTTP Content-Length of the update artifact, from the Tauri
+   * updater's download event. Unlike most `*_length` fields in this fleet it is
+   * not a character count. */
   content_length?: number;
   downloaded?: number;
 }

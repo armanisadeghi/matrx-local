@@ -32,6 +32,11 @@ interface UpdateDialogProps {
 export function UpdateDialog({ state, actions }: UpdateDialogProps) {
   const { status, busy, showDownloadProgress, progress, dialogOpen, restarting } = state;
   const isDownloadingUi = showDownloadProgress && status?.status === "downloading";
+  // BYTES. The Tauri updater's `content_length` IS the HTTP Content-Length of
+  // the artifact; the byte-size formatter is right here and the local name
+  // says so, because `*_length` almost everywhere else in this fleet is a
+  // CHARACTER count (see the note on UpdateStatus in lib/sidecar.ts).
+  const totalBytes = status?.content_length;
   const isInstalled = status?.status === "installed";
   const showAsAvailable =
     status?.status === "available" ||
@@ -94,7 +99,8 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
                   <span>{progress}%</span>
                   {status?.content_length && (
                     <span>
-                      {formatFileSize(status.downloaded ?? 0)} / {formatFileSize(status.content_length)}
+                      {formatFileSize(status.downloaded ?? 0)} /{" "}
+                      {formatFileSize(totalBytes)}
                     </span>
                   )}
                 </div>

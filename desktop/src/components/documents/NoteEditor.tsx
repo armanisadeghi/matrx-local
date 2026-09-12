@@ -38,7 +38,7 @@ import { useTranscriptionApp } from "@/contexts/TranscriptionContext";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1) — never a local byte→unit body.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount } from "@ai-matrx/kit/format";
 
 interface NoteEditorProps {
   note: DocNote;
@@ -56,6 +56,8 @@ type ViewMode = "edit" | "preview" | "split";
  * 2026-07 notes freeze). ~128 KB parses in well under a frame budget's worth
  * of tolerance on target hardware; beyond it the user opts in explicitly.
  */
+// CHARACTERS, not bytes — it is compared against `content.length`, which in
+// JavaScript counts characters. 131,072 of them.
 const PREVIEW_AUTO_RENDER_LIMIT = 128 * 1024;
 
 /**
@@ -557,7 +559,7 @@ export function NoteEditor({
                 <FileWarning className="h-8 w-8 opacity-40" />
                 <p className="text-sm">
                   Live preview paused — this note is{" "}
-                  {formatFileSize(content.length)} and rendering it on
+                  {formatCount(content.length)} characters and rendering it on
                   every keystroke would freeze the editor.
                 </p>
                 <button

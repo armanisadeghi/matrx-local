@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { ClaudeHistoryReview } from "@/lib/api";
 import { DEFAULT_ARCHIVE_FILTER } from "@ai-matrx/design-system";
-import { historyReviewCounts, inventoryRequestFilters } from "./HistoryInventoryTable";
+import {
+  capHistorySelection,
+  historyReviewCounts,
+  inventoryQueryChanged,
+  inventoryRequestFilters,
+  inventorySortFromTableQuery,
+} from "./history-inventory-table-adapter";
 
 describe("durable history review evidence", () => {
   it("uses backend-wide scan counts instead of inferring from the visible page", () => {
@@ -113,5 +119,36 @@ describe("THE ARCHIVED-ITEMS LAW: the table's request always carries an archive 
         expect(Object.keys(filters)).toContain("archived");
       }
     }
+  });
+});
+
+describe("history inventory table adapter", () => {
+  const baseQuery = {
+    page: 1,
+    pageSize: 50,
+    search: "",
+    anyOf: "",
+    columnFilters: {},
+    sort: { id: "modified", direction: "desc" as const },
+  };
+
+  it("maps package sorting to the server's fixed history vocabulary", () => {
+    expect(inventorySortFromTableQuery({ ...baseQuery, sort: { id: "project", direction: "asc" } }))
+      .toEqual({ sortKey: "project", direction: "asc" });
+    expect(inventorySortFromTableQuery({ ...baseQuery, sort: null }))
+      .toEqual({ sortKey: "modified", direction: "desc" });
+  });
+
+  it("resets the cursor chain only for a server-query shape change", () => {
+    expect(inventoryQueryChanged(baseQuery, { ...baseQuery, page: 2 })).toBe(false);
+    expect(inventoryQueryChanged(baseQuery, { ...baseQuery, search: "resume" })).toBe(true);
+    expect(inventoryQueryChanged(baseQuery, { ...baseQuery, sort: { id: "bytes", direction: "desc" } })).toBe(true);
+  });
+
+  it("enforces the source selection cap for package select-all emissions", () => {
+    expect([...capHistorySelection(["a", "b", "c"], new Set(["a"]), new Set(["a", "b", "c"]), 2)])
+      .toEqual(["a", "b"]);
+    expect([...capHistorySelection(["a", "outside"], new Set(["a", "outside"]), new Set(["a"]), 2)])
+      .toEqual(["a", "outside"]);
   });
 });

@@ -26,6 +26,17 @@ SDK_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
   exit 1
 }
 
+# Tauri sets TAURI_ENV_ARCH for cross-architecture release legs. Do not let
+# the build machine's architecture silently produce the wrong nested artifact.
+case "${TAURI_ENV_ARCH:-$(uname -m)}" in
+  arm64|aarch64|aarch64-apple-darwin) TARGET_ARCH="arm64" ;;
+  x86_64|x86_64-apple-darwin) TARGET_ARCH="x86_64" ;;
+  *)
+    echo "ERROR: unsupported native Vault provider architecture: ${TAURI_ENV_ARCH:-$(uname -m)}. Expected arm64/aarch64 or x86_64." >&2
+    exit 1
+    ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/native-vault-provider"
 OUTPUT="$SOURCE/build/AI Matrx Vault Provider.appex"
@@ -39,7 +50,7 @@ mkdir -p "$CONTENTS/MacOS"
   -Xlinker -bundle \
   -parse-as-library \
   -module-name VaultProvider \
-  -target "$(uname -m)-apple-macosx15.0" \
+  -target "$TARGET_ARCH-apple-macosx15.0" \
   -sdk "$SDK_PATH" \
   -framework AppKit \
   -framework AuthenticationServices \
@@ -49,4 +60,4 @@ cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"
 cp "$SOURCE/VaultProvider.entitlements" "$CONTENTS/VaultProvider.entitlements"
 plutil -lint "$CONTENTS/Info.plist" >/dev/null
 plutil -lint "$CONTENTS/VaultProvider.entitlements" >/dev/null
-echo "Built unsigned native Vault provider: $OUTPUT"
+echo "Built unsigned $TARGET_ARCH native Vault provider: $OUTPUT"

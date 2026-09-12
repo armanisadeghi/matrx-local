@@ -23,6 +23,7 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ -f "$INFO" ]] || fail "provider Info.plist is missing: $INFO"
 [[ -f "$ENTITLEMENTS" ]] || fail "provider entitlements are missing: $ENTITLEMENTS"
 [[ -f "$BINARY" ]] || fail "provider executable is missing: $BINARY"
+otool -hv "$BINARY" | awk '$5 == "BUNDLE" { found = 1 } END { exit !found }' || fail "provider executable must be an MH_BUNDLE app-extension image"
 
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 [[ "$(plist_value "$INFO" CFBundleIdentifier)" == "com.aimatrx.desktop.vault-provider" ]] || fail "unexpected provider bundle identifier"
@@ -60,6 +61,9 @@ if [[ "$SELF_TEST" == true ]]; then
   cp -R "$APPEX" "$WORKDIR/missing-provider.appex"
   rm "$WORKDIR/missing-provider.appex/Contents/MacOS/VaultProvider"
   expect_failure "missing provider executable" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-provider.appex"
+  cp -R "$APPEX" "$WORKDIR/wrong-macho.appex"
+  cp /usr/bin/true "$WORKDIR/wrong-macho.appex/Contents/MacOS/VaultProvider"
+  expect_failure "non-bundle provider executable" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-macho.appex"
   expect_failure "missing signed-provider profile" "$ROOT/scripts/verify-native-vault-provider.sh" --require-profile "$APPEX"
-  echo "Self-test passed: wrong bundle, missing entitlement, missing executable, and missing required profile were rejected."
+  echo "Self-test passed: wrong bundle, missing entitlement, missing executable, non-bundle Mach-O, and missing required profile were rejected."
 fi

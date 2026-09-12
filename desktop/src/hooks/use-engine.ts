@@ -445,6 +445,54 @@ export function useEngine() {
       }
     };
 
+    // Push the CURRENT session to the engine, refreshing first when the copy
+    // we hold is already (or nearly) expired. INITIAL_SESSION hands back the
+    // persisted session before supabase-js has refreshed it, and on
+    // 2026-09-11 that stale token was pushed, rightly rejected by the engine,
+    // and never replaced — every engine cloud lane then sat on a three-day-old
+    // token with 143,982 deliveries queued. The engine now asks for a fresh
+    // session over the socket (`session_refresh_requested`); this is the
+    // answer to that ask as well as the startup path.
+    const pushFreshSessionToEngine = async (reason: string): Promise<void> => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        let session = data.session;
+        const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
+        if (!session || expiresAtMs - Date.now() < 60_000) {
+          const refreshed = await supabase.auth.refreshSession();
+          if (refreshed.error || !refreshed.data.session) {
+            console.error(
+              `[engine] cannot hand the engine a fresh session (${reason}):`,
+              refreshed.error?.message ?? "no session",
+            );
+            return;
+          }
+          session = refreshed.data.session;
+        }
+        if (session.access_token && session.user?.id) {
+          await pushSessionToEngine(
+            session.access_token,
+            session.user.id,
+            session.refresh_token ?? undefined,
+            session.expires_in ?? undefined,
+            true,
+          );
+        }
+      } catch (e) {
+        console.error(`[engine] session hand-off failed (${reason}):`, e);
+      }
+    };
+
+    // The engine found its stored session expired and is asking for the
+    // current one. It rate-limits to once a minute per lane.
+    const offSessionRefresh = engine.on("message", (data: unknown) => {
+      const msg = data as { type?: string; lane?: string; reason?: string };
+      if (msg?.type !== "session_refresh_requested") return;
+      void pushFreshSessionToEngine(
+        `engine asked: ${msg.lane ?? "unknown lane"} — ${msg.reason ?? ""}`,
+      );
+    });
+
     // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
       (event, session) => {
@@ -455,13 +503,9 @@ export function useEngine() {
         setTimeout(async () => {
           if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
             if (session?.access_token && session?.user?.id) {
-              // Push the JWT to Python so it persists across restarts.
-              void pushSessionToEngine(
-                session.access_token,
-                session.user.id,
-                session.refresh_token ?? undefined,
-                session.expires_in ?? undefined,
-              );
+              // Push the JWT to Python so it persists across restarts —
+              // refreshed first when the persisted copy is already stale.
+              void pushFreshSessionToEngine(event);
 
               // Skip if initialize() already sent configure within the last 10s
               // to avoid a duplicate call on the INITIAL_SESSION event.
@@ -538,6 +582,7 @@ export function useEngine() {
       offConnected();
       offDisconnected();
       authSub.unsubscribe();
+      offSessionRefresh();
       clearInterval(healthInterval);
       clearInterval(heartbeatInterval);
       stopBackgroundTasks();

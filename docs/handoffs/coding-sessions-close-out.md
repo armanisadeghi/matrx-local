@@ -27,6 +27,36 @@ one-list-one-button screen (`f835747a4`), all four providers + a real scroll
 region (`ec5e4dc19`), and the 2026-09-08 cloud-truth rework by a sibling
 session (`9c3026d61`, `33756565d`).
 
+## 2026-09-12 — the stall behind "nothing delivers" (this session)
+
+Measured on the live app (1.4.85, engine log + `~/.matrx/matrx.db`): 148,764 envelopes
+queued, growing ~100/min, no acknowledgement since 8/31, no delivery attempt logged since
+the 9/11 restart. Cause: at startup the desktop pushed its persisted (already expired)
+session, the engine rightly rejected it, nothing ever asked for another one, and every
+engine cloud lane sat on a three-day-old token. The publisher's `no_active_user_jwt`
+branch deferred the head row and said nothing anywhere — `publisher.blocker` was null.
+
+Shipped in this thread (push, then the release watch ships it — do NOT run release.sh):
+- `app/services/session_freshness.py` — the engine never calls the refresh grant (it would
+  consume the desktop's rotating refresh token and sign the person out); it asks every UI
+  socket for a fresh session (`session_refresh_requested`, once a minute per lane) and
+  exposes one honest blocker (`no_active_user_jwt` + remedy).
+- Publisher: `no_active_user_jwt`, `cloud_participation_disabled` and
+  `aidream_server_unconfigured` are now visible `publisher.blocker`s, cleared by the first
+  tick that finds the condition gone. Test: `tests/unit/test_session_freshness.py`.
+- Overview cloud check asks for a fresh session the same way.
+- Desktop `use-engine.ts`: `pushFreshSessionToEngine` — refreshes first when the held
+  session is within 60 s of expiry (the startup race), and answers the engine's ask.
+
+Verification (after the release watch ships and the app updates): `GET /coding-session/status`
+on 127.0.0.1:22140 shows `publisher.blocker == null`, the outbox count falls, and
+`coding_session_bridge_delivery_activity.last_acknowledged_at` moves. If the blocker stays
+`no_active_user_jwt`, the desktop's own session is dead and the person must sign in again —
+the screen says exactly that.
+
+Items 1–3 below are dispatched to three worktree agents in the same thread; merge their
+branches to `main` when they report, then run the unit suites they name and `tsc`.
+
 ## Open items — do these, in this order
 
 ### 1. The 80 invisible conversations  — [ ]

@@ -46,6 +46,7 @@ from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
     fetch_complete_identity_inventory,
 )
+from app.services.session_freshness import request_ui_session_refresh
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -287,8 +288,16 @@ async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, A
         or tokens.is_expired(token_row)
     ):
         meta["reason"] = "no_active_user_jwt"
-        meta["detail"] = "Sign in to AI Matrx in Matrx Local; the server can only be asked as a signed-in user."
+        meta["detail"] = (
+            "This Mac has no valid signed-in session; Matrx Local is asking the desktop "
+            "for a fresh one. If this stays, sign out and back in to AI Matrx in Matrx Local."
+        )
         _CLOUD_CACHE = (now, {}, meta)
+        # The stored token is the engine's, the session is the desktop's: ask
+        # the owner for a fresh copy instead of waiting for the next hour.
+        await request_ui_session_refresh(
+            lane="claude_overview", reason="stored access token missing or expired"
+        )
         return {}, meta
 
     from app.services.aidream.client import get_aidream_client
@@ -452,6 +461,55 @@ def _session_state(
     return "not_in_cloud"
 
 
+def _transcript_only_rows(
+    orphan_ids: list[str],
+    transcripts: dict[str, tuple[int, int]],
+) -> list[dict[str, Any]]:
+    """Rows for transcripts that have NO Claude sidebar record anywhere.
+
+    A conversation only appeared on this screen if Claude Desktop had written
+    a sidebar index record for it. Sessions started from the plain `claude`
+    CLI never get one, so they sat on disk — readable, syncable, 80 of them and
+    113 MB on 2026-09-11 — and the screen simply never listed them. The
+    importer's own source walk already reaches them (it reads the projects
+    tree, not the index); only the screen was hiding them.
+
+    Title and project come from the transcript itself through the importer's
+    bounded reader (first 40 lines + last 256 KB), only for the orphans, so the
+    cost is ~80 small reads rather than 1,600.
+    """
+    from app.services.coding_sessions.claude_history import _read_summary
+
+    root = _claude_config_dir() / "projects"
+    wanted = set(orphan_ids)
+    by_id: dict[str, Path] = {}
+    for path in root.glob("*/*.jsonl"):
+        if path.stem in wanted:
+            by_id[path.stem] = path
+    rows: list[dict[str, Any]] = []
+    for session_id in orphan_ids:
+        path = by_id.get(session_id)
+        if path is None:
+            continue
+        size, mtime_ns = transcripts.get(session_id, (0, 0))
+        title = f"Claude session {session_id[:8]}"
+        project: str | None = None
+        try:
+            title, project, _branch = _read_summary(root, path, session_id)
+        except Exception:  # noqa: BLE001 — an unreadable summary still lists the row
+            logger.debug("[claude_overview] summary unreadable for %s", session_id, exc_info=True)
+        rows.append(
+            {
+                "session_id": session_id,
+                "title": title or "Untitled",
+                "project": project,
+                "bytes": size,
+                "mtime_ns": mtime_ns,
+            }
+        )
+    return rows
+
+
 async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     """Accounts, conversations and cloud state — the whole screen in one call."""
     current = active_account()
@@ -496,6 +554,53 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
                 "pinned_rank": entry.pinned_rank,
                 "category": entry.category,
                 "archived": bool(entry.is_archived),
+                "in_claude_sidebar": True,
+                "cloud": (
+                    {
+                        "conversation_id": binding.get("conversation_id"),
+                        "fidelity": binding.get("fidelity"),
+                        "last_seen_at": binding.get("last_seen_at"),
+                    }
+                    if binding is not None
+                    else None
+                ),
+                "delivery": {
+                    "pending": int(session_queue.get("pending", 0)),
+                    "quarantined": int(session_queue.get("quarantined", 0)),
+                },
+            }
+        )
+    # Everything on disk that Claude never indexed. Same state judgement as
+    # every other row — the cloud does not care whether the sidebar knew.
+    orphan_ids = sorted(set(transcripts) - set(entries))
+    transcript_only = 0
+    for row in await asyncio.to_thread(_transcript_only_rows, orphan_ids, transcripts):
+        session_id = row["session_id"]
+        binding = cloud.get(session_id)
+        session_queue = queue.get(session_id, {"pending": 0, "quarantined": 0})
+        state = _session_state(
+            cloud_checked=bool(cloud_meta["checked"]),
+            binding=binding,
+            activity_ns=int(row["mtime_ns"]),
+            queue=session_queue,
+        )
+        counts[state] += 1
+        transcript_only += 1
+        conversations.append(
+            {
+                "session_id": session_id,
+                "title": row["title"],
+                "title_source": None,
+                "project": row["project"],
+                "last_activity_at": int(row["mtime_ns"] // 1_000_000),
+                "bytes": row["bytes"],
+                "on_disk": row["bytes"] > 0,
+                "state": state,
+                "pinned": False,
+                "pinned_rank": None,
+                "category": None,
+                "archived": False,
+                "in_claude_sidebar": False,
                 "cloud": (
                     {
                         "conversation_id": binding.get("conversation_id"),
@@ -521,6 +626,8 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         "conversations": conversations[:limit],
         "totals": {
             "conversations": len(conversations),
+            "transcript_only": transcript_only,
+            "transcripts_on_disk": len(transcripts),
             "pinned": pinned_total,
             "index_files_read": totals.get("files", 0),
             "unreadable": totals.get("unreadable", 0),

@@ -30,6 +30,10 @@ from app.services.coding_sessions.models import (
     BridgeRequest,
     LocalBridgeReceipt,
 )
+from app.services.session_freshness import (
+    request_ui_session_refresh,
+    session_blocker,
+)
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -74,6 +78,10 @@ _DURABLE_WRITE_BUSY_TIMEOUT_MS = 15000
 # stable event id with DIFFERENT bytes, so this envelope can never be accepted,
 # and attempt 2,521 will fail exactly like attempt 1. Retrying a permanent
 # rejection is not durability, it is a stall.
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 _TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
 
 # Statuses that mean "the server understood and refused". They are quarantined
@@ -568,6 +576,13 @@ class CodingSessionBridgeOutbox:
         # Cleared automatically the moment it resolves (each tick re-checks),
         # or explicitly through ``resume_delivery``.
         self._organization_blocker: dict[str, Any] | None = None
+        # No valid signed-in session on this Mac (missing, undecodable or expired
+        # access token). Set by the tick that found it, cleared by the first
+        # tick that finds a usable token; the desktop is asked to re-push.
+        self._session_blocker: dict[str, Any] | None = None
+        # Cloud participation switched off, or no AI Dream server configured.
+        # Both used to be silent early returns.
+        self._configuration_blocker: dict[str, Any] | None = None
         self._blocked_token_hash: str | None = None
         self._circuit_state = "closed"
         self._circuit_opened_at: float | None = None
@@ -615,6 +630,10 @@ class CodingSessionBridgeOutbox:
         """
         if self._credential_blocker is not None:
             return dict(self._credential_blocker)
+        if self._session_blocker is not None:
+            return dict(self._session_blocker)
+        if self._configuration_blocker is not None:
+            return dict(self._configuration_blocker)
         if self._organization_blocker is not None:
             return dict(self._organization_blocker)
         return None
@@ -1757,11 +1776,23 @@ class CodingSessionBridgeOutbox:
             self._continue_immediately = False
             if not self._cloud_enabled:
                 await self._defer_head("cloud_participation_disabled", increment=False)
+                self._configuration_blocker = {
+                    "code": "cloud_participation_disabled",
+                    "message": (
+                        "Cloud participation is switched off on this Mac, so nothing "
+                        "is delivered to AI Matrx. Every event stays queued here."
+                    ),
+                    "remedy": "Turn cloud participation on in Matrx Local settings.",
+                    "since": self._configuration_blocker.get("since")
+                    if self._configuration_blocker is not None
+                    else _utc_now_iso(),
+                }
                 return {
                     "sent": 0,
                     "failed": 0,
                     "blocked": "cloud_participation_disabled",
                 }
+            self._configuration_blocker = None
 
             token_row = await self._tokens.get()
             if (
@@ -1773,7 +1804,28 @@ class CodingSessionBridgeOutbox:
                 await self._defer_head("no_active_user_jwt", increment=False)
                 self._credential_blocker = None
                 self._blocked_token_hash = None
+                if self._session_blocker is None:
+                    self._session_blocker = session_blocker(
+                        lane="coding_session_bridge", since=_utc_now_iso()
+                    )
+                    logger.warning(
+                        "[coding_session_bridge] delivery PAUSED: no valid signed-in "
+                        "session on this Mac — asking the desktop for a fresh one"
+                    )
+                await request_ui_session_refresh(
+                    lane="coding_session_bridge",
+                    reason=(
+                        "stored access token missing or expired"
+                        if token_row
+                        else "no stored session"
+                    ),
+                )
                 return {"sent": 0, "failed": 0, "blocked": "no_active_user_jwt"}
+            if self._session_blocker is not None:
+                logger.info(
+                    "[coding_session_bridge] a valid session is back — delivery resumes"
+                )
+                self._session_blocker = None
 
             access_token = str(token_row["access_token"])
             token_hash = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
@@ -1790,11 +1842,23 @@ class CodingSessionBridgeOutbox:
             client = self._client or self._client_factory()
             if client is None:
                 await self._defer_head("aidream_server_unconfigured", increment=False)
+                self._configuration_blocker = {
+                    "code": "aidream_server_unconfigured",
+                    "message": (
+                        "No AI Dream server is configured on this Mac, so nothing can "
+                        "be delivered. Every event stays queued here."
+                    ),
+                    "remedy": "Set the AI Dream server address in Matrx Local settings.",
+                    "since": self._configuration_blocker.get("since")
+                    if self._configuration_blocker is not None
+                    else _utc_now_iso(),
+                }
                 return {
                     "sent": 0,
                     "failed": 0,
                     "blocked": "aidream_server_unconfigured",
                 }
+            self._configuration_blocker = None
 
             if self._organization_blocker is not None:
                 if not await self._organization_resolves(access_token):

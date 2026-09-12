@@ -309,6 +309,33 @@ Guard: `tests/unit/test_coding_session_bridge.py::test_unnamed_organization_paus
 (fails against the pre-fix publisher) and `test_organization_refusal_is_never_a_terminal_rejection`.
 State rules: `tests/unit/test_claude_overview_state.py`.
 
+### 🚨 THE SESSION PAUSE — the engine asks for a fresh session, never mints one
+
+Found live 2026-09-11: at startup the desktop pushed its persisted, already-expired
+session; the engine rightly rejected it; nothing asked for another one; every engine
+cloud lane sat on a three-day-old token, and the publisher's `no_active_user_jwt`
+branch deferred the head row and said nothing (`publisher.blocker` was null while
+148,764 deliveries queued at ~100/min). Now:
+
+- **The desktop's Supabase client OWNS the session.** The engine never calls the
+  refresh grant: Supabase rotates refresh tokens on use and detects reuse, so an
+  engine-side refresh would consume the token the desktop still holds and sign the
+  person out on the desktop's next refresh.
+- **The engine asks.** `app/services/session_freshness.py::request_ui_session_refresh`
+  sends `session_refresh_requested` to every UI socket, at most once a minute per
+  lane. The desktop (`use-engine.ts::pushFreshSessionToEngine`) answers with
+  `getSession()`, refreshing first when the copy it holds is within 60 s of expiry —
+  the same routine now runs on `INITIAL_SESSION`, which closes the startup race.
+- **Every silent early return is a blocker.** `no_active_user_jwt`,
+  `cloud_participation_disabled` and `aidream_server_unconfigured` are visible
+  `publisher.blocker`s with a remedy, cleared by the first tick that finds the
+  condition gone. Order: credentials rejected > no session > configuration >
+  organization. The overview's cloud check reports the same state and asks the
+  same way.
+
+Guard: `tests/unit/test_session_freshness.py` (rate limit per lane; expired token →
+visible blocker → clears).
+
 ## Automatic capture reconciliation — backfilling what the hooks lost
 
 `capture_reconciler.py` closes the hole a non-blocking hook leaves. Every Claude

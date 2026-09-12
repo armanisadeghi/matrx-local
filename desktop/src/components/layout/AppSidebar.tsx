@@ -30,6 +30,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
+// THE package initials formatter (`@ai-matrx/kit/format`, census H1
+// 2026-09-07). The desktop app is never a visual exception — the same data
+// renders the same way everywhere — so this now takes the fleet's two-letter
+// badge (first + last for a multi-word name) instead of a private one-letter
+// rule. The h-7/h-8 avatar sizes here already match the sizes other
+// surfaces use for two-letter initials, so no sizing change is needed.
+import { getInitials } from "@ai-matrx/kit/format";
 import {
   Popover,
   PopoverTrigger,
@@ -145,13 +152,7 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
     "User";
 
   const avatarUrl = user?.user_metadata?.avatar_url;
-  // NOT swapped to `@ai-matrx/kit/format`'s `getInitials` (census H1
-  // 2026-09-07): this sidebar deliberately shows a ONE-letter avatar badge
-  // (just the first character of the resolved display name), while the
-  // package always returns up to two letters for a multi-word name. Swapping
-  // would visibly grow every multi-word user's sidebar avatar from one
-  // letter to two; that is a product decision, not a mechanical one.
-  const initials = (displayName[0] ?? "U").toUpperCase();
+  const initials = getInitials(displayName, { fallback: "U" });
 
   return (
     <aside

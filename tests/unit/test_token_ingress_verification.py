@@ -423,7 +423,9 @@ async def test_bad_user_jwt_is_still_invalid_and_is_logged(
     assert result.status == "invalid"
     assert "WARNING" in logged
     assert "MISCONFIGURATION" not in logged
-    assert "bad_jwt" in logged and "403" in logged
+    assert "403" in logged
+    assert "bad_jwt" not in logged
+    assert "error_code=[REDACTED]" in logged
 
 
 @pytest.mark.anyio

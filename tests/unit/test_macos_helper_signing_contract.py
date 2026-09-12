@@ -8,6 +8,7 @@ treats both processes as one responsible application.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -53,6 +54,23 @@ def test_identity_alignment_happens_before_tauri_copy_input() -> None:
 
 VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify-macos-artifact.sh"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+TAURI_CONFIG = REPO_ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
+
+
+def test_native_vault_provider_hook_is_cross_platform() -> None:
+    """Windows invokes bundle hooks through cmd.exe, not Bash.
+
+    The provider itself is macOS-only, but its gate must be expressed in a
+    runtime available on every release runner so Windows builds do not parse a
+    POSIX conditional as a cmd command.
+    """
+    command = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))["build"][
+        "beforeBundleCommand"
+    ]
+
+    assert "process.env.TAURI_ENV_PLATFORM === 'macos'" in command
+    assert "execFileSync('bash', ['scripts/build-native-vault-provider.sh']" in command
+    assert "if [" not in command
 
 
 def test_final_artifact_verification_exists_and_gates_the_release() -> None:

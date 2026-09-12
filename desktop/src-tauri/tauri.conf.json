@@ -8,7 +8,7 @@
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
-    "beforeBundleCommand": "if [ \"$TAURI_ENV_PLATFORM\" = \"macos\" ]; then bash scripts/build-native-vault-provider.sh; fi"
+    "beforeBundleCommand": "node -e \"if (process.env.TAURI_ENV_PLATFORM === 'macos') require('node:child_process').execFileSync('bash', ['scripts/build-native-vault-provider.sh'], { stdio: 'inherit' })\""
   },
   "app": {
     "withGlobalTauri": true,

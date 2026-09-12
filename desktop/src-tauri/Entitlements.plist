@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>com.apple.application-identifier</key>
+    <string>JH83UH9P4D.com.aimatrx.desktop</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>JH83UH9P4D</string>
     <!-- ── Hardened Runtime: PyInstaller / ctypes / cffi compatibility ─────── -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>

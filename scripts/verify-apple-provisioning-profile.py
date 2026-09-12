@@ -24,6 +24,8 @@ STATUS_GROUP = "group.com.aimatrx.desktop.vault-status"
 PROVIDER_BUNDLE_ID = "com.aimatrx.desktop.vault-provider"
 HOST_BUNDLE_ID = "com.aimatrx.desktop"
 PROVIDER_KEYCHAIN_GROUP = f"{TEAM_ID}.{PROVIDER_BUNDLE_ID}"
+APPLICATION_IDENTIFIER = "com.apple.application-identifier"
+TEAM_ENTITLEMENT = "com.apple.developer.team-identifier"
 
 
 def fail(message: str) -> None:
@@ -71,13 +73,18 @@ def codesign_metadata(code: Path) -> tuple[str, str, dict[object, object], bytes
 
     with tempfile.TemporaryDirectory(prefix="matrx-profile-cert-") as workdir:
         certificate_prefix = Path(workdir) / "signer"
-        run("codesign", "--display", "--extract-certificates", str(certificate_prefix), str(code))
+        run("codesign", "--display", f"--extract-certificates={certificate_prefix}", str(code))
         certificate = Path(f"{certificate_prefix}0")
         if not certificate.is_file():
             fail(f"{code} did not expose its leaf signing certificate")
         # This is independent system trust validation for the certificate that
         # sealed the code, not merely a plist claim from the profile.
-        run("security", "verify-cert", "-p", "codeSign", "-c", str(certificate), "-q")
+        chain = sorted(certificate_prefix.parent.glob(f"{certificate_prefix.name}[0-9]*"))
+        trust_command = ["security", "verify-cert", "-p", "codeSign"]
+        for chain_certificate in chain:
+            trust_command.extend(("-c", str(chain_certificate)))
+        trust_command.append("-q")
+        run(*trust_command)
         certificate_bytes = certificate.read_bytes()
     return identifier, team, entitlements, certificate_bytes
 
@@ -87,7 +94,9 @@ def expected_contract(kind: str) -> tuple[str, dict[str, object], set[str]]:
         return (
             PROVIDER_BUNDLE_ID,
             {
-                "com.apple.app-sandbox": True,
+                APPLICATION_IDENTIFIER: f"{TEAM_ID}.{PROVIDER_BUNDLE_ID}",
+                TEAM_ENTITLEMENT: TEAM_ID,
+                "com.apple.security.app-sandbox": True,
                 "com.apple.developer.authentication-services.autofill-credential-provider": True,
                 "com.apple.security.application-groups": [STATUS_GROUP],
                 "keychain-access-groups": [PROVIDER_KEYCHAIN_GROUP],
@@ -97,9 +106,60 @@ def expected_contract(kind: str) -> tuple[str, dict[str, object], set[str]]:
         )
     return (
         HOST_BUNDLE_ID,
-        {"com.apple.security.application-groups": [STATUS_GROUP]},
-        {"keychain-access-groups", "com.apple.security.keychain-access-groups"},
+        {
+            APPLICATION_IDENTIFIER: f"{TEAM_ID}.{HOST_BUNDLE_ID}",
+            TEAM_ENTITLEMENT: TEAM_ID,
+            "com.apple.security.application-groups": [STATUS_GROUP],
+        },
+        set(),
     )
+
+
+def profile_value_authorizes(allowed: object, requested: object) -> bool:
+    """Accept exact grants and Apple's documented trailing-wildcard grants only."""
+    if isinstance(requested, bool):
+        return allowed is requested
+    if isinstance(requested, str):
+        if not isinstance(allowed, str):
+            return False
+        if allowed == requested:
+            return True
+        return allowed.endswith("*") and "*" not in allowed[:-1] and bool(allowed[:-1]) and requested.startswith(allowed[:-1])
+    if isinstance(requested, list) and all(isinstance(value, str) for value in requested):
+        if not isinstance(allowed, list) or not all(isinstance(value, str) for value in allowed):
+            return False
+        return all(any(profile_value_authorizes(grant, value) for grant in allowed) for value in requested)
+    return False
+
+
+def assert_signed_contract(kind: str, signed_entitlements: dict[object, object]) -> None:
+    _, expected_signed, _ = expected_contract(kind)
+    for key, expected_value in expected_signed.items():
+        if signed_entitlements.get(key) != expected_value:
+            fail(f"signed {kind} entitlement {key!r} must equal {expected_value!r}")
+    if kind == "host":
+        for key in ("keychain-access-groups", "com.apple.security.keychain-access-groups"):
+            values = signed_entitlements.get(key, [])
+            if values == PROVIDER_KEYCHAIN_GROUP or (
+                isinstance(values, list) and PROVIDER_KEYCHAIN_GROUP in values
+            ):
+                fail("host signed entitlements must never include the provider Keychain group")
+
+
+def assert_profile_authorizes(kind: str, profile_entitlements: dict[object, object], signed_entitlements: dict[object, object]) -> None:
+    """Profiles may grant more than the signed object claims; only signed restricted claims need authorization."""
+    restricted = {
+        APPLICATION_IDENTIFIER,
+        TEAM_ENTITLEMENT,
+        "com.apple.developer.authentication-services.autofill-credential-provider",
+        "com.apple.security.application-groups",
+        "keychain-access-groups",
+    }
+    for key in restricted:
+        if key not in signed_entitlements:
+            continue
+        if not profile_value_authorizes(profile_entitlements.get(key), signed_entitlements[key]):
+            fail(f"profile does not authorize signed {kind} entitlement {key!r}")
 
 
 def main() -> int:
@@ -114,7 +174,7 @@ def main() -> int:
     if not args.code.exists():
         fail(f"signed code object is missing: {args.code}")
 
-    expected_bundle_id, expected_signed, forbidden = expected_contract(args.kind)
+    expected_bundle_id, _, _ = expected_contract(args.kind)
     with tempfile.TemporaryDirectory(prefix="matrx-profile-cms-") as workdir:
         decoded_profile = Path(workdir) / "profile.plist"
         # `-u 9` is macOS Security's protected-object-signer trust policy. It
@@ -144,9 +204,9 @@ def main() -> int:
     profile_entitlements = profile.get("Entitlements")
     if not isinstance(profile_entitlements, dict):
         fail("provisioning profile has no Entitlements dictionary")
-    if profile_entitlements.get("application-identifier") != f"{TEAM_ID}.{expected_bundle_id}":
-        fail("profile application-identifier does not authorize the expected bundle")
-    if profile_entitlements.get("com.apple.developer.team-identifier") != TEAM_ID:
+    if not profile_value_authorizes(profile_entitlements.get(APPLICATION_IDENTIFIER), f"{TEAM_ID}.{expected_bundle_id}"):
+        fail("profile application identifier does not authorize the expected bundle")
+    if profile_entitlements.get(TEAM_ENTITLEMENT) != TEAM_ID:
         fail("profile team entitlement does not match the expected team")
 
     identifier, code_team, signed_entitlements, signing_certificate = codesign_metadata(args.code)
@@ -164,24 +224,8 @@ def main() -> int:
     if signing_digest not in {hashlib.sha256(certificate).digest() for certificate in profile_certificates}:
         fail("profile does not authorize the certificate that signed this code")
 
-    for key, expected_value in expected_signed.items():
-        if signed_entitlements.get(key) != expected_value:
-            fail(f"signed {args.kind} entitlement {key!r} must equal {expected_value!r}")
-        if profile_entitlements.get(key) != expected_value:
-            fail(f"profile does not authorize exact {args.kind} entitlement {key!r}")
-    for key in forbidden:
-        if key in signed_entitlements or key in profile_entitlements:
-            fail(f"{args.kind} must never receive provider Keychain entitlement {key!r}")
-
-    # Capability-bearing signed values must be authorized by the matching
-    # profile value. This keeps a valid profile for another capability or team
-    # from becoming a generic signing escape hatch.
-    protected_prefixes = ("com.apple.developer.", "keychain-access-groups")
-    protected_exact = {"com.apple.security.application-groups"}
-    for key, value in signed_entitlements.items():
-        if key.startswith(protected_prefixes) or key in protected_exact:
-            if profile_entitlements.get(key) != value:
-                fail(f"profile does not authorize signed entitlement {key!r}")
+    assert_signed_contract(args.kind, signed_entitlements)
+    assert_profile_authorizes(args.kind, profile_entitlements, signed_entitlements)
 
     print(f"Verified {args.kind} Apple profile, signed certificate, and exact entitlement contract.")
     return 0

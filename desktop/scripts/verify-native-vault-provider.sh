@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fail() { echo "ERROR: $*" >&2; exit 1; }
 SELF_TEST=false
 REQUIRE_PROFILE=false
 EXPECTED_ARCH=""
@@ -25,7 +26,6 @@ INFO="$APPEX/Contents/Info.plist"
 ENTITLEMENTS="$APPEX/Contents/VaultProvider.entitlements"
 BINARY="$APPEX/Contents/MacOS/VaultProvider"
 
-fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ -f "$INFO" ]] || fail "provider Info.plist is missing: $INFO"
 [[ -f "$ENTITLEMENTS" ]] || fail "provider entitlements are missing: $ENTITLEMENTS"
 [[ -f "$BINARY" ]] || fail "provider executable is missing: $BINARY"
@@ -41,6 +41,10 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 [[ "$(plist_value "$INFO" CFBundleIdentifier)" == "com.aimatrx.desktop.vault-provider" ]] || fail "unexpected provider bundle identifier"
 [[ "$(plist_value "$INFO" LSMinimumSystemVersion)" == "15.0" ]] || fail "provider must retain macOS 15 minimum"
 [[ "$(plist_value "$INFO" 'NSExtension:NSExtensionPointIdentifier')" == "com.apple.authentication-services-credential-provider-ui" ]] || fail "unexpected extension point"
+[[ "$(plist_value "$ENTITLEMENTS" 'com.apple.security.app-sandbox')" == "true" ]] || fail "App Sandbox entitlement missing"
+! /usr/libexec/PlistBuddy -c 'Print :com.apple.app-sandbox' "$ENTITLEMENTS" >/dev/null 2>&1 || fail "obsolete App Sandbox entitlement key is forbidden"
+[[ "$(plist_value "$ENTITLEMENTS" 'com.apple.application-identifier')" == "JH83UH9P4D.com.aimatrx.desktop.vault-provider" ]] || fail "unexpected provider application identifier"
+[[ "$(plist_value "$ENTITLEMENTS" 'com.apple.developer.team-identifier')" == "JH83UH9P4D" ]] || fail "unexpected provider team identifier"
 [[ "$(plist_value "$ENTITLEMENTS" 'com.apple.developer.authentication-services.autofill-credential-provider')" == "true" ]] || fail "AutoFill provider entitlement missing"
 [[ "$(plist_value "$ENTITLEMENTS" 'com.apple.security.network.client')" == "true" ]] || fail "network client entitlement missing"
 [[ "$(plist_value "$ENTITLEMENTS" 'com.apple.security.application-groups:0')" == "group.com.aimatrx.desktop.vault-status" ]] || fail "unexpected App Group"
@@ -70,6 +74,10 @@ if [[ "$SELF_TEST" == true ]]; then
   cp -R "$APPEX" "$WORKDIR/missing-entitlement.appex"
   /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.authentication-services.autofill-credential-provider' "$WORKDIR/missing-entitlement.appex/Contents/VaultProvider.entitlements"
   expect_failure "missing AutoFill entitlement" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-entitlement.appex"
+  cp -R "$APPEX" "$WORKDIR/wrong-sandbox-key.appex"
+  /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$WORKDIR/wrong-sandbox-key.appex/Contents/VaultProvider.entitlements"
+  /usr/libexec/PlistBuddy -c 'Add :com.apple.app-sandbox bool true' "$WORKDIR/wrong-sandbox-key.appex/Contents/VaultProvider.entitlements"
+  expect_failure "obsolete App Sandbox entitlement key" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-sandbox-key.appex"
   cp -R "$APPEX" "$WORKDIR/missing-provider.appex"
   rm "$WORKDIR/missing-provider.appex/Contents/MacOS/VaultProvider"
   expect_failure "missing provider executable" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-provider.appex"
@@ -112,5 +120,5 @@ open(path, "wb").write(data.replace(before, after))
 PY
   expect_failure "wrong extension entry point" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-entry.appex"
   expect_failure "missing signed-provider profile" "$ROOT/scripts/verify-native-vault-provider.sh" --require-profile "$APPEX"
-  echo "Self-test passed: wrong bundle, missing entitlement, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, and missing required profile were rejected."
+  echo "Self-test passed: wrong bundle, missing AutoFill, obsolete App Sandbox key, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, and missing required profile were rejected."
 fi

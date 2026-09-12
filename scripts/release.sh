@@ -824,7 +824,7 @@ info "Checking release version manifests agree with pyproject.toml..."
 ok "Version manifests are synchronized."
 
 # ── TypeScript type-check ────────────────────────────────────────────────────
-info "Type diagnostics run once in GitHub Release; no duplicate local TypeScript preflight."
+info "Type and broad feature diagnostics belong to CI; release does not duplicate them."
 
 
 # Downloads, installs, and typechecking must not silently create source changes

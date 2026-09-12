@@ -60,14 +60,6 @@ jobs:
           TAURI_SIDECAR: "1"
           MATRX_CI_HEADLESS: "1"
 
-      - name: Smoke and parity tests (advisory during pre-production)
-        continue-on-error: true
-        run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q
-        env:
-          TUNNEL_ENABLED: "0"
-          TAURI_SIDECAR: "1"
-          MATRX_CI_HEADLESS: "1"
-
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -81,21 +73,6 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: pnpm install --frozen-lockfile
-
-      - name: TypeScript typecheck (advisory during pre-production)
-        continue-on-error: true
-        working-directory: desktop
-        run: pnpm tsc -b
-
-      - name: Desktop unit tests (advisory during pre-production)
-        continue-on-error: true
-        working-directory: desktop
-        run: pnpm test:unit
-        env:
-          # Unit tests must not depend on repository secrets. These values are
-          # syntactically valid but point only at the local Supabase test stub.
-          VITE_SUPABASE_URL: http://127.0.0.1:54321
-          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: test-publishable-key
 
       - name: Install Playwright Chromium
         working-directory: desktop

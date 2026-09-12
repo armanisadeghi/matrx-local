@@ -54,8 +54,10 @@ on 127.0.0.1:22140 shows `publisher.blocker == null`, the outbox count falls, an
 `no_active_user_jwt`, the desktop's own session is dead and the person must sign in again —
 the screen says exactly that.
 
-Items 1–3 below are dispatched to three worktree agents in the same thread; merge their
-branches to `main` when they report, then run the unit suites they name and `tsc`.
+Items 1 and 3 below were shipped on `main` by a peer session while this thread's agents
+worked (transcript-only rows: `aa2c8f76d`; index warm-up + cap: `c4e7bfc63`); item 2 landed
+from this thread (`fffbb839e`). What remains is item 4 (verify on the real app once the
+release watch ships) and item 5 (close the books).
 
 ## Open items — do these, in this order
 

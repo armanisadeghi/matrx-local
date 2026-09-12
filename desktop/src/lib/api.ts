@@ -593,10 +593,24 @@ export interface CodingSessionBridgeStatus {
       retry_in_seconds: number | null;
       config: {
         batch_size: number;
+        /** Lane heads delivered at once (user setting, clamped 1–32). */
+        delivery_concurrency: number;
         poll_interval_seconds: number;
         offline_failures_to_open: number;
         offline_cooldown_seconds: number;
       };
+    };
+    /** What the most recent publisher pass actually did. */
+    ticks: {
+      last_tick_at: string | null;
+      last_tick_duration_ms: number | null;
+      last_tick_sent: number;
+      last_tick_failed: number;
+      last_tick_blocked: string | null;
+      last_tick_eligible: number;
+      ticks_total: number;
+      last_delivery_at: string | null;
+      last_error: { code: string; message: string } | null;
     };
   };
   pending: {

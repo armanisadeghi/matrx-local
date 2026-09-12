@@ -1,4 +1,13 @@
-"""Durable ordered outbox from local provider hooks to aidream."""
+"""Durable ordered outbox from local provider hooks to aidream.
+
+Order is a per-lane promise, never a global one: inside one ``lane_key`` exactly
+one envelope is ever in flight, and the next row of that lane becomes eligible
+only after its head is retired, quarantined or deferred. ACROSS lanes the
+publisher fans out — up to ``coding_session_delivery_concurrency`` lane heads
+per tick — because a strictly one-at-a-time publisher drained ~0.7 envelopes a
+second against a queue that grows ~4 a second while someone is coding (measured
+2026-09-12 on 1.4.89 with ~193,000 queued envelopes across ~1,160 lanes).
+"""
 
 from __future__ import annotations
 
@@ -19,6 +28,7 @@ from app.services.local_db.write_gate import write_gate
 from pydantic import ValidationError
 
 from app.common.system_logger import get_logger
+from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.aidream.client import (
     AIDreamClient,
     AIDreamError,
@@ -129,6 +139,65 @@ class PublisherCircuitConfig:
             raise ValueError("offline_failures_to_open must be at least 2")
         if self.offline_cooldown_seconds <= 0:
             raise ValueError("offline_cooldown_seconds must be positive")
+
+
+# --------------------------------------------------------------------------
+# HOW MANY LANES DELIVER AT ONCE — a user setting, never a constant.
+# Read fresh on EVERY tick through the same `~/.matrx/settings.json` + cloud
+# settings store every other gate uses (the pattern `title_sync.py` follows for
+# `claude_label_sync_interval_minutes`), so changing it takes effect without an
+# engine restart. Per-lane order is unaffected: the value only says how many
+# DIFFERENT lanes may have an envelope in flight at the same moment.
+# --------------------------------------------------------------------------
+DELIVERY_CONCURRENCY_SETTING = "coding_session_delivery_concurrency"
+DELIVERY_CONCURRENCY_DEFAULT = 8
+DELIVERY_CONCURRENCY_MIN = 1
+DELIVERY_CONCURRENCY_MAX = 32
+
+
+def delivery_concurrency() -> int:
+    """Live lane fan-out width, clamped to the supported band.
+
+    A garbage or out-of-band value never silently becomes "some other number":
+    it is clamped and announced at WARNING with the remedy.
+    """
+    raw = get_settings_sync().get(
+        DELIVERY_CONCURRENCY_SETTING, DELIVERY_CONCURRENCY_DEFAULT
+    )
+    if isinstance(raw, bool):
+        numeric: float | None = None
+    else:
+        try:
+            numeric = float(raw)
+        except (TypeError, ValueError):
+            numeric = None
+    if numeric is None:
+        logger.warning(
+            "[coding_session_bridge] settings value %s=%r is not a number — "
+            "delivering %d lanes at a time instead. Set it to a whole number "
+            "between %d and %d in Settings to choose your own fan-out.",
+            DELIVERY_CONCURRENCY_SETTING,
+            raw,
+            DELIVERY_CONCURRENCY_DEFAULT,
+            DELIVERY_CONCURRENCY_MIN,
+            DELIVERY_CONCURRENCY_MAX,
+        )
+        return DELIVERY_CONCURRENCY_DEFAULT
+    lanes = int(numeric)
+    clamped = min(max(lanes, DELIVERY_CONCURRENCY_MIN), DELIVERY_CONCURRENCY_MAX)
+    if clamped != numeric:
+        logger.warning(
+            "[coding_session_bridge] settings value %s=%s is outside the "
+            "supported %d–%d band — delivering %d lanes at a time instead. "
+            "Change it in Settings to a value inside that band.",
+            DELIVERY_CONCURRENCY_SETTING,
+            numeric,
+            DELIVERY_CONCURRENCY_MIN,
+            DELIVERY_CONCURRENCY_MAX,
+            clamped,
+        )
+    return clamped
+
 
 _PROVIDER_CAPABILITIES: dict[BridgeProvider, dict[str, Any]] = {
     BridgeProvider.CLAUDE_CODE: {
@@ -539,7 +608,12 @@ def _validate_upstream_acknowledgement(
 
 
 class CodingSessionBridgeOutbox:
-    """Persists first, then uploads the oldest envelope until acknowledged.
+    """Persists first, then uploads eligible lane heads until acknowledged.
+
+    Each tick takes the oldest unblocked envelope of up to
+    ``coding_session_delivery_concurrency`` DIFFERENT lanes and delivers them
+    concurrently; a single lane still has exactly one envelope in flight, so a
+    provider's event stream is never reordered.
 
     Successful server acknowledgement deletes the local row. If aidream
     accepted a request but the response was lost, the unchanged persisted
@@ -594,6 +668,23 @@ class CodingSessionBridgeOutbox:
         # won the SQLite write lock. They are never uploaded again — the
         # publisher only retries their delete.
         self._delivered_undeleted: set[int] = set()
+        # Effective lane fan-out of the most recent tick. Refreshed from the
+        # user setting every tick; surfaced in delivery_status so the screen
+        # never has to guess what the publisher is actually doing.
+        self._delivery_concurrency = DELIVERY_CONCURRENCY_DEFAULT
+        # PER-TICK OBSERVABILITY. A publisher that delivers nothing while rows
+        # are eligible used to explain itself nowhere — not in the log, not in
+        # the status endpoint (measured 2026-09-12 on 1.4.89).
+        self._ticks_total = 0
+        self._last_tick_at: str | None = None
+        self._last_tick_duration_ms: float | None = None
+        self._last_tick_sent = 0
+        self._last_tick_failed = 0
+        self._last_tick_blocked: str | None = None
+        self._last_tick_eligible = 0
+        self._last_delivery_at: str | None = None
+        self._last_error: dict[str, str] | None = None
+        self._last_idle_tick_log = 0.0
 
     @property
     def active(self) -> bool:
@@ -1743,6 +1834,7 @@ class CodingSessionBridgeOutbox:
                 "server_path": f"/api{_SERVER_PATH}",
                 "blocker": self.publisher_blocker,
                 "transport_circuit": self._transport_circuit_status(),
+                "ticks": self._tick_status(),
             },
             "pending": pending,
             "quarantine": quarantine,
@@ -1767,7 +1859,24 @@ class CodingSessionBridgeOutbox:
         }
 
     async def sync_pending(self, *, limit: int | None = None) -> dict[str, Any]:
-        """Publish eligible lane heads while preserving order inside each lane."""
+        """Publish eligible lane heads while preserving order inside each lane.
+
+        Every tick — including one that delivers nothing — leaves a trace on the
+        instance (``delivery_status()["publisher"]["ticks"]``): when it ran, how
+        long it took, how many lane heads were eligible when it started, what it
+        sent, what blocked it, and the most recent per-row failure.
+        """
+        started = time.monotonic()
+        eligible = await self._eligible_lane_head_count()
+        result: dict[str, Any] | None = None
+        try:
+            result = await self._sync_pending_once(limit=limit)
+            return result
+        finally:
+            self._record_tick(started=started, eligible=eligible, result=result)
+
+    async def _sync_pending_once(self, *, limit: int | None = None) -> dict[str, Any]:
+        """One delivery tick: fan out ACROSS lanes, never inside one."""
         if limit is None:
             limit = self._circuit_config.batch_size
         if limit < 1:
@@ -1888,237 +1997,389 @@ class CodingSessionBridgeOutbox:
                 self._circuit_state = "half_open"
                 probe_smallest = True
 
+            concurrency = delivery_concurrency()
+            self._delivery_concurrency = concurrency
+            semaphore = asyncio.Semaphore(concurrency)
+
             sent = 0
             failed = 0
             processed = 0
             offline_failures = 0
-            while processed < limit:
-                row = await self._db.fetchone(
-                    """SELECT o.id, o.envelope_json, o.envelope_sha256,
-                              o.attempts, o.next_attempt_at, o.lane_key,
-                              COALESCE(m.payload_bytes, length(o.envelope_json))
-                                  AS payload_bytes
-                       FROM coding_session_bridge_outbox AS o
-                       LEFT JOIN coding_session_bridge_queue_metadata AS m
-                         ON m.receipt_id = o.id
-                       WHERE o.next_attempt_at <= ?
-                         AND NOT EXISTS (
-                             SELECT 1
-                             FROM coding_session_bridge_outbox AS prior
-                             WHERE prior.lane_key = o.lane_key
-                               AND prior.id < o.id
-                         )
-                       ORDER BY
-                           CASE WHEN ? THEN
-                               COALESCE(m.payload_bytes, length(o.envelope_json))
-                           END,
-                           o.id
-                       LIMIT 1""",
-                    (time.time(), int(probe_smallest)),
-                )
-                if row is None:
+            blocked: str | None = None
+            halt = False
+            # THE IN-FLIGHT WINDOW. A tick never opens at full width: one
+            # envelope proves the transport, and only then does the window
+            # double toward `concurrency`. The same caution as the half-open
+            # probe, for the same reason — fanning 8–32 POSTs into a network
+            # that is actually down burns attempts on every lane at once,
+            # while the bounded circuit is meant to learn that from two.
+            window = 1
+            while processed < limit and not halt and blocked is None:
+                wave_size = 1 if probe_smallest else min(window, limit - processed)
+                heads = await self._eligible_lane_heads(wave_size, probe_smallest)
+                if not heads:
                     break
-                if int(row["id"]) in self._delivered_undeleted:
-                    # Delivered, delete still losing the lock. Re-sending it
-                    # would duplicate an accepted event on the server for no
-                    # local benefit.
-                    break
-                processed += 1
-                try:
-                    serialized = str(row["envelope_json"])
-                    actual_digest = hashlib.sha256(
-                        serialized.encode("utf-8")
-                    ).hexdigest()
-                    if actual_digest != str(row["envelope_sha256"]):
-                        raise LocalEnvelopeIntegrityError(
-                            "persisted bridge envelope failed its SHA-256 integrity check",
-                        )
-                    try:
-                        payload = json.loads(serialized)
-                    except json.JSONDecodeError as exc:
-                        raise LocalEnvelopeIntegrityError(
-                            "persisted bridge envelope is not valid JSON",
-                        ) from exc
-                    try:
-                        persisted_request = BridgeRequest.model_validate(payload)
-                    except ValidationError as exc:
-                        raise LocalEnvelopeIntegrityError(
-                            "persisted bridge envelope no longer satisfies schema v1",
-                        ) from exc
-                    response = await client.post(
-                        _SERVER_PATH,
-                        payload,
-                        jwt=access_token,
-                        timeout=30.0,
+                processed += len(heads)
+                outcomes = await asyncio.gather(
+                    *(
+                        self._deliver_envelope(row, client, access_token, semaphore)
+                        for row in heads
                     )
-                    _validate_upstream_acknowledgement(response, persisted_request)
-                except LocalEnvelopeIntegrityError as exc:
-                    try:
-                        await self._quarantine_head(row, exc)
-                    except Exception:
-                        logger.exception(
-                            "[coding_session_bridge] could not quarantine invalid "
-                            "local envelope id=%s — retrying next tick",
-                            int(row["id"]),
+                )
+                wave_sent = 0
+                wave_offline = 0
+                # Bookkeeping runs sequentially in row order. Only the POST is
+                # concurrent: every durable write, blocker and circuit decision
+                # below is exactly the one the one-at-a-time publisher made.
+                for row, persisted_request, response, exc in sorted(
+                    outcomes, key=lambda outcome: int(outcome[0]["id"])
+                ):
+                    if exc is not None:
+                        self._note_delivery_error(exc)
+                    if isinstance(exc, LocalEnvelopeIntegrityError):
+                        try:
+                            await self._quarantine_head(row, exc)
+                        except Exception:
+                            logger.exception(
+                                "[coding_session_bridge] could not quarantine invalid "
+                                "local envelope id=%s — retrying next tick",
+                                int(row["id"]),
+                            )
+                            failed += 1
+                            halt = True
+                            break
+                        continue
+                    if isinstance(exc, (AIDreamOfflineError, AIDreamError)):
+                        provider = (
+                            persisted_request.provider.value
+                            if persisted_request is not None
+                            else "unknown"
                         )
+                        if isinstance(exc, AIDreamError) and exc.status == 401:
+                            if blocked is None:
+                                self._credential_blocker = {
+                                    "code": "cloud_credentials_rejected",
+                                    "message": (
+                                        "AI Matrx rejected the stored session. Sign in "
+                                        "again to resume delivery; queued events remain "
+                                        "safe on this Mac."
+                                    ),
+                                    "http_status": 401,
+                                    "receipt_id": int(row["id"]),
+                                    "provider": provider,
+                                }
+                                self._blocked_token_hash = token_hash
+                                blocked = "cloud_credentials_rejected"
+                            try:
+                                await self._record_failure(
+                                    int(row["id"]), int(row["attempts"]), exc
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[coding_session_bridge] could not record the "
+                                    "credential rejection for id=%s",
+                                    int(row["id"]),
+                                )
+                            failed += 1
+                            continue
+                        if (
+                            isinstance(exc, AIDreamError)
+                            and _ORGANIZATION_UNRESOLVED_MARKER in str(exc)
+                        ):
+                            try:
+                                await self._set_organization_blocker(row, provider)
+                            except Exception:
+                                logger.exception(
+                                    "[coding_session_bridge] could not record the "
+                                    "organization pause for id=%s",
+                                    int(row["id"]),
+                                )
+                            if blocked is None:
+                                blocked = _ORGANIZATION_BLOCKER_CODE
+                            failed += 1
+                            continue
+                        if _is_terminal_rejection(exc, int(row["attempts"])):
+                            try:
+                                await self._quarantine_head(row, exc)
+                            except Exception:
+                                logger.exception(
+                                    "[coding_session_bridge] could not quarantine "
+                                    "id=%s — retrying next tick, envelope intact",
+                                    int(row["id"]),
+                                )
+                                failed += 1
+                                halt = True
+                                break
+                            # The next row in this lane, plus every unrelated
+                            # lane, can now advance.
+                            continue
+                        try:
+                            await self._record_failure(
+                                int(row["id"]), int(row["attempts"]), exc
+                            )
+                        except Exception:
+                            # A write failure INSIDE an exception handler is how
+                            # this tick died on v1.4.37. Never let bookkeeping
+                            # about a failure become a worse failure.
+                            logger.exception(
+                                "[coding_session_bridge] could not record the "
+                                "failure for id=%s — backing off this tick",
+                                int(row["id"]),
+                            )
+                            failed += 1
+                            halt = True
+                            break
                         failed += 1
-                        break
-                    continue
-                except (AIDreamOfflineError, AIDreamError) as exc:
-                    if isinstance(exc, AIDreamError) and exc.status == 401:
-                        self._credential_blocker = {
-                            "code": "cloud_credentials_rejected",
-                            "message": (
-                                "AI Matrx rejected the stored session. Sign in "
-                                "again to resume delivery; queued events remain "
-                                "safe on this Mac."
-                            ),
-                            "http_status": 401,
-                            "receipt_id": int(row["id"]),
-                            "provider": persisted_request.provider.value,
-                        }
-                        self._blocked_token_hash = token_hash
+                        if isinstance(exc, AIDreamOfflineError):
+                            offline_failures += 1
+                            wave_offline += 1
+                            self._circuit_failure_count = offline_failures
+                            if (
+                                self._circuit_state == "half_open"
+                                or offline_failures
+                                >= self._circuit_config.offline_failures_to_open
+                            ):
+                                self._open_transport_circuit()
+                                if blocked is None:
+                                    blocked = "transport_offline"
+                                continue
+                            # One transport-shaped failure is not proof that the
+                            # whole service is offline. A size-specific TLS/proxy
+                            # failure must not stop unrelated lanes, so probe the
+                            # smallest other eligible lane head next. A second
+                            # failure opens the bounded global circuit instead of
+                            # burning every lane.
+                            probe_smallest = True
+                        continue
+                    if exc is not None:
+                        # An UNEXPECTED failure must degrade to a deferred row,
+                        # not a dead publisher. Three separate incidents
+                        # (v1.4.34's ack write, v1.4.35's delete, and a raw
+                        # ssl.SSLError escaping the aidream client on
+                        # 2026-08-19) each stopped the whole tick, and because
+                        # the row never recorded an attempt it also got no
+                        # backoff — every lane stalled at attempts=0 with
+                        # nothing in the outbox explaining why. Record it,
+                        # scream, and let the next lane through.
+                        logger.error(
+                            "[coding_session_bridge] unexpected failure on id=%s — "
+                            "deferring the row instead of stopping the publisher",
+                            int(row["id"]),
+                            exc_info=exc,
+                        )
                         try:
                             await self._record_failure(
                                 int(row["id"]), int(row["attempts"]), exc
                             )
                         except Exception:
                             logger.exception(
-                                "[coding_session_bridge] could not record the "
-                                "credential rejection for id=%s",
+                                "[coding_session_bridge] could not even defer id=%s",
                                 int(row["id"]),
                             )
-                        return {
-                            "sent": sent,
-                            "failed": failed + 1,
-                            "blocked": "cloud_credentials_rejected",
-                        }
-                    if (
-                        isinstance(exc, AIDreamError)
-                        and _ORGANIZATION_UNRESOLVED_MARKER in str(exc)
-                    ):
-                        try:
-                            await self._set_organization_blocker(
-                                row, persisted_request.provider.value
-                            )
-                        except Exception:
-                            logger.exception(
-                                "[coding_session_bridge] could not record the "
-                                "organization pause for id=%s",
-                                int(row["id"]),
-                            )
-                        return {
-                            "sent": sent,
-                            "failed": failed + 1,
-                            "blocked": _ORGANIZATION_BLOCKER_CODE,
-                        }
-                    if _is_terminal_rejection(exc, int(row["attempts"])):
-                        try:
-                            await self._quarantine_head(row, exc)
-                        except Exception:
-                            logger.exception(
-                                "[coding_session_bridge] could not quarantine "
-                                "id=%s — retrying next tick, envelope intact",
-                                int(row["id"]),
-                            )
-                            failed += 1
+                            halt = True
                             break
-                        # The next row in this lane, plus every unrelated lane,
-                        # can now advance.
-                        continue
-                    try:
-                        await self._record_failure(
-                            int(row["id"]), int(row["attempts"]), exc
-                        )
-                    except Exception:
-                        # A write failure INSIDE an exception handler is how
-                        # this tick died on v1.4.37. Never let bookkeeping
-                        # about a failure become a worse failure.
-                        logger.exception(
-                            "[coding_session_bridge] could not record the "
-                            "failure for id=%s — backing off this tick",
-                            int(row["id"]),
-                        )
                         failed += 1
-                        break
-                    failed += 1
-                    if isinstance(exc, AIDreamOfflineError):
-                        offline_failures += 1
-                        self._circuit_failure_count = offline_failures
-                        if (
-                            self._circuit_state == "half_open"
-                            or offline_failures
-                            >= self._circuit_config.offline_failures_to_open
-                        ):
-                            self._open_transport_circuit()
-                            return {
-                                "sent": sent,
-                                "failed": failed,
-                                "blocked": "transport_offline",
-                            }
-                        # One transport-shaped failure is not proof that the
-                        # whole service is offline. A size-specific TLS/proxy
-                        # failure must not stop unrelated lanes, so probe the
-                        # smallest other eligible lane head next. A second
-                        # failure opens the bounded global circuit instead of
-                        # burning every lane.
-                        probe_smallest = True
-                    continue
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # An UNEXPECTED failure must degrade to a deferred row, not
-                    # a dead publisher. Three separate incidents (v1.4.34's ack
-                    # write, v1.4.35's delete, and a raw ssl.SSLError escaping
-                    # the aidream client on 2026-08-19) each stopped the whole
-                    # tick, and because the row never recorded an attempt it
-                    # also got no backoff — every lane stalled at attempts=0
-                    # with nothing in the outbox explaining why. Record it,
-                    # scream, and let the next lane through.
-                    logger.exception(
-                        "[coding_session_bridge] unexpected failure on id=%s — "
-                        "deferring the row instead of stopping the publisher",
-                        int(row["id"]),
-                    )
-                    try:
-                        await self._record_failure(
-                            int(row["id"]), int(row["attempts"]), exc
-                        )
-                    except Exception:
-                        logger.exception(
-                            "[coding_session_bridge] could not even defer id=%s",
-                            int(row["id"]),
-                        )
-                        break
-                    failed += 1
-                    continue
+                        continue
 
-                # The upstream POST succeeded — from here on the envelope is
-                # DELIVERED. Retiring the row is the ONLY thing that stops the
-                # publisher sending it again, so it runs on the same durable
-                # boundary the hook ingress uses (see
-                # _DURABLE_WRITE_BUSY_TIMEOUT_MS).
-                if await self._retire_delivered_row(
-                    outbox_id=int(row["id"]),
-                    request=persisted_request,
-                    response=response,
-                ):
-                    sent += 1
-                    if self._circuit_state != "closed" or offline_failures:
-                        self._close_transport_circuit()
-                    offline_failures = 0
-                    probe_smallest = False
-                    continue
+                    # The upstream POST succeeded — from here on the envelope is
+                    # DELIVERED. Retiring the row is the ONLY thing that stops the
+                    # publisher sending it again, so it runs on the same durable
+                    # boundary the hook ingress uses (see
+                    # _DURABLE_WRITE_BUSY_TIMEOUT_MS).
+                    assert persisted_request is not None
+                    if await self._retire_delivered_row(
+                        outbox_id=int(row["id"]),
+                        request=persisted_request,
+                        response=response,
+                    ):
+                        sent += 1
+                        wave_sent += 1
+                        self._last_delivery_at = _utc_now_iso()
+                        if self._circuit_state != "closed" or offline_failures:
+                            self._close_transport_circuit()
+                        offline_failures = 0
+                        probe_smallest = False
+                        continue
 
-                # The delete lost the write lock. The row is DELIVERED, so it
-                # must never be uploaded again — remember it and stop this
-                # tick. The next tick retries the delete before any upload.
-                self._delivered_undeleted.add(int(row["id"]))
-                failed += 1
-                break
+                    # The delete lost the write lock. The row is DELIVERED, so it
+                    # must never be uploaded again — remember it and stop this
+                    # tick. The next tick retries the delete before any upload.
+                    self._delivered_undeleted.add(int(row["id"]))
+                    failed += 1
+                    halt = True
+                    break
+
+                if wave_offline:
+                    window = 1
+                elif wave_sent:
+                    window = min(concurrency, window * 2)
             if processed >= limit and await self._has_ready_lane_head():
                 self._continue_immediately = True
-            return {"sent": sent, "failed": failed, "blocked": None}
+            return {"sent": sent, "failed": failed, "blocked": blocked}
+
+    async def _eligible_lane_heads(
+        self, count: int, probe_smallest: bool
+    ) -> list[Any]:
+        """Up to ``count`` order-safe heads, at most ONE per delivery lane.
+
+        The NOT EXISTS clause admits only the lowest id of each ``lane_key``, so
+        every returned row is a different lane by construction and delivering
+        them together can never reorder a lane. Served by
+        ``idx_coding_session_bridge_lane_order (lane_key, id)``.
+        """
+        if count < 1:
+            return []
+        rows = await self._db.fetchall(
+            """SELECT o.id, o.envelope_json, o.envelope_sha256,
+                      o.attempts, o.next_attempt_at, o.lane_key,
+                      COALESCE(m.payload_bytes, length(o.envelope_json))
+                          AS payload_bytes
+               FROM coding_session_bridge_outbox AS o
+               LEFT JOIN coding_session_bridge_queue_metadata AS m
+                 ON m.receipt_id = o.id
+               WHERE o.next_attempt_at <= ?
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM coding_session_bridge_outbox AS prior
+                     WHERE prior.lane_key = o.lane_key
+                       AND prior.id < o.id
+                 )
+               ORDER BY
+                   CASE WHEN ? THEN
+                       COALESCE(m.payload_bytes, length(o.envelope_json))
+                   END,
+                   o.id
+               LIMIT ?""",
+            (
+                time.time(),
+                int(probe_smallest),
+                count + len(self._delivered_undeleted),
+            ),
+        )
+        # Delivered, delete still losing the lock. Re-sending one would
+        # duplicate an accepted event on the server for no local benefit, and
+        # it blocks only its own lane — skipping it is order-preserving.
+        heads = [
+            row for row in rows if int(row["id"]) not in self._delivered_undeleted
+        ]
+        return heads[:count]
+
+    async def _eligible_lane_head_count(self) -> int:
+        """How many lanes could deliver right now — the tick's own denominator."""
+        row = await self._db.fetchone(
+            """SELECT COUNT(*) AS c
+               FROM coding_session_bridge_outbox AS o
+               WHERE o.next_attempt_at <= ?
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM coding_session_bridge_outbox AS prior
+                     WHERE prior.lane_key = o.lane_key
+                       AND prior.id < o.id
+                 )""",
+            (time.time(),),
+        )
+        return int(row["c"]) if row else 0
+
+    async def _deliver_envelope(
+        self,
+        row: Any,
+        client: Any,
+        access_token: str,
+        semaphore: asyncio.Semaphore,
+    ) -> tuple[Any, BridgeRequest | None, Any, Exception | None]:
+        """Validate and POST ONE lane head. Never touches SQLite.
+
+        Every durable consequence — quarantine, deferral, retirement, blockers —
+        is decided by the caller in row order, so concurrency changes WHEN a
+        request is sent and nothing at all about what happens afterwards.
+        """
+        persisted_request: BridgeRequest | None = None
+        async with semaphore:
+            try:
+                serialized = str(row["envelope_json"])
+                actual_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                if actual_digest != str(row["envelope_sha256"]):
+                    raise LocalEnvelopeIntegrityError(
+                        "persisted bridge envelope failed its SHA-256 integrity check",
+                    )
+                try:
+                    payload = json.loads(serialized)
+                except json.JSONDecodeError as exc:
+                    raise LocalEnvelopeIntegrityError(
+                        "persisted bridge envelope is not valid JSON",
+                    ) from exc
+                try:
+                    persisted_request = BridgeRequest.model_validate(payload)
+                except ValidationError as exc:
+                    raise LocalEnvelopeIntegrityError(
+                        "persisted bridge envelope no longer satisfies schema v1",
+                    ) from exc
+                response = await client.post(
+                    _SERVER_PATH,
+                    payload,
+                    jwt=access_token,
+                    timeout=30.0,
+                )
+                _validate_upstream_acknowledgement(response, persisted_request)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the caller owns every path
+                return (row, persisted_request, None, exc)
+            return (row, persisted_request, response, None)
+
+    def _note_delivery_error(self, exc: Exception) -> None:
+        """Remember the most recent per-row failure in display-safe form."""
+        self._last_error = _safe_delivery_error(str(exc)) or {
+            "code": "cloud_delivery_failed",
+            "message": (
+                "Cloud delivery failed; the event remains local and will be retried."
+            ),
+        }
+
+    def _record_tick(
+        self,
+        *,
+        started: float,
+        eligible: int,
+        result: dict[str, Any] | None,
+    ) -> None:
+        """Close the books on one tick and scream once a minute if it idled."""
+        self._ticks_total += 1
+        self._last_tick_at = _utc_now_iso()
+        self._last_tick_duration_ms = round((time.monotonic() - started) * 1000.0, 3)
+        sent = int(result["sent"]) if result else 0
+        failed = int(result["failed"]) if result else 0
+        blocked = result.get("blocked") if result else None
+        self._last_tick_sent = sent
+        self._last_tick_failed = failed
+        self._last_tick_blocked = blocked
+        self._last_tick_eligible = eligible
+        if sent or not eligible:
+            return
+        now = time.monotonic()
+        if now - self._last_idle_tick_log < 60.0:
+            return
+        self._last_idle_tick_log = now
+        logger.info(
+            "[coding_session_bridge] publisher tick: 0 sent, %s eligible, "
+            "blocked=%s, last_error=%s",
+            eligible,
+            blocked,
+            self._last_error["code"] if self._last_error else None,
+        )
+
+    def _tick_status(self) -> dict[str, Any]:
+        return {
+            "last_tick_at": self._last_tick_at,
+            "last_tick_duration_ms": self._last_tick_duration_ms,
+            "last_tick_sent": self._last_tick_sent,
+            "last_tick_failed": self._last_tick_failed,
+            "last_tick_blocked": self._last_tick_blocked,
+            "last_tick_eligible": self._last_tick_eligible,
+            "ticks_total": self._ticks_total,
+            "last_delivery_at": self._last_delivery_at,
+            "last_error": dict(self._last_error) if self._last_error else None,
+        }
 
     async def _has_ready_lane_head(self) -> bool:
         """Whether another order-safe envelope can run without waiting."""
@@ -2166,6 +2427,7 @@ class CodingSessionBridgeOutbox:
             ),
             "config": {
                 "batch_size": self._circuit_config.batch_size,
+                "delivery_concurrency": self._delivery_concurrency,
                 "poll_interval_seconds": self._circuit_config.poll_interval_seconds,
                 "offline_failures_to_open": (
                     self._circuit_config.offline_failures_to_open
@@ -2553,6 +2815,11 @@ def get_coding_session_bridge_outbox() -> CodingSessionBridgeOutbox:
 __all__ = [
     "BridgeMutationConflict",
     "CodingSessionBridgeOutbox",
+    "DELIVERY_CONCURRENCY_DEFAULT",
+    "DELIVERY_CONCURRENCY_MAX",
+    "DELIVERY_CONCURRENCY_MIN",
+    "DELIVERY_CONCURRENCY_SETTING",
     "PublisherCircuitConfig",
+    "delivery_concurrency",
     "get_coding_session_bridge_outbox",
 ]

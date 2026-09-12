@@ -532,6 +532,23 @@ export function CodingSessions() {
                   : " · delivery stopped"}
               </p>
             )}
+            {/*
+              What the publisher's most recent pass actually did. A tick that
+              delivers nothing while rows are eligible used to be invisible on
+              every screen and in every log.
+            */}
+            {bridge && (
+              <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+                Publisher: last tick {formatStamp(bridge.publisher.ticks.last_tick_at)}{" "}
+                · sent {bridge.publisher.ticks.last_tick_sent.toLocaleString()} ·
+                eligible {bridge.publisher.ticks.last_tick_eligible.toLocaleString()} ·
+                concurrency{" "}
+                {bridge.publisher.transport_circuit.config.delivery_concurrency}
+                {bridge.publisher.ticks.last_error
+                  ? ` · ${bridge.publisher.ticks.last_error.message}`
+                  : ""}
+              </p>
+            )}
           </div>
 
           {data && (

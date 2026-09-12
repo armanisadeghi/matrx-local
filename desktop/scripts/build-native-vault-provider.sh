@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build the extension independently of the host.  This deliberately produces
-# an unsigned .appex: signed capability/profile verification belongs to the
-# release chain once matching Developer ID profiles are installed.
+# Build the extension independently of the host. Development builds are
+# deliberately unsigned. Release CI supplies the provider's private profile
+# and signing identity before Tauri seals the separately signed provider into
+# the host app.
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -46,8 +47,9 @@ mkdir -p "$CONTENTS/MacOS"
 
 "$SWIFTC" \
   -application-extension \
-  -emit-library \
-  -Xlinker -bundle \
+  -emit-executable \
+  -Xlinker -e \
+  -Xlinker _NSExtensionMain \
   -parse-as-library \
   -module-name VaultProvider \
   -target "$TARGET_ARCH-apple-macosx15.0" \
@@ -60,4 +62,35 @@ cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"
 cp "$SOURCE/VaultProvider.entitlements" "$CONTENTS/VaultProvider.entitlements"
 plutil -lint "$CONTENTS/Info.plist" >/dev/null
 plutil -lint "$CONTENTS/VaultProvider.entitlements" >/dev/null
-echo "Built unsigned $TARGET_ARCH native Vault provider: $OUTPUT"
+
+# A release provider has a distinct identity/profile from its Tauri host. Do
+# not make local source builds require private release inputs, but make a
+# partially supplied release configuration fail before the host is signed.
+if [[ -n "${MATRX_VAULT_PROVIDER_PROFILE_FILE:-}" || -n "${MATRX_APPLE_SIGNING_IDENTITY:-}" ]]; then
+  [[ -n "${MATRX_VAULT_PROVIDER_PROFILE_FILE:-}" ]] || {
+    echo "ERROR: MATRX_VAULT_PROVIDER_PROFILE_FILE is required when signing the native Vault provider." >&2
+    exit 1
+  }
+  [[ -f "$MATRX_VAULT_PROVIDER_PROFILE_FILE" ]] || {
+    echo "ERROR: native Vault provider provisioning profile is missing: $MATRX_VAULT_PROVIDER_PROFILE_FILE" >&2
+    exit 1
+  }
+  [[ -n "${MATRX_APPLE_SIGNING_IDENTITY:-}" ]] || {
+    echo "ERROR: MATRX_APPLE_SIGNING_IDENTITY is required when signing the native Vault provider." >&2
+    exit 1
+  }
+  /usr/bin/ditto "$MATRX_VAULT_PROVIDER_PROFILE_FILE" "$CONTENTS/embedded.provisionprofile"
+  codesign \
+    --force \
+    --timestamp \
+    --options runtime \
+    --entitlements "$SOURCE/VaultProvider.entitlements" \
+    --sign "$MATRX_APPLE_SIGNING_IDENTITY" \
+    "$OUTPUT"
+  codesign --verify --strict --verbose=2 "$OUTPUT"
+  echo "Built signed $TARGET_ARCH native Vault provider: $OUTPUT"
+else
+  echo "Built unsigned $TARGET_ARCH native Vault provider: $OUTPUT"
+fi
+
+"$ROOT/scripts/verify-native-vault-provider.sh" --arch "$TARGET_ARCH" "$OUTPUT"

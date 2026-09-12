@@ -196,6 +196,9 @@ desktop/src-tauri/sidecar/Matrx Engine.app/
 desktop/src-tauri/binaries/llama-server-*
 desktop/src-tauri/binaries/uv-*
 desktop/src-tauri/binaries/.llama-server-version
+# Release CI writes private Apple provisioning profiles here immediately before
+# the macOS bundle is sealed. They must never enter the shared checkout.
+desktop/src-tauri/release-signing/
 
 # macOS Finder metadata
 .DS_Store

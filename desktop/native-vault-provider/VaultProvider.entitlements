@@ -10,7 +10,7 @@
     <array>
         <string>group.com.aimatrx.desktop.vault-status</string>
     </array>
-    <key>com.apple.security.keychain-access-groups</key>
+    <key>keychain-access-groups</key>
     <array>
         <string>JH83UH9P4D.com.aimatrx.desktop.vault-provider</string>
     </array>

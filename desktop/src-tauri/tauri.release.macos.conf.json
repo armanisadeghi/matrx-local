@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/config.schema.json",
+  "bundle": {
+    "macOS": {
+      "files": {
+        "Frameworks/Matrx Engine.app": "sidecar/Matrx Engine.app",
+        "PlugIns/AI Matrx Vault Provider.appex": "../native-vault-provider/build/AI Matrx Vault Provider.appex",
+        "embedded.provisionprofile": "release-signing/host.provisionprofile"
+      }
+    }
+  }
+}

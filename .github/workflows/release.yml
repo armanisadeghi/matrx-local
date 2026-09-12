@@ -224,6 +224,30 @@ jobs:
 
           echo "✅ Apple certificate imported into temporary keychain"
 
+      # The provider has a distinct bundle identifier and entitlement set, so
+      # one host profile cannot authorize both code objects. Keep both private
+      # profile inputs off the checkout and make their CMS envelopes a release
+      # prerequisite before Tauri performs the host's final signing pass.
+      - name: Materialize macOS host and Vault provider profiles
+        if: matrix.platform == 'macos-15'
+        env:
+          APPLE_HOST_PROVISIONING_PROFILE: ${{ secrets.APPLE_HOST_PROVISIONING_PROFILE }}
+          APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE: ${{ secrets.APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          HOST_PROFILE="desktop/src-tauri/release-signing/host.provisionprofile"
+          PROVIDER_PROFILE="$RUNNER_TEMP/vault-provider.provisionprofile"
+          mkdir -p "$(dirname "$HOST_PROFILE")"
+          [[ -n "$APPLE_HOST_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_HOST_PROVISIONING_PROFILE is required for macOS releases." >&2; exit 1; }
+          [[ -n "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is required for macOS releases." >&2; exit 1; }
+          printf '%s' "$APPLE_HOST_PROVISIONING_PROFILE" | base64 --decode > "$HOST_PROFILE"
+          printf '%s' "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" | base64 --decode > "$PROVIDER_PROFILE"
+          [[ -s "$HOST_PROFILE" ]] || { echo "ERROR: host provisioning profile decoded empty." >&2; exit 1; }
+          [[ -s "$PROVIDER_PROFILE" ]] || { echo "ERROR: Vault provider provisioning profile decoded empty." >&2; exit 1; }
+          security cms -D -u 9 -i "$HOST_PROFILE" -o /dev/null
+          security cms -D -u 9 -i "$PROVIDER_PROFILE" -o /dev/null
+
       - name: Build Python sidecar binary
         env:
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-15' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -503,6 +527,8 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MATRX_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MATRX_VAULT_PROVIDER_PROFILE_FILE: ${{ runner.temp }}/vault-provider.provisionprofile
           # macOS notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -520,7 +546,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
 
       # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
       # The build scripts sign; this step PROVES the shipped artifact honors

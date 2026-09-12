@@ -120,35 +120,34 @@ fi
 
 # 4. The provider is a distinct app extension. It has the AutoFill capability
 # and its own Keychain group; the host is deliberately limited to the
-# nonsecret App Group. A signed provider must carry the matching profile.
+# nonsecret App Group. Final release verification validates each profile's
+# Apple CMS signature, current validity, exact team/bundle/capabilities, and
+# the certificate that actually signed that code object.
 echo "--- [4/6] native Vault provider boundary"
 PROVIDER_INFO="$VAULT_PROVIDER/Contents/Info.plist"
-PROVIDER_ENTS="$(codesign -d --entitlements - --xml "$VAULT_PROVIDER" 2>/dev/null || true)"
-HOST_ENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null || true)"
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 [[ "$(plist_value "$PROVIDER_INFO" CFBundleIdentifier)" == "com.aimatrx.desktop.vault-provider" ]] || { echo "ERROR: unexpected Vault provider bundle identifier" >&2; exit 1; }
 [[ "$(plist_value "$PROVIDER_INFO" LSMinimumSystemVersion)" == "15.0" ]] || { echo "ERROR: Vault provider must retain macOS 15 minimum" >&2; exit 1; }
 [[ "$(plist_value "$PROVIDER_INFO" 'NSExtension:NSExtensionPointIdentifier')" == "com.apple.authentication-services-credential-provider-ui" ]] || { echo "ERROR: unexpected Vault provider extension point" >&2; exit 1; }
-for required in \
-  "com.apple.developer.authentication-services.autofill-credential-provider" \
-  "group.com.aimatrx.desktop.vault-status" \
-  "JH83UH9P4D.com.aimatrx.desktop.vault-provider"; do
-  [[ "$PROVIDER_ENTS" == *"$required"* ]] || { echo "ERROR: Vault provider missing signed entitlement: $required" >&2; exit 1; }
-done
-[[ "$HOST_ENTS" == *"group.com.aimatrx.desktop.vault-status"* ]] || { echo "ERROR: host missing nonsecret Vault status App Group" >&2; exit 1; }
-[[ "$HOST_ENTS" != *"JH83UH9P4D.com.aimatrx.desktop.vault-provider"* ]] || { echo "ERROR: host must not access the provider-only Keychain group" >&2; exit 1; }
-PROVIDER_SIGNATURE="$(codesign -dv --verbose=4 "$VAULT_PROVIDER" 2>&1 || true)"
-if [[ "$PROVIDER_SIGNATURE" != *"Signature=adhoc"* && "$PROVIDER_SIGNATURE" == *"Authority="* ]]; then
-  [[ -f "$VAULT_PROVIDER/Contents/embedded.provisionprofile" ]] || { echo "ERROR: signed Vault provider is missing its provisioning profile" >&2; exit 1; }
-fi
-echo "    ✅ provider bundle, entitlement split, and signed-profile requirement verified"
+"$REPO_ROOT/desktop/scripts/verify-native-vault-provider.sh" "$VAULT_PROVIDER"
 
 if [[ "$DEV_MODE" == "--dev" ]]; then
+    echo "    (release-profile validation skipped for explicitly unsigned dev artifact)"
     echo "--- [5/6] spctl assess: SKIPPED (--dev)"
     echo "--- [6/6] stapler validate: SKIPPED (--dev)"
     echo "=== ✅ artifact verification passed (dev mode: signature + identity only)"
     exit 0
 fi
+
+HOST_PROFILE="$APP_PATH/Contents/embedded.provisionprofile"
+PROVIDER_PROFILE="$VAULT_PROVIDER/Contents/embedded.provisionprofile"
+[[ -f "$HOST_PROFILE" ]] || { echo "ERROR: signed host is missing its provisioning profile" >&2; exit 1; }
+[[ -f "$PROVIDER_PROFILE" ]] || { echo "ERROR: signed Vault provider is missing its provisioning profile" >&2; exit 1; }
+python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
+    --kind host --profile "$HOST_PROFILE" --code "$APP_PATH"
+python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
+    --kind provider --profile "$PROVIDER_PROFILE" --code "$VAULT_PROVIDER"
+echo "    ✅ provider bundle, typed entitlement split, profiles, and signed certificates verified"
 
 # 4. Gatekeeper acceptance — proves notarization is visible to the OS.
 echo "--- [5/6] spctl --assess"

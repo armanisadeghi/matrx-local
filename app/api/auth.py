@@ -254,46 +254,20 @@ _SUCCESS_HTML = """
 
 @auth_router.get("/auth/callback", response_class=HTMLResponse)
 async def oauth_callback(request: Request):
-    """
-    OAuth redirect target for the Tauri desktop app.
-
-    Supabase completes authentication in the user's external browser and then
-    redirects to this local URL.  We capture whichever parameters Supabase
-    included (PKCE ``code``, or implicit ``access_token`` / ``refresh_token``
-    in the URL fragment — though fragments are never sent to the server, so
-    for implicit flow the frontend must parse them itself from the redirected
-    page URL).
-
-    Once the parameters are captured we broadcast them to every connected
-    WebSocket client so the Tauri webview can complete the session exchange
-    without any page navigation.
+    """Forward a PKCE code/state pair to local clients; the initiating client
+    validates state and supplies its retained verifier before token exchange.
+    Implicit tokens and arbitrary callback parameters are never broadcast.
     """
     # Import here to avoid a circular import with main.py
     from app.main import websocket_manager  # type: ignore[attr-defined]
 
-    params = dict(request.query_params)
-    logger.info("[oauth_callback] received params: %s", list(params.keys()))
-
-    # Broadcast whichever parameters arrived so the webview can handle them.
-    # The frontend checks for `code` (PKCE) first, then falls back to
-    # `access_token` + `refresh_token` (implicit).
-    payload: dict = {"type": "oauth-callback"}
-
-    if "code" in params:
-        payload["code"] = params["code"]
-        logger.info("[oauth_callback] PKCE code received, broadcasting to webview")
-    elif "access_token" in params:
-        payload["access_token"] = params["access_token"]
-        payload["refresh_token"] = params.get("refresh_token", "")
-        logger.info(
-            "[oauth_callback] implicit tokens received, broadcasting to webview"
-        )
-    else:
-        logger.warning(
-            "[oauth_callback] unexpected params — forwarding raw: %s",
-            list(params.keys()),
-        )
-        payload["raw"] = params
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        return HTMLResponse("Sign-in callback is incomplete. Start sign-in again.", status_code=400)
+    # PKCE callback only. Never forward raw parameters or implicit tokens.
+    payload = {"type": "oauth-callback", "code": code, "state": state}
+    logger.info("[oauth_callback] PKCE callback received")
 
     # Broadcast the OAuth credentials ONLY to direct-loopback WebSocket
     # clients (the Tauri webview signing in is one of these). Tunnel-borne
@@ -311,7 +285,7 @@ async def oauth_callback(request: Request):
             await websocket_manager._send(conn, payload)
         except Exception:
             logger.warning(
-                "OAuth credential broadcast to one client failed", exc_info=True
+                "OAuth callback delivery failed; retry sign-in if the app did not receive it"
             )
 
     return HTMLResponse(_SUCCESS_HTML)

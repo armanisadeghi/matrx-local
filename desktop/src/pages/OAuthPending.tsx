@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { engine } from "@/lib/api";
+import { isCurrentOAuthCallback } from "@/lib/oauth";
 import { Zap, ArrowLeft, ExternalLink, CheckCircle2, RefreshCw } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
 
@@ -12,7 +13,7 @@ const BRAND_COLOR = "hsl(var(--primary))";
 
 interface OAuthPendingProps {
     onCancel: () => void;
-    completeOAuthExchange: (code: string, redirectUri: string) => Promise<boolean>;
+    completeOAuthExchange: (code: string, state: string, redirectUri: string) => Promise<boolean>;
 }
 
 function WaitingDots() {
@@ -76,8 +77,8 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
     //     the event is delivered. Whichever channel delivers the code first wins;
     //     the handled.current ref ensures exactly-once handling.
     //
-    // On mount we first clear any stale PendingOAuthUrl from a prior login session
-    // to prevent an old code from immediately firing a new exchange.
+    // On mount we consume an early callback only if its state matches the
+    // locally initiated transaction; stale callbacks never consume the new one.
     useEffect(() => {
         if (handled.current) return;
 
@@ -85,17 +86,21 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
         let wsOff: (() => void) | null = null;
         let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-        function extractCode(urlStr: string): string | null {
+        function extractCallback(urlStr: string): { code: string; state: string } | null {
             try {
-                return new URL(urlStr).searchParams.get("code");
+                const url = new URL(urlStr);
+                if (`${url.protocol}//${url.host}${url.pathname}` !== TAURI_REDIRECT_URI) return null;
+                const code = url.searchParams.get("code");
+                const state = url.searchParams.get("state");
+                return code && state ? { code, state } : null;
             } catch {
-                console.warn("[OAuthPending] could not parse URL:", urlStr);
+                console.warn("[OAuthPending] invalid sign-in callback");
                 return null;
             }
         }
 
-        async function handleCode(code: string) {
-            if (handled.current) return;
+        async function handleCode(code: string, state: string) {
+            if (handled.current || !isCurrentOAuthCallback(state, TAURI_REDIRECT_URI)) return;
             handled.current = true;
             tauriUnlisten?.();
             wsOff?.();
@@ -106,7 +111,7 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
 
             console.log("[OAuthPending] exchanging code for tokens...");
             try {
-                const ok = await completeOAuthExchange(code, TAURI_REDIRECT_URI);
+                const ok = await completeOAuthExchange(code, state, TAURI_REDIRECT_URI);
                 if (ok) {
                     // auth.isAuthenticated will flip true → App.tsx re-renders to
                     // the dashboard automatically. Show success briefly first.
@@ -128,11 +133,13 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
                 const { invoke } = await import("@tauri-apps/api/core");
                 invokeAvailable = true;
 
-                // ── Step 1: Clear any stale URL from a prior login session ──
-                // This prevents a code from a previous (already-consumed) OAuth round
-                // from immediately triggering a new exchange on re-login.
-                await invoke<string | null>("get_pending_oauth_url");
-                // (result is intentionally ignored — we just drain the stale value)
+                // State binding distinguishes a current early callback from an old one.
+                const earlyUrl = await invoke<string | null>("get_pending_oauth_url");
+                if (earlyUrl) {
+                    const callback = extractCallback(earlyUrl);
+                    if (callback) await handleCode(callback.code, callback.state);
+                    if (handled.current) return;
+                }
 
                 // ── Step 2: Set up defensive polling loop ──────────────────
                 // Polls every 500ms for the URL stored by Rust's on_open_url handler.
@@ -147,9 +154,9 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
                     try {
                         const pendingUrl = await invoke<string | null>("get_pending_oauth_url");
                         if (pendingUrl) {
-                            console.log("[OAuthPending] poll found URL:", pendingUrl);
-                            const code = extractCode(pendingUrl);
-                            if (code) handleCode(code);
+                            console.log("[OAuthPending] sign-in callback received");
+                            const callback = extractCallback(pendingUrl);
+                            if (callback) handleCode(callback.code, callback.state);
                         }
                     } catch {
                         // ignore — Tauri may transiently unavailable during focus change
@@ -167,10 +174,10 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
                 const { listen } = await import("@tauri-apps/api/event");
                 const unlisten = await listen<string>("oauth-callback", (event) => {
                     if (handled.current) return;
-                    console.log("[OAuthPending] received oauth-callback event:", event.payload);
-                    const code = extractCode(event.payload);
-                    if (code) handleCode(code);
-                    else console.warn("[OAuthPending] deep-link has no code param:", event.payload);
+                    console.log("[OAuthPending] sign-in callback event received");
+                    const callback = extractCallback(event.payload);
+                    if (callback) handleCode(callback.code, callback.state);
+                    else console.warn("[OAuthPending] incomplete sign-in callback");
                 });
                 tauriUnlisten = unlisten;
             } catch {
@@ -186,8 +193,8 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
         // aimatrx:// deep link (e.g. when VITE_DEV_WS_AUTH=1 is set).
         wsOff = engine.on("message", (data: unknown) => {
             const msg = data as Record<string, string>;
-            if (msg?.type !== "oauth-callback" || !msg.code) return;
-            handleCode(msg.code);
+            if (msg?.type !== "oauth-callback" || !msg.code || !msg.state) return;
+            handleCode(msg.code, msg.state);
         });
 
         setup();

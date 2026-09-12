@@ -2068,7 +2068,7 @@ pub fn run() {
     } else {
         builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(url_str) = argv.iter().find(|a| a.starts_with("aimatrx://")) {
-                println!("[single-instance] Received deep-link via argv: {}", url_str);
+                println!("[single-instance] Received deep-link callback");
                 show_main_window(app);
                 if let Some(state) = app.try_state::<PendingOAuthUrl>() {
                     *state.0.lock().unwrap() = Some(url_str.clone());
@@ -2529,7 +2529,7 @@ pub fn run() {
                 let urls = event.urls();
                 if let Some(url) = urls.first() {
                     let url_str = url.to_string();
-                    println!("[deep-link] Received URL: {}", url_str);
+                    println!("[deep-link] Received callback");
 
                     // Bring the window to front
                     show_main_window(&handle);

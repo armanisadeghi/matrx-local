@@ -213,7 +213,7 @@ export function useAuth() {
 
       // Persist verifier + state so the callback can complete the exchange.
       // Uses localStorage so it survives app backgrounding and potential restart.
-      saveOAuthState(codeVerifier, oauthState);
+      saveOAuthState(codeVerifier, oauthState, redirectUri);
 
       if (isInTauri) {
         // Mark OAuth as in-flight BEFORE opening the browser. This persists
@@ -258,19 +258,9 @@ export function useAuth() {
    * Returns true on success.
    */
   const completeOAuthExchange = useCallback(
-    async (code: string, redirectUri: string): Promise<boolean> => {
-      const stored = localStorage.getItem("matrx_oauth_code_verifier");
-      if (!stored) {
-        console.error("[auth] completeOAuthExchange: no code_verifier in localStorage");
-        update({
-          loading: false,
-          error: "OAuth session expired. Please try signing in again.",
-        });
-        return false;
-      }
-
+    async (code: string, returnedState: string, redirectUri: string): Promise<boolean> => {
       try {
-        const tokens = await exchangeOAuthCode(code, stored, redirectUri);
+        const tokens = await exchangeOAuthCode(code, returnedState, redirectUri);
         clearOAuthState();
         clearOAuthPending();
 

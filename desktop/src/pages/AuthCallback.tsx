@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { exchangeOAuthCode, clearOAuthState, extractVerifierFromState } from "@/lib/oauth";
+import { exchangeOAuthCode, clearOAuthState } from "@/lib/oauth";
+import supabase from "@/lib/supabase";
 import { Loader2, AlertTriangle } from "lucide-react";
 
 /**
@@ -48,41 +49,9 @@ export function AuthCallback() {
       const code = params.get("code");
       const state = params.get("state");
 
-      console.log("[AuthCallback] hash:", hash);
-      console.log("[AuthCallback] code present:", !!code, "state present:", !!state);
-
-      console.log("[AuthCallback] state length:", state?.length);
-
-      if (!code) {
-        const msg = "No authorization code in callback URL. The OAuth flow may have been interrupted.";
-        console.error("[AuthCallback]", msg, "hash:", hash);
-        setErrorMsg(msg);
-        setTimeout(() => navigate("/login", { replace: true }), 4000);
-        return;
-      }
-
-      // ── Step 2: Extract the PKCE code_verifier from the state param ────────
-      //
-      // The verifier is encoded directly into the state we sent, in the format:
-      //   "<verifier>.<nonce>"
-      // This survives cross-origin browser navigation (localStorage gets cleared
-      // when the tab goes aimatrx.com → localhost in some browsers).
-      if (!state) {
-        const msg = "No state parameter returned — cannot recover PKCE verifier.";
-        console.error("[AuthCallback]", msg);
-        setErrorMsg(msg);
-        setTimeout(() => navigate("/login", { replace: true }), 4000);
-        return;
-      }
-
-      const codeVerifier = extractVerifierFromState(state);
-      console.log("[AuthCallback] codeVerifier extracted from state:", !!codeVerifier);
-
-      if (!codeVerifier) {
-        const msg = "Could not extract PKCE verifier from state parameter. Please try signing in again.";
-        console.error("[AuthCallback]", msg, "state:", state?.slice(0, 30));
-        setErrorMsg(msg);
-        setTimeout(() => navigate("/login", { replace: true }), 4000);
+      window.history.replaceState({}, "", `${window.location.pathname}#/auth/callback`);
+      if (!code || !state) {
+        setErrorMsg("Sign-in callback is incomplete. Please start sign-in again.");
         return;
       }
 
@@ -91,43 +60,18 @@ export function AuthCallback() {
         console.log("[AuthCallback] exchanging code for tokens...");
         const tokens = await exchangeOAuthCode(
           code,
-          codeVerifier,
+          state,
           "http://localhost:1420/auth/callback"
         );
         clearOAuthState();
         console.log("[AuthCallback] token exchange succeeded, storing session...");
 
-        // ── Step 4: Store tokens directly into supabase-js storage ──────────
-        //
-        // supabase.auth.setSession() makes an extra network round-trip to validate
-        // the token which can hang in the dev browser. Instead, write the session
-        // directly into the storage key supabase-js reads on startup, then do a
-        // hard reload so useAuth re-initialises from storage with the new session.
-        //
-        // Storage key: "sb-<project-ref>-auth-token"
-        // Value: the session object supabase-js expects.
-        const projectRef = new URL(import.meta.env.VITE_SUPABASE_URL as string).hostname.split(".")[0];
-        const storageKey = `sb-${projectRef}-auth-token`;
-
-        const expiresAt = Math.floor(Date.now() / 1000) + tokens.expires_in;
-        const sessionObj = {
+        const { error } = await supabase.auth.setSession({
           access_token: tokens.access_token,
           refresh_token: tokens.refresh_token,
-          expires_in: tokens.expires_in,
-          expires_at: expiresAt,
-          token_type: tokens.token_type ?? "bearer",
-        };
-
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(sessionObj));
-          console.log("[AuthCallback] session stored at", storageKey, "— reloading app");
-        } catch (storageErr) {
-          console.error("[AuthCallback] failed to write session to storage:", storageErr);
-        }
-
-        // Hard reload to `/` — useAuth will call getSession() which reads from
-        // the storage key we just wrote, and the user lands on the dashboard.
-        window.location.replace("/");
+        });
+        if (error) throw new Error("Could not establish your sign-in session. Please try again.");
+        navigate("/", { replace: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error("[AuthCallback] token exchange failed:", msg);

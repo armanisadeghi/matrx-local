@@ -312,10 +312,6 @@ def _session_ref(session_key: object) -> str | None:
     return hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:12]
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def _utc_timestamp(value: object) -> str | None:
     """SQLite datetime('now') is UTC but lacks an offset; make that truth explicit."""
     if value is None:

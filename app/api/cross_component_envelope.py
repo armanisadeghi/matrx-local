@@ -54,7 +54,10 @@ class CrossComponentEnvelope(BaseModel):
 
     Carried over Supabase Broadcast on the per-user buses
     (`matrx-extension-bridge:<userId>`, `matrx-local-bridge:<userId>`,
-    `matrx-server-bus:<userId>`). v1 publishers parse cleanly: missing
+    `matrx-server-bus:<userId>` — the last one ACTIVE since 2026-09-11 as the
+    platform client-directive channel, `kind:"directive"`; this client does not
+    subscribe yet: common-docs/systems/platform/realtime/CLIENT-DIRECTIVES.md).
+    v1 publishers parse cleanly: missing
     v2 fields default appropriately.
     """
 
@@ -62,7 +65,7 @@ class CrossComponentEnvelope(BaseModel):
     # v2 publishers stamp it explicitly. Bump ONLY on a breaking wire change
     # and keep parse back-compat for at least one version.
     v: int = 2
-    kind: Literal["rpc", "wake", "presence"] = "rpc"
+    kind: Literal["rpc", "wake", "presence", "directive"] = "rpc"
     direction: str = Field(..., min_length=1)
     action: str
     requestId: str

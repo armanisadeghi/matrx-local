@@ -685,7 +685,10 @@ async def test_preview_summary_tail_with_unterminated_giant_line_is_bounded(
     ).preview()
     assert preview["sessions"][0]["session_id"] == session_id
     assert preview["sessions"][0]["bytes"] == path.stat().st_size
-    assert preview["sessions"][0]["title"].startswith("Claude session")
+    # The valid opening line must remain readable even when the unterminated
+    # tail is too large to parse; falling back to the UUID title means the
+    # bounded reader discarded valid data before the corrupt tail.
+    assert preview["sessions"][0]["title"] == "hello"
 
 
 @pytest.mark.anyio

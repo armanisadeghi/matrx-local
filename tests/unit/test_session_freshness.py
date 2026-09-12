@@ -72,7 +72,12 @@ async def test_expired_token_is_a_visible_blocker_that_clears(
     await db.connect()
     try:
         tokens = _Tokens({"access_token": "x", "user_id": "u"}, expired=True)
-        outbox = CodingSessionBridgeOutbox(db=db, client_factory=lambda: None)
+        # This test owns the credential-blocker branch. Make cloud participation
+        # explicit so CI's headless environment cannot short-circuit the SUT at
+        # the earlier configuration-blocker branch.
+        outbox = CodingSessionBridgeOutbox(
+            db=db, client_factory=lambda: None, cloud_enabled=True
+        )
         outbox._tokens = tokens  # type: ignore[attr-defined]
 
         result = await outbox.sync_pending()

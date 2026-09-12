@@ -36,7 +36,11 @@ Tauri Rust (OS-owned)
 
 5. **All state transitions via `app/launcher.py`** — `registry.starting/ready/degraded/failed/stopping/stopped`. `[launcher] <service> → <state>` is source of truth. FAILED → auto dump to `~/.matrx/diagnostics/`.
 
-6. **Safety-net subprocess in `lib.rs`** — parachute after 5s SIGTERM/SIGKILL ladder if graceful path crashes mid-shutdown. Not a substitute for correct ownership.
+6. **Safety-net subprocess in `lib.rs`** — parachute on a SIGTERM(T+1s)/SIGKILL(T+grace+4s) ladder if the graceful path crashes mid-shutdown. Not a substitute for correct ownership.
+
+7. **Never SIGKILL an engine before its teardown budget expires.** Every Rust path that ends an engine — `sigterm_then_kill`, the launch orphan sweep, the safety net — waits `MATRX_ORPHAN_TERM_GRACE_MS` (default 25 s, the engine's own lifespan budget) after SIGTERM before escalating. A SIGKILL that lands earlier skips the FastAPI lifespan shutdown, so `LocalDatabase` is never closed and the SQLite WAL is never checkpointed. The launch sweep used a 500 ms ladder until 2026-09-12; that is how the WAL reached 60-76 MB. Guarded by `engine_termination_tests` in `desktop/src-tauri/src/lib.rs`.
+
+8. **The engine is a TREE, not a pid.** On macOS the process Rust owns is the PyInstaller bootloader; the Python interpreter holding `~/.matrx/matrx.db` is its child (live pair 2026-09-12: 70236 → 70291). SIGTERM is forwarded down, SIGKILL is not — so Rust signals and WAITS ON both, and force-kills both. It filters descendants by the engine command-line pattern, so rule 1 still holds: cloudflared and the other engine children are never signalled by Rust.
 
 ---
 

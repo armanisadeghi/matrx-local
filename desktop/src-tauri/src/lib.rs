@@ -105,6 +105,207 @@ struct FetchResponse {
     final_url: String,
 }
 
+// ── Engine termination ladder (shared by the launch sweep and the quit path) ─
+//
+// An engine process that is SIGKILLed mid-teardown never runs the FastAPI
+// lifespan shutdown, so `LocalDatabase` is never closed and the SQLite WAL is
+// never checkpointed. Arman's machine reached a 60-76 MB WAL that could not
+// check itself in, 2026-09-11/12. Anything in this file that terminates an
+// engine therefore has to give it the SAME teardown budget the quit path
+// already gives it (`sigterm_then_kill`, 20 s) before escalating.
+
+/// Single regex covering every engine binary name we have ever shipped:
+/// the macOS Helper-app process name ("Matrx Engine"), the Linux flat binary
+/// ("matrx-engine"), and the legacy "aimatrx-engine" name from older installs.
+/// Matched against the FULL command line (`pgrep -f` / `pkill -f`).
+#[cfg(unix)]
+const ENGINE_PATTERN: &str = "Matrx Engine|matrx-engine|aimatrx-engine";
+
+/// Knob (org/operator-settable, never hardcoded taste): how long an engine
+/// process gets to finish its OWN teardown after SIGTERM before a sweep
+/// escalates to SIGKILL. Default matches the engine's documented lifespan
+/// budget (wake-word 3 s + scheduler 3 s + proxy 4 s + tunnel 5 s + scraper
+/// 5 s + browsers 3 s + margin ≈ 25 s).
+const DEFAULT_ORPHAN_TERM_GRACE_MS: u64 = 25_000;
+const ORPHAN_TERM_GRACE_ENV: &str = "MATRX_ORPHAN_TERM_GRACE_MS";
+const ORPHAN_TERM_GRACE_MIN_MS: u64 = 100;
+const ORPHAN_TERM_GRACE_MAX_MS: u64 = 120_000;
+
+/// Resolve the grace period from a configured value. Returns the value to use
+/// plus a complaint the caller MUST log when the configured value was ignored
+/// — nothing fails silently.
+fn resolve_orphan_term_grace_ms(configured: Option<&str>) -> (u64, Option<String>) {
+    let Some(raw) = configured else {
+        return (DEFAULT_ORPHAN_TERM_GRACE_MS, None);
+    };
+    let trimmed = raw.trim();
+    match trimmed.parse::<u64>() {
+        Ok(ms) if (ORPHAN_TERM_GRACE_MIN_MS..=ORPHAN_TERM_GRACE_MAX_MS).contains(&ms) => (ms, None),
+        Ok(ms) => (
+            DEFAULT_ORPHAN_TERM_GRACE_MS,
+            Some(format!(
+                "{ORPHAN_TERM_GRACE_ENV}={ms} is outside the allowed \
+                 {ORPHAN_TERM_GRACE_MIN_MS}-{ORPHAN_TERM_GRACE_MAX_MS} ms range — using the \
+                 {DEFAULT_ORPHAN_TERM_GRACE_MS} ms default. Remedy: set it inside that range \
+                 or unset it."
+            )),
+        ),
+        Err(_) => (
+            DEFAULT_ORPHAN_TERM_GRACE_MS,
+            Some(format!(
+                "{ORPHAN_TERM_GRACE_ENV}={trimmed:?} is not a whole number of milliseconds — \
+                 using the {DEFAULT_ORPHAN_TERM_GRACE_MS} ms default. Remedy: set it to an \
+                 integer between {ORPHAN_TERM_GRACE_MIN_MS} and {ORPHAN_TERM_GRACE_MAX_MS}."
+            )),
+        ),
+    }
+}
+
+/// The grace period this process will grant, with any misconfiguration
+/// announced in lifecycle.log.
+fn orphan_term_grace() -> std::time::Duration {
+    let configured = std::env::var(ORPHAN_TERM_GRACE_ENV).ok();
+    let (ms, complaint) = resolve_orphan_term_grace_ms(configured.as_deref());
+    if let Some(complaint) = complaint {
+        lifecycle_log::log(&format!("[orphan-sweep] {complaint}"));
+    }
+    std::time::Duration::from_millis(ms)
+}
+
+/// What a termination ladder actually did. Every field is observed, not assumed.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SweepOutcome {
+    /// PIDs we sent SIGTERM to.
+    signalled: usize,
+    /// Exited on their own after SIGTERM (their teardown ran to completion).
+    exited_after_term: usize,
+    /// Still alive when the grace period expired — SIGKILLed.
+    killed: usize,
+    /// Still alive even after SIGKILL (unkillable / not ours / permission).
+    still_alive: usize,
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: kill(2) with signal 0 performs an existence/permission check
+    // and never delivers a signal.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+/// PIDs whose FULL command line matches `pattern`, excluding ourselves.
+#[cfg(unix)]
+fn pids_matching_cmdline(pattern: &str) -> Vec<u32> {
+    let own = std::process::id();
+    let output = match std::process::Command::new("pgrep").args(["-f", pattern]).output() {
+        Ok(output) => output,
+        Err(error) => {
+            lifecycle_log::log(&format!(
+                "[orphan-sweep] pgrep unavailable ({error}) — cannot enumerate engine \
+                 processes, so the launch sweep is skipped. Remedy: an orphaned engine may \
+                 still hold the port; quit it from Activity Monitor if the new engine fails \
+                 to bind."
+            ));
+            return Vec::new();
+        }
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .filter(|pid| *pid > 1 && *pid != own)
+        .collect()
+}
+
+/// Every descendant pid of `pid`, deepest first.
+///
+/// The macOS engine is a PyInstaller one-file bundle: the process Rust owns is
+/// the BOOTLOADER, and the real Python interpreter that holds the SQLite
+/// connection is its child (live example 2026-09-12: bootloader 70236 →
+/// engine 70291). SIGTERM is forwarded down by the bootloader, but SIGKILL
+/// cannot be — killing only the bootloader leaves the interpreter running,
+/// reparented to launchd, still holding ~/.matrx/matrx.db. Any force-kill must
+/// therefore take the descendants with it.
+#[cfg(unix)]
+fn descendant_pids(pid: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut frontier = vec![pid];
+    // Bounded so a pathological /malicious ppid cycle cannot spin forever.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for parent in frontier.drain(..) {
+            let Ok(output) = std::process::Command::new("pgrep")
+                .args(["-P", &parent.to_string()])
+                .output()
+            else {
+                continue;
+            };
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Ok(child) = line.trim().parse::<u32>() {
+                    if child > 1 && child != std::process::id() && !found.contains(&child) {
+                        found.push(child);
+                        next.push(child);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    found.reverse(); // deepest first
+    found
+}
+
+/// SIGTERM every pid, wait up to `grace` for each to exit on its own, then
+/// SIGKILL only the survivors.
+///
+/// This is the ladder the ENTIRE codebase must use to end an engine: a
+/// SIGKILL that lands before the engine's lifespan teardown finishes leaves
+/// SQLite un-checkpointed (see the module note above).
+#[cfg(unix)]
+fn terminate_pids_gracefully(pids: &[u32], grace: std::time::Duration) -> SweepOutcome {
+    use std::time::Instant;
+
+    let mut outcome = SweepOutcome::default();
+    let mut pending: Vec<u32> = Vec::new();
+    for &pid in pids {
+        if pid <= 1 || pid == std::process::id() {
+            continue;
+        }
+        // SAFETY: kill(2) on a pid we enumerated ourselves; failure is reported.
+        let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
+        if sent {
+            outcome.signalled += 1;
+            pending.push(pid);
+        }
+    }
+    if pending.is_empty() {
+        return outcome;
+    }
+
+    let deadline = Instant::now() + grace;
+    while !pending.is_empty() {
+        pending.retain(|pid| process_alive(*pid));
+        outcome.exited_after_term = outcome.signalled - pending.len();
+        if pending.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    for pid in pending {
+        // SAFETY: same as above.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if process_alive(pid) {
+            outcome.still_alive += 1;
+        } else {
+            outcome.killed += 1;
+        }
+    }
+    outcome
+}
+
 /// Kill orphaned engine sidecar processes from a previous session.
 ///
 /// **Ownership note (see docs/official/lifecycle-ownership.md):**
@@ -158,44 +359,63 @@ fn kill_orphaned_sidecars() {
     }
     #[cfg(unix)]
     {
-        // Single regex covers the macOS Helper-app process name ("Matrx Engine"),
-        // the Linux flat binary ("matrx-engine"), and the legacy "aimatrx-engine"
-        // name from older installs. pkill -f matches against the full command
-        // line, so a substring of the executable path is enough.
-        const ENGINE_PATTERN: &str = "Matrx Engine|matrx-engine|aimatrx-engine";
-
-        // pkill exit code 0 = at least one process matched (i.e. we actually
-        // killed something). Log the sweep either way, but flag real kills —
-        // this sweep SIGTERMs any running engine, so an unexplained engine
-        // death should be attributable to this line in lifecycle.log.
-        let term = std::process::Command::new("pkill")
-            .args(["-TERM", "-f", ENGINE_PATTERN])
-            .output();
-        let matched = term.map(|o| o.status.success()).unwrap_or(false);
-        // Forensic honesty: pkill -f matches the FULL CMDLINE, so a hit can be
-        // any process whose argv merely mentions an engine binary name (a
-        // `tail -f …/matrx-engine.log`, an editor). Log what pkill proved —
-        // "matched something engine-like" — not more.
-        lifecycle_log::log(&format!(
-            "[orphan-sweep] pkill -TERM engine pattern → {}",
-            if matched {
-                "matched ≥1 process with an engine-like cmdline (SIGTERM sent)"
-            } else {
-                "no match (clean)"
+        // Enumerate first, then run the shared SIGTERM→wait→SIGKILL ladder.
+        //
+        // The previous implementation was `pkill -TERM` / sleep 500 ms /
+        // `pkill -KILL`. 500 ms is 50x shorter than the engine's own teardown
+        // budget, so ANY orphan found at launch — and any engine still tearing
+        // down from a restart moments earlier — was force-killed before its
+        // FastAPI lifespan shutdown could close `LocalDatabase`. That is how a
+        // WAL reaches 60-76 MB with no checkpoint (observed 2026-09-11/12).
+        // The ladder below gives it the same budget the quit path already does.
+        // A survivor is an engine whose parent is NOT this desktop process.
+        // Our own children are never sweep targets (this sweep only runs before
+        // the first spawn, but the exclusion makes that correct by construction
+        // rather than by ordering).
+        let ours = descendant_pids(std::process::id());
+        let pids: Vec<u32> = pids_matching_cmdline(ENGINE_PATTERN)
+            .into_iter()
+            .filter(|candidate| !ours.contains(candidate))
+            .collect();
+        if pids.is_empty() {
+            lifecycle_log::log("[orphan-sweep] no engine-like process found (clean)");
+        } else {
+            // Forensic honesty: `pgrep -f` matches the FULL CMDLINE, so a hit
+            // can be any process whose argv merely mentions an engine binary
+            // name (a `tail -f …/matrx-engine.log`, an editor). Log what we
+            // actually proved — "matched something engine-like" — not more.
+            let grace = orphan_term_grace();
+            lifecycle_log::log(&format!(
+                "[orphan-sweep] {} process(es) with an engine-like cmdline {:?} — SIGTERM sent, \
+                 waiting up to {}s for each to close its database and exit",
+                pids.len(),
+                pids,
+                grace.as_secs()
+            ));
+            let outcome = terminate_pids_gracefully(&pids, grace);
+            lifecycle_log::log(&format!(
+                "[orphan-sweep] ladder finished: signalled={} exited-cleanly={} sigkilled={} \
+                 still-alive={}",
+                outcome.signalled, outcome.exited_after_term, outcome.killed, outcome.still_alive
+            ));
+            if outcome.killed > 0 {
+                lifecycle_log::log(&format!(
+                    "[orphan-sweep] {} engine-like process(es) ignored SIGTERM for the full \
+                     {}s grace and were SIGKILLed — their SQLite teardown did NOT run, so the \
+                     WAL was not checkpointed. Remedy: check system.log for the last \
+                     [shutdown]/[launcher] lines to find what hung the teardown.",
+                    outcome.killed,
+                    grace.as_secs()
+                ));
             }
-        ));
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let kill = std::process::Command::new("pkill")
-            .args(["-KILL", "-f", ENGINE_PATTERN])
-            .output();
-        if kill.map(|o| o.status.success()).unwrap_or(false) {
-            // 500ms is far shorter than a legitimate engine teardown (~25s
-            // budget), so this line does NOT imply a hung engine — only that
-            // something engine-like was still alive when the SIGKILL pass ran.
-            lifecycle_log::log(
-                "[orphan-sweep] pkill -KILL still matched ≥1 engine-like process \
-                 500ms after SIGTERM (possibly mid-teardown); SIGKILL sent",
-            );
+            if outcome.still_alive > 0 {
+                lifecycle_log::log(&format!(
+                    "[orphan-sweep] {} process(es) survived SIGKILL — they are not ours to \
+                     kill (different user, or uninterruptible). Remedy: the new engine may \
+                     fail to bind its port; quit the stray from Activity Monitor.",
+                    outcome.still_alive
+                ));
+            }
         }
         // NOTE: cloudflared is intentionally NOT killed here. It is the
         // engine's child, and the engine's preflight reclaims it on startup.
@@ -679,13 +899,34 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
 
     let pid = child.pid();
 
+    // The pid we own is the PyInstaller BOOTLOADER; the interpreter that holds
+    // ~/.matrx/matrx.db is its child (live pair 2026-09-12: 70236 → 70291).
+    // The bootloader does forward SIGTERM, but we signal the interpreter too
+    // and — load-bearing — we WAIT ON THE WHOLE TREE. Waiting only on the
+    // bootloader would report "exited cleanly" while the interpreter was still
+    // mid-teardown, and the caller would exit the app out from under it.
+    let engine_tree = engine_descendants(pid, ENGINE_PATTERN);
+
     // Send SIGTERM — gives Python's signal handler time to run lifespan teardown.
     // SAFETY: kill(2) with SIGTERM is safe; the PID comes from our own child.
     let term_sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0;
+    for member in &engine_tree {
+        // SAFETY: same — enumerated engine descendants of our own child.
+        unsafe { libc::kill(*member as libc::pid_t, libc::SIGTERM) };
+    }
     lifecycle_log::log(&format!(
-        "[sigterm_then_kill] SIGTERM → engine pid {} ({})",
+        "[sigterm_then_kill] SIGTERM → engine pid {}{} ({})",
         pid,
-        if term_sent { "delivered; waiting up to 20s for clean exit" } else { "delivery FAILED — process already gone?" }
+        if engine_tree.is_empty() {
+            String::new()
+        } else {
+            format!(" + interpreter child(ren) {engine_tree:?}")
+        },
+        if term_sent {
+            "delivered; waiting for the whole engine tree to exit"
+        } else {
+            "delivery FAILED — process already gone?"
+        }
     ));
 
     let mut exited_cleanly = false;
@@ -694,11 +935,12 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
         // budget is ~25s total (wake-word 3s + scheduler 3s + proxy 4s + tunnel 5s
         // + scraper 5s + browsers 3s + margin). 20s lets most phases complete;
         // if it's still alive, SIGKILL ensures we don't hang the Tauri exit.
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + orphan_term_grace();
         loop {
             std::thread::sleep(Duration::from_millis(100));
             // kill(pid, 0) = existence check; ESRCH means the process exited.
-            let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+            // The tree is only down when the interpreter is down too.
+            let alive = process_alive(pid) || engine_tree.iter().copied().any(process_alive);
             if !alive {
                 exited_cleanly = true;
                 break;
@@ -710,17 +952,75 @@ fn sigterm_then_kill(child: tauri_plugin_shell::process::CommandChild) {
     }
 
     if exited_cleanly {
-        lifecycle_log::log(&format!("[sigterm_then_kill] engine pid {} exited cleanly after SIGTERM", pid));
+        lifecycle_log::log(&format!(
+            "[sigterm_then_kill] engine tree rooted at pid {} exited cleanly after SIGTERM",
+            pid
+        ));
     } else {
         lifecycle_log::log(&format!(
-            "[sigterm_then_kill] engine pid {} did NOT exit within 20s — escalating to SIGKILL \
+            "[sigterm_then_kill] engine pid {} did NOT exit within its grace period — escalating to SIGKILL \
              (its lifespan teardown hung; check system.log for the last [shutdown]/[launcher] lines)",
             pid
         ));
     }
 
     // Final guarantee: SIGKILL if it did not exit in time (or SIGTERM failed).
+    // Take the descendants first — `child.kill()` reaches only the PyInstaller
+    // bootloader, and the Python interpreter underneath it is the process that
+    // actually holds the SQLite connection (see `descendant_pids`).
+    if !exited_cleanly {
+        force_kill_tree(pid, ENGINE_PATTERN);
+    }
     let _ = child.kill();
+}
+
+/// Descendants of `pid` that are THEMSELVES engine processes (their command
+/// line matches `pattern`) — i.e. the PyInstaller interpreter under the
+/// bootloader, and nothing else.
+///
+/// The filter is what keeps the lifecycle ownership rule intact
+/// (docs/official/lifecycle-ownership.md): Rust signals engines and nothing
+/// else. cloudflared, the scraper, Playwright and friends are the ENGINE's
+/// children and it stops them in its own lifespan teardown; Rust reaching
+/// across to them is what produces "ended unexpectedly" crash reports.
+#[cfg(unix)]
+fn engine_descendants(pid: u32, pattern: &str) -> Vec<u32> {
+    let engine_like = pids_matching_cmdline(pattern);
+    descendant_pids(pid)
+        .into_iter()
+        .filter(|candidate| engine_like.contains(candidate))
+        .collect()
+}
+
+/// SIGKILL `pid` and every engine descendant of it, deepest first.
+///
+/// Killing only the top pid is what leaves an orphaned engine behind: the pid
+/// Rust owns is the PyInstaller bootloader, and the Python interpreter holding
+/// ~/.matrx/matrx.db is its child. Returns the descendants it signalled.
+#[cfg(unix)]
+fn force_kill_tree(pid: u32, pattern: &str) -> Vec<u32> {
+    let strays = engine_descendants(pid, pattern);
+    if !strays.is_empty() {
+        lifecycle_log::log(&format!(
+            "[force-kill] SIGKILL reaching {} engine descendant(s) of pid {} {:?} — the \
+             PyInstaller bootloader cannot forward SIGKILL, so without this they survive as \
+             orphans still holding ~/.matrx/matrx.db. Remedy: none needed here, but a healthy \
+             engine should have exited on SIGTERM — check system.log for the last \
+             [shutdown]/[launcher] lines to see what hung its teardown.",
+            strays.len(),
+            pid,
+            strays
+        ));
+    }
+    for stray in &strays {
+        // SAFETY: kill(2) on a pid we enumerated as our own descendant.
+        unsafe { libc::kill(*stray as libc::pid_t, libc::SIGKILL) };
+    }
+    if pid > 1 && pid != std::process::id() {
+        // SAFETY: same.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+    strays
 }
 
 /// Windows: no SIGTERM concept. Use `taskkill /F /T /PID` to forcibly
@@ -800,23 +1100,32 @@ fn spawn_detached_shutdown_safety_net() {
         );
         return;
     }
-    lifecycle_log::log(
+    // The SIGKILL rung comes from the SAME knob as every other engine
+    // termination path, and is deliberately set 3s LATER than the primary
+    // `sigterm_then_kill` wait so this net can never preempt a healthy
+    // teardown that is still closing SQLite.
+    let grace_secs = orphan_term_grace().as_secs().max(1);
+    let kill_after_secs = grace_secs + 3;
+    lifecycle_log::log(&format!(
         "[safety-net] detached shutdown safety net spawned — pkill -TERM at T+1s, \
-         pkill -KILL at T+26s for any engine/cloudflared/llama-server strays",
-    );
+         pkill -KILL at T+{}s for any engine/cloudflared/llama-server strays",
+        kill_after_secs + 1
+    ));
     #[cfg(unix)]
     {
-        let script = "\
+        let script = format!(
+            "\
             sleep 1; \
             pkill -TERM -f '[M]atrx Engine|[m]atrx-engine|[a]imatrx-engine' 2>/dev/null; \
-            sleep 25; \
+            sleep {kill_after_secs}; \
             pkill -KILL -f '[M]atrx Engine|[m]atrx-engine|[a]imatrx-engine' 2>/dev/null; \
             pkill -KILL -f '[c]loudflared tunnel' 2>/dev/null; \
             pkill -KILL -f '[l]lama-server' 2>/dev/null; \
-            true";
+            true"
+        );
 
         let mut cmd = std::process::Command::new("sh");
-        cmd.args(["-c", script])
+        cmd.args(["-c", script.as_str()])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -2477,5 +2786,201 @@ mod isolation_tests {
     fn isolated_smoke_disables_global_process_sweeps() {
         assert!(!global_process_sweeps_allowed(true));
         assert!(global_process_sweeps_allowed(false));
+    }
+}
+
+/// Forcing-function guards for the engine termination ladder.
+///
+/// These spawn REAL detached processes and send REAL signals. They never touch
+/// the global engine pattern — only PIDs the test itself created — so running
+/// the suite on a machine with a live AI Matrx install cannot kill its engine.
+#[cfg(all(test, unix))]
+mod engine_termination_tests {
+    use super::{
+        orphan_term_grace, resolve_orphan_term_grace_ms, terminate_pids_gracefully,
+        DEFAULT_ORPHAN_TERM_GRACE_MS,
+    };
+    use std::time::{Duration, Instant};
+
+    /// Spawn a detached `sh` (reparented to init, so it never becomes our
+    /// zombie and `kill(pid, 0)` tells the truth) and return its pid.
+    fn spawn_detached(script: &str) -> u32 {
+        let out = std::process::Command::new("sh")
+            .args(["-c", &format!("{{ {script} }} >/dev/null 2>&1 & echo $!")])
+            .output()
+            .expect("spawn test process");
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("pid from detached spawn")
+    }
+
+    /// Reaps the test's own processes even when an assertion panics, so a red
+    /// guard never litters the machine with stray loops.
+    struct Reaper(Vec<u32>);
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            for pid in self.0.drain(..) {
+                for stray in super::descendant_pids(pid) {
+                    unsafe { libc::kill(stray as libc::pid_t, libc::SIGKILL) };
+                }
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+        }
+    }
+
+    fn temp_marker(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("matrx-sweep-guard-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn wait_until_running(pid: u32) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if super::process_alive(pid) {
+                // Give sh time to install its trap before we signal it.
+                std::thread::sleep(Duration::from_millis(300));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("test process {pid} never started");
+    }
+
+    /// THE GUARD. An engine that answers SIGTERM but needs seconds to close
+    /// SQLite must be allowed to finish. The shipped launch sweep gave it
+    /// 500 ms and SIGKILLed it mid-teardown, which is how the WAL grew to
+    /// 60-76 MB without a checkpoint.
+    #[test]
+    fn a_slow_but_well_behaved_engine_finishes_its_teardown_before_sigkill() {
+        let marker = temp_marker("graceful");
+        let script = format!(
+            "trap 'sleep 2; : > {m}; exit 0' TERM; while :; do sleep 0.1; done",
+            m = marker.display()
+        );
+        let pid = spawn_detached(&script);
+        wait_until_running(pid);
+        let _reaper = Reaper(vec![pid]);
+
+        let outcome = terminate_pids_gracefully(&[pid], orphan_term_grace());
+
+        assert_eq!(outcome.signalled, 1, "SIGTERM must reach the process");
+        assert_eq!(
+            outcome.killed, 0,
+            "a process that is tearing down cleanly must never be SIGKILLed \
+             (killed={} still_alive={})",
+            outcome.killed, outcome.still_alive
+        );
+        assert_eq!(outcome.exited_after_term, 1, "it must exit by its own hand");
+        assert!(
+            marker.exists(),
+            "the process never reached the end of its teardown — it was killed \
+             before it could close its database"
+        );
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    /// The other half: a genuinely hung engine must still be force-killed, so
+    /// a generous grace period can never hang app launch forever.
+    #[test]
+    fn a_hung_engine_is_still_sigkilled_when_the_grace_period_expires() {
+        let script = "trap '' TERM; while :; do sleep 0.1; done";
+        let pid = spawn_detached(script);
+        wait_until_running(pid);
+        let _reaper = Reaper(vec![pid]);
+
+        let started = Instant::now();
+        let outcome = terminate_pids_gracefully(&[pid], Duration::from_millis(700));
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome.signalled, 1);
+        assert_eq!(outcome.exited_after_term, 0);
+        assert_eq!(outcome.killed, 1, "a hung process must be SIGKILLed");
+        assert_eq!(outcome.still_alive, 0);
+        assert!(!super::process_alive(pid), "it must actually be gone");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the ladder must not outlast its grace period by much (took {elapsed:?})"
+        );
+    }
+
+    #[test]
+    fn the_grace_period_is_a_knob_with_a_teardown_sized_default() {
+        assert_eq!(resolve_orphan_term_grace_ms(None).0, DEFAULT_ORPHAN_TERM_GRACE_MS);
+        assert_eq!(resolve_orphan_term_grace_ms(Some("4000")), (4000, None));
+        assert_eq!(resolve_orphan_term_grace_ms(Some(" 4000 ")), (4000, None));
+        // Out of range and unparseable both fall back AND complain.
+        for bad in ["0", "99", "999999", "soon", ""] {
+            let (ms, complaint) = resolve_orphan_term_grace_ms(Some(bad));
+            assert_eq!(ms, DEFAULT_ORPHAN_TERM_GRACE_MS, "{bad} must fall back");
+            assert!(complaint.is_some(), "{bad} must not fail silently");
+            assert!(
+                complaint.unwrap().contains("Remedy"),
+                "{bad}'s complaint must carry a remedy"
+            );
+        }
+    }
+
+    /// THE SECOND GUARD. The engine Rust owns on macOS is the PyInstaller
+    /// bootloader; the Python interpreter that holds ~/.matrx/matrx.db is its
+    /// CHILD. SIGKILLing only the pid we own reparents that interpreter to
+    /// launchd and leaves it running — the orphaned engine Arman saw.
+    #[test]
+    fn force_killing_the_engine_takes_its_interpreter_child_with_it() {
+        // parent sh spawns a child sh; both ignore SIGTERM so only the force
+        // path can end them — exactly the escalation case.
+        let ready = temp_marker("tree-ready");
+        // A marker unique to this test stands in for the engine command-line
+        // pattern, so the test proves the REAL rule: only descendants that are
+        // themselves engine processes get signalled.
+        let marker = format!("matrx-guard-fake-engine-{}", std::process::id());
+        let script = format!(
+            ": {m}; trap '' TERM; {{ trap '' TERM; while :; do sleep 0.1; done; }} & \
+             echo $! > {r}; while :; do sleep 0.1; done",
+            r = ready.display(),
+            m = marker
+        );
+        let parent = spawn_detached(&script);
+        wait_until_running(parent);
+        let _reaper = Reaper(vec![parent]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let child: u32 = std::fs::read_to_string(&ready)
+            .expect("child pid file")
+            .trim()
+            .parse()
+            .expect("child pid");
+        let _ = std::fs::remove_file(&ready);
+        assert!(super::process_alive(child), "child must be running");
+
+        let strays = super::engine_descendants(parent, &marker);
+        assert!(
+            strays.contains(&child),
+            "descendant enumeration missed the interpreter child ({child} not in {strays:?})"
+        );
+
+        super::force_kill_tree(parent, &marker);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!super::process_alive(parent), "the bootloader must be gone");
+        assert!(
+            !super::process_alive(child),
+            "the interpreter child survived the force-kill — it is now an orphan \
+             holding the database"
+        );
+    }
+
+    /// The ladder must refuse to signal pid 1 or ourselves no matter what an
+    /// enumeration hands it.
+    #[test]
+    fn the_ladder_never_signals_init_or_itself() {
+        let outcome = terminate_pids_gracefully(
+            &[0, 1, std::process::id()],
+            Duration::from_millis(100),
+        );
+        assert_eq!(outcome, super::SweepOutcome::default());
     }
 }

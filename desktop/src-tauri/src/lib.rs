@@ -21,6 +21,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 mod lifecycle_log;
+mod native_vault;
 
 mod transcription;
 use transcription::commands::*;
@@ -116,6 +117,8 @@ struct NativeVaultProviderStatus {
     signing_profile: &'static str,
     ready: bool,
     message: String,
+    state: &'static str,
+    last_configured_subject: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -134,6 +137,7 @@ fn native_vault_provider_status() -> NativeVaultProviderStatus {
     #[cfg(target_os = "macos")]
     {
         let built = native_vault_provider_appex_path().is_some_and(|path| path.is_dir());
+        let historical = native_vault::status();
         return NativeVaultProviderStatus {
             supported: true,
             artifact: if built { "built" } else { "not_built" },
@@ -141,7 +145,7 @@ fn native_vault_provider_status() -> NativeVaultProviderStatus {
             // Reporting ready here would turn a source build into a false
             // installed-provider claim.
             os_enablement: "unverified",
-            enrollment: "not_connected",
+            enrollment: historical.state,
             signing_profile: "not_verified",
             ready: false,
             message: if built {
@@ -149,6 +153,8 @@ fn native_vault_provider_status() -> NativeVaultProviderStatus {
             } else {
                 "This build does not include the native Vault provider. A packaged macOS build is required before enablement can be checked.".into()
             },
+            state: historical.state,
+            last_configured_subject: historical.last_configured_subject,
         };
     }
     #[cfg(not(target_os = "macos"))]
@@ -160,7 +166,19 @@ fn native_vault_provider_status() -> NativeVaultProviderStatus {
         signing_profile: "not_supported",
         ready: false,
         message: "Native Vault AutoFill is currently a macOS-only provider shell.".into(),
+        state: "unsupported_platform",
+        last_configured_subject: None,
     }
+}
+
+#[tauri::command]
+fn invalidate_native_vault_host_actor() -> native_vault::TransitionResult {
+    native_vault::invalidate()
+}
+
+#[tauri::command]
+fn reconcile_native_vault_host_actor(subject: Option<String>) -> native_vault::TransitionResult {
+    native_vault::reconcile(subject)
 }
 
 // ── Engine termination ladder (shared by the launch sweep and the quit path) ─
@@ -2206,6 +2224,8 @@ pub fn run() {
             get_close_to_tray,
             check_for_updates,
             native_vault_provider_status,
+            invalidate_native_vault_host_actor,
+            reconcile_native_vault_host_actor,
             set_compact_mode,
             proxy_fetch,
             get_pending_oauth_url,

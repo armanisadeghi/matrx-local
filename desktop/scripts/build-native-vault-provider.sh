@@ -56,10 +56,19 @@ mkdir -p "$CONTENTS/MacOS"
   -sdk "$SDK_PATH" \
   -framework AppKit \
   -framework AuthenticationServices \
+  -framework CryptoKit \
+  -framework LocalAuthentication \
+  -framework Security \
   "$SOURCE/CredentialProviderViewController.swift" \
   -o "$CONTENTS/MacOS/VaultProvider"
 cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"
 cp "$SOURCE/VaultProvider.entitlements" "$CONTENTS/VaultProvider.entitlements"
+VAULT_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY:-}"
+if [[ -z "$VAULT_PUBLISHABLE_KEY" || ! "$VAULT_PUBLISHABLE_KEY" =~ ^[!-~]+$ ]]; then
+  echo "ERROR: VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY must be supplied as an allowlisted printable public build input." >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c "Set :MatrxVaultSupabasePublishableKey $VAULT_PUBLISHABLE_KEY" "$CONTENTS/Info.plist"
 plutil -lint "$CONTENTS/Info.plist" >/dev/null
 plutil -lint "$CONTENTS/VaultProvider.entitlements" >/dev/null
 

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { exchangeOAuthCode, clearOAuthState } from "@/lib/oauth";
 import supabase from "@/lib/supabase";
 import { Loader2, AlertTriangle } from "lucide-react";
+import { invalidateNativeVaultBeforeHostMutation } from "@/lib/native-vault-auth";
 
 /**
  * AuthCallback — handles the OAuth code exchange in the web dev browser.
@@ -59,6 +60,7 @@ export function AuthCallback() {
 
       // ── Step 3: Exchange the code for tokens ─────────────────────────────
       try {
+        await invalidateNativeVaultBeforeHostMutation();
         console.log("[AuthCallback] exchanging code for tokens...");
         const tokens = await exchangeOAuthCode(
           code,

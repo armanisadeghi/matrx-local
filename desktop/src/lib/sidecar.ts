@@ -54,16 +54,30 @@ export interface NativeVaultProviderStatus {
   supported: boolean;
   artifact: "built" | "not_built" | "not_supported";
   os_enablement: "unverified" | "not_supported";
-  enrollment: "not_connected" | "not_supported";
+  enrollment: "uninitialized" | "configured" | "invalidated" | "state_corrupt" | "busy" | "state_unavailable" | "unsupported_platform";
   signing_profile: "not_verified" | "not_supported";
   ready: false;
   message: string;
+  state: string;
+  last_configured_subject: string | null;
 }
 
 export async function getNativeVaultProviderStatus(): Promise<NativeVaultProviderStatus | null> {
   const inv = await loadTauriInvoke();
   if (!inv) return null;
   return inv<NativeVaultProviderStatus>("native_vault_provider_status");
+}
+
+export type NativeVaultTransition = "applied" | "unchanged" | "state_unavailable" | "state_corrupt" | "busy" | "unsupported_platform";
+
+export async function invalidateNativeVaultHostActor(): Promise<NativeVaultTransition | null> {
+  const inv = await loadTauriInvoke();
+  return inv ? inv<NativeVaultTransition>("invalidate_native_vault_host_actor") : null;
+}
+
+export async function reconcileNativeVaultHostActor(subject: string | null): Promise<NativeVaultTransition | null> {
+  const inv = await loadTauriInvoke();
+  return inv ? inv<NativeVaultTransition>("reconcile_native_vault_host_actor", { subject }) : null;
 }
 
 /**

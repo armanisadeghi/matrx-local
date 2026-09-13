@@ -27,12 +27,16 @@
         <key>NSExtensionAttributes</key>
         <dict>
             <key>ASCredentialProviderExtensionShowsConfigurationUI</key>
-            <false/>
+            <true/>
         </dict>
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.authentication-services-credential-provider-ui</string>
         <key>NSExtensionPrincipalClass</key>
         <string>VaultProvider.CredentialProviderViewController</string>
     </dict>
+    <key>MatrxVaultOAuthClientID</key>
+    <string>d8a02629-f5f2-4064-ab26-31da07f082fc</string>
+    <key>MatrxVaultSupabasePublishableKey</key>
+    <string>__MATRX_VAULT_PUBLISHABLE_KEY__</string>
 </dict>
 </plist>

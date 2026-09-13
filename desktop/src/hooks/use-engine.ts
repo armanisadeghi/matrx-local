@@ -13,6 +13,7 @@ import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-task
 import supabase from "@/lib/supabase";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { useWindowLeader } from "@/hooks/use-window-leader";
+import { reconcileNativeVaultAfterHostSession } from "@/lib/native-vault-auth";
 
 export type EngineStatus = "discovering" | "starting" | "connected" | "disconnected" | "error";
 
@@ -364,6 +365,7 @@ export function useEngine() {
   // This behaviour is identical on macOS, Windows, and Linux.
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setTimeout(() => { void reconcileNativeVaultAfterHostSession(session?.user.id ?? null).catch((error) => emitClientLog("warn", String(error), "auth")); }, 0);
       if (event === "SIGNED_IN") {
         if (statusRef.current === "connected") {
           if (!wsConnectedRef.current && session?.access_token) {
@@ -501,6 +503,12 @@ export function useEngine() {
         // blocking future auth reads, some engine calls obtain the current
         // token through getSession() and would self-deadlock inside this callback.
         setTimeout(async () => {
+          try {
+            await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
+          } catch (error) {
+            emitClientLog("warn", `Native Vault account fence failed: ${error}`, "auth");
+            return;
+          }
           if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
             if (session?.access_token && session?.user?.id) {
               // Push the JWT to Python so it persists across restarts —

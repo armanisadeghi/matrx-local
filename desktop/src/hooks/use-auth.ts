@@ -56,6 +56,7 @@ import {
   isOAuthPending,
 } from "@/lib/oauth";
 import { emitClientLog } from "@/hooks/use-client-log";
+import { invalidateNativeVaultBeforeHostMutation, reconcileNativeVaultAfterHostSession } from "@/lib/native-vault-auth";
 
 export interface AuthState {
   user: User | null;
@@ -118,7 +119,8 @@ export function useAuth() {
   useEffect(() => {
     mountedRef.current = true;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      try { await reconcileNativeVaultAfterHostSession(session?.user.id ?? null); } catch (error) { emitClientLog("warn", String(error), "auth"); }
       if (session) {
         emitClientLog("success", `Auth: session restored for ${session.user.email ?? session.user.id}`, "auth");
       } else {
@@ -135,6 +137,10 @@ export function useAuth() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      // Supabase holds its internal lock in this listener. Defer the native
+      // file-lock operation so it cannot deadlock token refresh, and fence
+      // dependent adoption on the serialized coordinator.
+      setTimeout(() => { void reconcileNativeVaultAfterHostSession(session?.user.id ?? null).catch((error) => emitClientLog("warn", String(error), "auth")); }, 0);
       // INITIAL_SESSION with no session is the normal signed-out boot state,
       // and SIGNED_OUT is a user action — neither is degraded functionality.
       emitClientLog(
@@ -207,6 +213,7 @@ export function useAuth() {
     const redirectUri = getRedirectUri();
 
     try {
+      await invalidateNativeVaultBeforeHostMutation();
       const { url, state: oauthState, codeVerifier } =
         await buildOAuthAuthorizeUrl({ redirectUri });
 
@@ -259,6 +266,7 @@ export function useAuth() {
   const completeOAuthExchange = useCallback(
     async (code: string, returnedState: string, redirectUri: string): Promise<boolean> => {
       try {
+        await invalidateNativeVaultBeforeHostMutation();
         const tokens = await exchangeOAuthCode(code, returnedState, redirectUri);
         clearOAuthState();
         clearOAuthPending();
@@ -294,6 +302,7 @@ export function useAuth() {
   const signInWithEmail = useCallback(
     async (email: string, password: string) => {
       update({ loading: true, error: null });
+      try { await invalidateNativeVaultBeforeHostMutation(); } catch (error) { update({ loading: false, error: String(error) }); return; }
 
       const { error } = await supabase.auth.signInWithPassword({
         email,
@@ -317,6 +326,7 @@ export function useAuth() {
     emitClientLog("cmd", "Sign-out initiated", "auth");
     update({ loading: true, error: null });
     try {
+      await invalidateNativeVaultBeforeHostMutation();
       const result = await Promise.race([
         supabase.auth.signOut(),
         new Promise<{ error: { message: string } }>((resolve) =>

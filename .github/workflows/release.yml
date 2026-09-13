@@ -552,7 +552,12 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
+          # Sealed: the release config adds the provider + host profile. Absent:
+          # the host-only config REMOVES the provider mapping that
+          # tauri.macos.conf.json carries for dev builds (JSON Merge Patch:
+          # null deletes the key), so the bundle never references an appex
+          # that was not built.
+          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && (env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && ' --config src-tauri/tauri.release.macos.conf.json' || ' --config src-tauri/tauri.release.macos.host-only.conf.json') || '' }}
 
       # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
       # The build scripts sign; this step PROVES the shipped artifact honors

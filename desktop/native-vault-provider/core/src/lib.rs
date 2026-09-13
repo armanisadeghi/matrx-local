@@ -814,7 +814,16 @@ mod tests {
     #[test]
     fn total_status_mapping_covers_all_bytes_and_fixed_named_groups() {
         for byte in 0_u8..=u8::MAX {
-            let _ = map_status(StatusCode::from(byte));
+            let expected = match byte {
+                0x19 => FixedError::CredentialExcluded,
+                0x2e => FixedError::NoCredentials,
+                0x27 | 0x2d | 0x2f | 0x3a | 0x3b | 0x3c | 0x3f => FixedError::VerificationDenied,
+                0x11 | 0x12 | 0x14 | 0x15 | 0x26 | 0x2b | 0x2c | 0x39 | 0x3e => {
+                    FixedError::InvalidRequest
+                }
+                _ => FixedError::OperationFailed,
+            };
+            assert_eq!(map_status(StatusCode::from(byte)), expected, "0x{byte:02x}");
         }
         assert_eq!(
             map_status(Ctap2Error::CredentialExcluded.into()),

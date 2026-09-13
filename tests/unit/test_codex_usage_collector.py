@@ -77,3 +77,10 @@ def test_one_shared_scan_survives_waiter_cancellation_and_rejects_other_range(mo
         resolved = await same
         assert resolved["collection"]["state"] == "refreshed"
     asyncio.run(exercise())
+
+
+def test_collaboration_transport_requires_exact_structured_namespace_and_name():
+    assert collector._is_collaboration_send_message({"namespace": "collaboration"}, "send_message")
+    assert not collector._is_collaboration_send_message({}, "send_message")
+    assert not collector._is_collaboration_send_message({"namespace": "tools"}, "send_message")
+    assert not collector._is_collaboration_send_message({"namespace": "collaboration"}, "send_message_to_thread")

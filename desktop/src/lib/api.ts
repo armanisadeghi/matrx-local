@@ -102,7 +102,7 @@ export interface CodexUsageMetric {
   cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
   reasoning_output_tokens: number; total_tokens: number; response_count: number;
   peer_message_call_ids?: number; peer_message_invocations?: number;
-  child_call_ids?: number; child_invocations?: number;
+  collaboration_message_calls?: number; child_call_ids?: number; child_invocations?: number;
   estimated_standard_credits?: number | null; credit_rate_known?: boolean;
 }
 
@@ -110,13 +110,13 @@ export interface CodexUsageSnapshot {
   collected_at: string;
   range: { start: string; end: string };
   collection: { state: "cached" | "refreshed" | "resumed"; in_progress: boolean };
-  coverage: { complete: boolean; scan_exhausted: boolean; scanned_files: number; indexed_files: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
+  coverage: { complete: boolean; scan_exhausted: boolean; index_available: boolean; scanned_files: number; indexed_files: number; successfully_read_candidates: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
   totals: CodexUsageMetric & { estimated_standard_credits: number };
   credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
   models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
   cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
   qualification: string[];
-  activity: { classification: string; outbound_peer_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
+  activity: { classification: string; outbound_peer_calls: number; collaboration_message_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
 }
 
 export interface CodexAllowanceLimit {

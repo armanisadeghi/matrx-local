@@ -299,3 +299,60 @@ async def test_route_feeds_current_delivery_evidence_into_facade(
     response = await routes.coding_session_provider_readiness()
 
     assert response == {"schema_version": 1, "providers": {}}
+
+
+@pytest.mark.anyio
+async def test_codex_capture_kill_switch_is_reported_and_a_stale_one_self_repairs(
+    tmp_path: Path,
+) -> None:
+    """2026-09-12: the Codex hook's permanent 'telemetry-launch-failed' marker
+    opened on one slow launch and stopped every Codex capture for 21 hours
+    with nothing on any screen. A fresh marker is the blocker it is; one older
+    than ten minutes is a stale transient the engine removes and reports."""
+    home = tmp_path / "home"
+    matrx_home = tmp_path / "matrx"
+    data = home / ".codex/plugins/data/matrx-codex-plugin-ai-matrx"
+    (data / "coding-session-bridge").mkdir(parents=True)
+    marker = data / "telemetry-launch-failed"
+    marker.mkdir()
+    now = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
+
+    async def versions(executable: str) -> str | None:
+        return None
+
+    def facade() -> ProviderReadinessFacade:
+        return ProviderReadinessFacade(
+            home=home,
+            matrx_home=matrx_home,
+            applications=tmp_path / "Applications",
+            process_probe=lambda: set(),
+            which_probe=lambda name: None,
+            version_probe=versions,
+            now=lambda: now,
+        )
+
+    # Fresh marker (2 minutes old): reported, not removed.
+    stamp = (now - timedelta(minutes=2)).timestamp()
+    os.utime(marker, (stamp, stamp))
+    capture = (await facade().status({"providers": {}}))["providers"]["codex"]["capture"]
+    assert capture["state"] == "blocked"
+    assert capture["blocker"]["code"] == "codex_hook_launch_failed"
+    assert capture["blocker"]["remedy"]
+    assert marker.is_dir()
+
+    # Stale marker (11 minutes old): removed, and the repair is announced.
+    stamp = (now - timedelta(minutes=11)).timestamp()
+    os.utime(marker, (stamp, stamp))
+    capture = (await facade().status({"providers": {}}))["providers"]["codex"]["capture"]
+    assert capture["state"] == "ok" and capture["blocker"] is None
+    assert not marker.exists()
+    assert capture["repaired"] and "stale telemetry-launch-failed" in capture["repaired"][0]
+
+    # Runtime circuit open: reported with its own code.
+    runtime = data / "telemetry-runtime"
+    runtime.mkdir()
+    (runtime / "abc.status.json").write_text(
+        '{"status": "emitter_failed", "failures": 2, "disabled": true}', encoding="utf-8"
+    )
+    capture = (await facade().status({"providers": {}}))["providers"]["codex"]["capture"]
+    assert capture["runtime_disabled"] and capture["blocker"]["code"] == "codex_hook_runtime_disabled"

@@ -20,6 +20,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.common.system_logger import get_logger
+
+logger = get_logger()
+
 import psutil
 
 from app.config import MATRX_HOME_DIR
@@ -298,6 +302,77 @@ class ProviderReadinessFacade:
             "evidence": ["adapter_cache_detected"] if detected else [],
         }
 
+    def _codex_capture_health(self, now: datetime) -> dict[str, Any]:
+        """The Codex hook's own kill switches, read and — when stale — cleared.
+
+        The plugin's telemetry wrapper keeps three markers under PLUGIN_DATA:
+        ``telemetry-launch-failed`` (a directory: every hook returns nothing
+        while it exists), ``telemetry-slow`` (informational, never gates) and
+        ``telemetry-runtime/*.status.json`` (``disabled`` after two runtime
+        failures). Before 0.2.0-alpha.10 one 2-second overrun opened the
+        launch-failed marker PERMANENTLY: on 2026-09-12 that stopped every
+        Codex capture for 21 hours with nothing on any screen. A marker older
+        than ten minutes is a stale transient, so this engine removes it and
+        says so; a fresh one is reported as the blocker it is.
+        """
+        data = self._home / ".codex/plugins/data"
+        result: dict[str, Any] = {
+            "state": "unknown",
+            "launch_failed_marker": None,
+            "slow_marker": False,
+            "runtime_disabled": False,
+            "repaired": [],
+            "blocker": None,
+        }
+        try:
+            roots = [p for p in data.glob("matrx-codex-plugin-*") if p.is_dir()] if data.is_dir() else []
+        except OSError:
+            roots = []
+        if not roots:
+            return result
+        result["state"] = "ok"
+        for root in roots:
+            marker = root / "telemetry-launch-failed"
+            if marker.is_dir():
+                try:
+                    age = now.timestamp() - marker.stat().st_mtime
+                except OSError:
+                    age = 0.0
+                if age > 600:
+                    try:
+                        marker.rmdir()
+                        result["repaired"].append(
+                            f"removed stale telemetry-launch-failed marker ({int(age // 60)} min old) at {marker}"
+                        )
+                        continue
+                    except OSError:
+                        pass
+                result["launch_failed_marker"] = {"path": str(marker), "age_seconds": int(age)}
+                result["state"] = "blocked"
+                result["blocker"] = {
+                    "code": "codex_hook_launch_failed",
+                    "message": "The Codex plugin's telemetry hook found no working python3 and switched itself off; nothing from Codex is captured while this marker exists.",
+                    "remedy": "Make sure python3 runs from a terminal, then the marker clears itself within ten minutes (or delete the empty folder named in the details).",
+                }
+            if (root / "telemetry-slow").is_dir():
+                result["slow_marker"] = True
+            for status in (root / "telemetry-runtime").glob("*.status.json"):
+                value = _safe_json(status)
+                if isinstance(value, dict) and value.get("disabled"):
+                    result["runtime_disabled"] = True
+                    if result["blocker"] is None:
+                        result["state"] = "blocked"
+                        result["blocker"] = {
+                            "code": "codex_hook_runtime_disabled",
+                            "message": f"The Codex plugin's telemetry runtime disabled itself after repeated failures ({value.get('status')}); nothing from Codex is captured.",
+                            "remedy": "Reinstall or update the matrx-codex-plugin, then clear the .failures file named in PLUGIN_DATA/telemetry-runtime.",
+                        }
+        if result["repaired"]:
+            logger.warning(
+                "[provider_readiness] codex capture self-repair: %s", "; ".join(result["repaired"])
+            )
+        return result
+
     def _cursor_adapter(self) -> dict[str, Any]:
         manifests = list(
             _bounded_manifests(self._home / ".cursor/plugins", "plugin.json")
@@ -575,6 +650,7 @@ class ProviderReadinessFacade:
                 "display_name": _DISPLAY_NAMES[provider],
                 "product": product_state,
                 "adapter": adapter,
+                "capture": self._codex_capture_health(now) if provider == "codex" else None,
                 "upstream_spool": spool,
                 "activity": activity,
                 "connection": {

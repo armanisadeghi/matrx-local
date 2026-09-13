@@ -363,6 +363,7 @@ def initialize_matrx_ai() -> None:
     from app.services.ai.conversation_handler import get_conversation_store
     from app.services.ai.key_manager import get_key_resolver
     from app.services.ai.model_catalog import get_model_catalog
+    from app.services.ai.tool_source import OrganizationAwareToolSource
     execution_agent_source = None
     try:
         from matrx_ai.client_host.agent_source import ExecutionAgentSource  # noqa: F401
@@ -390,6 +391,19 @@ def initialize_matrx_ai() -> None:
         get_jwt=_get_jwt if server_url else None,
         server_url=server_url or None,
         source_app="matrx_local",
+        # The upstream derived ServerToolSource can forward a JWT but cannot
+        # name the active organization.  AIDream quite intentionally rejects
+        # that ambiguous request before routing; use the same transport as the
+        # rest of this client host instead.
+        tool_source=(
+            OrganizationAwareToolSource(
+                server_url=server_url,
+                source_app="matrx_local",
+                get_jwt=_get_jwt,
+            )
+            if server_url
+            else None
+        ),
     )
     if execution_agent_source is not None:
         configure_kwargs["execution_agent_source"] = execution_agent_source
@@ -492,38 +506,44 @@ async def load_tools_and_register() -> int:
     import contextlib
     import io
 
-    _tool_init_out = io.StringIO()
-    try:
-        from matrx_ai.tools.handle_tool_calls import initialize_tool_system
+    if _get_jwt():
+        _tool_init_out = io.StringIO()
         try:
-            with contextlib.redirect_stdout(_tool_init_out):
-                count = await initialize_tool_system()
-        finally:
-            captured = _tool_init_out.getvalue().strip()
-            if captured:
-                # Single line, ANSI stripped: the desktop log viewer classifies
-                # unprefixed continuation lines by keyword ("traceback", "error"
-                # …) which would put this right back into issue reports as ERR.
-                compact = re.sub(r"\x1b\[[0-9;]*m", "", captured)
-                compact = " | ".join(
-                    s for s in (p.strip() for p in compact.splitlines()) if s
+            from matrx_ai.tools.handle_tool_calls import initialize_tool_system
+            try:
+                with contextlib.redirect_stdout(_tool_init_out):
+                    count = await initialize_tool_system()
+            finally:
+                captured = _tool_init_out.getvalue().strip()
+                if captured:
+                    # Single line, ANSI stripped: the desktop log viewer classifies
+                    # unprefixed continuation lines by keyword ("traceback", "error"
+                    # …) which would put this right back into issue reports as ERR.
+                    compact = re.sub(r"\x1b\[[0-9;]*m", "", captured)
+                    compact = " | ".join(
+                        s for s in (p.strip() for p in compact.splitlines()) if s
+                    )
+                    logger.debug("[engine] matrx-ai tool init output: %s", compact)
+            if count:
+                logger.info(
+                    "[engine] matrx-ai: loaded %d tools from the server registry ✓", count
                 )
-                logger.debug("[engine] matrx-ai tool init output: %s", compact)
-        if count:
-            logger.info(
-                "[engine] matrx-ai: loaded %d tools from the server registry ✓", count
-            )
-        else:
+            else:
+                logger.warning(
+                    "[engine] matrx-ai: server tool registry returned 0 tools "
+                    "(offline or server unreachable) — falling back to the local "
+                    "tool catalog"
+                )
+        except Exception:
             logger.warning(
-                "[engine] matrx-ai: server tool registry returned 0 tools "
-                "(offline or server unreachable) — falling back to the local "
-                "tool catalog"
+                "[engine] matrx-ai: FAILED to load the server tool registry — "
+                "falling back to the local tool catalog",
+                exc_info=True,
             )
-    except Exception:
-        logger.warning(
-            "[engine] matrx-ai: FAILED to load the server tool registry — "
-            "falling back to the local tool catalog",
-            exc_info=True,
+    else:
+        logger.info(
+            "[engine] matrx-ai: server tool registry deferred until a verified "
+            "desktop session is available"
         )
 
     # --- Phase A½: backfill local tool definitions from the catalog ---
@@ -588,6 +608,33 @@ async def load_tools_and_register() -> int:
     _tools_loaded = local_tools_ok
     _registered_tool_count = registered_count
     return registered_count
+
+
+async def refresh_server_tool_definitions() -> int:
+    """Refresh server definitions after a verified desktop token hand-off.
+
+    Local tool executors are registered at process boot and remain usable
+    offline.  The server rows, however, cannot be fetched safely until the
+    desktop has handed over a JWT *and* its organization can be resolved.  Do
+    not let an anonymous boot latch the remote registry into an empty state.
+    """
+    if not _ai_initialized:
+        return 0
+    try:
+        from matrx_ai.tools.handle_tool_calls import initialize_tool_system
+
+        count = await initialize_tool_system()
+        from app.services.ai.remote_tool_bridge import get_remote_tool_bridge
+
+        await get_remote_tool_bridge().refresh()
+        return count
+    except Exception:
+        logger.warning(
+            "[engine] matrx-ai: authenticated server tool refresh failed; "
+            "local tools remain available and the next token hand-off will retry",
+            exc_info=True,
+        )
+        return 0
 
 
 def is_initialized() -> bool:

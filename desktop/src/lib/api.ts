@@ -3505,7 +3505,21 @@ class EngineAPI {
         expected_credential_revision: fence.credential_revision,
       }),
     });
-    if (!response.ok) throw new Error(`Token hand-off failed: ${response.status}`);
+    if (!response.ok) {
+      // Keep the server's stable code in the client error.  The auth
+      // lifecycle distinguishes a rejected Supabase session (which must be
+      // refreshed/sign-out) from a transient transport failure; reducing the
+      // response to an HTTP number made that recovery path unreachable.
+      const failed: unknown = await response.json().catch(() => null);
+      const detail = failed && typeof failed === "object"
+        ? (failed as { detail?: unknown }).detail
+        : null;
+      const code = detail && typeof detail === "object"
+        && typeof (detail as { code?: unknown }).code === "string"
+        ? (detail as { code: string }).code
+        : null;
+      throw new Error(`Token hand-off failed: ${response.status}${code ? ` (${code})` : ""}`);
+    }
     const receipt: unknown = await response.json().catch(() => null);
     if (!receipt || typeof receipt !== "object") throw new Error("Token hand-off receipt is malformed.");
     const acceptedReceipt = receipt as Record<string, unknown>;

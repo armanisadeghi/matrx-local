@@ -271,9 +271,16 @@ export function useEngine() {
         emitClientLog("warn", "Could not load browser status (non-critical)", "engine");
       }
 
-      // Connect WebSocket — only when we have a token; the server rejects
-      // unauthenticated WS connections with 403 and the auto-reconnect loop
-      // would hammer the server until auth is available.
+      // Establish the full engine session before starting any authenticated
+      // work.  A WebSocket can authenticate its own handshake, but it does
+      // not populate the engine's persisted JWT.  Previously startup treated
+      // a successful WebSocket as sufficient and started the idle queue; the
+      // first queued token hand-off could then be fenced by an auth event,
+      // leaving every REST request from the running desktop unauthenticated.
+      //
+      // The persisted hand-off is deliberately before the WebSocket: the
+      // local API is usable only once both current-account fencing and engine
+      // credential custody agree on this exact session.
       let acceptedSessionForTasks = false;
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -284,6 +291,13 @@ export function useEngine() {
           }
           const context = nativeVaultEngineTransitionContext(session.user?.id);
           if (!context) throw new Error("Native Vault account fence has not adopted this session");
+          await engine.syncTokenToPython(
+            session.access_token,
+            session.user.id,
+            context,
+            session.refresh_token ?? undefined,
+            session.expires_in ?? undefined,
+          );
           await engine.connectWebSocket(context);
           acceptedSessionForTasks = true;
           update({ wsConnected: true });

@@ -59,6 +59,7 @@ mkdir -p "$CONTENTS/MacOS"
   -framework CryptoKit \
   -framework LocalAuthentication \
   -framework Security \
+  "$SOURCE/NativeVaultCodec.swift" \
   "$SOURCE/CredentialProviderViewController.swift" \
   -o "$CONTENTS/MacOS/VaultProvider"
 cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"

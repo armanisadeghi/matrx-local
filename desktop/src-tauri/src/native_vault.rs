@@ -71,7 +71,22 @@ mod platform {
             libc::fstat(fd, &mut s) == 0
                 && s.st_uid == libc::geteuid()
                 && s.st_mode & libc::S_IFMT == kind
-                && s.st_mode & 0o777 == mode
+                && s.st_mode & 0o7777 == mode
+        }
+    }
+    /// The first native-Vault release created this directory through
+    /// `create_dir_all`, so the process umask left existing installs at 0755.
+    /// Tighten only that exact, owned predecessor through the already-opened
+    /// no-follow descriptor. Every other mismatch remains fail-closed.
+    fn ensure_private_dir(fd: i32) -> bool {
+        if valid(fd, libc::S_IFDIR, 0o700) {
+            return true;
+        }
+        if !valid(fd, libc::S_IFDIR, 0o755) {
+            return false;
+        }
+        unsafe {
+            libc::fchmod(fd, 0o700) == 0 && libc::fsync(fd) == 0 && valid(fd, libc::S_IFDIR, 0o700)
         }
     }
     fn owned_dir(fd: i32) -> bool {
@@ -125,7 +140,7 @@ mod platform {
         unsafe {
             libc::close(root_fd);
         }
-        if fd < 0 || !valid(fd, libc::S_IFDIR, 0o700) {
+        if fd < 0 || !ensure_private_dir(fd) {
             if fd >= 0 {
                 unsafe {
                     libc::close(fd);
@@ -521,6 +536,28 @@ mod platform {
             .unwrap();
             assert_eq!(status_at(root_text).state, "state_corrupt");
             std::fs::remove_dir_all(root).unwrap();
+        }
+        #[test]
+        fn mutating_path_repairs_only_the_owned_legacy_directory_mode() {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            let (path, _) = temp();
+            let vault = path.join("NativeVault");
+            std::fs::create_dir(&vault).unwrap();
+            std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o755)).unwrap();
+            let dir = File::open(&vault).unwrap();
+
+            assert!(ensure_private_dir(dir.as_raw_fd()));
+            assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o700);
+            assert!(
+                ensure_private_dir(dir.as_raw_fd()),
+                "the migrated mode stays valid"
+            );
+
+            std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o750)).unwrap();
+            assert!(!ensure_private_dir(dir.as_raw_fd()));
+            assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o750);
+            std::fs::remove_dir_all(path).unwrap();
         }
         #[test]
         fn flock_worker() {

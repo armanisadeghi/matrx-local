@@ -32,19 +32,9 @@ import {
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1) — never a local byte→unit body.
 import { formatFileSize } from "@ai-matrx/kit/format";
-
-/**
- * The DECODED byte length of base64 text — padding subtracted (2026-09-12).
- * `Math.round((b64.length * 3) / 4)` stood here and OVERSTATED every padded
- * body by one or two bytes: four base64 characters carry three bytes, and a
- * trailing `=` / `==` is exactly the bytes that were never there.
- */
-function base64ByteLength(b64: string): number {
-    const clean = b64.replace(/\s+/g, "");
-    if (clean.length === 0) return 0;
-    const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
-    return Math.floor((clean.length * 3) / 4) - padding;
-}
+// THE decoded byte length of base64 text (`@ai-matrx/kit/base64`,
+// duplication census) — padding subtracted, never a local `length * 3 / 4`.
+import { base64ByteLength } from "@ai-matrx/kit/base64";
 
 import { isTauri } from "@/lib/sidecar";
 

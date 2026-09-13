@@ -22,6 +22,33 @@ struct PrivateSession: Codable {
     let access_token: String
     let refresh_token: String
     let expires_at_ms: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case version, phase, subject, generation, access_token, refresh_token, expires_at_ms
+    }
+
+    init(version: Int, phase: String, subject: String, generation: String, access_token: String, refresh_token: String, expires_at_ms: Int64) {
+        self.version = version
+        self.phase = phase
+        self.subject = subject
+        self.generation = generation
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.expires_at_ms = expires_at_ms
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(phase, forKey: .phase)
+        try container.encode(subject, forKey: .subject)
+        try container.encode(generation, forKey: .generation)
+        try container.encode(expires_at_ms, forKey: .expires_at_ms)
+        if phase == "active" {
+            try container.encode(access_token, forKey: .access_token)
+            try container.encode(refresh_token, forKey: .refresh_token)
+        }
+    }
 }
 
 struct Token {
@@ -86,7 +113,7 @@ struct StrictJSON {
     }
 
     private mutating func object(_ depth: Int) throws -> [String: JSONValue] {
-        take(123)
+        try take(123)
         space()
         var result: [String: JSONValue] = [:]
         var keys = Set<String>()
@@ -97,16 +124,16 @@ struct StrictJSON {
             let key = try string()
             guard keys.insert(key).inserted else { throw Self.bad() }
             space()
-            take(58)
+            try take(58)
             result[key] = try value(depth + 1)
             space()
             if accept(125) { return result }
-            take(44)
+            try take(44)
         }
     }
 
     private mutating func array(_ depth: Int) throws -> [JSONValue] {
-        take(91)
+        try take(91)
         space()
         var result: [JSONValue] = []
         if accept(93) { return result }
@@ -114,12 +141,12 @@ struct StrictJSON {
             result.append(try value(depth + 1))
             space()
             if accept(93) { return result }
-            take(44)
+            try take(44)
         }
     }
 
     private mutating func string() throws -> String {
-        take(34)
+        try take(34)
         var result = ""
         var utf8 = [UInt8]()
         while index < bytes.count {
@@ -211,7 +238,9 @@ struct StrictJSON {
     }
     private mutating func space() { while index < bytes.count, [9, 10, 13, 32].contains(bytes[index]) { index += 1 } }
     private mutating func accept(_ byte: UInt8) -> Bool { guard index < bytes.count, bytes[index] == byte else { return false }; index += 1; return true }
-    private mutating func take(_ byte: UInt8) { guard accept(byte) else { fatalError("strict JSON internal grammar error") } }
+    private mutating func take(_ byte: UInt8) throws {
+        guard accept(byte) else { throw Self.bad() }
+    }
     private mutating func digit() -> Bool { guard index < bytes.count, bytes[index] >= 48, bytes[index] <= 57 else { return false }; index += 1; return true }
     private mutating func digit19() -> Bool { guard index < bytes.count, bytes[index] >= 49, bytes[index] <= 57 else { return false }; index += 1; return true }
     private static func bad() -> Error { EnrollmentError.message("Account response was rejected. Try again.") }
@@ -252,7 +281,12 @@ enum VaultEnvelopeCodec {
 
     static func publicState(_ data: Data) throws -> PublicState {
         guard data.count <= 2048 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
-        let object = try StrictEnvelope.object(data, required: ["version", "generation", "host_subject", "provider_subject"], optional: [])
+        let object: [String: JSONValue]
+        do {
+            object = try StrictEnvelope.object(data, required: ["version", "generation", "host_subject", "provider_subject"], optional: [])
+        } catch {
+            throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.")
+        }
         guard case .number("1")? = object["version"], case let .string(generation)? = object["generation"], generation.canonicalUUID, let host = optionalCanonicalUUID(object["host_subject"]), let provider = optionalCanonicalUUID(object["provider_subject"]) else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
         return PublicState(version: 1, generation: generation, host_subject: host, provider_subject: provider)
     }
@@ -270,7 +304,12 @@ enum VaultEnvelopeCodec {
 enum PrivateSessionCodec {
     static func decode(_ data: Data) throws -> PrivateSession {
         guard data.count <= 48 * 1024 else { throw corrupt() }
-        let object = try StrictEnvelope.object(data, required: ["version", "phase", "subject", "generation", "expires_at_ms"], optional: ["access_token", "refresh_token"])
+        let object: [String: JSONValue]
+        do {
+            object = try StrictEnvelope.object(data, required: ["version", "phase", "subject", "generation", "expires_at_ms"], optional: ["access_token", "refresh_token"])
+        } catch {
+            throw corrupt()
+        }
         guard case .number("1")? = object["version"], case let .string(phase)? = object["phase"], case let .string(subject)? = object["subject"], case let .string(generation)? = object["generation"], case let .number(expiry)? = object["expires_at_ms"], subject.canonicalUUID, generation.canonicalUUID, let expiryValue = Int64(expiry), expiryValue > 0 else { throw corrupt() }
         switch phase {
         case "active": guard case let .string(access)? = object["access_token"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken else { throw corrupt() }; return PrivateSession(version: 1, phase: phase, subject: subject, generation: generation, access_token: access, refresh_token: refresh, expires_at_ms: expiryValue)

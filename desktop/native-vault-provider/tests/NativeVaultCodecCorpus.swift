@@ -12,10 +12,12 @@ struct NativeVaultCodecCorpus {
             ("strict JSON rejects surrogate duplicate keys", strictJSONRejectsSurrogateDuplicate),
             ("strict JSON enforces depth eight", strictJSONEnforcesDepth),
             ("strict JSON validates UTF-8 and surrogate pairs", strictJSONValidatesUnicode),
+            ("strict JSON refuses malformed punctuation without process termination", strictJSONRejectsMalformedPunctuation),
             ("token envelope closes key, type, number, scope, and size contracts", tokenContract),
             ("userinfo envelope closes key, UUID, email, and bool contracts", userinfoContract),
             ("public state envelope closes exact nullable UUID contract", publicStateContract),
             ("private active and refresh-pending envelopes remain disjoint", privateSessionContract),
+            ("typed persisted envelopes map every parse failure to their fixed remedy", persistedEnvelopeErrors),
         ]
         var failures = 0
         for (name, body) in cases {
@@ -58,6 +60,12 @@ struct NativeVaultCodecCorpus {
         try rejects { try parse(Data([123, 34, 120, 34, 58, 34, 0xff, 34, 125])) }
         try rejects { try parse(data(#"{"word":"\uD800"}"#)) }
         try rejects { try parse(data(#"{"word":"\uDC00"}"#)) }
+    }
+
+    private static func strictJSONRejectsMalformedPunctuation() throws {
+        for malformed in [#"{"a" 1}"#, #"{"a":1 "b":2}"#, #"{"a":1,}"#, #"{"a":1x}"#] {
+            try rejects { try parse(data(malformed)) }
+        }
     }
 
     private static func tokenContract() throws {
@@ -106,6 +114,14 @@ struct NativeVaultCodecCorpus {
         let pending = #"{"version":1,"phase":"refresh_pending","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1}"#
         try accepts { let value = try PrivateSessionCodec.decode(data(active)); guard value.access_token == "access" else { throw CorpusFailure.badValue } }
         try accepts { let value = try PrivateSessionCodec.decode(data(pending)); guard value.access_token.isEmpty && value.refresh_token.isEmpty else { throw CorpusFailure.badValue } }
+        for (source, tokensExpected) in [(active, true), (pending, false)] {
+            let decoded = try PrivateSessionCodec.decode(data(source))
+            let encoded = try JSONEncoder().encode(decoded)
+            let object = try StrictEnvelope.object(encoded, required: ["version", "phase", "subject", "generation", "expires_at_ms"], optional: ["access_token", "refresh_token"])
+            let hasTokens = object["access_token"] != nil || object["refresh_token"] != nil
+            guard hasTokens == tokensExpected else { throw CorpusFailure.badValue }
+            _ = try PrivateSessionCodec.decode(encoded)
+        }
         for invalid in [
             #"{"version":1,"phase":"active","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1}"#,
             #"{"version":1,"phase":"refresh_pending","subject":"\#(subject)","generation":"\#(generation)","access_token":"access","expires_at_ms":1}"#,
@@ -114,6 +130,20 @@ struct NativeVaultCodecCorpus {
             #"{"version":1,"phase":"refresh_pending","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1,"unknown":true}"#,
         ] { try rejects { _ = try PrivateSessionCodec.decode(data(invalid)) } }
         try rejects { _ = try PrivateSessionCodec.decode(Data(repeating: 32, count: 48 * 1024 + 1)) }
+    }
+
+    private static func persistedEnvelopeErrors() throws {
+        let publicFailures = [#"{"version" 1}"#, #"[]"#, #"{"version":1,"version":1,"generation":"\#(generation)","host_subject":null,"provider_subject":null}"#, #"{"version":1,"generation":"\#(generation)","host_subject":null,"provider_subject":null,"unknown":true}"#, #"{"version":2,"generation":"\#(generation)","host_subject":null,"provider_subject":null}"#]
+        for value in publicFailures { try fixedError("Vault status is corrupt. Reconnect the provider.") { _ = try VaultEnvelopeCodec.publicState(data(value)) } }
+        let privateFailures = [#"{"version" 1}"#, #"[]"#, #"{"version":1,"version":1,"phase":"refresh_pending","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1}"#, #"{"version":1,"phase":"refresh_pending","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1,"unknown":true}"#, #"{"version":1,"phase":"active","subject":"\#(subject)","generation":"\#(generation)","expires_at_ms":1}"#]
+        for value in privateFailures { try fixedError("Vault session is corrupt. Reconnect the provider.") { _ = try PrivateSessionCodec.decode(data(value)) } }
+    }
+
+    private static func fixedError(_ expected: String, _ body: () throws -> Void) throws {
+        do { try body(); throw CorpusFailure.expectedRefusal }
+        catch let error as LocalizedError {
+            guard error.errorDescription == expected else { throw CorpusFailure.badValue }
+        }
     }
 }
 

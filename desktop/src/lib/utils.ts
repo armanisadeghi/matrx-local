@@ -6,9 +6,11 @@ import { extendTailwindMerge } from "tailwind-merge";
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
 import { formatDurationMs } from "@ai-matrx/kit/format";
-// Re-exported so the historical `formatBytes` specifier keeps working for
-// this module's callers; NEW code should import from kit directly.
-export { formatFileSize, formatFileSize as formatBytes } from "@ai-matrx/kit/format";
+// THE `formatBytes` ALIAS IS GONE (2026-09-12): a compatibility spelling of a
+// collapsed export puts its call sites outside the input guard that judges
+// what ENTERS formatFileSize. Nothing imported it from here; every caller in
+// this app already imports `formatFileSize` from "@ai-matrx/kit/format".
+export { formatFileSize } from "@ai-matrx/kit/format";
 /**
  * tailwind-merge does not know this app's `boxShadow.glass` theme entry, so it
  * files `shadow-glass` under shadow-COLOR and stops deduping it against

@@ -27,9 +27,10 @@ import type { GeneratedImageResult } from "@/hooks/use-media-gen";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-// Re-exported so the historical `formatBytes` specifier keeps working for
-// this module's callers; NEW code should import from kit directly.
-export { formatFileSize, formatFileSize as formatBytes } from "@ai-matrx/kit/format";
+// THE `formatBytes` ALIAS IS GONE (2026-09-12): a compatibility spelling of a
+// collapsed export puts its call sites outside the input guard. Callers import
+// `formatFileSize` from "@ai-matrx/kit/format" under its own name.
+export { formatFileSize } from "@ai-matrx/kit/format";
 /** Where the bytes actually live — decides which actions apply. */
 export type MediaSource =
   /** Plaintext media library (~/.matrx/media/generated). */

@@ -32,6 +32,20 @@ import {
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1) — never a local byte→unit body.
 import { formatFileSize } from "@ai-matrx/kit/format";
+
+/**
+ * The DECODED byte length of base64 text — padding subtracted (2026-09-12).
+ * `Math.round((b64.length * 3) / 4)` stood here and OVERSTATED every padded
+ * body by one or two bytes: four base64 characters carry three bytes, and a
+ * trailing `=` / `==` is exactly the bytes that were never there.
+ */
+function base64ByteLength(b64: string): number {
+    const clean = b64.replace(/\s+/g, "");
+    if (clean.length === 0) return 0;
+    const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+    return Math.floor((clean.length * 3) / 4) - padding;
+}
+
 import { isTauri } from "@/lib/sidecar";
 
 const DEFAULT_URL = "https://www.aimatrx.com";
@@ -155,7 +169,7 @@ export function TauriFetchBrowser() {
                 finalUrl: result.final_url || finalTarget,
                 blobUrl,
                 contentType: ct,
-                byteCount: Math.round((result.body_b64.length * 3) / 4),
+                byteCount: base64ByteLength(result.body_b64),
                 status: result.status,
             };
 

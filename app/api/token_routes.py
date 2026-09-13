@@ -245,6 +245,22 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     repo = TokenRepo()
     # Keep the in-memory cache hot so matrx-ai picks up the new token immediately.
     set_jwt_cache(req.access_token)
+    # Startup may have happened before the desktop transferred a session. In
+    # that state local OS tools are present but the server registry deliberately
+    # has no identity/org context yet. Refresh it only after this verified
+    # hand-off, so remote tools and bindings do not remain permanently empty.
+    try:
+        from app.services.ai.engine import refresh_server_tool_definitions
+
+        await refresh_server_tool_definitions()
+    except Exception:
+        # The helper contains its own containment; retain this guard so token
+        # custody itself can never fail because a best-effort catalog refresh
+        # has an unexpected import/runtime issue.
+        logger.warning(
+            "[token_routes] authenticated tool-registry refresh failed",
+            exc_info=True,
+        )
     # The source owns the requirement through retry success: a verification that
     # worked is the proof the configuration fault is gone, so the card clears.
     await get_action_needed_registry().reconcile_operation(

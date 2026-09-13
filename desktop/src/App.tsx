@@ -116,14 +116,6 @@ if (
 export default function App() {
   return (
     <ErrorBoundary>
-      {/* THE ONE CONFIRMATION SURFACE (@ai-matrx/design-system 0.11.0 +
-          @ai-matrx/kit 0.9.0). `confirm()` from `@ai-matrx/kit/confirm-opener`
-          resolves against this host; without it a destructive call would hang
-          forever rather than silently default-yes. Native `window.confirm` is
-          forbidden here — it cannot carry the consequence copy the destructive-
-          click law requires, ignores the theme, and in a Tauri webview wears the
-          OS chrome instead of the app's. */}
-      <ConfirmDialogHost />
       <DevTerminalProvider>
         <DownloadManagerProvider>
           {/* Media: ONE library store, ONE vault store, ONE action set + the

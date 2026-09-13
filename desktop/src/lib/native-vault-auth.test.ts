@@ -1,12 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { NativeVaultHostAuthCoordinator } from "./native-vault-auth";
+const unavailable = async () => ({ status: "unavailable" as const });
 
 it("does not adopt dependent state when the native command is missing or rejects", async () => {
   const adopt = vi.fn();
   const missing = new NativeVaultHostAuthCoordinator({
     invalidate: async () => "applied",
     reconcile: async () => null,
-  });
+  }, unavailable);
   await expect(missing.reconcileAndAdopt("11111111-1111-4111-8111-111111111111", adopt)).rejects.toThrow("Retry");
   expect(adopt).not.toHaveBeenCalled();
   expect(missing.isAdopted("11111111-1111-4111-8111-111111111111")).toBe(false);
@@ -14,7 +15,7 @@ it("does not adopt dependent state when the native command is missing or rejects
   const rejected = new NativeVaultHostAuthCoordinator({
     invalidate: async () => "state_corrupt",
     reconcile: async () => "busy",
-  });
+  }, unavailable);
   await expect(rejected.invalidateBeforeHostMutation()).rejects.toThrow("Retry");
   await expect(rejected.reconcileAndAdopt("11111111-1111-4111-8111-111111111111", adopt)).rejects.toThrow("Retry");
   expect(adopt).not.toHaveBeenCalled();
@@ -22,25 +23,23 @@ it("does not adopt dependent state when the native command is missing or rejects
 
 it("serializes an invalidation before a later actor can be adopted", async () => {
   const calls: string[] = [];
-  let releaseInvalidate!: () => void;
-  const blocked = new Promise<void>((resolve) => { releaseInvalidate = resolve; });
+  const blocked = new Promise<void>(() => undefined);
   const coordinator = new NativeVaultHostAuthCoordinator({
     invalidate: async () => { calls.push("invalidate"); await blocked; return "applied"; },
     reconcile: async (subject) => { calls.push(`reconcile:${subject}`); return "applied"; },
-  });
-  const invalidation = coordinator.invalidateBeforeHostMutation();
+  }, unavailable);
+  const invalidation = coordinator.invalidateBeforeHostMutation().catch(() => undefined);
   const adoption = coordinator.reconcileAndAdopt("22222222-2222-4222-8222-222222222222", () => calls.push("adopt"));
   await Promise.resolve();
-  expect(calls).toEqual(["invalidate"]);
-  releaseInvalidate();
+  expect(calls).toEqual([]);
   await Promise.all([invalidation, adoption]);
-  expect(calls).toEqual(["invalidate", "reconcile:22222222-2222-4222-8222-222222222222", "adopt"]);
+  expect(calls).toEqual(["reconcile:22222222-2222-4222-8222-222222222222", "adopt"]);
   expect(coordinator.isAdopted("22222222-2222-4222-8222-222222222222")).toBe(true);
 });
 
 it("accepts same-actor unchanged reconciliation without a new invalidation", async () => {
   const reconcile = vi.fn(async () => "unchanged" as const);
-  const coordinator = new NativeVaultHostAuthCoordinator({ invalidate: async () => "applied", reconcile });
+  const coordinator = new NativeVaultHostAuthCoordinator({ invalidate: async () => "applied", reconcile }, unavailable);
   await coordinator.reconcileAndAdopt("33333333-3333-4333-8333-333333333333");
   await coordinator.reconcileAndAdopt("33333333-3333-4333-8333-333333333333");
   expect(reconcile).toHaveBeenCalledTimes(2);
@@ -57,7 +56,7 @@ it("drops an older deferred reconciliation after a newer auth event fences it", 
       if (subject === "old") await oldPending;
       return "applied";
     },
-  });
+  }, unavailable);
   const oldFence = coordinator.fence();
   const old = coordinator.reconcileAndAdopt("old", adopted, oldFence);
   await Promise.resolve();
@@ -76,7 +75,7 @@ it("revokes the prior actor synchronously when mutation is queued", async () => 
   const coordinator = new NativeVaultHostAuthCoordinator({
     invalidate: async () => { await wait; return "applied"; },
     reconcile: async () => "applied",
-  });
+  }, unavailable);
   await coordinator.reconcileAndAdopt("current");
   const invalidation = coordinator.invalidateBeforeHostMutation();
   expect(coordinator.isAdopted("current")).toBe(false);
@@ -84,19 +83,47 @@ it("revokes the prior actor synchronously when mutation is queued", async () => 
   await invalidation;
 });
 
-it("shares one generation across UI and engine listeners for the same auth event", async () => {
-  const adopted: string[] = [];
+it("gives consecutive lifecycle events distinct revisions", async () => {
   const coordinator = new NativeVaultHostAuthCoordinator({
     invalidate: async () => "applied",
     reconcile: async () => "applied",
-  });
-  const uiFence = coordinator.fence("actor-b");
-  const engineFence = coordinator.fence("actor-b");
-  expect(engineFence).toBe(uiFence);
-  await Promise.all([
-    coordinator.reconcileAndAdopt("actor-b", () => adopted.push("ui"), uiFence),
-    coordinator.reconcileAndAdopt("actor-b", () => adopted.push("engine"), engineFence),
-  ]);
-  expect(adopted).toEqual(["ui", "engine"]);
+  }, unavailable);
+  const first = coordinator.fence("actor-b");
+  const second = coordinator.fence("actor-b");
+  expect(second).toBeGreaterThan(first);
+  await coordinator.reconcileAndAdopt("actor-b", undefined, second);
   expect(coordinator.isAdopted("actor-b")).toBe(true);
+});
+
+it("settles the current signed-out revision without manufacturing an adopted actor", async () => {
+  const coordinator = new NativeVaultHostAuthCoordinator({
+    invalidate: async () => "applied",
+    reconcile: async () => "applied",
+  }, unavailable);
+  const revision = coordinator.fence(null);
+  await coordinator.reconcileAndAdopt(null, undefined, revision);
+  expect(coordinator.isCurrentRevision(revision)).toBe(true);
+  expect(coordinator.adoptedGeneration(null)).toBeNull();
+});
+
+it("times out the caller while retaining the hung native operation in the serialized queue", async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  const hung = new Promise<void>((resolve) => { release = resolve; });
+  const reconcile = vi.fn(async () => "applied" as const);
+  const coordinator = new NativeVaultHostAuthCoordinator({
+    invalidate: async () => { await hung; return "applied" as const; },
+    reconcile,
+  }, unavailable);
+  const timedOut = coordinator.invalidateBeforeHostMutation();
+  void timedOut.catch(() => undefined);
+  await vi.advanceTimersByTimeAsync(5_001);
+  await expect(timedOut).rejects.toThrow("timed out");
+  const later = coordinator.reconcileAndAdopt("actor-b");
+  await Promise.resolve();
+  expect(reconcile).not.toHaveBeenCalled();
+  release();
+  await later;
+  expect(reconcile).toHaveBeenCalledOnce();
+  vi.useRealTimers();
 });

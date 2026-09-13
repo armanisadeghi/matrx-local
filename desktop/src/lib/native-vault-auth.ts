@@ -6,106 +6,78 @@
 import {
   invalidateNativeVaultHostActor,
   reconcileNativeVaultHostActor,
-  type NativeVaultTransition,
 } from "@/lib/sidecar";
-
-type NativeVaultCommands = {
-  invalidate(): Promise<NativeVaultTransition | null>;
-  reconcile(subject: string | null): Promise<NativeVaultTransition | null>;
-};
-
-const accepted = new Set<NativeVaultTransition>([
-  "applied",
-  "unchanged",
-  "unsupported_platform",
-]);
-
-function requireApplied(result: NativeVaultTransition | null, operation: string): void {
-  if (result !== null && accepted.has(result)) return;
-  throw new Error(`Native Vault account fence could not ${operation}. Retry the account action.`);
-}
-
-/** One queue for explicit mutations and externally emitted auth events. */
-export class NativeVaultHostAuthCoordinator {
-  private chain: Promise<void> = Promise.resolve();
-  private adoptedSubject: string | null = null;
-  private generation = 0;
-  private pendingSubject: string | null | undefined = undefined;
-
-  constructor(private readonly commands: NativeVaultCommands) {}
-
-  private serialize<T>(work: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(work, work);
-    this.chain = next.then(() => undefined, () => undefined);
-    return next;
-  }
-
-  /** Revoke adoption synchronously, before deferred Supabase callback work. */
-  fence(subject?: string | null): number {
-    // useAuth and useEngine receive the same Supabase event independently.
-    // They share one generation for that event, rather than invalidating each
-    // other's deferred work. Undefined is reserved for explicit mutations and
-    // always creates a fresh fence.
-    if (subject !== undefined && this.pendingSubject === subject) return this.generation;
-    this.adoptedSubject = null;
-    this.generation += 1;
-    this.pendingSubject = subject;
-    return this.generation;
-  }
-
-  /** Clear dependent permission before an account-changing host auth action. */
-  invalidateBeforeHostMutation(): Promise<void> {
-    const generation = this.fence();
-    return this.serialize(async () => {
-      requireApplied(await this.commands.invalidate(), "invalidate");
-      // A later event may already have fenced this request. Invalidation still
-      // completed, but it must not authorize anything from this older turn.
-      if (generation !== this.generation) return;
-    });
-  }
-
-  /** Reconcile first, then permit dependent adoption in queue order. */
-  reconcileAndAdopt<T>(
-    subject: string | null,
-    adopt?: () => Promise<T> | T,
-    existingGeneration?: number,
-  ): Promise<T | undefined> {
-    const generation = existingGeneration ?? this.fence(subject);
-    return this.serialize(async () => {
-      requireApplied(await this.commands.reconcile(subject), "reconcile");
-      // An auth listener/mutation arrived while this command waited. Its
-      // newer account state wins; the old event cannot republish UI/engine use.
-      if (generation !== this.generation) return undefined;
-      this.adoptedSubject = subject;
-      this.pendingSubject = undefined;
-      return adopt?.();
-    });
-  }
-
-  isAdopted(subject: string | null): boolean {
-    return subject !== null && this.adoptedSubject === subject;
-  }
-
-  adopted(): string | null {
-    return this.adoptedSubject;
-  }
-
-  adoptedGeneration(subject: string | null): number | null {
-    return this.isAdopted(subject) ? this.generation : null;
-  }
-}
+import { engine } from "@/lib/api";
+import supabase from "@/lib/supabase";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+import {
+  NativeVaultHostAuthCoordinator,
+  type EngineAlignment,
+  type NativeVaultTransitionContext,
+} from "@/lib/native-vault-auth-coordinator";
 
 const coordinator = new NativeVaultHostAuthCoordinator({
   invalidate: invalidateNativeVaultHostActor,
   reconcile: reconcileNativeVaultHostActor,
-});
+}, (context) => engine.prepareSessionTransition(context));
+
+export interface NativeVaultHostEventEnvelope {
+  readonly event: AuthChangeEvent;
+  readonly session: Session | null;
+  readonly revision: number;
+  readonly completion: Promise<{ accepted: boolean }>;
+}
+
+const eventSubscribers = new Set<(envelope: NativeVaultHostEventEnvelope) => void>();
+let subscriptionStarted = false;
+let latestEnvelope: NativeVaultHostEventEnvelope | null = null;
+
+/** The only Supabase lifecycle callback. It fences synchronously and fans out immutable work. */
+function ensureHostSubscription(): void {
+  if (subscriptionStarted) return;
+  subscriptionStarted = true;
+  supabase.auth.onAuthStateChange((event, session) => {
+    const revision = coordinator.fence();
+    const completion = new Promise<{ accepted: boolean }>((resolve, reject) => {
+      setTimeout(() => {
+        void coordinator.reconcileAndAdopt(session?.user.id ?? null, undefined, revision).then(
+          () => resolve({ accepted: coordinator.isCurrentRevision(revision) }),
+          reject,
+        );
+      }, 0);
+    });
+    // Listeners receive the envelope while the callback is still synchronous,
+    // so they can stop local work before Supabase releases its own lock.
+    const envelope: NativeVaultHostEventEnvelope = Object.freeze({ event, session, revision, completion });
+    latestEnvelope = envelope;
+    for (const listener of eventSubscribers) {
+      try { listener(envelope); } catch { /* one subscriber cannot block another */ }
+    }
+    // A subscriber normally observes this promise; retaining this handler also
+    // prevents an unmounted subscriber from creating an unhandled rejection.
+    void completion.catch(() => undefined);
+  });
+}
+
+export function subscribeNativeVaultHostEvents(listener: (envelope: NativeVaultHostEventEnvelope) => void): () => void {
+  ensureHostSubscription();
+  eventSubscribers.add(listener);
+  if (latestEnvelope) {
+    const replay = latestEnvelope;
+    queueMicrotask(() => { if (eventSubscribers.has(listener) && latestEnvelope === replay) { try { listener(replay); } catch { /* isolated */ } } });
+  }
+  return () => eventSubscribers.delete(listener);
+}
+
+export { NativeVaultHostAuthCoordinator } from "@/lib/native-vault-auth-coordinator";
+export type { EngineAlignment, NativeVaultTransitionContext } from "@/lib/native-vault-auth-coordinator";
 
 export function invalidateNativeVaultBeforeHostMutation(): Promise<void> {
   return coordinator.invalidateBeforeHostMutation();
 }
 
 /** Call synchronously inside an auth callback; do no native I/O there. */
-export function fenceNativeVaultHostAdoption(subject: string | null): number {
+export function fenceNativeVaultHostAdoption(subject?: string | null): number {
   return coordinator.fence(subject);
 }
 
@@ -126,11 +98,26 @@ export function isNativeVaultHostSessionAdopted(subject: string | null | undefin
   return coordinator.isAdopted(subject ?? null);
 }
 
-export function nativeVaultAdoptedHostSubject(): string | null {
-  return coordinator.adopted();
-}
-
 /** A background task snapshots this and rechecks it immediately before I/O. */
 export function nativeVaultAdoptedHostGeneration(subject: string | null | undefined): number | null {
   return coordinator.adoptedGeneration(subject ?? null);
+}
+
+/** Engine/background callers must hold an origin-bound current alignment. */
+export function nativeVaultEngineTransitionContext(subject: string | null | undefined): NativeVaultTransitionContext | null {
+  return coordinator.engineContext(subject);
+}
+
+export function nativeVaultEngineAlignment(): EngineAlignment | null {
+  return coordinator.engineAlignment();
+}
+
+/** Engine discovery reuses the current host revision; it never promotes an old callback. */
+export function alignNativeVaultEngineForCurrentSubject(subject: string | null): Promise<EngineAlignment | null> {
+  return coordinator.alignEngineForAdopted(subject);
+}
+
+/** Retry uses the current coordinator authority, never a retained auth callback. */
+export function retryNativeVaultAccountCleanup(subject: string): Promise<EngineAlignment | null> {
+  return coordinator.alignEngineForAdopted(subject);
 }

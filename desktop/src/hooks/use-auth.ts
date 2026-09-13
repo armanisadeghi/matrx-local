@@ -58,9 +58,9 @@ import {
 import { emitClientLog } from "@/hooks/use-client-log";
 import {
   invalidateNativeVaultBeforeHostMutation,
-  fenceNativeVaultHostAdoption,
-  reconcileNativeVaultAndAdopt,
-  reconcileNativeVaultAfterHostSession,
+  nativeVaultAdoptedHostGeneration,
+  retryNativeVaultAccountCleanup,
+  subscribeNativeVaultHostEvents,
 } from "@/lib/native-vault-auth";
 
 export interface AuthState {
@@ -124,46 +124,15 @@ export function useAuth() {
   useEffect(() => {
     mountedRef.current = true;
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      try {
-        // The initial read can resolve after a newer SIGNED_IN event. Compare
-        // once more before adopting, and give its queued work a fence ticket.
-        const { data: { session: current } } = await supabase.auth.getSession();
-        if (current?.user.id !== session?.user.id) return;
-        const fence = fenceNativeVaultHostAdoption(session?.user.id ?? null);
-        await reconcileNativeVaultAndAdopt(session?.user.id ?? null, () => {
-          if (session) {
-            emitClientLog("success", `Auth: session restored for ${session.user.email ?? session.user.id}`, "auth");
-          } else {
-            emitClientLog("info", "Auth: no active session — login required", "auth");
-          }
-          update({
-            session,
-            user: session?.user ?? null,
-            isAuthenticated: !!session,
-            loading: false,
-            error: null,
-          });
-        }, fence);
-      } catch (error) {
-        // A restored Supabase session is not adopted until its native fence is
-        // known-good. Do not turn this into a signed-in UI with live tokens.
-        emitClientLog("warn", String(error), "auth");
-        update({ loading: false, error: "Native Vault account check failed. Retry sign-in." });
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    const unsubscribe = subscribeNativeVaultHostEvents(({ event, session, revision, completion }) => {
       // Revoke all dependent use synchronously while Supabase still holds its
       // own lock. Native I/O stays deferred below.
-      const fence = fenceNativeVaultHostAdoption(session?.user.id ?? null);
-      // Supabase holds its internal lock in this listener. Defer the native
-      // file-lock operation so it cannot deadlock token refresh, and fence
-      // dependent adoption on the serialized coordinator.
-      setTimeout(() => {
-        void reconcileNativeVaultAndAdopt(session?.user.id ?? null, () => {
+      void completion.then(({ accepted }) => {
+          if (!accepted) return;
+          // A signed-out session has no actor to adopt, but its exact lifecycle
+          // revision still settles the loading state. Signed-in sessions must
+          // additionally hold the actor-bound adoption fence.
+          if (session && nativeVaultAdoptedHostGeneration(session.user.id) !== revision) return;
           // Supabase owns this callback's lock; all UI adoption happens later.
           if (
             (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") &&
@@ -182,7 +151,7 @@ export function useAuth() {
             loading: false,
             error: null,
           });
-        }, fence).catch((error) => {
+      }).catch((error) => {
           emitClientLog("warn", String(error), "auth");
           resetContentIr();
           update({
@@ -192,8 +161,7 @@ export function useAuth() {
             loading: false,
             error: "Native Vault account check failed. Retry sign-in.",
           });
-        });
-      }, 0);
+      });
       // INITIAL_SESSION with no session is the normal signed-out boot state,
       // and SIGNED_OUT is a user action — neither is degraded functionality.
       emitClientLog(
@@ -218,7 +186,7 @@ export function useAuth() {
 
     return () => {
       mountedRef.current = false;
-      subscription.unsubscribe();
+      unsubscribe();
     };
   }, [update]);
 
@@ -314,10 +282,7 @@ export function useAuth() {
           return false;
         }
 
-        const { data: { session } } = await supabase.auth.getSession();
-        await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
-        // onAuthStateChange fires automatically; reconciliation above prevents
-        // the callback route from navigating before dependent adoption settles.
+        // The facade-owned auth event reconciles the resulting host session.
         update({ oauthPending: false });
         return true;
       } catch (err) {
@@ -358,10 +323,14 @@ export function useAuth() {
   const signOut = useCallback(async () => {
     emitClientLog("cmd", "Sign-out initiated", "auth");
     update({ loading: true, error: null });
-    let nativeInvalidated = false;
+    let cleanupError: string | null = null;
+    let signOutError: string | null = null;
     try {
       await invalidateNativeVaultBeforeHostMutation();
-      nativeInvalidated = true;
+    } catch (err) {
+      cleanupError = err instanceof Error ? err.message : String(err);
+    }
+    try {
       const result = await Promise.race([
         supabase.auth.signOut(),
         new Promise<{ error: { message: string } }>((resolve) =>
@@ -371,17 +340,10 @@ export function useAuth() {
           )
         ),
       ]);
-      if (result.error) {
-        console.warn("[signOut]", result.error.message);
-      }
+      if (result.error) signOutError = result.error.message;
     } catch (err) {
       console.warn("[signOut] unexpected error:", err);
-      update({ loading: false, error: "Native Vault account fence failed. Retry sign-out." });
-      return;
     } finally {
-      // A failed fence has not started server sign-out. Keep the real host
-      // session visible rather than manufacturing a local signed-out state.
-      if (!nativeInvalidated) return;
       clearOAuthState();
       clearOAuthPending();
       // Best-effort: drain any stale Rust PendingOAuthUrl so the next login
@@ -392,13 +354,13 @@ export function useAuth() {
       } catch {
         // Not in Tauri (web dev) or invoke unavailable — safe to ignore
       }
+      // Do not manufacture an anonymous session when Supabase rejected or timed
+      // out the mutation. Its lifecycle event remains the source of truth.
       update({
         loading: false,
         oauthPending: false,
-        session: null,
-        user: null,
-        isAuthenticated: false,
-        error: null,
+        ...(signOutError ? {} : { session: null, user: null, isAuthenticated: false }),
+        error: signOutError ?? (cleanupError ? "Signed out, but engine account cleanup needs retry." : null),
       });
     }
   }, [update]);
@@ -410,6 +372,16 @@ export function useAuth() {
     return session?.access_token ?? null;
   }, []);
 
+  const retryAccountCleanup = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) return false;
+    update({ loading: true, error: null });
+    const alignment = await retryNativeVaultAccountCleanup(session.user.id);
+    const complete = alignment?.status === "aligned";
+    update({ loading: false, error: complete ? null : "Account cleanup still needs retry." });
+    return complete;
+  }, [update]);
+
   return useMemo(
     () => ({
       ...state,
@@ -418,8 +390,9 @@ export function useAuth() {
       cancelOAuth,
       signInWithEmail,
       signOut,
+      retryAccountCleanup,
       getAccessToken,
     }),
-    [state, signInWithOAuth, completeOAuthExchange, cancelOAuth, signInWithEmail, signOut, getAccessToken],
+    [state, signInWithOAuth, completeOAuthExchange, cancelOAuth, signInWithEmail, signOut, retryAccountCleanup, getAccessToken],
   );
 }

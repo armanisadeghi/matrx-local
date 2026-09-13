@@ -15,9 +15,10 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.common.background_tasks import fire_and_forget
 from app.common.system_logger import get_logger
@@ -107,6 +108,10 @@ class TokenRequest(BaseModel):
     refresh_token: Optional[str] = None
     user_id: str
     expires_in: Optional[float] = None
+    expected_generation: UUID | None = None
+    expected_credential_revision: int | None = Field(
+        default=None, ge=0, le=9_007_199_254_740_991
+    )
 
 
 class TokenResponse(BaseModel):
@@ -197,7 +202,7 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         # engine's good token — leaving the UI "signed in" while every engine
         # cloud lane (bridge outbox, sync, the browser runtime trigger) died.
         # Only a stored copy of the SAME bad token is cleared.
-        await _clear_stored_token_if_matches(req.access_token)
+        await _clear_stored_token_if_matches(req.access_token, str(req.expected_generation) if req.expected_generation else None, req.expected_credential_revision)
         logger.warning(
             "[token_routes] rejected posted session for user_id=%s "
             "(verification=%s); stored session left untouched unless identical",
@@ -216,7 +221,7 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         )
     if verified_user.user_id != req.user_id:
         invalidate_token(req.access_token)
-        await _clear_stored_token_if_matches(req.access_token)
+        await _clear_stored_token_if_matches(req.access_token, str(req.expected_generation) if req.expected_generation else None, req.expected_credential_revision)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -232,13 +237,12 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     if req.expires_in:
         expires_at = int(time.time()) + int(req.expires_in)
 
+    from app.services.auth_session import get_auth_session, SessionFenceError
+    try:
+        receipt = await get_auth_session().install(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, access_token=req.access_token, refresh_token=req.refresh_token, expires_at=expires_at, allow_initialize=True)
+    except SessionFenceError as error:
+        raise HTTPException(status_code=409, detail={"code": error.code})
     repo = TokenRepo()
-    await repo.save(
-        access_token=req.access_token,
-        user_id=req.user_id,
-        refresh_token=req.refresh_token,
-        expires_at=expires_at,
-    )
     # Keep the in-memory cache hot so matrx-ai picks up the new token immediately.
     set_jwt_cache(req.access_token)
     # The source owns the requirement through retry success: a verification that
@@ -360,7 +364,14 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
     except Exception:
         pass
 
-    return {"status": "ok", "user_id": req.user_id}
+    return {"status": "ok", "user_id": req.user_id, "generation": receipt.generation, "credential_revision": receipt.credential_revision}
+
+
+@router.get("/session-state")
+async def session_state() -> dict[str, Any]:
+    from app.services.auth_session import get_auth_session
+    state = await get_auth_session().snapshot()
+    return {"generation": state.generation, "credential_revision": state.credential_revision, "subject": state.subject, "cleanup": None if state.cleanup is None else {"retired_generation": state.cleanup.retired_generation, "status": state.cleanup.status}}
 
 
 @router.get("/token")
@@ -386,75 +397,55 @@ async def get_token() -> dict[str, Any]:
     }
 
 
-async def _clear_stored_token_if_matches(posted_token: str) -> None:
-    """Clear the stored session only when it IS the token that just failed.
-
-    A bad NEW token must not erase a different, previously-verified stored
-    session — that turns one flaky/revoked restore into a silent engine-wide
-    sign-out while the desktop UI still looks signed in.
-    """
-    repo = TokenRepo()
+async def _teardown_cleared_session(result: Any) -> None:
+    """Required logout teardown; failure keeps this exact cycle fenced."""
+    from app.services.auth_session import get_auth_session
+    row = result.row; outgoing = row.get("user_id") if row else None
     try:
-        row = await repo.get()
+        if row and isinstance(row.get("access_token"), str): invalidate_token(row["access_token"])
+        clear_jwt_cache()
+        from app.services.ai.key_manager import clear_vault_keys
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+        clear_vault_keys(); get_settings_sync().clear_credentials()
+        from app.services.coding_sessions import get_coding_session_bridge_outbox
+        await get_coding_session_bridge_outbox().credentials_changed()
+        if _broadcast_enabled() and outgoing:
+            from app.api.extension_broadcast import disconnect_broadcast
+            await disconnect_broadcast(outgoing)
     except Exception:
-        logger.debug("[token_routes] stored-token read failed", exc_info=True)
-        return
-    if row and row.get("access_token") == posted_token:
-        await clear_token()
+        await get_auth_session().finish_cleanup(retired_generation=result.retired_generation, new_generation=result.snapshot.generation, attempt_id=result.attempt_id, success=False)
+        raise
+    await get_auth_session().finish_cleanup(retired_generation=result.retired_generation, new_generation=result.snapshot.generation, attempt_id=result.attempt_id, success=True)
 
+async def _clear_stored_token_if_matches(posted_token: str, generation: str | None, revision: int | None) -> None:
+    """Retire only an exact rejected stored token under its captured fence."""
+    from app.services.auth_session import get_auth_session, SessionFenceError
+    try:
+        result = await get_auth_session().clear(generation=generation, revision=revision, token=posted_token)
+    except SessionFenceError:
+        return
+    if result is not None:
+        try:
+            await _teardown_cleared_session(result)
+        except Exception as error:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "session_cleanup_failed",
+                    "message": "Engine credential cleanup did not finish. Retry sign-out.",
+                },
+            ) from error
 
 @router.delete("/token")
-async def clear_token() -> dict[str, Any]:
-    """Clear the stored JWT on logout."""
-    repo = TokenRepo()
-
-    # Capture the outgoing user_id BEFORE we wipe the row so we can tear
-    # down the matching cross-component broadcast subscription. Best-effort:
-    # missing row / read failure must not block logout.
-    outgoing_user_id: Optional[str] = None
-    row: dict[str, Any] | None = None
+async def clear_token(expected_generation: UUID | None = None, expected_credential_revision: int | None = None) -> dict[str, Any]:
+    """Compare-and-rotate the exact observed JWT; never clear unqualified state."""
+    from app.services.auth_session import get_auth_session, SessionFenceError
     try:
-        row = await repo.get()
-        if row:
-            outgoing_user_id = row.get("user_id")
-    except Exception:
-        logger.debug(
-            "[token_routes] could not read outgoing user_id on logout", exc_info=True
-        )
-
-    await repo.clear()
-    if row and isinstance(row.get("access_token"), str):
-        invalidate_token(row["access_token"])
-    clear_jwt_cache()
-    # Drop every Credential-Vault-supplied provider key with the session that
-    # authorized it. Keys the user saved on THIS machine survive sign-out.
-    from app.services.ai.key_manager import clear_vault_keys
-
-    clear_vault_keys()
-    logger.info("[token_routes] JWT cleared (logout) user_id=%s", outgoing_user_id)
-
-    try:
-        from app.services.coding_sessions import get_coding_session_bridge_outbox
-
-        await get_coding_session_bridge_outbox().credentials_changed()
-    except Exception:
-        logger.debug(
-            "[token_routes] coding-session publisher wake failed on logout",
-            exc_info=True,
-        )
-
-    # Cross-component broadcast disconnect — Case B of the lifecycle wiring.
-    # Mirrors the connect in POST /auth/token. Gated on the
-    # `extension_broadcast_enabled` user setting to match the startup wiring.
-    if _broadcast_enabled() and outgoing_user_id:
-        try:
-            from app.api.extension_broadcast import disconnect_broadcast
-
-            await disconnect_broadcast(outgoing_user_id)
-        except Exception as exc:
-            logger.warning(
-                "[token_routes] cross-component broadcast disconnect failed (non-fatal): %s",
-                exc,
-            )
-
-    return {"status": "ok"}
+        result = await get_auth_session().clear(generation=str(expected_generation) if expected_generation else None, revision=expected_credential_revision)
+        if result is None: raise SessionFenceError()
+        await _teardown_cleared_session(result)
+    except SessionFenceError as error:
+        raise HTTPException(status_code=409, detail={"code": error.code})
+    except Exception as error:
+        raise HTTPException(status_code=503, detail={"code": "session_cleanup_failed", "message": "Engine credential cleanup did not finish. Retry sign-out."}) from error
+    return {"status": "ok", "generation": result.snapshot.generation, "credential_revision": result.snapshot.credential_revision}

@@ -14,6 +14,7 @@ interface LoginProps {
     | "signInWithEmail"
     | "loading"
     | "error"
+    | "retryAccountCleanup"
   >;
 }
 
@@ -136,7 +137,14 @@ export function Login({ auth }: LoginProps) {
             </form>
 
             {auth.error && (
-              <p className="text-center text-sm text-red-500">{auth.error}</p>
+              <div className="space-y-2 text-center">
+                <p className="text-sm text-red-500">{auth.error}</p>
+                {auth.error.toLowerCase().includes("cleanup") && (
+                  <Button type="button" variant="outline" size="sm" disabled={auth.loading} onClick={() => void auth.retryAccountCleanup()}>
+                    Retry account cleanup
+                  </Button>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

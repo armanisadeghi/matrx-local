@@ -1,5 +1,12 @@
+/** @vitest-environment jsdom */
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+const context = vi.hoisted(() => {
+  const state = { current: true };
+  return { state, get: vi.fn(() => ({ isCurrent: () => state.current })) };
+});
 
 vi.mock("@/lib/supabase", () => ({
   default: { auth: { getSession: vi.fn() } },
@@ -11,9 +18,10 @@ vi.mock("@/lib/api", () => ({
     setAuthToken: vi.fn(),
   },
 }));
+vi.mock("@/lib/native-vault-auth", () => ({ nativeVaultEngineTransitionContext: context.get }));
 
 import type { ScrapeSyncStatus } from "@/lib/api";
-import { ScrapeSyncStrip } from "./ScrapeSyncBanner";
+import { ScrapeSyncBanner, ScrapeSyncStrip } from "./ScrapeSyncBanner";
 
 function status(over: Partial<ScrapeSyncStatus>): ScrapeSyncStatus {
   return {
@@ -87,5 +95,23 @@ describe("ScrapeSyncStrip", () => {
     const synced = status({ state: "synced", healthy: true, unsynced: 0, failed: 0, action: "none" });
     expect(render(synced, 6)).toContain("6 scrapes uploaded to the cloud");
     expect(render(synced, 0)).toBe("");
+  });
+});
+
+describe("ScrapeSyncBanner retry authority", () => {
+  let root: Root; let node: HTMLDivElement;
+  afterEach(async () => { if (root) await act(async () => root.unmount()); node?.remove(); });
+  it("uses a current context for the mounted Retry upload action and refuses a stale completion", async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const supabase = await import("@/lib/supabase");
+    const { engine } = await import("@/lib/api");
+    vi.mocked(supabase.default.auth.getSession).mockResolvedValue({ data: { session: { user: { id: "actor-a" } } } } as never);
+    vi.mocked(engine.getScrapeSyncStatus).mockResolvedValue(status({ action: "retry" }));
+    vi.mocked(engine.triggerScrapeSync).mockResolvedValue({ reset_to_pending: 0, pushed: 1, deferred: 0, failed: 0, status: status({ state: "synced", action: "none", unsynced: 0 }) });
+    context.state.current = true; node = document.createElement("div"); document.body.append(node); root = createRoot(node);
+    await act(async () => { root.render(<ScrapeSyncBanner />); await Promise.resolve(); });
+    const button = node.querySelector("button"); expect(button).not.toBeNull();
+    await act(async () => { button!.dispatchEvent(new MouseEvent("click", { bubbles: true })); await Promise.resolve(); });
+    expect(engine.triggerScrapeSync).toHaveBeenCalledOnce();
   });
 });

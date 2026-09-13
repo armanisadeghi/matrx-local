@@ -1,8 +1,7 @@
 import type { BackgroundTask } from "../orchestrator";
 import { engine } from "@/lib/api";
 import {
-  isNativeVaultHostSessionAdopted,
-  nativeVaultAdoptedHostGeneration,
+  nativeVaultEngineTransitionContext,
 } from "@/lib/native-vault-auth";
 import supabase from "@/lib/supabase";
 
@@ -16,12 +15,12 @@ export const pushTokenToPython: BackgroundTask = {
     // The queue can outlive an auth event by one idle turn. The exact subject
     // and generation must still be adopted after getSession() and immediately
     // before the token crosses to the sidecar.
-    const generation = nativeVaultAdoptedHostGeneration(session.user.id);
-    if (generation === null || !isNativeVaultHostSessionAdopted(session.user.id)) return;
-    if (nativeVaultAdoptedHostGeneration(session.user.id) !== generation) return;
+    const context = nativeVaultEngineTransitionContext(session.user.id);
+    if (!context || !context.isCurrent()) return;
     await engine.syncTokenToPython(
       session.access_token,
       session.user.id,
+      context,
       session.refresh_token ?? undefined,
       session.expires_in ?? undefined,
     );

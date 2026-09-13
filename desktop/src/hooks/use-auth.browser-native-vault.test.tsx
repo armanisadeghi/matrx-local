@@ -32,15 +32,26 @@ function Subject() { auth = useAuth(); return null; }
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.getSession.mockResolvedValue({ data: { session: null } });
-  mocks.onAuthStateChange.mockImplementation(() => ({ data: { subscription: { unsubscribe: vi.fn() } } }));
+  mocks.onAuthStateChange.mockImplementation((listener) => {
+    queueMicrotask(() => listener("INITIAL_SESSION", null));
+    return { data: { subscription: { unsubscribe: vi.fn() } } };
+  });
   mocks.signInWithPassword.mockResolvedValue({ error: null });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-  await act(async () => { root.render(<Subject />); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+  await act(async () => {
+    root.render(<Subject />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
 });
 
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 it("starts browser-dev password sign-in through the real native fence", async () => {
+  await act(async () => {
+    await vi.waitFor(() => expect(auth.loading).toBe(false));
+  });
+  expect(auth.isAuthenticated).toBe(false);
   await act(async () => { await auth.signInWithEmail("browser@example.test", "password"); });
   expect(mocks.signInWithPassword).toHaveBeenCalledWith({ email: "browser@example.test", password: "password" });
   expect(auth.error).toBeNull();

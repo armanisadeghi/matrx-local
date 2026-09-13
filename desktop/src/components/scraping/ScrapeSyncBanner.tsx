@@ -23,6 +23,7 @@ import { CheckCircle2, CloudOff, LogIn, Loader2, RefreshCw, UploadCloud } from "
 import { Button } from "@ai-matrx/design-system";
 import { engine, type ScrapeSyncState, type ScrapeSyncStatus } from "@/lib/api";
 import supabase from "@/lib/supabase";
+import { nativeVaultEngineTransitionContext } from "@/lib/native-vault-auth";
 
 const POLL_MS = 30_000;
 
@@ -87,9 +88,12 @@ export function ScrapeSyncBanner() {
       const { data } = await supabase.auth.getSession();
       const session = data.session;
       if (session) {
+        const context = nativeVaultEngineTransitionContext(session.user.id);
+        if (!context) throw new Error("Engine account alignment is not ready");
         await engine.syncTokenToPython(
           session.access_token,
           session.user.id,
+          context,
           session.refresh_token,
           session.expires_in,
         );
@@ -107,7 +111,11 @@ export function ScrapeSyncBanner() {
   const handleRetry = useCallback(async () => {
     setBusy(true);
     try {
+      const { data } = await supabase.auth.getSession();
+      const context = nativeVaultEngineTransitionContext(data.session?.user.id);
+      if (!context || !context.isCurrent()) throw new Error("Engine account alignment is not ready");
       const result = await engine.triggerScrapeSync();
+      if (!context.isCurrent()) throw new Error("Engine account alignment changed");
       setJustSynced(result.pushed);
       setStatus(result.status);
     } catch {

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
     getPlatformContext: vi.fn(async () => ({})), listTools: vi.fn(async () => []), getVersion: vi.fn(async () => "test"),
     getSystemInfo: vi.fn(async () => ({})), getBrowserStatus: vi.fn(async () => ({})), connectWebSocket: vi.fn(async () => undefined),
     disconnect: vi.fn(), clearPythonToken: vi.fn(async () => undefined), syncTokenToPython: vi.fn(async () => undefined),
-    configureCloudSync: vi.fn(async () => undefined), reconfigureCloudSync: vi.fn(async () => undefined), cloudHeartbeat: vi.fn(async () => undefined),
+    configureCloudSync: vi.fn(async () => undefined), reconfigureCloudSync: vi.fn(async () => undefined), cloudHeartbeat: vi.fn(async () => undefined), prepareSessionTransition: vi.fn(async () => ({ status: "aligned", origin: "http://engine.test", generation: "g", credentialRevision: 0, subject: null })),
     get: vi.fn(async () => ({})), getInstanceInfo: vi.fn(async () => ({})), listInstances: vi.fn(async () => []), getHardware: vi.fn(async () => ({})),
     on: vi.fn(() => () => undefined),
   };
@@ -44,7 +44,6 @@ function Subject() { useEngine(); return null; }
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
-  mocks.listeners.length = 0;
   mocks.reconcile.mockClear();
   Object.values(mocks.engine).forEach((value) => {
     if (typeof value === "function" && "mockClear" in value) (value as any).mockClear();
@@ -77,7 +76,7 @@ it("restarts the real idle queue after accepted same-actor reconciliation", asyn
   mocks.engine.cloudHeartbeat.mockClear();
   act(() => mocks.listeners[0]!("TOKEN_REFRESHED", mocks.session));
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-  expect(mocks.engine.syncTokenToPython).toHaveBeenCalledWith("access-a", "actor-a", "refresh-a", 3600);
-  expect(mocks.engine.configureCloudSync).toHaveBeenCalledWith("access-a", "actor-a");
+  expect(mocks.engine.syncTokenToPython).toHaveBeenCalledWith("access-a", "actor-a", expect.any(Object), "refresh-a", 3600);
+  expect(mocks.engine.configureCloudSync).toHaveBeenCalledWith("access-a", "actor-a", expect.any(Object));
   expect(mocks.engine.cloudHeartbeat).toHaveBeenCalled();
 });

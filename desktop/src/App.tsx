@@ -412,9 +412,10 @@ function AppInner() {
   // already owns the session, so the catalog is TOLD who that is rather than
   // running a second auth read that could disagree with the screen.
   const authUserId = auth.user?.id ?? null;
-  useEffect(() => {
-    setAgentCatalogUserId(authUserId);
-  }, [authUserId]);
+  // Publish the render's identity before any catalog provider/consumer below
+  // can start loading. A passive effect runs after child effects and allowed
+  // the authenticated shell to issue its first catalog reads as signed out.
+  setAgentCatalogUserId(authUserId);
 
   // Persistent pages
   const appPages: PageEntry[] = useMemo(

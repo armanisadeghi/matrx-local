@@ -257,36 +257,32 @@ async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
         if expires_at <= int(time.time()):
             return
 
+        from app.services.auth_session import SessionFenceError, get_auth_session
         from app.services.ai.engine import set_jwt_cache
-        from app.services.local_db.repositories import TokenRepo
 
-        repo = TokenRepo()
-        existing = await repo.get()
-        existing_user_id = str((existing or {}).get("user_id") or "")
-        if existing_user_id and existing_user_id != user_id:
+        coordinator = get_auth_session()
+        current = await coordinator.snapshot()
+        if current.subject != user_id:
             logger.warning(
                 "[ai_routes] refused request JWT adoption for a different owner "
                 "(persisted_user_id=%s request_user_id=%s)",
-                existing_user_id,
+                current.subject,
                 user_id,
             )
             return
-        if (
-            existing
-            and existing.get("access_token") == bearer
-            and not repo.is_expired(existing)
-        ):
-            set_jwt_cache(bearer)
+        try:
+            await coordinator.install(
+                generation=current.generation,
+                revision=current.credential_revision,
+                subject=user_id,
+                access_token=bearer,
+                refresh_token=None,
+                expires_at=expires_at,
+                allow_initialize=False,
+            )
+        except SessionFenceError:
             return
         set_jwt_cache(bearer)
-        await repo.save(
-            access_token=bearer,
-            user_id=user_id,
-            refresh_token=(existing or {}).get("refresh_token")
-            if existing_user_id == user_id
-            else None,
-            expires_at=expires_at,
-        )
         logger.info(
             "[ai_routes] refreshed engine auth state from authenticated AI request "
             "(user_id=%s)",

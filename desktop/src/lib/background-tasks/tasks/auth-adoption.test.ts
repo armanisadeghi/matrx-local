@@ -13,6 +13,10 @@ vi.mock("@/lib/supabase", () => ({ default: { auth: { getSession: mocks.getSessi
 vi.mock("@/lib/native-vault-auth", () => ({
   isNativeVaultHostSessionAdopted: (subject: string) => mocks.generation(subject) !== null,
   nativeVaultAdoptedHostGeneration: mocks.generation,
+  nativeVaultEngineTransitionContext: (subject: string) => {
+    const generation = mocks.generation(subject);
+    return generation === null ? null : { revision: generation, nextSubject: subject, isCurrent: () => mocks.generation(subject) === generation };
+  },
 }));
 
 import { pushTokenToPython } from "./token-sync";

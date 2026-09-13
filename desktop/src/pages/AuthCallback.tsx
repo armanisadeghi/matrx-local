@@ -5,7 +5,6 @@ import supabase from "@/lib/supabase";
 import { Loader2, AlertTriangle } from "lucide-react";
 import {
   invalidateNativeVaultBeforeHostMutation,
-  reconcileNativeVaultAfterHostSession,
 } from "@/lib/native-vault-auth";
 
 /**
@@ -78,8 +77,8 @@ export function AuthCallback() {
           refresh_token: tokens.refresh_token,
         });
         if (error) throw new Error("Could not establish your sign-in session. Please try again.");
-        const { data: { session } } = await supabase.auth.getSession();
-        await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
+        // `setSession` emits the one facade-owned lifecycle event. A direct
+        // reconciliation here would allocate a second host revision.
         navigate("/", { replace: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

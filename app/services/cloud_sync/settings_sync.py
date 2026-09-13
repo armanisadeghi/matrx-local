@@ -250,6 +250,14 @@ class SettingsSync:
                 bool(user_id),
             )
 
+    def clear_credentials(self) -> None:
+        """Synchronously fence actor-derived cloud state without erasing settings."""
+        self._jwt = None; self._user_id = None; self._instance_id = None
+        self._configured = False; self._is_orphan = False; self._known_metadata = None
+        self._last_provenance_written = None; self._pending_provenance = None
+        self._last_error = None; self._last_registration_at = None; self._last_registration_result = None
+        self._heartbeat_failures = 0; self._configure_called_at = None
+
     @property
     def is_configured(self) -> bool:
         return self._configured

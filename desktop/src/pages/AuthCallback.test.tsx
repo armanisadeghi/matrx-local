@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
   setSession: vi.fn(),
   getSession: vi.fn(),
   invalidate: vi.fn(),
-  reconcile: vi.fn(),
 }));
 
 vi.mock("react-router-dom", () => ({ useNavigate: () => mocks.navigate }));
@@ -23,7 +22,6 @@ vi.mock("@/lib/supabase", () => ({
 }));
 vi.mock("@/lib/native-vault-auth", () => ({
   invalidateNativeVaultBeforeHostMutation: mocks.invalidate,
-  reconcileNativeVaultAfterHostSession: mocks.reconcile,
 }));
 
 import { AuthCallback } from "./AuthCallback";
@@ -41,7 +39,6 @@ beforeEach(() => {
   mocks.setSession.mockReset();
   mocks.getSession.mockReset();
   mocks.invalidate.mockReset();
-  mocks.reconcile.mockReset();
   mocks.invalidate.mockResolvedValue(undefined);
   window.history.replaceState({}, "", "/#/auth/callback?state=only-state");
   container = document.createElement("div");
@@ -49,23 +46,14 @@ beforeEach(() => {
   root = createRoot(container);
 });
 
-it("does not navigate after a successful token exchange until native reconciliation accepts", async () => {
-  let rejectFence!: (error: Error) => void;
-  const pendingFence = new Promise<void>((_resolve, reject) => { rejectFence = reject; });
+it("relies on the central setSession lifecycle event without a duplicate reconciliation", async () => {
   mocks.exchangeOAuthCode.mockResolvedValue({ access_token: "test-access", refresh_token: "test-refresh" });
   mocks.setSession.mockResolvedValue({ error: null });
-  mocks.getSession.mockResolvedValue({ data: { session: { user: { id: "user-a" } } } });
-  mocks.reconcile.mockReturnValue(pendingFence);
   window.history.replaceState({}, "", "/#/auth/callback?code=code&state=state");
 
   await act(async () => { root.render(<AuthCallback />); });
   expect(mocks.setSession).toHaveBeenCalledOnce();
-  expect(mocks.navigate).not.toHaveBeenCalled();
-
-  rejectFence(new Error("state corrupt"));
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-  expect(mocks.navigate).not.toHaveBeenCalled();
-  expect(container.textContent).toContain("Token exchange failed");
+  expect(mocks.navigate).toHaveBeenCalledWith("/", { replace: true });
 });
 
 afterEach(async () => {

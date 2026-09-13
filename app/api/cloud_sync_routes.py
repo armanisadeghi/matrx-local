@@ -7,9 +7,10 @@ and synchronization between local and cloud storage.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.cloud_sync.instance_manager import get_instance_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
@@ -21,6 +22,10 @@ router = APIRouter(prefix="/cloud", tags=["cloud-sync"])
 class ConfigureRequest(BaseModel):
     jwt: str
     user_id: str
+    expected_generation: UUID | None = None
+    expected_credential_revision: int | None = Field(
+        default=None, ge=0, le=9_007_199_254_740_991
+    )
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -69,6 +74,11 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 
     Called by the frontend after user authentication.
     """
+    from app.services.auth_session import get_auth_session, SessionFenceError
+    try:
+        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
+    except SessionFenceError as error:
+        raise HTTPException(status_code=409, detail={"code": error.code})
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
@@ -99,6 +109,11 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 @router.post("/reconfigure")
 async def reconfigure_sync(req: ConfigureRequest) -> dict:
     """Re-configure with a fresh JWT (e.g. after token refresh)."""
+    from app.services.auth_session import get_auth_session, SessionFenceError
+    try:
+        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
+    except SessionFenceError as error:
+        raise HTTPException(status_code=409, detail={"code": error.code})
     sync = get_settings_sync()
     mgr = get_instance_manager()
 

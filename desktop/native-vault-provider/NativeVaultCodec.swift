@@ -255,6 +255,18 @@ enum StrictEnvelope {
 }
 
 enum VaultEnvelopeCodec {
+    /// The Keychain envelope shares the same duplicate-safe parser and closed
+    /// persisted-contract authority as the public state envelope.
+    static func privateSession(_ data: Data) throws -> PrivateSession {
+        try PrivateSessionCodec.decode(data)
+    }
+
+    static func encodePrivateSession(_ value: PrivateSession) throws -> Data {
+        let data = try JSONEncoder().encode(value)
+        _ = try privateSession(data)
+        return data
+    }
+
     static func token(_ data: Data) throws -> Token {
         let object = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["id_token", "scope"])
         guard case let .string(access)? = object["access_token"], case let .string(kind)? = object["token_type"], case let .number(expiry)? = object["expires_in"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken, kind.lowercased() == "bearer", let expiresIn = Int(expiry), (1...86400).contains(expiresIn) else { throw EnrollmentError.message("Account response was rejected. Try again.") }

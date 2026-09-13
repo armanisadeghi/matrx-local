@@ -10,11 +10,6 @@ private let callback = URL(string: "matrx-vault-provider://oauth/callback")!
 private let authorizeURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/authorize")!
 private let tokenURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/token")!
 private let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo")!
-private let keychainService = "com.aimatrx.desktop.vault-provider.session"
-private let keychainAccount = "current-session"
-private let keychainGroup = "JH83UH9P4D.com.aimatrx.desktop.vault-provider"
-
-
 /// URLSession's convenience completion handler has already accumulated the
 /// response. This delegate refuses redirects and cancels as soon as the fixed
 /// envelope limit is crossed.
@@ -46,33 +41,6 @@ private func constantTimeEqual(_ left: String, _ right: String) -> Bool {
     let width = max(lhs.count, rhs.count)
     for index in 0..<width { mismatch |= Int((index < lhs.count ? lhs[index] : 0) ^ (index < rhs.count ? rhs[index] : 0)) }
     return mismatch == 0
-}
-
-private extension ProviderStore {
-    func deletePrivate(context: LAContext) throws {
-        context.interactionNotAllowed = true
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
-            kSecAttrAccessGroup as String: keychainGroup,
-            kSecUseDataProtectionKeychain as String: true,
-            kSecAttrSynchronizable as String: false,
-            kSecUseAuthenticationContext as String: context,
-        ]
-        let result = SecItemDelete(query as CFDictionary)
-        guard result == errSecSuccess || result == errSecItemNotFound else {
-            throw EnrollmentError.message("Could not clear the Vault session. Reconnect the provider.")
-        }
-    }
-    func save(_ value: PrivateSession, context: LAContext) throws {
-        let data = try JSONEncoder().encode(value); guard data.count <= 48 * 1024 else { throw EnrollmentError.message("Vault session is too large. Reconnect the provider.") }
-        guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .userPresence, nil) else { throw EnrollmentError.message("Could not protect the Vault session.") }
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: keychainAccount, kSecAttrAccessGroup as String: keychainGroup, kSecUseDataProtectionKeychain as String: true, kSecAttrSynchronizable as String: false]
-        try deletePrivate(context: context)
-        var query = base; query[kSecValueData as String] = data; query[kSecAttrAccessControl as String] = access; query[kSecUseAuthenticationContext as String] = context
-        guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else { throw EnrollmentError.message("Could not save the Vault session. Reconnect the provider.") }
-    }
 }
 
 private final class Transaction {
@@ -117,7 +85,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
                         let store = try ProviderStore()
-                        let state = try store.initializeExplicitConnect { try store.deletePrivate(context: context) }
+                        let state = try store.initializeExplicitConnect { try NativeVaultPrivateSession().delete(context: context) }
                         DispatchQueue.main.async { self?.startAuthorization(transaction, generation: state.generation, key: key) }
                     } catch { DispatchQueue.main.async { self?.showError(error) } }
                 }
@@ -169,21 +137,36 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private func userinfo(_ token: Token, generation: String, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try VaultEnvelopeCodec.userinfo(data); let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try VaultEnvelopeCodec.userinfo(data); let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try NativeVaultPrivateSession().save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.start(request)
     }
     private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
     @objc private func disconnect() {
-        do {
-            let store = try ProviderStore()
-            try store.locked { old in
-                let cleared = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
-                try store.write(cleared)
-                let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: keychainAccount, kSecAttrAccessGroup as String: keychainGroup, kSecUseDataProtectionKeychain as String: true]
-                // Local invalidation is authoritative; any server revocation is best-effort and only ever uses this provider session.
-                SecItemDelete(query as CFDictionary)
+        let privateSession = NativeVaultPrivateSession()
+        let context: LAContext
+        do { context = try privateSession.authenticatedContext(reason: "Disconnect your AI Matrx Vault session") }
+        catch { showError(error); return }
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Disconnect your AI Matrx Vault session") { [weak self] allowed, _ in
+            guard allowed else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let store = try ProviderStore()
+                    var deletionFailure: Error?
+                    try store.locked { old in
+                        // Public invalidation fences stale bytes before the exact,
+                        // authenticated Keychain deletion; no network logout here.
+                        let cleared = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
+                        try store.write(cleared)
+                        do { try privateSession.delete(context: context) }
+                        catch { deletionFailure = error }
+                        // Do not release the shared generation lock while a
+                        // callback may still clear an identity for this provider.
+                        try ProviderIdentityIndex.system.clearWhileLocked()
+                    }
+                    if let deletionFailure { throw deletionFailure }
+                } catch { self?.showError(error) }
             }
-        } catch { showError(error) }
+        }
     }
     @objc private func cancel() { extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue)) }
 }

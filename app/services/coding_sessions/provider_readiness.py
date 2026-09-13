@@ -20,13 +20,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.common.system_logger import get_logger
-
-logger = get_logger()
-
 import psutil
 
+from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
+
+logger = get_logger()
 
 _PROVIDER_ORDER = ("claude_code", "codex", "cursor", "vscode")
 _DISPLAY_NAMES = {

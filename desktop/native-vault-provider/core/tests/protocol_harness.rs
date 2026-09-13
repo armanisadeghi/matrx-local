@@ -1,7 +1,7 @@
 #![cfg(feature = "protocol-test-harness")]
 
 use serde::Deserialize;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 #[derive(Deserialize)]
@@ -97,4 +97,40 @@ fn process_keeps_a_valid_id_when_strict_option_validation_fails() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].id.as_deref(), Some("echo-me"));
     assert_eq!(out[0].code.as_deref(), Some("InvalidRequest"));
+}
+
+#[test]
+fn process_emits_a_complete_frame_before_stdin_closes() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_protocol-harness"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    stdin
+        .write_all(format!("{}\n", register("open-1", "success")).as_bytes())
+        .unwrap();
+    stdin.flush().unwrap();
+    let mut line = String::new();
+    BufReader::new(stdout).read_line(&mut line).unwrap();
+    let response: Response = serde_json::from_str(&line).unwrap();
+    assert!(response.ok);
+    assert_eq!(response.id.as_deref(), Some("open-1"));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn process_drains_oversize_frame_then_accepts_the_next_valid_frame() {
+    let oversized = "x".repeat(1024 * 1024);
+    let out = run(format!(
+        "{oversized}\n{}\n",
+        register("after-oversize", "success")
+    ));
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].id, None);
+    assert_eq!(out[0].code.as_deref(), Some("InvalidRequest"));
+    assert!(out[1].ok);
+    assert_eq!(out[1].id.as_deref(), Some("after-oversize"));
 }

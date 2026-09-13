@@ -508,9 +508,29 @@ pub async fn cancel_wire_registration(frame: Frame) -> Result<(), FixedError> {
     else {
         return Err(FixedError::InvalidRequest);
     };
-    // The prepared operation is deliberately dropped without a persister, so it cannot expose a credential.
-    drop(prepare_create(id, options, origin, uv).await?);
-    Ok(())
+    struct PendingCommit {
+        polled: bool,
+    }
+    #[async_trait]
+    impl RegistrationPersister for PendingCommit {
+        async fn persist(&mut self, _: &[u8]) -> Result<(), FixedError> {
+            self.polled = true;
+            std::future::pending().await
+        }
+    }
+    let prepared = prepare_create(id, options, origin, uv).await?;
+    let mut persister = PendingCommit { polled: false };
+    let mut commit = Box::pin(prepared.prepared.commit_with(&mut persister));
+    std::future::poll_fn(|cx| {
+        assert!(matches!(commit.as_mut().poll(cx), std::task::Poll::Pending));
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(commit);
+    persister
+        .polled
+        .then_some(())
+        .ok_or(FixedError::OperationFailed)
 }
 impl PendingRegistration {
     pub async fn commit<P: RegistrationPersister>(

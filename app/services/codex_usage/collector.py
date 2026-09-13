@@ -1,9 +1,4 @@
-"""Read bounded Codex telemetry without retaining conversation contents.
-
-The collector deliberately exposes attribution and counter fields only.  It
-never returns prompts, response text, tool arguments, tool output, or any path
-under the user's private ``.arman`` directory.
-"""
+"""Bounded, resumable, local-only Codex usage collection."""
 from __future__ import annotations
 
 import asyncio
@@ -13,356 +8,243 @@ import json
 import re
 import sqlite3
 import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens")
 ACTIVITY_FIELDS = ("peer_message_call_ids", "peer_message_invocations", "child_call_ids", "child_invocations")
-MAX_SECONDS = 60
-MAX_BYTES = 8 * 1024**3
-MAX_FILES = 400
-STANDARD_RATES: dict[str, tuple[float, float, float]] = {
-    "gpt-6-astra": (250, 25, 1250), "gpt-5.6-sol": (100, 10, 500),
-    "gpt-5.6-terra": (50, 5, 300), "gpt-5.6-luna": (5, 0.5, 30),
-    "gpt-5.5": (125, 12.5, 750), "gpt-5.4": (62.5, 6.25, 375),
-    "gpt-5.4-mini": (18.75, 1.875, 113), "gpt-5.3-codex": (43.75, 4.375, 350),
-}
-
-
-def _stamp(value: Any) -> dt.datetime | None:
-    try:
-        return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
-    except (TypeError, ValueError):
-        return None
-
-
-def _metrics() -> collections.Counter[str]:
-    return collections.Counter({field: 0 for field in (*FIELDS, *ACTIVITY_FIELDS)} | {"response_count": 0})
-
-
-def _plain(value: collections.Counter[str]) -> dict[str, int]:
-    result = {field: int(value.get(field, 0)) for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count")}
-    result["uncached_input_tokens"] = max(0, result["input_tokens"] - result["cached_input_tokens"])
-    return result
-
-
-def _project_for(cwd: Any, codex_home: Path) -> str:
-    try:
-        path = Path(str(cwd)).resolve()
-        code = Path.home() / "code"
-        worktrees = codex_home / "worktrees"
-        if path.is_relative_to(worktrees):
-            parts = path.relative_to(worktrees).parts
-            return parts[1] if len(parts) > 1 else "Worktree (project unavailable)"
-        relative = path.relative_to(code)
-        return relative.parts[0] if relative.parts else "code"
-    except (ValueError, OSError):
-        return "unknown"
-
-
-def _call_name(payload: dict[str, Any]) -> str:
-    function = payload.get("function")
-    return str(payload.get("name") or payload.get("tool_name") or (function.get("name") if isinstance(function, dict) else "") or "")
-
-
-def _call_args(payload: dict[str, Any]) -> Any:
-    function = payload.get("function")
-    return payload.get("arguments", payload.get("input", function.get("arguments", {}) if isinstance(function, dict) else {}))
-
-
-def _target_thread_id(value: Any) -> str | None:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return None
-    if not isinstance(value, dict):
-        return None
-    for key in ("threadId", "thread_id", "targetThreadId", "target_thread_id"):
-        if value.get(key):
-            return str(value[key])
-    return None
-
-
+MAX_SECONDS, MAX_BYTES, MAX_FILES, MAX_CACHE_STATES = 60, 8 * 1024**3, 400, 4
+STANDARD_RATES = {"gpt-6-astra": (250, 25, 1250), "gpt-5.6-sol": (100, 10, 500), "gpt-5.6-terra": (50, 5, 300), "gpt-5.6-luna": (5, .5, 30), "gpt-5.5": (125, 12.5, 750), "gpt-5.4": (62.5, 6.25, 375), "gpt-5.4-mini": (18.75, 1.875, 113), "gpt-5.3-codex": (43.75, 4.375, 350)}
 _EXEC_SEND = re.compile(r"tools\.mcp__codex_app__send_message_to_thread\s*\(\s*\{(?P<body>.{0,12000}?)\}\s*\)", re.S)
 _EXEC_TARGET = re.compile(r"(?:threadId|thread_id)\s*:\s*['\"](?P<id>[0-9a-f-]{36})['\"]")
 _EXEC_CHILD = re.compile(r"tools\.collaboration\.(?:spawn_agent|followup_task|send_message)\s*\(")
 
 
-def _embedded_activity(value: Any) -> tuple[list[str | None], int]:
-    """Parse actual call syntax from an exec input, never result text."""
-    if not isinstance(value, str):
-        return [], 0
-    targets = [_EXEC_TARGET.search(match.group("body")).group("id") if _EXEC_TARGET.search(match.group("body")) else None for match in _EXEC_SEND.finditer(value)]
+def _stamp(value: Any) -> dt.datetime | None:
+    try: return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+    except (TypeError, ValueError): return None
+
+
+def _metrics() -> collections.Counter[str]: return collections.Counter({key: 0 for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count")})
+def _plain(value: collections.Counter[str]) -> dict[str, int]:
+    output = {key: int(value.get(key, 0)) for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count")}
+    output["uncached_input_tokens"] = max(0, output["input_tokens"] - output["cached_input_tokens"]); return output
+
+
+def _project(cwd: Any, home: Path) -> str:
+    try:
+        path, code = Path(str(cwd)).resolve(), Path.home() / "code"
+        if path.is_relative_to(home / "worktrees"):
+            parts = path.relative_to(home / "worktrees").parts; return parts[1] if len(parts) > 1 else "Worktree (project unavailable)"
+        relative = path.relative_to(code); return relative.parts[0] if relative.parts else "code"
+    except (ValueError, OSError): return "unknown"
+
+
+def _metadata(home: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    state = home / "state_5.sqlite"
+    if not state.is_file(): return {}, {}
+    try:
+        with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as db:
+            rows = db.execute("select id,name,cwd,rollout_path,created_at,updated_at,project_id from threads").fetchall()
+            edges, projects = dict(db.execute("select child_thread_id,parent_thread_id from thread_spawn_edges")), dict(db.execute("select id,name from projects"))
+    except sqlite3.Error: return {}, {}
+    threads = {str(row[0]): {"title": str(row[1] or f"Untitled conversation {str(row[0])[:8]}"), "cwd": row[2], "rollout_path": row[3], "created_at": row[4], "updated_at": row[5], "project": projects.get(row[6]) or _project(row[2], home)} for row in rows if row[0] and row[3]}
+    for tid, item in threads.items():
+        if tid not in edges and item["project"] == "code": item["project"] = "Workspace (multiple projects)"
+    return threads, {str(key): str(value) for key, value in edges.items() if key and value}
+
+
+def _call(payload: dict[str, Any]) -> tuple[str, Any, str]:
+    function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+    return str(payload.get("name") or payload.get("tool_name") or function.get("name") or ""), payload.get("arguments", payload.get("input", function.get("arguments", {}))), str(payload.get("call_id") or payload.get("id") or "")
+
+
+def _target(value: Any) -> str | None:
+    if isinstance(value, str):
+        try: value = json.loads(value)
+        except (TypeError, ValueError): return None
+    if isinstance(value, dict):
+        for key in ("threadId", "thread_id", "targetThreadId", "target_thread_id"):
+            if value.get(key): return str(value[key])
+    return None
+
+
+def _embedded(value: Any) -> tuple[list[str | None], int]:
+    if not isinstance(value, str): return [], 0
+    targets = []
+    for match in _EXEC_SEND.finditer(value):
+        hit = _EXEC_TARGET.search(match.group("body")); targets.append(hit.group("id") if hit else None)
     return targets, len(_EXEC_CHILD.findall(value))
 
 
-def _metadata(codex_home: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    state = codex_home / "state_5.sqlite"
-    if not state.is_file():
-        return {}, {}
-    try:
-        with sqlite3.connect(f"file:{state}?mode=ro", uri=True) as db:
-            rows = db.execute("select id, name, cwd, rollout_path, created_at, updated_at, project_id from threads").fetchall()
-            edges = dict(db.execute("select child_thread_id, parent_thread_id from thread_spawn_edges"))
-            projects = dict(db.execute("select id, name from projects"))
-    except sqlite3.Error:
-        return {}, {}
-    threads = {
-        str(row[0]): {
-            "title": str(row[1] or f"Untitled conversation {str(row[0])[:8]}"),
-            "cwd": row[2], "rollout_path": row[3], "created_at": row[4], "updated_at": row[5],
-            "project": projects.get(row[6]) or _project_for(row[2], codex_home),
-        }
-        for row in rows if row[0] and row[3]
-    }
+@dataclass(frozen=True)
+class Candidate:
+    thread_id: str; path: Path; frozen_size: int
+
+
+@dataclass
+class UsageScan:
+    start: dt.datetime; end: dt.datetime; created_at: dt.datetime; threads: dict[str, dict[str, Any]]; edges: dict[str, str]; candidates: list[Candidate]
+    cursor: int = 0; cells: dict[tuple[str, str, str], collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(_metrics)); bins: dict[tuple[dt.datetime, str, str, str], collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(_metrics))
+    seen_responses: set[str] = field(default_factory=set); seen_calls: set[str] = field(default_factory=set); targets: dict[str, collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(collections.Counter))
+    duplicates: int = 0; foreign_records: int = 0; missing: int = 0; skipped: int = 0; truncated: int = 0; bytes_read: int = 0; notes: list[str] = field(default_factory=list)
+
+    def root(self, tid: str) -> str:
+        seen: set[str] = set()
+        while tid in self.edges and tid not in seen: seen.add(tid); tid = self.edges[tid]
+        return tid
+
+    @property
+    def complete(self) -> bool: return self.cursor >= len(self.candidates)
+
+
+def create_scan(start: dt.datetime, end: dt.datetime, home: Path | None = None) -> UsageScan:
+    if start.tzinfo is None or end.tzinfo is None or start >= end: raise ValueError("start and end must be ordered timezone-aware datetimes")
+    start, end, home = start.astimezone(dt.timezone.utc), end.astimezone(dt.timezone.utc), home or Path.home() / ".codex"
+    threads, edges = _metadata(home); candidates: list[Candidate] = []
     for tid, item in threads.items():
-        if tid not in edges and item["project"] == "code":
-            item["project"] = "Workspace (multiple projects)"
-    return threads, {str(k): str(v) for k, v in edges.items() if k and v}
+        try: active = float(item["created_at"]) < end.timestamp() and float(item["updated_at"]) >= start.timestamp()
+        except (TypeError, ValueError): active = True
+        path = Path(str(item["rollout_path"]))
+        if active and ".arman" not in path.parts:
+            try: candidates.append(Candidate(tid, path, path.stat().st_size))
+            except OSError: candidates.append(Candidate(tid, path, 0))
+    # Stable ID order avoids a size-derived ranking. Every frozen candidate is
+    # eventually visited across explicit continuations.
+    candidates.sort(key=lambda item: item.thread_id)
+    scan = UsageScan(start, end, dt.datetime.now(dt.timezone.utc), threads, edges, candidates)
+    if not threads: scan.notes.append("Codex local state is unavailable or contains no readable conversations.")
+    return scan
+
+
+def _read_candidate(scan: UsageScan, candidate: Candidate, began: float, batch_bytes: int) -> tuple[bool, int, dict[tuple[str, str, str], collections.Counter[str]], dict[tuple[dt.datetime, str, str, str], collections.Counter[str]], list[tuple[str, dict[str, Any], dict[str, tuple[str, str]], dt.datetime]], list[tuple[str, list[str | None], int]]]:
+    """Read one frozen file. A partial final line is discarded, never parsed."""
+    empty_cells: dict[tuple[str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics); empty_bins: dict[tuple[dt.datetime, str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics)
+    if not candidate.path.is_file() or candidate.frozen_size <= 0: return True, 0, empty_cells, empty_bins, [], []
+    if candidate.frozen_size + batch_bytes > MAX_BYTES: return True, 0, empty_cells, empty_bins, [], []
+    contexts: dict[str, tuple[str, str]] = {}; usage: list[tuple[str, dict[str, Any], dict[str, tuple[str, str]], dt.datetime]] = []; activity: list[tuple[str, list[str | None], int]] = []; read = 0
+    try:
+        with candidate.path.open("rb") as source:
+            while read < candidate.frozen_size:
+                if time.monotonic() - began >= MAX_SECONDS: return False, read, empty_cells, empty_bins, [], []
+                raw = source.readline(candidate.frozen_size - read); read += len(raw)
+                if not raw: break
+                if read >= candidate.frozen_size and not raw.endswith(b"\n"): break
+                if not any(tag in raw[:500] for tag in (b'"turn_context"', b'"token_usage_record"', b'"custom_tool_call"', b'"function_call"')): continue
+                try: record = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError): continue
+                payload, kind, when = record.get("payload") or {}, record.get("type"), _stamp(record.get("timestamp"))
+                if kind == "turn_context" and payload.get("turn_id"):
+                    contexts[str(payload["turn_id"])] = (str(payload.get("model") or "unknown"), str(payload.get("reasoning_effort", payload.get("effort")) or "unknown")); continue
+                if not when or not (scan.start <= when < scan.end): continue
+                if kind == "token_usage_record": usage.append((candidate.thread_id, payload, contexts, when)); continue
+                if kind == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
+                    name, args, call_id = _call(payload); targets: list[str | None] = []; children = 0
+                    if "send_message_to_thread" in name: targets = [_target(args)]
+                    elif name == "exec": targets, children = _embedded(args)
+                    elif any(key in name for key in ("spawn_agent", "followup_task", "collaboration.send_message")): children = 1
+                    if targets or children: activity.append((call_id or f"{candidate.thread_id}:{read}", targets, children))
+    except OSError: return True, read, empty_cells, empty_bins, [], []
+    return True, read, empty_cells, empty_bins, usage, activity
+
+
+def advance_scan(scan: UsageScan) -> None:
+    began, batch_bytes, visited = time.monotonic(), 0, 0
+    while scan.cursor < len(scan.candidates) and visited < MAX_FILES:
+        if time.monotonic() - began >= MAX_SECONDS: scan.notes.append("time budget reached; continue collection to resume"); break
+        candidate = scan.candidates[scan.cursor]
+        if not candidate.path.is_file() or candidate.frozen_size <= 0:
+            scan.missing += 1; scan.cursor += 1; visited += 1; continue
+        if batch_bytes + candidate.frozen_size > MAX_BYTES:
+            scan.skipped += 1; scan.notes.append(f"frozen file exceeded byte budget: {candidate.path.name}"); scan.cursor += 1; visited += 1; continue
+        complete, read, _cells, _bins, usage, activity = _read_candidate(scan, candidate, began, batch_bytes)
+        batch_bytes += read; scan.bytes_read += read
+        if not complete:
+            scan.truncated += 1; scan.notes.append("time budget reached while reading a file; no partial file data was counted"); break
+        scan.cursor += 1; visited += 1
+        for tid, payload, contexts, when in usage:
+            if str(payload.get("thread_id")) != tid: scan.foreign_records += 1; continue
+            response_id = str(payload.get("response_id") or "")
+            if not response_id: continue
+            if response_id in scan.seen_responses: scan.duplicates += 1; continue
+            scan.seen_responses.add(response_id); model, effort = contexts.get(str(payload.get("turn_id")), ("unknown", "unknown")); usage_data = payload.get("usage") or {}
+            bucket = when.replace(minute=(when.minute // 10) * 10, second=0, microsecond=0)
+            for group in (scan.cells[(tid, model, effort)], scan.bins[(bucket, tid, model, effort)]):
+                group["response_count"] += 1
+                for key in FIELDS:
+                    value = usage_data.get(key, 0)
+                    if isinstance(value, int) and value >= 0: group[key] += value
+        for call_id, targets, children in activity:
+            if call_id in scan.seen_calls: continue
+            scan.seen_calls.add(call_id); row = scan.cells[(candidate.thread_id, "unknown", "unknown")]
+            if targets:
+                row["peer_message_call_ids"] += 1; row["peer_message_invocations"] += len(targets)
+                for target in targets:
+                    if target: scan.targets[candidate.thread_id][target] += 1
+            if children: row["child_call_ids"] += 1; row["child_invocations"] += children
 
 
 def _estimate(row: dict[str, Any]) -> dict[str, Any]:
     rates = STANDARD_RATES.get(str(row["model"]))
-    if rates is None:
-        return {**row, "estimated_standard_credits": None, "credit_rate_known": False}
-    uncached = max(0, int(row["input_tokens"]) - int(row["cached_input_tokens"]))
-    # output_tokens already includes reasoning_output_tokens. Never add it twice.
-    estimate = uncached * rates[0] / 1_000_000 + int(row["cached_input_tokens"]) * rates[1] / 1_000_000 + int(row["output_tokens"]) * rates[2] / 1_000_000
-    return {**row, "estimated_standard_credits": estimate, "credit_rate_known": True}
+    if rates is None: return row | {"estimated_standard_credits": None, "credit_rate_known": False}
+    value = (max(0, row["input_tokens"] - row["cached_input_tokens"]) * rates[0] + row["cached_input_tokens"] * rates[1] + row["output_tokens"] * rates[2]) / 1_000_000
+    return row | {"estimated_standard_credits": value, "credit_rate_known": True}
 
 
 def _aggregate(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:
-    buckets: dict[tuple[Any, ...], collections.Counter[str]] = collections.defaultdict(_metrics)
+    grouped: dict[tuple[Any, ...], collections.Counter[str]] = collections.defaultdict(_metrics)
     for row in rows:
-        bucket = buckets[tuple(row[key] for key in keys)]
-        for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count"):
-            bucket[field] += int(row.get(field, 0))
-    result = []
-    for key, value in buckets.items():
-        item = dict(zip(keys, key)) | _plain(value)
-        # A model aggregation retains pricing; project/conversation rows include mixed models.
-        item["model"] = item.get("model", "mixed")
-        result.append(_estimate(item))
-    return sorted(result, key=lambda row: row["total_tokens"], reverse=True)
+        for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count"): grouped[tuple(row[key] for key in keys)][key] += int(row.get(key, 0))
+    return sorted([_estimate(dict(zip(keys, key)) | {"model": (dict(zip(keys, key)).get("model", "mixed"))} | _plain(value)) for key, value in grouped.items()], key=lambda row: row["total_tokens"], reverse=True)
+
+
+def snapshot(scan: UsageScan) -> dict[str, Any]:
+    rows = []
+    for (tid, model, effort), values in scan.cells.items():
+        item = {"conversation_id": tid, "conversation_title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "root_id": scan.root(tid), "project": scan.threads.get(tid, {}).get("project", "unknown"), "model": model, "effort": effort, **_plain(values)}; rows.append(item)
+    for tid in {row["conversation_id"] for row in rows}:
+        group = [row for row in rows if row["conversation_id"] == tid]; activity = next((row for row in group if row["model"] == "unknown" and any(row[key] for key in ACTIVITY_FIELDS)), None)
+        if activity is not None:
+            anchor = max((row for row in group if row is not activity), key=lambda row: row["total_tokens"], default=activity)
+            if anchor is not activity:
+                for key in ACTIVITY_FIELDS: anchor[key] += activity[key]
+                rows.remove(activity)
+            if tid in scan.targets: anchor["peer_targets"] = [{"conversation_id": target, "title": scan.threads[target]["title"], "invocations": count} for target, count in scan.targets[tid].most_common() if target in scan.threads]
+    bins = [{"start": when.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(values)} for (when, tid, model, effort), values in sorted(scan.bins.items())]
+    tasks = [{"id": tid, "title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "project": scan.threads.get(tid, {}).get("project", "unknown"), "root_id": scan.root(tid), "is_worker": tid != scan.root(tid), **{key: sum(row[key] for row in rows if row["conversation_id"] == tid) for key in ACTIVITY_FIELDS}} for tid in sorted({row["conversation_id"] for row in rows})]
+    total = _plain(collections.Counter({key: sum(int(row.get(key, 0)) for row in rows) for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count")})); models, model_effort, projects = _aggregate(rows, ("model",)), _aggregate(rows, ("model", "effort")), _aggregate(rows, ("project",)); estimate = sum(float(row["estimated_standard_credits"] or 0) for row in models)
+    coverage = {"indexed_files": len(scan.candidates), "scanned_files": scan.cursor, "completed_candidates": scan.cursor, "total_candidates": len(scan.candidates), "can_resume": not scan.complete, "missing_files": scan.missing, "skipped_files": scan.skipped, "truncated_files": scan.truncated, "bytes_read": scan.bytes_read, "max_seconds": MAX_SECONDS, "max_bytes": MAX_BYTES, "max_indexed_files": MAX_FILES, "candidate_overflow": False, "budget_exhausted": not scan.complete, "complete": scan.complete, "notes": list(dict.fromkeys(scan.notes))}
+    return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(), "indexed_at": scan.created_at.isoformat(), "range": {"start": scan.start.isoformat(), "end": scan.end.isoformat()}, "coverage": coverage, "totals": total | {"estimated_standard_credits": estimate}, "credits": {"estimated_standard": estimate, "measured_allowance": None, "label": "Estimated standard credits — not actual Pro allowance debits", "unknown_models": sorted({str(row["model"]) for row in models if not row["credit_rate_known"]})}, "models": models, "model_effort": model_effort, "projects": projects, "cells": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "tasks": tasks, "bins": bins, "conversations": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "workers": [row for row in rows if row["conversation_id"] != row["root_id"]], "selected_view_groups": {"model": models, "model_effort": model_effort}, "activity": {"classification": "heuristic metadata classification; inbound wakes and causal cost are unknown without recipient provenance", "outbound_peer_calls": total["peer_message_invocations"], "child_calls": total["child_invocations"], "inbound_peer_wakes": "unknown", "causal_cost": "unknown"}, "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across collected files: {scan.duplicates} ignored.", f"Embedded owner filter excluded {scan.foreign_records} copied or foreign records.", "Peer activity is proved from function calls and embedded functions.exec JavaScript only; tool outputs and descriptions are not counted.", "Inbound peer wakes and causal cost are unknown without recipient provenance.", "No prompts, response text, tool arguments, tool output, credential values, or recipient identities are returned."]}
 
 
 def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
-    """Return sanitized aggregate activity for the requested half-open UTC window."""
-    if start.tzinfo is None or end.tzinfo is None or start >= end:
-        raise ValueError("start and end must be ordered timezone-aware datetimes")
-    start, end = start.astimezone(dt.timezone.utc), end.astimezone(dt.timezone.utc)
-    began, codex_home = time.monotonic(), Path.home() / ".codex"
-    threads, edges = _metadata(codex_home)
-    coverage: dict[str, Any] = {
-        "indexed_files": 0, "scanned_files": 0, "missing_files": 0, "skipped_files": 0,
-        "truncated_files": 0, "bytes_read": 0, "max_seconds": MAX_SECONDS, "max_bytes": MAX_BYTES,
-        "max_indexed_files": MAX_FILES, "candidate_overflow": False, "budget_exhausted": False,
-        "complete": False, "notes": [],
-    }
-    if not threads:
-        coverage["notes"].append("Codex local state is unavailable or contains no readable conversations.")
-        return _result(start, end, coverage, [], [], [], 0, 0)
-
-    def lineage(tid: str) -> list[str]:
-        chain: list[str] = []; seen: set[str] = set(); current: str | None = tid
-        while current and current not in seen:
-            chain.append(current); seen.add(current); current = edges.get(current)
-        return chain
-
-    def root_for(tid: str) -> str:
-        chain = lineage(tid)
-        return chain[-1] if chain else tid
-
-    candidates = []
-    for tid, item in threads.items():
-        try:
-            active = float(item["created_at"]) < end.timestamp() and float(item["updated_at"]) >= start.timestamp()
-        except (TypeError, ValueError):
-            active = True
-        if active:
-            candidates.append((tid, item))
-    candidates.sort(key=lambda item: Path(str(item[1]["rollout_path"])).stat().st_size if Path(str(item[1]["rollout_path"])).is_file() else 0)
-    coverage["candidate_overflow"] = len(candidates) > MAX_FILES
-    candidates = candidates[:MAX_FILES]; coverage["indexed_files"] = len(candidates)
-    cells: dict[tuple[str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics)
-    bins: dict[tuple[dt.datetime, str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics)
-    seen_responses: set[str] = set(); duplicates = foreign_records = 0
-    seen_tool_calls: set[str] = set()
-    target_counts: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
-
-    for tid, info in candidates:
-        if time.monotonic() - began >= MAX_SECONDS:
-            coverage["budget_exhausted"] = True; coverage["notes"].append("time budget reached"); break
-        path = Path(str(info["rollout_path"]))
-        # The ownership filter is deliberate: private operator storage is never a candidate.
-        if ".arman" in path.parts or not path.is_file():
-            coverage["missing_files"] += 1; continue
-        try:
-            size = path.stat().st_size
-        except OSError:
-            coverage["missing_files"] += 1; continue
-        if coverage["bytes_read"] + size > MAX_BYTES:
-            coverage["skipped_files"] += 1; coverage["budget_exhausted"] = True; continue
-        contexts: dict[str, tuple[str, str]] = {}; usages: list[tuple[dt.datetime, dict[str, Any]]] = []
-        try:
-            with path.open("rb") as source:
-                for raw in source:
-                    coverage["bytes_read"] += len(raw)
-                    if time.monotonic() - began >= MAX_SECONDS:
-                        coverage["budget_exhausted"] = True; coverage["truncated_files"] += 1; break
-                    if not any(tag in raw[:500] for tag in (b'"turn_context"', b'"token_usage_record"', b'"custom_tool_call"', b'"function_call"')):
-                        continue
-                    try:
-                        record = json.loads(raw)
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        continue
-                    payload = record.get("payload") or {}; kind = record.get("type"); when = _stamp(record.get("timestamp"))
-                    if kind == "turn_context" and payload.get("turn_id"):
-                        contexts[str(payload["turn_id"])] = (str(payload.get("model") or "unknown"), str(payload.get("reasoning_effort", payload.get("effort")) or "unknown")); continue
-                    if not when or not (start <= when < end):
-                        continue
-                    if kind == "token_usage_record": usages.append((when, payload))
-                    elif kind == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
-                        name, args = _call_name(payload), _call_args(payload)
-                        call_id = str(payload.get("call_id") or payload.get("id") or "")
-                        if call_id and call_id in seen_tool_calls:
-                            continue
-                        if call_id:
-                            seen_tool_calls.add(call_id)
-                        peer_targets: list[str | None] = []
-                        child_invocations = 0
-                        if "send_message_to_thread" in name:
-                            peer_targets = [_target_thread_id(args)]
-                        elif name == "exec":
-                            peer_targets, child_invocations = _embedded_activity(args)
-                        elif any(part in name for part in ("spawn_agent", "followup_task", "collaboration.send_message")):
-                            child_invocations = 1
-                        if peer_targets or child_invocations:
-                            # Activity belongs to this source conversation only;
-                            # no output or tool-description strings participate.
-                            activity = cells[(tid, "unknown", "unknown")]
-                            if peer_targets:
-                                activity["peer_message_call_ids"] += 1
-                                activity["peer_message_invocations"] += len(peer_targets)
-                                for target in peer_targets:
-                                    if target:
-                                        target_counts[tid][target] += 1
-                            if child_invocations:
-                                activity["child_call_ids"] += 1
-                                activity["child_invocations"] += child_invocations
-            coverage["scanned_files"] += 1
-        except OSError:
-            coverage["missing_files"] += 1; continue
-        for _when, payload in usages:
-            if str(payload.get("thread_id")) != tid:
-                foreign_records += 1; continue
-            response_id = payload.get("response_id")
-            if not response_id:
-                continue
-            if str(response_id) in seen_responses:
-                duplicates += 1; continue
-            seen_responses.add(str(response_id))
-            model, effort = contexts.get(str(payload.get("turn_id")), ("unknown", "unknown"))
-            bucket = _when.replace(minute=(_when.minute // 10) * 10, second=0, microsecond=0)
-            for group in (cells[(tid, model, effort)], bins[(bucket, tid, model, effort)]):
-                group["response_count"] += 1
-                for field in FIELDS:
-                    value = (payload.get("usage") or {}).get(field, 0)
-                    if isinstance(value, int) and value >= 0: group[field] += value
-
-    rows = []
-    for (tid, model, effort), metrics in cells.items():
-        root = root_for(tid); owner = threads.get(tid, {})
-        rows.append({"conversation_id": tid, "conversation_title": owner.get("title", f"Conversation {tid[:8]}"), "root_id": root,
-                     "project": owner.get("project", "unknown"), "model": model, "effort": effort, **_plain(metrics)})
-    # Tool activity is attributed to the source conversation, while model rows
-    # remain truthful when a tool event has no corresponding token response.
-    for tid in {row["conversation_id"] for row in rows}:
-        thread_rows = [row for row in rows if row["conversation_id"] == tid]
-        activity_row = next((row for row in thread_rows if row["model"] == "unknown" and any(row[field] for field in ACTIVITY_FIELDS)), None)
-        if activity_row is None:
-            continue
-        anchor = max((row for row in thread_rows if row is not activity_row), key=lambda row: row["total_tokens"], default=activity_row)
-        if anchor is not activity_row:
-            for field in ACTIVITY_FIELDS:
-                anchor[field] += activity_row[field]
-            rows.remove(activity_row)
-        if tid in target_counts:
-            anchor["peer_targets"] = [{"conversation_id": target, "title": threads[target]["title"], "invocations": count}
-                                      for target, count in target_counts[tid].most_common() if target in threads]
-    coverage["complete"] = not any((coverage["budget_exhausted"], coverage["missing_files"], coverage["truncated_files"], coverage["candidate_overflow"]))
-    bin_rows = [{"start": bucket.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(metrics)}
-                for (bucket, tid, model, effort), metrics in sorted(bins.items())]
-    task_rows = []
-    for tid in sorted({row["conversation_id"] for row in rows}):
-        owner = threads.get(tid, {}); root = root_for(tid)
-        task_rows.append({"id": tid, "title": owner.get("title", f"Conversation {tid[:8]}"), "project": owner.get("project", "unknown"), "root_id": root,
-                          "is_worker": tid != root, **{field: sum(row[field] for row in rows if row["conversation_id"] == tid) for field in ACTIVITY_FIELDS}})
-    return _result(start, end, coverage, rows, bin_rows, task_rows, duplicates, foreign_records)
-
-
-def _result(start: dt.datetime, end: dt.datetime, coverage: dict[str, Any], rows: list[dict[str, Any]], bins: list[dict[str, Any]], tasks: list[dict[str, Any]], duplicates: int, foreign_records: int) -> dict[str, Any]:
-    total = _plain(collections.Counter({field: sum(int(row.get(field, 0)) for row in rows) for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count")}))
-    model_effort = [_estimate(row) for row in _aggregate(rows, ("model", "effort"))]
-    models = [_estimate(row) for row in _aggregate(rows, ("model",))]
-    projects = _aggregate(rows, ("project",))
-    conversations = sorted(rows, key=lambda row: row["total_tokens"], reverse=True)
-    workers = [row for row in conversations if row["conversation_id"] != row["root_id"]]
-    estimated = sum(float(row["estimated_standard_credits"] or 0) for row in models)
-    return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(), "range": {"start": start.isoformat(), "end": end.isoformat()},
-            "coverage": coverage, "totals": total | {"estimated_standard_credits": estimated},
-            "credits": {"estimated_standard": estimated, "measured_allowance": None,
-                        "label": "Estimated standard credits — not actual Pro allowance debits",
-                        "unknown_models": sorted({str(row["model"]) for row in models if not row["credit_rate_known"]})},
-            "models": models, "model_effort": model_effort, "projects": projects,
-            # Canonical primitive rows stay in the response so native and web
-            # drilldowns reconcile to the same values instead of re-collecting.
-            "cells": conversations, "tasks": tasks, "bins": bins,
-            "conversations": conversations, "workers": workers, "selected_view_groups": {"model": models, "model_effort": model_effort},
-            "activity": {"classification": "heuristic metadata classification; inbound wakes and causal cost are unknown without recipient provenance", "outbound_peer_calls": total["peer_message_invocations"], "child_calls": total["child_invocations"], "inbound_peer_wakes": "unknown", "causal_cost": "unknown"},
-            "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across selected files: {duplicates} ignored.", f"Embedded owner filter excluded {foreign_records} copied or foreign records.", "Peer activity is proved from function calls and embedded functions.exec JavaScript only; tool outputs and descriptions are not counted.", "Inbound peer wakes and causal cost are unknown without recipient provenance.", "No prompts, response text, tool arguments, tool output, credential values, or recipient identities are returned."]}
+    scan = create_scan(start, end); advance_scan(scan); return snapshot(scan)
 
 
 class CodexUsageSnapshotService:
-    """Range-keyed snapshot cache with a single collector at a time.
-
-    Collection reads potentially large local JSONL files. A normal view only
-    receives a matching cached snapshot; explicit refreshes share one bounded
-    collection rather than starting competing scans.
-    """
-
-    def __init__(self) -> None:
-        self._cache: dict[tuple[str, str], dict[str, Any]] = {}
-        self._lock = asyncio.Lock()
-        self._collection_lock = asyncio.Lock()
-        self._inflight: dict[tuple[str, str], asyncio.Task[dict[str, Any]]] = {}
-
+    """Four frozen in-memory range snapshots; refresh resumes incomplete work."""
+    def __init__(self) -> None: self._cache: OrderedDict[tuple[str, str], UsageScan] = OrderedDict(); self._lock = asyncio.Lock(); self._collect = asyncio.Lock(); self._inflight: dict[tuple[str, str], asyncio.Task[dict[str, Any]]] = {}
     async def read(self, start: dt.datetime, end: dt.datetime, refresh: bool = False) -> dict[str, Any]:
         key = (start.astimezone(dt.timezone.utc).isoformat(), end.astimezone(dt.timezone.utc).isoformat())
         async with self._lock:
-            cached = self._cache.get(key)
-            if cached is not None and not refresh:
-                return cached | {"collection": {"state": "cached", "in_progress": False}}
+            scan = self._cache.get(key)
+            if scan and not refresh: self._cache.move_to_end(key); return snapshot(scan) | {"collection": {"state": "cached", "in_progress": False}}
+            if scan and scan.complete and refresh: scan = None
+            if scan is None:
+                scan = create_scan(start, end); self._cache[key] = scan
+                while len(self._cache) > MAX_CACHE_STATES: self._cache.popitem(last=False)
             task = self._inflight.get(key)
             if task is None:
-                async def collect_once() -> dict[str, Any]:
-                    # One disk scan at a time across every range. This avoids
-                    # competing bounded readers on the user's machine.
-                    async with self._collection_lock:
-                        return await asyncio.to_thread(collect_usage, start, end)
-                task = asyncio.create_task(collect_once())
-                self._inflight[key] = task
-        try:
-            snapshot = await task
-            async with self._lock:
-                self._cache[key] = snapshot
-            return snapshot | {"collection": {"state": "refreshed", "in_progress": False}}
+                async def run() -> dict[str, Any]:
+                    async with self._collect: await asyncio.to_thread(advance_scan, scan)
+                    return snapshot(scan)
+                task = asyncio.create_task(run()); self._inflight[key] = task
+        try: return (await task) | {"collection": {"state": "resumed" if not scan.complete else "refreshed", "in_progress": False}}
         finally:
             async with self._lock:
-                if self._inflight.get(key) is task:
-                    self._inflight.pop(key, None)
-
+                if self._inflight.get(key) is task: self._inflight.pop(key, None)
 
 
 snapshot_service = CodexUsageSnapshotService()

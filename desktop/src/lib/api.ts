@@ -109,8 +109,8 @@ export interface CodexUsageMetric {
 export interface CodexUsageSnapshot {
   collected_at: string;
   range: { start: string; end: string };
-  collection: { state: "cached" | "refreshed"; in_progress: boolean };
-  coverage: { complete: boolean; scanned_files: number; indexed_files: number; notes: string[] };
+  collection: { state: "cached" | "refreshed" | "resumed"; in_progress: boolean };
+  coverage: { complete: boolean; scanned_files: number; indexed_files: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
   totals: CodexUsageMetric & { estimated_standard_credits: number };
   credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
   models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];

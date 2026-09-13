@@ -2188,6 +2188,10 @@ app.include_router(ner_router)
 app.include_router(openai_compat_router)
 app.include_router(hf_token_router)
 app.include_router(codex_usage_router)
+# aidream's authenticated local-proxy forwards `/sandbox/<path>` verbatim to
+# the engine. Keep the same collector contract for a caller already proven to
+# own this compute target; this is not a public or bootstrap route.
+app.include_router(codex_usage_router, prefix="/sandbox")
 app.include_router(scrape_router)
 app.include_router(extension_router)
 # Bridge-test endpoints — back the desktop frontend's "Bridge Test" page.

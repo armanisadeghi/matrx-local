@@ -101,6 +101,8 @@ export interface CodexUsageMetric {
   conversation_title?: string; root_id?: string; input_tokens: number;
   cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
   reasoning_output_tokens: number; total_tokens: number; response_count: number;
+  peer_message_call_ids?: number; peer_message_invocations?: number;
+  child_call_ids?: number; child_invocations?: number;
   estimated_standard_credits?: number | null; credit_rate_known?: boolean;
 }
 
@@ -114,6 +116,7 @@ export interface CodexUsageSnapshot {
   models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
   cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
   qualification: string[];
+  activity: { classification: string; outbound_peer_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
 }
 
 export interface ToolInfo {

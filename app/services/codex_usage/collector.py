@@ -10,12 +10,14 @@ import asyncio
 import collections
 import datetime as dt
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
 FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens")
+ACTIVITY_FIELDS = ("peer_message_call_ids", "peer_message_invocations", "child_call_ids", "child_invocations")
 MAX_SECONDS = 60
 MAX_BYTES = 8 * 1024**3
 MAX_FILES = 400
@@ -35,11 +37,11 @@ def _stamp(value: Any) -> dt.datetime | None:
 
 
 def _metrics() -> collections.Counter[str]:
-    return collections.Counter({field: 0 for field in FIELDS} | {"response_count": 0})
+    return collections.Counter({field: 0 for field in (*FIELDS, *ACTIVITY_FIELDS)} | {"response_count": 0})
 
 
 def _plain(value: collections.Counter[str]) -> dict[str, int]:
-    result = {field: int(value.get(field, 0)) for field in (*FIELDS, "response_count")}
+    result = {field: int(value.get(field, 0)) for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count")}
     result["uncached_input_tokens"] = max(0, result["input_tokens"] - result["cached_input_tokens"])
     return result
 
@@ -56,6 +58,43 @@ def _project_for(cwd: Any, codex_home: Path) -> str:
         return relative.parts[0] if relative.parts else "code"
     except (ValueError, OSError):
         return "unknown"
+
+
+def _call_name(payload: dict[str, Any]) -> str:
+    function = payload.get("function")
+    return str(payload.get("name") or payload.get("tool_name") or (function.get("name") if isinstance(function, dict) else "") or "")
+
+
+def _call_args(payload: dict[str, Any]) -> Any:
+    function = payload.get("function")
+    return payload.get("arguments", payload.get("input", function.get("arguments", {}) if isinstance(function, dict) else {}))
+
+
+def _target_thread_id(value: Any) -> str | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, dict):
+        return None
+    for key in ("threadId", "thread_id", "targetThreadId", "target_thread_id"):
+        if value.get(key):
+            return str(value[key])
+    return None
+
+
+_EXEC_SEND = re.compile(r"tools\.mcp__codex_app__send_message_to_thread\s*\(\s*\{(?P<body>.{0,12000}?)\}\s*\)", re.S)
+_EXEC_TARGET = re.compile(r"(?:threadId|thread_id)\s*:\s*['\"](?P<id>[0-9a-f-]{36})['\"]")
+_EXEC_CHILD = re.compile(r"tools\.collaboration\.(?:spawn_agent|followup_task|send_message)\s*\(")
+
+
+def _embedded_activity(value: Any) -> tuple[list[str | None], int]:
+    """Parse actual call syntax from an exec input, never result text."""
+    if not isinstance(value, str):
+        return [], 0
+    targets = [_EXEC_TARGET.search(match.group("body")).group("id") if _EXEC_TARGET.search(match.group("body")) else None for match in _EXEC_SEND.finditer(value)]
+    return targets, len(_EXEC_CHILD.findall(value))
 
 
 def _metadata(codex_home: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
@@ -97,7 +136,7 @@ def _aggregate(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[s
     buckets: dict[tuple[Any, ...], collections.Counter[str]] = collections.defaultdict(_metrics)
     for row in rows:
         bucket = buckets[tuple(row[key] for key in keys)]
-        for field in (*FIELDS, "response_count"):
+        for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count"):
             bucket[field] += int(row.get(field, 0))
     result = []
     for key, value in buckets.items():
@@ -149,6 +188,8 @@ def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
     cells: dict[tuple[str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics)
     bins: dict[tuple[dt.datetime, str, str, str], collections.Counter[str]] = collections.defaultdict(_metrics)
     seen_responses: set[str] = set(); duplicates = foreign_records = 0
+    seen_tool_calls: set[str] = set()
+    target_counts: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
 
     for tid, info in candidates:
         if time.monotonic() - began >= MAX_SECONDS:
@@ -182,6 +223,34 @@ def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
                     if not when or not (start <= when < end):
                         continue
                     if kind == "token_usage_record": usages.append((when, payload))
+                    elif kind == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
+                        name, args = _call_name(payload), _call_args(payload)
+                        call_id = str(payload.get("call_id") or payload.get("id") or "")
+                        if call_id and call_id in seen_tool_calls:
+                            continue
+                        if call_id:
+                            seen_tool_calls.add(call_id)
+                        peer_targets: list[str | None] = []
+                        child_invocations = 0
+                        if "send_message_to_thread" in name:
+                            peer_targets = [_target_thread_id(args)]
+                        elif name == "exec":
+                            peer_targets, child_invocations = _embedded_activity(args)
+                        elif any(part in name for part in ("spawn_agent", "followup_task", "collaboration.send_message")):
+                            child_invocations = 1
+                        if peer_targets or child_invocations:
+                            # Activity belongs to this source conversation only;
+                            # no output or tool-description strings participate.
+                            activity = cells[(tid, "unknown", "unknown")]
+                            if peer_targets:
+                                activity["peer_message_call_ids"] += 1
+                                activity["peer_message_invocations"] += len(peer_targets)
+                                for target in peer_targets:
+                                    if target:
+                                        target_counts[tid][target] += 1
+                            if child_invocations:
+                                activity["child_call_ids"] += 1
+                                activity["child_invocations"] += child_invocations
             coverage["scanned_files"] += 1
         except OSError:
             coverage["missing_files"] += 1; continue
@@ -207,6 +276,21 @@ def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
         root = root_for(tid); owner = threads.get(tid, {})
         rows.append({"conversation_id": tid, "conversation_title": owner.get("title", f"Conversation {tid[:8]}"), "root_id": root,
                      "project": owner.get("project", "unknown"), "model": model, "effort": effort, **_plain(metrics)})
+    # Tool activity is attributed to the source conversation, while model rows
+    # remain truthful when a tool event has no corresponding token response.
+    for tid in {row["conversation_id"] for row in rows}:
+        thread_rows = [row for row in rows if row["conversation_id"] == tid]
+        activity_row = next((row for row in thread_rows if row["model"] == "unknown" and any(row[field] for field in ACTIVITY_FIELDS)), None)
+        if activity_row is None:
+            continue
+        anchor = max((row for row in thread_rows if row is not activity_row), key=lambda row: row["total_tokens"], default=activity_row)
+        if anchor is not activity_row:
+            for field in ACTIVITY_FIELDS:
+                anchor[field] += activity_row[field]
+            rows.remove(activity_row)
+        if tid in target_counts:
+            anchor["peer_targets"] = [{"conversation_id": target, "title": threads[target]["title"], "invocations": count}
+                                      for target, count in target_counts[tid].most_common() if target in threads]
     coverage["complete"] = not any((coverage["budget_exhausted"], coverage["missing_files"], coverage["truncated_files"], coverage["candidate_overflow"]))
     bin_rows = [{"start": bucket.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(metrics)}
                 for (bucket, tid, model, effort), metrics in sorted(bins.items())]
@@ -214,12 +298,12 @@ def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
     for tid in sorted({row["conversation_id"] for row in rows}):
         owner = threads.get(tid, {}); root = root_for(tid)
         task_rows.append({"id": tid, "title": owner.get("title", f"Conversation {tid[:8]}"), "project": owner.get("project", "unknown"), "root_id": root,
-                          "is_worker": tid != root})
+                          "is_worker": tid != root, **{field: sum(row[field] for row in rows if row["conversation_id"] == tid) for field in ACTIVITY_FIELDS}})
     return _result(start, end, coverage, rows, bin_rows, task_rows, duplicates, foreign_records)
 
 
 def _result(start: dt.datetime, end: dt.datetime, coverage: dict[str, Any], rows: list[dict[str, Any]], bins: list[dict[str, Any]], tasks: list[dict[str, Any]], duplicates: int, foreign_records: int) -> dict[str, Any]:
-    total = _plain(collections.Counter({field: sum(int(row.get(field, 0)) for row in rows) for field in (*FIELDS, "response_count")}))
+    total = _plain(collections.Counter({field: sum(int(row.get(field, 0)) for row in rows) for field in (*FIELDS, *ACTIVITY_FIELDS, "response_count")}))
     model_effort = [_estimate(row) for row in _aggregate(rows, ("model", "effort"))]
     models = [_estimate(row) for row in _aggregate(rows, ("model",))]
     projects = _aggregate(rows, ("project",))
@@ -235,8 +319,9 @@ def _result(start: dt.datetime, end: dt.datetime, coverage: dict[str, Any], rows
             # Canonical primitive rows stay in the response so native and web
             # drilldowns reconcile to the same values instead of re-collecting.
             "cells": conversations, "tasks": tasks, "bins": bins,
-            "conversations": conversations, "workers": workers, "selected_view_groups": {"model": models, "model_effort": model_effort}, "activity": None,
-            "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across selected files: {duplicates} ignored.", f"Embedded owner filter excluded {foreign_records} copied or foreign records.", "No prompts, response text, tool arguments, tool output, credential values, or recipient identities are returned."]}
+            "conversations": conversations, "workers": workers, "selected_view_groups": {"model": models, "model_effort": model_effort},
+            "activity": {"classification": "heuristic metadata classification; inbound wakes and causal cost are unknown without recipient provenance", "outbound_peer_calls": total["peer_message_invocations"], "child_calls": total["child_invocations"], "inbound_peer_wakes": "unknown", "causal_cost": "unknown"},
+            "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across selected files: {duplicates} ignored.", f"Embedded owner filter excluded {foreign_records} copied or foreign records.", "Peer activity is proved from function calls and embedded functions.exec JavaScript only; tool outputs and descriptions are not counted.", "Inbound peer wakes and causal cost are unknown without recipient provenance.", "No prompts, response text, tool arguments, tool output, credential values, or recipient identities are returned."]}
 
 
 class CodexUsageSnapshotService:

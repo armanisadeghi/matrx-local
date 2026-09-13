@@ -66,6 +66,7 @@ where
                     &input.options,
                 )
                 .await?;
+                return Err(Ctap2Error::CredentialExcluded.into());
             }
         }
 

@@ -9,7 +9,9 @@ treats both processes as one responsible application.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +57,7 @@ def test_identity_alignment_happens_before_tauri_copy_input() -> None:
 VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify-macos-artifact.sh"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 TAURI_CONFIG = REPO_ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
+NATIVE_VAULT_HOOK = REPO_ROOT / "desktop" / "scripts" / "build-native-vault-provider-hook.cjs"
 
 
 def test_native_vault_provider_hook_is_cross_platform() -> None:
@@ -68,9 +71,18 @@ def test_native_vault_provider_hook_is_cross_platform() -> None:
         "beforeBundleCommand"
     ]
 
-    assert "process.env.TAURI_ENV_PLATFORM === 'macos'" in command
-    assert "execFileSync('bash', ['scripts/build-native-vault-provider.sh']" in command
-    assert "if [" not in command
+    assert command == "node scripts/build-native-vault-provider-hook.cjs"
+    hook = NATIVE_VAULT_HOOK.read_text(encoding="utf-8")
+    assert 'process.env.TAURI_ENV_PLATFORM !== "macos"' in hook
+    assert '"scripts/build-native-vault-provider.sh"' in hook
+    assert "node -e" not in command
+
+    # Exercise the command's Windows path without requiring a Windows runner.
+    subprocess.run(
+        ["node", str(NATIVE_VAULT_HOOK)],
+        env={**os.environ, "TAURI_ENV_PLATFORM": "windows"},
+        check=True,
+    )
 
 
 def test_final_artifact_verification_exists_and_gates_the_release() -> None:

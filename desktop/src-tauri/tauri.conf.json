@@ -8,7 +8,7 @@
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
-    "beforeBundleCommand": "node -e \"if (process.env.TAURI_ENV_PLATFORM === 'macos') { if (process.env.MATRX_NATIVE_VAULT_PROVIDER === 'absent') { console.log('native Vault provider NOT built: release inputs absent, host bundles without it'); process.exit(0) } require('node:child_process').execFileSync('bash', ['scripts/build-native-vault-provider.sh'], { stdio: 'inherit' }) }\""
+    "beforeBundleCommand": "node scripts/build-native-vault-provider-hook.cjs"
   },
   "app": {
     "withGlobalTauri": true,

@@ -52,23 +52,24 @@ fn emit<T: Serialize>(out: &mut impl Write, value: &T) {
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let frames = match support::read_frames(io::stdin().lock()) {
-        Ok(frames) => frames,
-        Err(WireError::Invalid) => {
-            emit(
-                &mut io::stdout().lock(),
-                &Failure {
-                    id: None,
-                    ok: false,
-                    code: "InvalidRequest",
-                },
-            );
-            return;
-        }
-    };
+    let mut frames = support::FrameReader::new(io::stdin().lock());
     let mut memory = Memory::default();
     let mut out = io::stdout().lock();
-    for bytes in frames {
+    while let Some(frame_result) = frames.next_frame() {
+        let bytes = match frame_result {
+            Ok(bytes) => bytes,
+            Err(WireError::Invalid) => {
+                emit(
+                    &mut out,
+                    &Failure {
+                        id: None,
+                        ok: false,
+                        code: "InvalidRequest",
+                    },
+                );
+                continue;
+            }
+        };
         let frame = match support::parse(&bytes[..bytes.len().saturating_sub(1)]) {
             Ok(frame) => frame,
             Err(_) => {

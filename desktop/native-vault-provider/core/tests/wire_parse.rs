@@ -43,15 +43,18 @@ fn rejects_policy_and_origin_deviations() {
 }
 #[test]
 fn frame_reader_enforces_newline_and_one_mebibyte_including_newline() {
-    assert_eq!(
-        read_frames(format!("{}\n", register()).as_bytes())
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(read_frames(register().as_bytes()), Err(WireError::Invalid));
-    assert_eq!(
-        read_frames(vec![b'x'; MAX_FRAME_BYTES + 1].as_slice()),
-        Err(WireError::Invalid)
-    );
+    let complete = format!("{}\n", register());
+    let mut reader = FrameReader::new(complete.as_bytes());
+    assert!(reader.next_frame().unwrap().is_ok());
+    assert_eq!(reader.next_frame(), None);
+    let partial_input = register();
+    let mut partial = FrameReader::new(partial_input.as_bytes());
+    assert_eq!(partial.next_frame(), Some(Err(WireError::Invalid)));
+    let valid = format!("{}\n", register());
+    let mut bytes = vec![b'x'; MAX_FRAME_BYTES];
+    bytes.push(b'\n');
+    bytes.extend(valid.bytes());
+    let mut oversized = FrameReader::new(bytes.as_slice());
+    assert_eq!(oversized.next_frame(), Some(Err(WireError::Invalid)));
+    assert!(oversized.next_frame().unwrap().is_ok());
 }

@@ -297,30 +297,58 @@ pub fn valid_request_id(frame: &[u8]) -> Option<String> {
         .and_then(|header| id_ok(&header.id).then_some(header.id))
 }
 
-pub fn read_frames(mut input: impl Read) -> Result<Vec<Vec<u8>>, WireError> {
-    let mut frames = Vec::new();
-    let mut current = Vec::new();
-    let mut byte = [0_u8; 1];
-    loop {
-        match input.read(&mut byte) {
-            Ok(0) => break,
-            Ok(_) => {
-                if current.len() == MAX_FRAME_BYTES {
-                    return Err(WireError::Invalid);
-                }
-                current.push(byte[0]);
-                if byte[0] == b'\n' {
-                    frames.push(std::mem::take(&mut current));
-                }
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(WireError::Invalid),
+pub struct FrameReader<R> {
+    input: R,
+    current: Vec<u8>,
+}
+impl<R: Read> FrameReader<R> {
+    pub fn new(input: R) -> Self {
+        Self {
+            input,
+            current: Vec::new(),
         }
     }
-    if !current.is_empty() {
-        return Err(WireError::Invalid);
+    /// Returns one completed frame at a time. An oversize frame is drained through its newline
+    /// before its fixed error is returned, allowing the following frame to be processed.
+    pub fn next_frame(&mut self) -> Option<Result<Vec<u8>, WireError>> {
+        let mut byte = [0_u8; 1];
+        loop {
+            match self.input.read(&mut byte) {
+                Ok(0) => {
+                    if self.current.is_empty() {
+                        return None;
+                    }
+                    self.current.clear();
+                    return Some(Err(WireError::Invalid));
+                }
+                Ok(_) if byte[0] == b'\n' => {
+                    self.current.push(byte[0]);
+                    return Some(Ok(std::mem::take(&mut self.current)));
+                }
+                Ok(_) if self.current.len() + 1 >= MAX_FRAME_BYTES => loop {
+                    match self.input.read(&mut byte) {
+                        Ok(0) => {
+                            self.current.clear();
+                            return Some(Err(WireError::Invalid));
+                        }
+                        Ok(_) if byte[0] == b'\n' => {
+                            self.current.clear();
+                            return Some(Err(WireError::Invalid));
+                        }
+                        Ok(_) => continue,
+                        Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => {
+                            self.current.clear();
+                            return Some(Err(WireError::Invalid));
+                        }
+                    }
+                },
+                Ok(_) => self.current.push(byte[0]),
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return Some(Err(WireError::Invalid)),
+            }
+        }
     }
-    Ok(frames)
 }
 
 /// Test-only user validation. It exercises the maintained authenticator's refusal path.

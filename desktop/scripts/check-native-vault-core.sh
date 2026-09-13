@@ -71,8 +71,23 @@ for mode in pristine patched; do
   rsync -a --exclude target "$CORE/" "$copy/"
   printf '// provenance adapter isolates the pinned authenticator dependency.\n' > "$copy/src/lib.rs"
   cp "$PROVENANCE/semantic_adapter.rs" "$copy/tests/semantic_adapter.rs"
-cmp "$PROVENANCE/semantic_adapter.rs" "$copy/tests/semantic_adapter.rs"
-cmp "$CORE/Cargo.lock" "$copy/Cargo.lock"
+  cmp "$PROVENANCE/semantic_adapter.rs" "$copy/tests/semantic_adapter.rs"
+  cmp "$CORE/Cargo.lock" "$copy/Cargo.lock"
+  # Test-only self-check seam: mutates only the already-forked pristine adapter.
+  # CI never sets this variable and the patched adapter always remains byte-identical.
+  if [ "$mode" = pristine ] && [ "${NATIVE_VAULT_TEST_PRISTINE_MUTATION:-}" = false_state_green ]; then
+    python3 - "$copy/tests/semantic_adapter.rs" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+old = 'assert_exact_backup_flags(false, false, Flags::empty()).await;'
+new = 'assert_exact_backup_flags(false, false, Flags::BE | Flags::BS).await;'
+if s.count(old) != 1:
+    raise SystemExit('pristine mutation target missing')
+p.write_text(s.replace(old, new))
+PY
+  fi
   python3 - "$copy/Cargo.toml" <<'PY'
 from pathlib import Path
 import sys
@@ -91,16 +106,30 @@ PY
     status=$?
     set -e
     test "$status" -ne 0
-    grep -Fx 'test device_bound_backup_flags_are_absent_on_make_and_get ... FAILED' "$work/pristine.log"
-    grep -Fx 'test eligible_not_backed_up_has_only_be_on_make_and_get ... FAILED' "$work/pristine.log"
-    grep -Fx 'test cross_user_handle_exclusion_requires_credential_excluded ... FAILED' "$work/pristine.log"
-    grep -Fx 'test eligible_backed_up_is_intentional_control ... ok' "$work/pristine.log"
-    grep -Fx 'test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s' "$work/pristine.log" ||
-      grep -E '^test result: FAILED\. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in [0-9.]+s$' "$work/pristine.log"
+    for line in \
+      'test device_bound_backup_flags_are_absent_on_make_and_get ... FAILED' \
+      'test eligible_not_backed_up_has_only_be_on_make_and_get ... FAILED' \
+      'test cross_user_handle_exclusion_requires_credential_excluded ... FAILED' \
+      'test eligible_backed_up_is_intentional_control ... ok'; do
+      if ! grep -Fx "$line" "$work/pristine.log" >/dev/null; then
+        echo "native-vault pristine semantic matrix mismatch: $line" >&2
+        exit 1
+      fi
+    done
+    if ! grep -E '^test result: FAILED\. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in [0-9.]+s$' "$work/pristine.log" >/dev/null; then
+      echo 'native-vault pristine semantic aggregate mismatch: expected 1 passed; 3 failed' >&2
+      exit 1
+    fi
   else
     cargo test --locked --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
   fi
 done
+
+# Test-only negative-suite boundary: normal CI never sets this. It allows the
+# self-test to prove semantic-predicate causality without rerunning downstream RP work.
+if [ "${NATIVE_VAULT_TEST_STOP_AFTER_SEMANTIC:-}" = 1 ]; then
+  exit 0
+fi
 
 cd "$CORE"
 cargo test --locked --features protocol-test-harness

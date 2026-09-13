@@ -22,13 +22,12 @@ zeroize = "1"
 
 [features]
 default = []
-test-harness = []
-protocol-test-harness = ["test-harness"]
+protocol-test-harness = []
 
 [[bin]]
 name = "protocol-harness"
 path = "src/bin/protocol-harness.rs"
-required-features = ["test-harness"]
+required-features = ["protocol-test-harness"]
 
 [patch.crates-io]
 passkey-authenticator = { path = "vendor/passkey-authenticator" }

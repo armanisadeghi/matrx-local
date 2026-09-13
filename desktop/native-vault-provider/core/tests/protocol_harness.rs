@@ -1,4 +1,4 @@
-#![cfg(feature = "test-harness")]
+#![cfg(feature = "protocol-test-harness")]
 
 use serde::Deserialize;
 use std::io::Write;
@@ -87,4 +87,14 @@ fn process_reports_fixed_failures_and_never_commits_failed_or_cancelled_registra
             .filter_map(|r| r.credential.as_ref())
             .all(|c| !c.id.contains("private"))
     );
+}
+
+#[test]
+fn process_keeps_a_valid_id_when_strict_option_validation_fails() {
+    let invalid_origin =
+        register("echo-me", "success").replace("https://example.com", "http://example.com");
+    let out = run(format!("{invalid_origin}\n"));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].id.as_deref(), Some("echo-me"));
+    assert_eq!(out[0].code.as_deref(), Some("InvalidRequest"));
 }

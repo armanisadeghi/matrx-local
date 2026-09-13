@@ -75,7 +75,8 @@ async fn main() {
                 emit(
                     &mut out,
                     &Failure {
-                        id: None,
+                        id: support::valid_request_id(&bytes[..bytes.len().saturating_sub(1)])
+                            .as_deref(),
                         ok: false,
                         code: "InvalidRequest",
                     },

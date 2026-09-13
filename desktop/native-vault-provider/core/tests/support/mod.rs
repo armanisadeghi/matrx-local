@@ -285,6 +285,18 @@ pub fn parse(frame: &[u8]) -> Result<Frame, WireError> {
     valid.then_some(parsed).ok_or(WireError::Invalid)
 }
 
+/// Extract only an otherwise-valid public request id after the strict full parse fails.
+/// This stays typed so duplicate ids are still rejected by serde rather than silently chosen.
+pub fn valid_request_id(frame: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Header {
+        id: String,
+    }
+    serde_json::from_slice::<Header>(frame)
+        .ok()
+        .and_then(|header| id_ok(&header.id).then_some(header.id))
+}
+
 pub fn read_frames(mut input: impl Read) -> Result<Vec<Vec<u8>>, WireError> {
     let mut frames = Vec::new();
     let mut current = Vec::new();
@@ -361,12 +373,14 @@ pub struct SuccessEnvelope<R> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MakeResponse {
+    #[serde(rename = "clientDataJSON")]
     pub client_data_json: String,
     pub attestation_object: String,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetResponse {
+    #[serde(rename = "clientDataJSON")]
     pub client_data_json: String,
     pub authenticator_data: String,
     pub signature: String,

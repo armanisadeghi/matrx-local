@@ -17,6 +17,7 @@ serde_json = "1"
 zeroize = "1"
 
 [dev-dependencies]
+sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [patch.crates-io]

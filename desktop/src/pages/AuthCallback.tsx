@@ -3,7 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { exchangeOAuthCode, clearOAuthState } from "@/lib/oauth";
 import supabase from "@/lib/supabase";
 import { Loader2, AlertTriangle } from "lucide-react";
-import { invalidateNativeVaultBeforeHostMutation } from "@/lib/native-vault-auth";
+import {
+  invalidateNativeVaultBeforeHostMutation,
+  reconcileNativeVaultAfterHostSession,
+} from "@/lib/native-vault-auth";
 
 /**
  * AuthCallback — handles the OAuth code exchange in the web dev browser.
@@ -75,6 +78,8 @@ export function AuthCallback() {
           refresh_token: tokens.refresh_token,
         });
         if (error) throw new Error("Could not establish your sign-in session. Please try again.");
+        const { data: { session } } = await supabase.auth.getSession();
+        await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
         navigate("/", { replace: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

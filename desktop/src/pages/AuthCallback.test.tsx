@@ -6,15 +6,24 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   clearOAuthState: vi.fn(),
+  exchangeOAuthCode: vi.fn(),
+  setSession: vi.fn(),
+  getSession: vi.fn(),
+  invalidate: vi.fn(),
+  reconcile: vi.fn(),
 }));
 
 vi.mock("react-router-dom", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("@/lib/oauth", () => ({
   clearOAuthState: mocks.clearOAuthState,
-  exchangeOAuthCode: vi.fn(),
+  exchangeOAuthCode: mocks.exchangeOAuthCode,
 }));
 vi.mock("@/lib/supabase", () => ({
-  default: { auth: { setSession: vi.fn() } },
+  default: { auth: { setSession: mocks.setSession, getSession: mocks.getSession } },
+}));
+vi.mock("@/lib/native-vault-auth", () => ({
+  invalidateNativeVaultBeforeHostMutation: mocks.invalidate,
+  reconcileNativeVaultAfterHostSession: mocks.reconcile,
 }));
 
 import { AuthCallback } from "./AuthCallback";
@@ -28,10 +37,35 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.navigate.mockReset();
   mocks.clearOAuthState.mockReset();
+  mocks.exchangeOAuthCode.mockReset();
+  mocks.setSession.mockReset();
+  mocks.getSession.mockReset();
+  mocks.invalidate.mockReset();
+  mocks.reconcile.mockReset();
+  mocks.invalidate.mockResolvedValue(undefined);
   window.history.replaceState({}, "", "/#/auth/callback?state=only-state");
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+});
+
+it("does not navigate after a successful token exchange until native reconciliation accepts", async () => {
+  let rejectFence!: (error: Error) => void;
+  const pendingFence = new Promise<void>((_resolve, reject) => { rejectFence = reject; });
+  mocks.exchangeOAuthCode.mockResolvedValue({ access_token: "test-access", refresh_token: "test-refresh" });
+  mocks.setSession.mockResolvedValue({ error: null });
+  mocks.getSession.mockResolvedValue({ data: { session: { user: { id: "user-a" } } } });
+  mocks.reconcile.mockReturnValue(pendingFence);
+  window.history.replaceState({}, "", "/#/auth/callback?code=code&state=state");
+
+  await act(async () => { root.render(<AuthCallback />); });
+  expect(mocks.setSession).toHaveBeenCalledOnce();
+  expect(mocks.navigate).not.toHaveBeenCalled();
+
+  rejectFence(new Error("state corrupt"));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Token exchange failed");
 });
 
 afterEach(async () => {

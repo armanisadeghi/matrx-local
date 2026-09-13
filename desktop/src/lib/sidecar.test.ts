@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DesktopBridgeUnavailableError,
+  invalidateNativeVaultHostActor,
   invokeTauri,
   isTauri,
+  reconcileNativeVaultHostActor,
   waitForOwnedEngineProbe,
 } from "./sidecar";
 
@@ -18,6 +20,12 @@ describe("Tauri runtime boundary", () => {
     await expect(invokeTauri("test_command")).rejects.toThrow(
       "requires the Matrx Local desktop app",
     );
+  });
+
+  it("uses the explicit unsupported-platform transition in ordinary browser development", async () => {
+    expect(isTauri()).toBe(false);
+    await expect(invalidateNativeVaultHostActor()).resolves.toBe("unsupported_platform");
+    await expect(reconcileNativeVaultHostActor("actor-a")).resolves.toBe("unsupported_platform");
   });
 });
 

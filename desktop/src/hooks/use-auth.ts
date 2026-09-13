@@ -56,7 +56,12 @@ import {
   isOAuthPending,
 } from "@/lib/oauth";
 import { emitClientLog } from "@/hooks/use-client-log";
-import { invalidateNativeVaultBeforeHostMutation, reconcileNativeVaultAfterHostSession } from "@/lib/native-vault-auth";
+import {
+  invalidateNativeVaultBeforeHostMutation,
+  fenceNativeVaultHostAdoption,
+  reconcileNativeVaultAndAdopt,
+  reconcileNativeVaultAfterHostSession,
+} from "@/lib/native-vault-auth";
 
 export interface AuthState {
   user: User | null;
@@ -120,27 +125,75 @@ export function useAuth() {
     mountedRef.current = true;
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      try { await reconcileNativeVaultAfterHostSession(session?.user.id ?? null); } catch (error) { emitClientLog("warn", String(error), "auth"); }
-      if (session) {
-        emitClientLog("success", `Auth: session restored for ${session.user.email ?? session.user.id}`, "auth");
-      } else {
-        emitClientLog("info", "Auth: no active session — login required", "auth");
+      try {
+        // The initial read can resolve after a newer SIGNED_IN event. Compare
+        // once more before adopting, and give its queued work a fence ticket.
+        const { data: { session: current } } = await supabase.auth.getSession();
+        if (current?.user.id !== session?.user.id) return;
+        const fence = fenceNativeVaultHostAdoption(session?.user.id ?? null);
+        await reconcileNativeVaultAndAdopt(session?.user.id ?? null, () => {
+          if (session) {
+            emitClientLog("success", `Auth: session restored for ${session.user.email ?? session.user.id}`, "auth");
+          } else {
+            emitClientLog("info", "Auth: no active session — login required", "auth");
+          }
+          update({
+            session,
+            user: session?.user ?? null,
+            isAuthenticated: !!session,
+            loading: false,
+            error: null,
+          });
+        }, fence);
+      } catch (error) {
+        // A restored Supabase session is not adopted until its native fence is
+        // known-good. Do not turn this into a signed-in UI with live tokens.
+        emitClientLog("warn", String(error), "auth");
+        update({ loading: false, error: "Native Vault account check failed. Retry sign-in." });
       }
-      update({
-        session,
-        user: session?.user ?? null,
-        isAuthenticated: !!session,
-        loading: false,
-      });
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      // Revoke all dependent use synchronously while Supabase still holds its
+      // own lock. Native I/O stays deferred below.
+      const fence = fenceNativeVaultHostAdoption(session?.user.id ?? null);
       // Supabase holds its internal lock in this listener. Defer the native
       // file-lock operation so it cannot deadlock token refresh, and fence
       // dependent adoption on the serialized coordinator.
-      setTimeout(() => { void reconcileNativeVaultAfterHostSession(session?.user.id ?? null).catch((error) => emitClientLog("warn", String(error), "auth")); }, 0);
+      setTimeout(() => {
+        void reconcileNativeVaultAndAdopt(session?.user.id ?? null, () => {
+          // Supabase owns this callback's lock; all UI adoption happens later.
+          if (
+            (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") &&
+            session !== null &&
+            isAuthenticatedRef.current
+          ) {
+            update({ session, user: session.user });
+            return;
+          }
+          resetContentIr();
+          if (session) warmContentIr();
+          update({
+            session,
+            user: session?.user ?? null,
+            isAuthenticated: !!session,
+            loading: false,
+            error: null,
+          });
+        }, fence).catch((error) => {
+          emitClientLog("warn", String(error), "auth");
+          resetContentIr();
+          update({
+            session: null,
+            user: null,
+            isAuthenticated: false,
+            loading: false,
+            error: "Native Vault account check failed. Retry sign-in.",
+          });
+        });
+      }, 0);
       // INITIAL_SESSION with no session is the normal signed-out boot state,
       // and SIGNED_OUT is a user action — neither is degraded functionality.
       emitClientLog(
@@ -160,30 +213,7 @@ export function useAuth() {
       // If we are NOT yet authenticated, this is a genuine first sign-in: fall
       // through to the full update so isAuthenticated flips to true and the
       // authenticated cloud integrations can initialize.
-      if (
-        (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") &&
-        session !== null &&
-        isAuthenticatedRef.current
-      ) {
-        update({ session, user: session.user });
-        return;
-      }
-
-      // WHO IS SIGNED IN CHANGED, so what the kind catalog is allowed to show
-      // changed with it. The cached catalog was RLS-filtered for the previous
-      // identity and must never be reused across one
-      // (docs/CONTENT_IR_CONSUMER_GUIDE.md § "invalidate it on auth change").
-      // A fresh session warms it again; a sign-out leaves it empty.
-      resetContentIr();
-      if (session) warmContentIr();
-
-      update({
-        session,
-        user: session?.user ?? null,
-        isAuthenticated: !!session,
-        loading: false,
-        error: null,
-      });
+      // Adoption is deliberately deferred above, outside Supabase's lock.
     });
 
     return () => {
@@ -284,7 +314,10 @@ export function useAuth() {
           return false;
         }
 
-        // onAuthStateChange fires automatically and updates state.
+        const { data: { session } } = await supabase.auth.getSession();
+        await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
+        // onAuthStateChange fires automatically; reconciliation above prevents
+        // the callback route from navigating before dependent adoption settles.
         update({ oauthPending: false });
         return true;
       } catch (err) {
@@ -325,8 +358,10 @@ export function useAuth() {
   const signOut = useCallback(async () => {
     emitClientLog("cmd", "Sign-out initiated", "auth");
     update({ loading: true, error: null });
+    let nativeInvalidated = false;
     try {
       await invalidateNativeVaultBeforeHostMutation();
+      nativeInvalidated = true;
       const result = await Promise.race([
         supabase.auth.signOut(),
         new Promise<{ error: { message: string } }>((resolve) =>
@@ -341,7 +376,12 @@ export function useAuth() {
       }
     } catch (err) {
       console.warn("[signOut] unexpected error:", err);
+      update({ loading: false, error: "Native Vault account fence failed. Retry sign-out." });
+      return;
     } finally {
+      // A failed fence has not started server sign-out. Keep the real host
+      // session visible rather than manufacturing a local signed-out state.
+      if (!nativeInvalidated) return;
       clearOAuthState();
       clearOAuthPending();
       // Best-effort: drain any stale Rust PendingOAuthUrl so the next login

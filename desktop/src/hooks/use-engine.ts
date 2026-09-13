@@ -13,7 +13,12 @@ import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-task
 import supabase from "@/lib/supabase";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { useWindowLeader } from "@/hooks/use-window-leader";
-import { reconcileNativeVaultAfterHostSession } from "@/lib/native-vault-auth";
+import {
+  invalidateNativeVaultBeforeHostMutation,
+  isNativeVaultHostSessionAdopted,
+  fenceNativeVaultHostAdoption,
+  reconcileNativeVaultAfterHostSession,
+} from "@/lib/native-vault-auth";
 
 export type EngineStatus = "discovering" | "starting" | "connected" | "disconnected" | "error";
 
@@ -71,7 +76,9 @@ export function useEngine() {
   useEffect(() => {
     engine.setTokenProvider(async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      return session?.access_token ?? null;
+      return session?.access_token && isNativeVaultHostSessionAdopted(session.user?.id)
+        ? session.access_token
+        : null;
     });
   }, []);
 
@@ -267,10 +274,16 @@ export function useEngine() {
       // Connect WebSocket — only when we have a token; the server rejects
       // unauthenticated WS connections with 403 and the auto-reconnect loop
       // would hammer the server until auth is available.
+      let acceptedSessionForTasks = false;
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.access_token) {
+          await reconcileNativeVaultAfterHostSession(session.user?.id ?? null);
+          if (!isNativeVaultHostSessionAdopted(session.user?.id)) {
+            throw new Error("Native Vault account fence has not adopted this session");
+          }
           await engine.connectWebSocket();
+          acceptedSessionForTasks = true;
           update({ wsConnected: true });
           emitClientLog("success", "WebSocket connected", "engine");
         } else {
@@ -280,16 +293,16 @@ export function useEngine() {
         emitClientLog("warn", `WebSocket connection failed (non-critical): ${err}`, "engine");
       }
 
-      // Fire background tasks: token sync, cloud configure, settings hydration,
-      // prefetch, and heartbeat all run via the idle-scheduled orchestrator.
-      // Leader-only: with multiple windows, exactly one runs the orchestrator
-      // (a late promotion is handled by the isLeader effect below).
-      lastCloudConfigureRef.current = Date.now();
-      if (isLeaderRef.current) {
+      // The queue reads tokens itself, so it starts only after the exact
+      // current subject has passed native reconciliation. A failed/anonymous
+      // initialization must leave the queue stopped.
+      if (isLeaderRef.current && acceptedSessionForTasks) {
+        lastCloudConfigureRef.current = Date.now();
         startBackgroundTasks();
         emitClientLog("success", "Engine initialization complete — background tasks queued", "engine");
       } else {
-        emitClientLog("success", "Engine initialization complete (non-leader window — background tasks skipped)", "engine");
+        stopBackgroundTasks();
+        emitClientLog("success", "Engine initialization complete without an adopted leader session — background tasks skipped", "engine");
       }
     } finally {
       // Always release the mutex so future retries are possible
@@ -336,10 +349,13 @@ export function useEngine() {
   // belt-and-suspenders only.
   useEffect(() => {
     if (!isLeader) return;
-    if (statusRef.current === "connected") {
-      emitClientLog("info", "Promoted to leader window — starting background tasks", "engine");
+    void (async () => {
+      if (statusRef.current !== "connected") return;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id || !isNativeVaultHostSessionAdopted(session.user.id)) return;
+      emitClientLog("info", "Promoted to leader window — starting adopted background tasks", "engine");
       startBackgroundTasks();
-    }
+    })();
     return () => stopBackgroundTasks();
   }, [isLeader]);
 
@@ -353,43 +369,6 @@ export function useEngine() {
       void initialize();
     }
   }, [initialize]);
-
-  // Belt-and-suspenders: also watch supabase auth state directly so we catch
-  // the SIGNED_IN event that fires from setSession() in completeOAuthExchange,
-  // in case the authenticated prop hasn't propagated yet when it fires.
-  //
-  // Supabase-js fires SIGNED_IN on visibility return (tab/window refocus) when
-  // it refreshes an expiring token. If the engine is already connected we must
-  // NOT call initialize() — that would reset status to "discovering" and flash
-  // the StartupScreen. Instead, only patch up the WebSocket if it dropped.
-  // This behaviour is identical on macOS, Windows, and Linux.
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setTimeout(() => { void reconcileNativeVaultAfterHostSession(session?.user.id ?? null).catch((error) => emitClientLog("warn", String(error), "auth")); }, 0);
-      if (event === "SIGNED_IN") {
-        if (statusRef.current === "connected") {
-          if (!wsConnectedRef.current && session?.access_token) {
-            // Supabase holds its auth lock while this callback runs.
-            // connectWebSocket() obtains the token through getSession(), so
-            // awaiting it here deadlocks that lock and every later authenticated
-            // engine request (including image-model loads).  Leave the callback
-            // first, then reconnect once Supabase has released the lock.
-            setTimeout(() => {
-              void engine.connectWebSocket().then(() => {
-                update({ wsConnected: true });
-                emitClientLog("success", "WebSocket connected (deferred — auth arrived after engine)", "engine");
-              }).catch((err) => {
-                emitClientLog("warn", `Deferred WebSocket connection failed: ${err}`, "engine");
-              });
-            }, 0);
-          }
-        } else {
-          setTimeout(() => void initialize(), 0);
-        }
-      }
-    });
-    return () => subscription.unsubscribe();
-  }, [initialize, update]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -414,6 +393,10 @@ export function useEngine() {
       expiresIn?: number,
       isRetryAfterRefresh = false,
     ): Promise<void> => {
+      if (!isNativeVaultHostSessionAdopted(userId)) {
+        console.warn("[engine] refusing to hand off a session before native account reconciliation");
+        return;
+      }
       try {
         await engine.syncTokenToPython(accessToken, userId, refreshToken, expiresIn);
       } catch (e) {
@@ -443,7 +426,12 @@ export function useEngine() {
           "[engine] session rejected by the engine even after refresh — " +
             "signing out so a real login can mint a valid session",
         );
-        await supabase.auth.signOut().catch(() => {});
+        try {
+          await invalidateNativeVaultBeforeHostMutation();
+          await supabase.auth.signOut();
+        } catch (signOutError) {
+          console.error("[engine] native fence prevented forced sign-out:", signOutError);
+        }
       }
     };
 
@@ -498,19 +486,41 @@ export function useEngine() {
     // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        if (!engine.engineUrl) return;
+        // Fence synchronously in Supabase's callback; the native command and
+        // all engine I/O run after its lock is released.
+        const fence = fenceNativeVaultHostAdoption(session?.user.id ?? null);
+        // Cancel idle work before clearing the engine token. Each cloud task
+        // also rechecks its exact subject in case it already left the queue.
+        stopBackgroundTasks();
+        engine.disconnect();
+        update({ wsConnected: false });
+        void engine.clearPythonToken().catch((e) => console.warn("[engine] clearPythonToken failed:", e));
         // Never keep Supabase's auth lock while doing network work. Besides
         // blocking future auth reads, some engine calls obtain the current
         // token through getSession() and would self-deadlock inside this callback.
         setTimeout(async () => {
           try {
-            await reconcileNativeVaultAfterHostSession(session?.user.id ?? null);
+            await reconcileNativeVaultAfterHostSession(session?.user.id ?? null, fence);
+            if (session?.user?.id && !isNativeVaultHostSessionAdopted(session.user.id)) return;
           } catch (error) {
             emitClientLog("warn", `Native Vault account fence failed: ${error}`, "auth");
+            engine.disconnect();
+            update({ wsConnected: false });
+            await engine.clearPythonToken().catch(() => undefined);
             return;
           }
           if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
             if (session?.access_token && session?.user?.id) {
+              if (statusRef.current === "connected" && !wsConnectedRef.current) {
+                try {
+                  await engine.connectWebSocket();
+                  update({ wsConnected: true });
+                } catch (error) {
+                  emitClientLog("warn", `Deferred WebSocket connection failed: ${error}`, "engine");
+                }
+              } else if (statusRef.current !== "connected") {
+                void initialize();
+              }
               // Push the JWT to Python so it persists across restarts —
               // refreshed first when the persisted copy is already stale.
               void pushFreshSessionToEngine(event);
@@ -545,6 +555,11 @@ export function useEngine() {
             }
           } else if (event === "SIGNED_OUT") {
             engine.clearPythonToken().catch((e) => console.warn("[engine] clearPythonToken failed:", e));
+          }
+          // A fence accepted this exact session above. Restart only now; a
+          // failure returned before any queued task can observe the session.
+          if (session?.user?.id && isLeaderRef.current && isNativeVaultHostSessionAdopted(session.user.id)) {
+            startBackgroundTasks();
           }
         }, 0);
       }

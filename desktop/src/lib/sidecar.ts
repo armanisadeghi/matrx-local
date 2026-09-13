@@ -71,13 +71,29 @@ export async function getNativeVaultProviderStatus(): Promise<NativeVaultProvide
 export type NativeVaultTransition = "applied" | "unchanged" | "state_unavailable" | "state_corrupt" | "busy" | "unsupported_platform";
 
 export async function invalidateNativeVaultHostActor(): Promise<NativeVaultTransition | null> {
+  // Browser/dev has no native Vault container by design. This is the explicit
+  // accepted platform outcome, distinct from a broken bridge in Tauri.
+  if (!isTauri()) return "unsupported_platform";
   const inv = await loadTauriInvoke();
-  return inv ? inv<NativeVaultTransition>("invalidate_native_vault_host_actor") : null;
+  if (!inv) return null;
+  try {
+    return await inv<NativeVaultTransition>("invalidate_native_vault_host_actor");
+  } catch {
+    return null;
+  }
 }
 
 export async function reconcileNativeVaultHostActor(subject: string | null): Promise<NativeVaultTransition | null> {
+  // See invalidateNativeVaultHostActor: only an identified non-Tauri runtime
+  // receives this value. A Tauri bridge failure remains a fence refusal.
+  if (!isTauri()) return "unsupported_platform";
   const inv = await loadTauriInvoke();
-  return inv ? inv<NativeVaultTransition>("reconcile_native_vault_host_actor", { subject }) : null;
+  if (!inv) return null;
+  try {
+    return await inv<NativeVaultTransition>("reconcile_native_vault_host_actor", { subject });
+  } catch {
+    return null;
+  }
 }
 
 /**

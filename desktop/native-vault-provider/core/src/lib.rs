@@ -318,7 +318,7 @@ impl CredentialStore for CaptureStore {
             .filter(|c| {
                 c.rp_id() == rp
                     && ids.map_or(false, |ids| {
-                        ids.iter().any(|id| id.id.as_slice() == c.credential_id())
+                        ids.iter().any(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey && id.id.as_slice() == c.credential_id())
                     })
             })
             .cloned()
@@ -363,7 +363,7 @@ impl CredentialStore for SingleSourceStore {
                 !ids.is_empty()
                     && !ids
                         .iter()
-                        .any(|id| id.id.as_slice() == self.0.credential_id())
+                        .any(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey && id.id.as_slice() == self.0.credential_id())
             })
         {
             Err(Ctap2Error::NoCredentials.into())
@@ -442,6 +442,7 @@ fn valid_get(r: &passkey_types::ctap2::get_assertion::Request) -> bool {
         && r.client_data_hash.len() == 32
         && r.options.up
         && r.options.uv
+        && !r.options.rk
         && r.extensions.is_none()
         && r.pin_auth.is_none()
         && r.pin_protocol.is_none()

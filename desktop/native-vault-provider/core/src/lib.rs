@@ -694,4 +694,97 @@ mod tests {
             Err(FixedError::CredentialExcluded)
         ));
     }
+
+    struct FailingPersist;
+    #[async_trait]
+    impl RegistrationPersister for FailingPersist {
+        async fn persist(&mut self, _: &[u8]) -> Result<(), FixedError> {
+            Err(FixedError::PersistenceFailed)
+        }
+    }
+    struct PendingPersist(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    #[async_trait]
+    impl RegistrationPersister for PendingPersist {
+        async fn persist(&mut self, _: &[u8]) -> Result<(), FixedError> {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+    #[tokio::test]
+    async fn failed_or_cancelled_commit_never_releases_registration_response() {
+        let prepared = prepare_registration(make_request(None), Uv, &[], 4096)
+            .await
+            .unwrap();
+        assert!(matches!(
+            prepared.commit_with(&mut FailingPersist).await,
+            Err(FixedError::PersistenceFailed)
+        ));
+        let prepared = prepare_registration(make_request(None), Uv, &[], 4096)
+            .await
+            .unwrap();
+        let entered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut persister = PendingPersist(entered.clone());
+        let mut pending = Box::pin(prepared.commit_with(&mut persister));
+        std::future::poll_fn(|cx| {
+            assert!(matches!(
+                std::future::Future::poll(pending.as_mut(), cx),
+                std::task::Poll::Pending
+            ));
+            std::task::Poll::Ready(())
+        })
+        .await;
+        drop(pending);
+        assert!(entered.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    #[test]
+    fn total_status_mapping_covers_all_bytes_and_fixed_named_groups() {
+        for byte in 0_u8..=u8::MAX {
+            let _ = map_status(StatusCode::from(byte));
+        }
+        assert_eq!(
+            map_status(Ctap2Error::CredentialExcluded.into()),
+            FixedError::CredentialExcluded
+        );
+        assert_eq!(
+            map_status(Ctap2Error::NoCredentials.into()),
+            FixedError::NoCredentials
+        );
+        assert_eq!(
+            map_status(Ctap2Error::OperationDenied.into()),
+            FixedError::VerificationDenied
+        );
+        assert_eq!(
+            map_status(Ctap2Error::InvalidCbor.into()),
+            FixedError::InvalidRequest
+        );
+        assert_eq!(
+            map_status(Ctap2Error::Ok.into()),
+            FixedError::OperationFailed
+        );
+    }
+    #[test]
+    fn valid_fixture_one_mutation_codec_rejections() {
+        let source = valid_source();
+        let mut missing: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(&source).unwrap();
+        missing.remove("user_handle");
+        assert_eq!(
+            canonical_source(&serde_json::to_vec(&missing).unwrap(), 4096),
+            Err(FixedError::InvalidSource)
+        );
+        let duplicate = String::from_utf8(source.clone()).unwrap().replacen(
+            "\"version\":1",
+            "\"version\":1,\"version\":1",
+            1,
+        );
+        assert_eq!(
+            canonical_source(duplicate.as_bytes(), 4096),
+            Err(FixedError::InvalidSource)
+        );
+        let whitespace = [b" ".as_slice(), source.as_slice()].concat();
+        assert_eq!(
+            canonical_source(&whitespace, 4096),
+            Err(FixedError::InvalidSource)
+        );
+    }
 }

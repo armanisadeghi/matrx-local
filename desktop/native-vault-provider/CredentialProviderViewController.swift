@@ -10,7 +10,6 @@ private let callback = URL(string: "matrx-vault-provider://oauth/callback")!
 private let authorizeURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/authorize")!
 private let tokenURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/token")!
 private let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo")!
-private let groupID = "group.com.aimatrx.desktop.vault-status"
 private let keychainService = "com.aimatrx.desktop.vault-provider.session"
 private let keychainAccount = "current-session"
 private let keychainGroup = "JH83UH9P4D.com.aimatrx.desktop.vault-provider"
@@ -49,6 +48,33 @@ private func constantTimeEqual(_ left: String, _ right: String) -> Bool {
     return mismatch == 0
 }
 
+private extension ProviderStore {
+    func deletePrivate(context: LAContext) throws {
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecAttrAccessGroup as String: keychainGroup,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: false,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        let result = SecItemDelete(query as CFDictionary)
+        guard result == errSecSuccess || result == errSecItemNotFound else {
+            throw EnrollmentError.message("Could not clear the Vault session. Reconnect the provider.")
+        }
+    }
+    func save(_ value: PrivateSession, context: LAContext) throws {
+        let data = try JSONEncoder().encode(value); guard data.count <= 48 * 1024 else { throw EnrollmentError.message("Vault session is too large. Reconnect the provider.") }
+        guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .userPresence, nil) else { throw EnrollmentError.message("Could not protect the Vault session.") }
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: keychainAccount, kSecAttrAccessGroup as String: keychainGroup, kSecUseDataProtectionKeychain as String: true, kSecAttrSynchronizable as String: false]
+        try deletePrivate(context: context)
+        var query = base; query[kSecValueData as String] = data; query[kSecAttrAccessControl as String] = access; query[kSecUseAuthenticationContext as String] = context
+        guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else { throw EnrollmentError.message("Could not save the Vault session. Reconnect the provider.") }
+    }
+}
+
 private final class Transaction {
     let verifier: String; let state: String
     init() throws { verifier = try Self.random(); state = try Self.random() }
@@ -59,51 +85,6 @@ private final class Transaction {
     }
 }
 
-/// The App Group stores only non-secret coordination metadata. Every operation
-/// holds the file lock through its state transition; private session material
-/// remains in the provider-only Data Protection Keychain group.
-private final class ProviderStore {
-    private let directory: URL
-    init() throws {
-        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) else { throw EnrollmentError.message("The Vault provider App Group is unavailable. Install a signed AI Matrx build.") }
-        directory = root.appendingPathComponent("NativeVault", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    }
-    func locked<T>(_ operation: (PublicState) throws -> T) throws -> T {
-        let lock = directory.appendingPathComponent("state.lock")
-        let fd = open(lock.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        guard fd >= 0 else { throw EnrollmentError.message("Vault setup is unavailable. Try again.") }
-        defer { close(fd) }
-        let deadline = Date().addingTimeInterval(2)
-        while flock(fd, LOCK_EX | LOCK_NB) != 0 { if Date() >= deadline { throw EnrollmentError.message("Vault setup is busy. Try again.") }; Thread.sleep(forTimeInterval: 0.05) }
-        defer { flock(fd, LOCK_UN) }
-        return try operation(try read())
-    }
-    func read() throws -> PublicState {
-        let file = directory.appendingPathComponent("state.json")
-        guard FileManager.default.fileExists(atPath: file.path) else { return PublicState(version: 1, generation: UUID().canonical, host_subject: nil, provider_subject: nil) }
-        let data = try Data(contentsOf: file)
-        guard data.count <= 2048 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
-        return try VaultEnvelopeCodec.publicState(data)
-    }
-    func write(_ value: PublicState) throws {
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let temporary = directory.appendingPathComponent(".state-\(UUID().uuidString)")
-        try encoder.encode(value).write(to: temporary, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-        let final = directory.appendingPathComponent("state.json")
-        if FileManager.default.fileExists(atPath: final.path) { _ = try FileManager.default.replaceItemAt(final, withItemAt: temporary) } else { try FileManager.default.moveItem(at: temporary, to: final) }
-    }
-    func save(_ value: PrivateSession, context: LAContext) throws {
-        let data = try JSONEncoder().encode(value); guard data.count <= 48 * 1024 else { throw EnrollmentError.message("Vault session is too large. Reconnect the provider.") }
-        guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .userPresence, nil) else { throw EnrollmentError.message("Could not protect the Vault session.") }
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: keychainAccount, kSecAttrAccessGroup as String: keychainGroup, kSecUseDataProtectionKeychain as String: true]
-        SecItemDelete(base as CFDictionary)
-        context.interactionNotAllowed = true
-        var query = base; query[kSecValueData as String] = data; query[kSecAttrAccessControl as String] = access; query[kSecUseAuthenticationContext as String] = context
-        guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else { throw EnrollmentError.message("Could not save the Vault session. Reconnect the provider.") }
-    }
-}
 
 final class CredentialProviderViewController: ASCredentialProviderViewController, ASWebAuthenticationPresentationContextProviding {
     private var transaction: Transaction?
@@ -128,11 +109,25 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     @objc private func begin() {
         do {
             guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else { throw EnrollmentError.message("This build has no public Vault configuration. Install an updated AI Matrx build.") }
-            let transaction = try Transaction(); self.transaction = transaction
-            let store = try ProviderStore()
-            // Capture the shared generation before leaving for web auth. A host
-            // actor transition during the await invalidates this transaction.
-            enrollmentGeneration = try store.locked { $0.generation }
+            let transaction = try Transaction()
+            let context = LAContext(); var detail: NSError?
+            guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &detail) else { throw EnrollmentError.message("Vault protection is unavailable on this Mac.") }
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Protect your AI Matrx Vault session") { [weak self] allowed, _ in
+                guard allowed else { return }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let store = try ProviderStore()
+                        let state = try store.initializeExplicitConnect { try store.deletePrivate(context: context) }
+                        DispatchQueue.main.async { self?.startAuthorization(transaction, generation: state.generation, key: key) }
+                    } catch { DispatchQueue.main.async { self?.showError(error) } }
+                }
+            }
+        } catch { showError(error) }
+    }
+    private func startAuthorization(_ transaction: Transaction, generation: String, key: String) {
+        do {
+            self.transaction = transaction
+            enrollmentGeneration = generation
             let challenge = Data(SHA256.hash(data: Data(transaction.verifier.utf8))).urlSafeBase64()
             var components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)!; components.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: clientID), URLQueryItem(name: "redirect_uri", value: callback.absoluteString), URLQueryItem(name: "state", value: transaction.state), URLQueryItem(name: "code_challenge", value: challenge), URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "scope", value: "openid email offline_access")]
             guard let url = components.url, window != nil else { throw EnrollmentError.message("Vault setup needs an active provider window. Try again.") }

@@ -172,13 +172,17 @@ fn native_vault_provider_status() -> NativeVaultProviderStatus {
 }
 
 #[tauri::command]
-fn invalidate_native_vault_host_actor() -> native_vault::TransitionResult {
-    native_vault::invalidate()
+async fn invalidate_native_vault_host_actor() -> native_vault::TransitionResult {
+    tokio::task::spawn_blocking(native_vault::invalidate)
+        .await
+        .unwrap_or(native_vault::TransitionResult::StateUnavailable)
 }
 
 #[tauri::command]
-fn reconcile_native_vault_host_actor(subject: Option<String>) -> native_vault::TransitionResult {
-    native_vault::reconcile(subject)
+async fn reconcile_native_vault_host_actor(subject: Option<String>) -> native_vault::TransitionResult {
+    tokio::task::spawn_blocking(move || native_vault::reconcile(subject))
+        .await
+        .unwrap_or(native_vault::TransitionResult::StateUnavailable)
 }
 
 // ── Engine termination ladder (shared by the launch sweep and the quit path) ─

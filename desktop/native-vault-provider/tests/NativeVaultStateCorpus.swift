@@ -1,0 +1,54 @@
+import Foundation
+
+@main struct NativeVaultStateCorpus {
+    static let generation = "11111111-1111-4111-8111-111111111111"
+    static func main() {
+        do { try run(); print("PASS: native Vault state filesystem corpus") } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
+    }
+    static func run() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("native-vault-state-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        do { _ = try ProviderStore(testRoot: root, mode: .existingOnly); throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
+        guard try FileManager.default.contentsOfDirectory(atPath: root.path) == before else { throw Failure.changedReadOnlyRoot }
+        let vault = root.appendingPathComponent("NativeVault")
+        try FileManager.default.createSymbolicLink(atPath: vault.path, withDestinationPath: "/tmp")
+        try expectCorrupt { _ = try ProviderStore(testRoot: root, mode: .explicitConnect) }
+        try FileManager.default.removeItem(at: vault)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let readOnly = try ProviderStore(testRoot: root, mode: .existingOnly)
+        do { _ = try readOnly.read(); throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
+        do { try readOnly.locked { _ in () }; throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
+        guard try FileManager.default.contentsOfDirectory(atPath: vault.path).isEmpty else { throw Failure.changedReadOnlyRoot }
+        let store = try ProviderStore(testRoot: root, mode: .explicitConnect)
+        let initialized = try store.initializeExplicitConnect(invalidatePrivate: {})
+        let reopened = try ProviderStore(testRoot: root, mode: .explicitConnect)
+        guard try reopened.read().generation == initialized.generation else { throw Failure.missingStateGenerationChanged }
+        let state = PublicState(version: 1, generation: generation, host_subject: nil, provider_subject: nil)
+        try store.write(state)
+        guard try store.read().generation == generation else { throw Failure.badRoundTrip }
+        let stateURL = root.appendingPathComponent("NativeVault/state.json")
+        for corrupt in ["{", #"{"version":1,"generation":"\#(generation)","host_subject":null,"provider_subject":null,"unknown":true}"#, #"{"version":1,"generation":"\#(generation)","host_subject":null}"#] {
+            try corrupt.data(using: .utf8)!.write(to: stateURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+            do { _ = try store.read(); throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
+        }
+        try FileManager.default.removeItem(at: stateURL)
+        try FileManager.default.createSymbolicLink(atPath: stateURL.path, withDestinationPath: "/tmp")
+        try expectCorrupt { _ = try store.read() }
+        let lockURL = root.appendingPathComponent("NativeVault/state.lock")
+        try FileManager.default.removeItem(at: stateURL)
+        try FileManager.default.removeItem(at: lockURL)
+        try FileManager.default.createSymbolicLink(atPath: lockURL.path, withDestinationPath: "/tmp")
+        try expectCorrupt { try store.locked { _ in () } }
+    }
+    static func expectCorrupt(_ operation: () throws -> Void) throws {
+        do { try operation(); throw Failure.expectedRefusal }
+        catch Failure.expectedRefusal { throw Failure.expectedRefusal }
+        catch let error as EnrollmentError {
+            guard error.errorDescription == "Vault status is corrupt. Reconnect the provider." else { throw Failure.wrongErrorCategory }
+        }
+    }
+    enum Failure: Error { case expectedRefusal, changedReadOnlyRoot, badRoundTrip, missingStateGenerationChanged, wrongErrorCategory }
+}

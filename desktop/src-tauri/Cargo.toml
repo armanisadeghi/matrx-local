@@ -48,6 +48,10 @@ tauri-plugin-window-state = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", features = ["NSFileManager", "NSString", "NSURL"] }
+
 [features]
 # No features are enabled by default — acceleration is opt-in per platform.
 # macOS builds pass --features metal via the CI workflow.

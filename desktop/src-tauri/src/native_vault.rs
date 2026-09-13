@@ -3,65 +3,610 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TransitionResult { Applied, Unchanged, StateUnavailable, StateCorrupt, Busy, UnsupportedPlatform }
-
+pub enum TransitionResult {
+    Applied,
+    Unchanged,
+    StateUnavailable,
+    StateCorrupt,
+    Busy,
+    UnsupportedPlatform,
+}
 #[derive(Debug, Serialize)]
-pub struct HistoricalStatus { pub state: &'static str, pub last_configured_subject: Option<String> }
+pub struct HistoricalStatus {
+    pub state: &'static str,
+    pub last_configured_subject: Option<String>,
+}
 
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
-    use serde::{Deserialize, Serialize};
-    use std::fs::{self, File, OpenOptions};
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSFileManager, NSString};
+    use serde::{Deserialize, Deserializer, Serialize};
+    use std::fs::File;
     use std::io::{Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    use std::path::{Path, PathBuf};
+    use std::os::fd::{AsRawFd, FromRawFd};
     use std::time::{Duration, Instant};
 
-    #[derive(Deserialize, Serialize, Clone)]
-    struct State { version: u8, generation: String, host_subject: Option<String>, provider_subject: Option<String> }
-    fn subject(value: &str) -> bool { value.len() == 36 && value == value.to_ascii_lowercase() && value.as_bytes().iter().enumerate().all(|(i, c)| match i { 8|13|18|23 => *c == b'-', _ => c.is_ascii_hexdigit() }) }
-    fn generation() -> String { format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", rand_word(), (rand_word() >> 16) as u16, ((rand_word() as u16) & 0x0fff) | 0x4000, ((rand_word() as u16) & 0x3fff) | 0x8000, rand_word() & 0x0000_ffff_ffff_ffff) }
-    fn rand_word() -> u64 { unsafe { ((libc::arc4random() as u64) << 32) | libc::arc4random() as u64 } }
-    fn dir() -> Result<PathBuf, TransitionResult> {
-        let home = std::env::var_os("HOME").ok_or(TransitionResult::StateUnavailable)?;
-        let path = PathBuf::from(home).join("Library/Group Containers/group.com.aimatrx.desktop.vault-status/NativeVault");
-        fs::create_dir_all(&path).map_err(|_| TransitionResult::StateUnavailable)?; Ok(path)
+    fn required_nullable<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+        Option::<String>::deserialize(d)
     }
-    fn read(dir: &Path) -> Result<State, TransitionResult> {
-        let path = dir.join("state.json");
-        if !path.exists() { return Ok(State { version: 1, generation: generation(), host_subject: None, provider_subject: None }); }
-        let meta = fs::symlink_metadata(&path).map_err(|_| TransitionResult::StateUnavailable)?;
-        if meta.file_type().is_symlink() || meta.len() > 2048 { return Err(TransitionResult::StateCorrupt); }
-        let mut bytes = Vec::new(); File::open(path).map_err(|_| TransitionResult::StateUnavailable)?.take(2049).read_to_end(&mut bytes).map_err(|_| TransitionResult::StateUnavailable)?;
-        let state: State = serde_json::from_slice(&bytes).map_err(|_| TransitionResult::StateCorrupt)?;
-        if state.version != 1 || !subject(&state.generation) || state.host_subject.as_deref().is_some_and(|v| !subject(v)) || state.provider_subject.as_deref().is_some_and(|v| !subject(v)) { return Err(TransitionResult::StateCorrupt); }
+    #[derive(Deserialize, Serialize, Clone)]
+    #[serde(deny_unknown_fields)]
+    struct State {
+        version: u8,
+        generation: String,
+        #[serde(deserialize_with = "required_nullable")]
+        host_subject: Option<String>,
+        #[serde(deserialize_with = "required_nullable")]
+        provider_subject: Option<String>,
+    }
+    fn subject(value: &str) -> bool {
+        value.len() == 36
+            && value == value.to_ascii_lowercase()
+            && value.as_bytes().iter().enumerate().all(|(i, c)| match i {
+                8 | 13 | 18 | 23 => *c == b'-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    }
+    fn generation() -> String {
+        format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            rand_word() as u32,
+            (rand_word() >> 16) as u16,
+            ((rand_word() as u16) & 0x0fff) | 0x4000,
+            ((rand_word() as u16) & 0x3fff) | 0x8000,
+            rand_word() & 0x0000_ffff_ffff_ffff
+        )
+    }
+    fn rand_word() -> u64 {
+        unsafe { ((libc::arc4random() as u64) << 32) | libc::arc4random() as u64 }
+    }
+    fn c(value: &str) -> std::ffi::CString {
+        std::ffi::CString::new(value).unwrap()
+    }
+    fn valid(fd: i32, kind: libc::mode_t, mode: libc::mode_t) -> bool {
+        let mut s: libc::stat = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::fstat(fd, &mut s) == 0
+                && s.st_uid == libc::geteuid()
+                && s.st_mode & libc::S_IFMT == kind
+                && s.st_mode & 0o777 == mode
+        }
+    }
+    fn owned_dir(fd: i32) -> bool {
+        let mut s: libc::stat = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::fstat(fd, &mut s) == 0
+                && s.st_uid == libc::geteuid()
+                && s.st_mode & libc::S_IFMT == libc::S_IFDIR
+        }
+    }
+    fn dir() -> Result<File, TransitionResult> {
+        let root = autoreleasepool(|pool| {
+            let identifier = NSString::from_str("group.com.aimatrx.desktop.vault-status");
+            let url = NSFileManager::defaultManager()
+                .containerURLForSecurityApplicationGroupIdentifier(&identifier)?;
+            let path = url.path()?;
+            Some(unsafe { path.to_str(pool) }.to_owned())
+        })
+        .ok_or(TransitionResult::StateUnavailable)?;
+        let root = c(&root);
+        let root_fd = unsafe {
+            libc::open(
+                root.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if root_fd < 0 || !owned_dir(root_fd) {
+            if root_fd >= 0 {
+                unsafe {
+                    libc::close(root_fd);
+                }
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        let name = c("NativeVault");
+        if unsafe { libc::mkdirat(root_fd, name.as_ptr(), 0o700) } != 0
+            && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST)
+        {
+            unsafe {
+                libc::close(root_fd);
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        let fd = unsafe {
+            libc::openat(
+                root_fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        unsafe {
+            libc::close(root_fd);
+        }
+        if fd < 0 || !valid(fd, libc::S_IFDIR, 0o700) {
+            if fd >= 0 {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+    fn existing_dir_at(root_path: &str) -> Result<Option<File>, TransitionResult> {
+        let root = c(root_path);
+        let root_fd = unsafe {
+            libc::open(
+                root.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if root_fd < 0 || !owned_dir(root_fd) {
+            if root_fd >= 0 {
+                unsafe {
+                    libc::close(root_fd);
+                }
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        let name = c("NativeVault");
+        let fd = unsafe {
+            libc::openat(
+                root_fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        unsafe {
+            libc::close(root_fd);
+        }
+        if fd < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ENOENT) => Ok(None),
+                Some(libc::ELOOP) | Some(libc::ENOTDIR) => Err(TransitionResult::StateCorrupt),
+                _ => Err(TransitionResult::StateUnavailable),
+            };
+        }
+        if !valid(fd, libc::S_IFDIR, 0o700) {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(TransitionResult::StateCorrupt);
+        }
+        Ok(Some(unsafe { File::from_raw_fd(fd) }))
+    }
+    fn existing_dir() -> Result<Option<File>, TransitionResult> {
+        let root = autoreleasepool(|pool| {
+            let identifier = NSString::from_str("group.com.aimatrx.desktop.vault-status");
+            let url = NSFileManager::defaultManager()
+                .containerURLForSecurityApplicationGroupIdentifier(&identifier)?;
+            let path = url.path()?;
+            Some(unsafe { path.to_str(pool) }.to_owned())
+        })
+        .ok_or(TransitionResult::StateUnavailable)?;
+        existing_dir_at(&root)
+    }
+    fn read(dir: &File) -> Result<State, TransitionResult> {
+        let name = c("state.json");
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ENOENT) => Ok(State {
+                    version: 1,
+                    generation: generation(),
+                    host_subject: None,
+                    provider_subject: None,
+                }),
+                Some(libc::ELOOP) => Err(TransitionResult::StateCorrupt),
+                _ => Err(TransitionResult::StateUnavailable),
+            };
+        }
+        if !valid(fd, libc::S_IFREG, 0o600) {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(TransitionResult::StateCorrupt);
+        }
+        let mut bytes = Vec::new();
+        let file = unsafe { File::from_raw_fd(fd) };
+        file.take(2049)
+            .read_to_end(&mut bytes)
+            .map_err(|_| TransitionResult::StateUnavailable)?;
+        if bytes.len() > 2048 {
+            return Err(TransitionResult::StateCorrupt);
+        }
+        decode(&bytes)
+    }
+    fn decode(bytes: &[u8]) -> Result<State, TransitionResult> {
+        let state: State =
+            serde_json::from_slice(bytes).map_err(|_| TransitionResult::StateCorrupt)?;
+        if state.version != 1
+            || !subject(&state.generation)
+            || state.host_subject.as_deref().is_some_and(|v| !subject(v))
+            || state
+                .provider_subject
+                .as_deref()
+                .is_some_and(|v| !subject(v))
+        {
+            return Err(TransitionResult::StateCorrupt);
+        }
         Ok(state)
     }
-    fn write(dir: &Path, value: &State) -> Result<(), TransitionResult> {
-        let temp = dir.join(format!(".state-{}", std::process::id()));
+    fn write(dir: &File, value: &State) -> Result<(), TransitionResult> {
+        let temp = c(&format!(".state-{}-{}", std::process::id(), generation()));
         let bytes = serde_json::to_vec(value).map_err(|_| TransitionResult::StateCorrupt)?;
-        let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp).map_err(|_| TransitionResult::StateUnavailable)?;
-        file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|_| TransitionResult::StateUnavailable)?;
-        fs::rename(temp, dir.join("state.json")).map_err(|_| TransitionResult::StateUnavailable)?;
-        File::open(dir).and_then(|f| f.sync_all()).map_err(|_| TransitionResult::StateUnavailable)
+        if bytes.len() > 2048 {
+            return Err(TransitionResult::StateCorrupt);
+        }
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                temp.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW,
+                0o600,
+            )
+        };
+        if fd < 0 || !valid(fd, libc::S_IFREG, 0o600) {
+            if fd >= 0 {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        let result = file
+            .write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| TransitionResult::StateUnavailable);
+        if result.is_err() {
+            unsafe {
+                libc::unlinkat(dir.as_raw_fd(), temp.as_ptr(), 0);
+            }
+            return result;
+        }
+        let final_name = c("state.json");
+        if unsafe {
+            libc::renameat(
+                dir.as_raw_fd(),
+                temp.as_ptr(),
+                dir.as_raw_fd(),
+                final_name.as_ptr(),
+            )
+        } != 0
+            || unsafe { libc::fsync(dir.as_raw_fd()) } != 0
+        {
+            unsafe {
+                libc::unlinkat(dir.as_raw_fd(), temp.as_ptr(), 0);
+            }
+            return Err(TransitionResult::StateUnavailable);
+        }
+        Ok(())
     }
-    fn locked<T>(work: impl FnOnce(&Path, State) -> Result<T, TransitionResult>) -> Result<T, TransitionResult> {
-        let dir = dir()?; let lock = OpenOptions::new().read(true).write(true).create(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(dir.join("state.lock")).map_err(|_| TransitionResult::StateUnavailable)?;
+    fn locked_at<T>(
+        dir: File,
+        work: impl FnOnce(&File, State) -> Result<T, TransitionResult>,
+    ) -> Result<T, TransitionResult> {
+        let name = c("state.lock");
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW,
+                0o600,
+            )
+        };
+        if fd < 0 || !valid(fd, libc::S_IFREG, 0o600) {
+            if fd >= 0 {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+            return Err(TransitionResult::StateUnavailable);
+        };
+        let lock = unsafe { File::from_raw_fd(fd) };
         let deadline = Instant::now() + Duration::from_secs(2);
-        while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 { if Instant::now() >= deadline { return Err(TransitionResult::Busy); }; std::thread::sleep(Duration::from_millis(50)); }
-        let answer = work(&dir, read(&dir)?); unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN); }; answer
+        while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            if Instant::now() >= deadline {
+                return Err(TransitionResult::Busy);
+            };
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let answer = work(&dir, read(&dir)?);
+        unsafe {
+            libc::flock(lock.as_raw_fd(), libc::LOCK_UN);
+        };
+        answer
+    }
+    fn locked<T>(
+        work: impl FnOnce(&File, State) -> Result<T, TransitionResult>,
+    ) -> Result<T, TransitionResult> {
+        locked_at(dir()?, work)
+    }
+    /// Status is read-only: it never creates a lock inode.  If a transition is
+    /// holding the existing lock, expose the closed `busy` status rather than
+    /// reporting stale configured metadata.
+    fn status_lock(dir: &File) -> Result<(), TransitionResult> {
+        let name = c("state.lock");
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::ENOENT) => Ok(()),
+                Some(libc::ELOOP) => Err(TransitionResult::StateCorrupt),
+                _ => Err(TransitionResult::StateUnavailable),
+            };
+        }
+        if !valid(fd, libc::S_IFREG, 0o600) {
+            unsafe { libc::close(fd) };
+            return Err(TransitionResult::StateCorrupt);
+        }
+        let lock = unsafe { File::from_raw_fd(fd) };
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return if std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK) {
+                Err(TransitionResult::Busy)
+            } else {
+                Err(TransitionResult::StateUnavailable)
+            };
+        }
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+        Ok(())
     }
     pub fn reconcile(next: Option<String>, force: bool) -> TransitionResult {
-        if next.as_deref().is_some_and(|v| !subject(v)) { return TransitionResult::StateCorrupt; }
-        match locked(|dir, mut state| { if !force && state.host_subject == next { return Ok(TransitionResult::Unchanged); }; state.generation = generation(); state.host_subject = if force { None } else { next }; state.provider_subject = None; write(dir, &state)?; Ok(TransitionResult::Applied) }) { Ok(v) => v, Err(v) => v }
+        if next.as_deref().is_some_and(|v| !subject(v)) {
+            return TransitionResult::StateCorrupt;
+        }
+        match locked(|dir, mut state| {
+            if !force && state.host_subject == next {
+                return Ok(TransitionResult::Unchanged);
+            };
+            state.generation = generation();
+            state.host_subject = if force { None } else { next };
+            state.provider_subject = None;
+            write(dir, &state)?;
+            Ok(TransitionResult::Applied)
+        }) {
+            Ok(v) => v,
+            Err(v) => v,
+        }
     }
-    pub fn status() -> HistoricalStatus { match locked(|_, state| Ok(state)) { Ok(state) if state.provider_subject.is_some() => HistoricalStatus { state: "configured", last_configured_subject: state.provider_subject }, Ok(_) => HistoricalStatus { state: "uninitialized", last_configured_subject: None }, Err(TransitionResult::StateCorrupt) => HistoricalStatus { state: "state_corrupt", last_configured_subject: None }, Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None }, Err(_) => HistoricalStatus { state: "state_unavailable", last_configured_subject: None } } }
+    pub fn status() -> HistoricalStatus {
+        match existing_dir().and_then(|dir| match dir {
+            None => Ok(State {
+                version: 1,
+                generation: generation(),
+                host_subject: None,
+                provider_subject: None,
+            }),
+            Some(dir) => { status_lock(&dir)?; read(&dir) },
+        }) {
+            Ok(state) if state.provider_subject.is_some() => HistoricalStatus {
+                state: "configured",
+                last_configured_subject: state.provider_subject,
+            },
+            Ok(_) => HistoricalStatus {
+                state: "uninitialized",
+                last_configured_subject: None,
+            },
+            Err(TransitionResult::StateCorrupt) => HistoricalStatus {
+                state: "state_corrupt",
+                last_configured_subject: None,
+            },
+            Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None },
+            Err(_) => HistoricalStatus {
+                state: "state_unavailable",
+                last_configured_subject: None,
+            },
+        }
+    }
+    fn status_at(root: &str) -> HistoricalStatus {
+        match existing_dir_at(root).and_then(|dir| match dir {
+            None => Ok(State {
+                version: 1,
+                generation: generation(),
+                host_subject: None,
+                provider_subject: None,
+            }),
+            Some(dir) => { status_lock(&dir)?; read(&dir) },
+        }) {
+            Ok(state) if state.provider_subject.is_some() => HistoricalStatus {
+                state: "configured",
+                last_configured_subject: state.provider_subject,
+            },
+            Ok(_) => HistoricalStatus {
+                state: "uninitialized",
+                last_configured_subject: None,
+            },
+            Err(TransitionResult::StateCorrupt) => HistoricalStatus {
+                state: "state_corrupt",
+                last_configured_subject: None,
+            },
+            Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None },
+            Err(_) => HistoricalStatus {
+                state: "state_unavailable",
+                last_configured_subject: None,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::process::Command;
+        fn state() -> String {
+            r#"{"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null}"#.into()
+        }
+        fn temp() -> (std::path::PathBuf, File) {
+            let mut p = std::env::temp_dir();
+            p.push(format!("native-vault-{}", generation()));
+            std::fs::create_dir(&p).unwrap();
+            std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+                .unwrap();
+            let f = File::open(&p).unwrap();
+            (p, f)
+        }
+        #[test]
+        fn closed_state_refuses_missing_unknown_duplicate_and_corrupt_fields() {
+            assert!(decode(state().as_bytes()).is_ok());
+            for invalid in [
+                r#"{"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null}"#,
+                r#"{"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null,"x":1}"#,
+                r#"{"version":1,"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null}"#,
+                r#"{"version":1,"generation":"upper","host_subject":null,"provider_subject":null}"#,
+            ] {
+                assert!(matches!(
+                    decode(invalid.as_bytes()),
+                    Err(TransitionResult::StateCorrupt)
+                ));
+            }
+        }
+        #[test]
+        fn generated_generations_are_canonical_and_round_trip() {
+            for _ in 0..4096 {
+                let generation = generation();
+                assert!(subject(&generation));
+                let encoded = format!(
+                    r#"{{"version":1,"generation":"{generation}","host_subject":null,"provider_subject":null}}"#
+                );
+                assert!(decode(encoded.as_bytes()).is_ok());
+            }
+        }
+        #[test]
+        fn state_reader_refuses_symlink_and_accepts_atomic_written_state() {
+            let (path, dir) = temp();
+            assert!(read(&dir).is_ok());
+            let link = path.join("state.json");
+            std::os::unix::fs::symlink("/tmp", &link).unwrap();
+            assert!(matches!(read(&dir), Err(TransitionResult::StateCorrupt)));
+            std::fs::remove_file(&link).unwrap();
+            let value = decode(state().as_bytes()).unwrap();
+            write(&dir, &value).unwrap();
+            assert_eq!(read(&dir).unwrap().generation, value.generation);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        #[test]
+        fn readonly_status_never_creates_missing_entries_and_refuses_corrupt_state() {
+            let (root, _) = temp();
+            let before = std::fs::read_dir(&root).unwrap().count();
+            let root_text = root.to_str().unwrap();
+            assert_eq!(status_at(root_text).state, "uninitialized");
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), before);
+            let vault = root.join("NativeVault");
+            std::os::unix::fs::symlink("/tmp", &vault).unwrap();
+            assert_eq!(status_at(root_text).state, "state_corrupt");
+            std::fs::remove_file(&vault).unwrap();
+            std::fs::create_dir(&vault).unwrap();
+            std::fs::set_permissions(&vault, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+                .unwrap();
+            assert_eq!(status_at(root_text).state, "uninitialized");
+            assert_eq!(std::fs::read_dir(&vault).unwrap().count(), 0);
+            std::fs::write(vault.join("state.json"), b"{").unwrap();
+            std::fs::set_permissions(
+                vault.join("state.json"),
+                std::os::unix::fs::PermissionsExt::from_mode(0o600),
+            )
+            .unwrap();
+            assert_eq!(status_at(root_text).state, "state_corrupt");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+        #[test]
+        fn flock_worker() {
+            if let Some(path) = std::env::var_os("NATIVE_VAULT_STATUS_TEST_DIR") {
+                println!("{}", status_at(&path.to_string_lossy()).state);
+                return;
+            }
+            let Some(path) = std::env::var_os("NATIVE_VAULT_LOCK_TEST_DIR") else {
+                return;
+            };
+            let dir = File::open(path).unwrap();
+            let result = locked_at(dir, |dir, mut value| {
+                value.generation = generation();
+                write(dir, &value)?;
+                Ok(TransitionResult::Applied)
+            });
+            println!("{result:?}");
+        }
+        #[test]
+        fn two_process_lock_timeout_then_generation_write_are_serialized() {
+            let (path, _) = temp();
+            let vault = path.join("NativeVault");
+            std::fs::create_dir(&vault).unwrap();
+            std::fs::set_permissions(&vault, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+                .unwrap();
+            let dir = File::open(&vault).unwrap();
+            let value = decode(state().as_bytes()).unwrap();
+            write(&dir, &value).unwrap();
+            let child = || {
+                Command::new(std::env::current_exe().unwrap())
+                    .arg("--exact")
+                    .arg("native_vault::platform::tests::flock_worker")
+                    .arg("--nocapture")
+                    .env("NATIVE_VAULT_LOCK_TEST_DIR", &vault)
+                    .output()
+                    .unwrap()
+            };
+            locked_at(dir, |_, _| {
+                let status = Command::new(std::env::current_exe().unwrap())
+                    .arg("--exact")
+                    .arg("native_vault::platform::tests::flock_worker")
+                    .arg("--nocapture")
+                    .env("NATIVE_VAULT_STATUS_TEST_DIR", &path)
+                    .output()
+                    .unwrap();
+                assert!(status.status.success());
+                assert!(String::from_utf8_lossy(&status.stdout).contains("busy"));
+                let out = child();
+                assert!(out.status.success());
+                assert!(String::from_utf8_lossy(&out.stdout).contains("Busy"));
+                Ok(())
+            })
+            .unwrap();
+            let out = child();
+            assert!(out.status.success());
+            assert!(String::from_utf8_lossy(&out.stdout).contains("Applied"));
+            let after = read(&File::open(&vault).unwrap()).unwrap();
+            assert_ne!(after.generation, value.generation);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
 }
-#[cfg(target_os = "macos")] pub fn reconcile(subject: Option<String>) -> TransitionResult { platform::reconcile(subject, false) }
-#[cfg(target_os = "macos")] pub fn invalidate() -> TransitionResult { platform::reconcile(None, true) }
-#[cfg(target_os = "macos")] pub fn status() -> HistoricalStatus { platform::status() }
-#[cfg(not(target_os = "macos"))] pub fn reconcile(_: Option<String>) -> TransitionResult { TransitionResult::UnsupportedPlatform }
-#[cfg(not(target_os = "macos"))] pub fn invalidate() -> TransitionResult { TransitionResult::UnsupportedPlatform }
-#[cfg(not(target_os = "macos"))] pub fn status() -> HistoricalStatus { HistoricalStatus { state: "unsupported_platform", last_configured_subject: None } }
+#[cfg(target_os = "macos")]
+pub fn reconcile(subject: Option<String>) -> TransitionResult {
+    platform::reconcile(subject, false)
+}
+#[cfg(target_os = "macos")]
+pub fn invalidate() -> TransitionResult {
+    platform::reconcile(None, true)
+}
+#[cfg(target_os = "macos")]
+pub fn status() -> HistoricalStatus {
+    platform::status()
+}
+#[cfg(not(target_os = "macos"))]
+pub fn reconcile(_: Option<String>) -> TransitionResult {
+    TransitionResult::UnsupportedPlatform
+}
+#[cfg(not(target_os = "macos"))]
+pub fn invalidate() -> TransitionResult {
+    TransitionResult::UnsupportedPlatform
+}
+#[cfg(not(target_os = "macos"))]
+pub fn status() -> HistoricalStatus {
+    HistoricalStatus {
+        state: "unsupported_platform",
+        last_configured_subject: None,
+    }
+}

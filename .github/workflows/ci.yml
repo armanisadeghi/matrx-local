@@ -134,3 +134,17 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+
+  native-vault-core:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust 1.93.1
+        uses: dtolnay/rust-toolchain@1.93.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Native Vault core provenance and protocol gate
+        run: desktop/scripts/check-native-vault-core.sh

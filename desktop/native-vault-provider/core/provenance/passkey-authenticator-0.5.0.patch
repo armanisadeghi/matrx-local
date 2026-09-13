@@ -1,0 +1,630 @@
+diff --git a/vendor/LICENSE-APACHE b/LICENSE-APACHE
+new file mode 100644
+index 0000000..261eeb9
+--- /dev/null
++++ b/LICENSE-APACHE
+@@ -0,0 +1,201 @@
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/vendor/LICENSE-MIT b/LICENSE-MIT
+new file mode 100644
+index 0000000..49641f3
+--- /dev/null
++++ b/LICENSE-MIT
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2022 1Password
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+\ No newline at end of file
+diff --git a/src/authenticator/get_assertion/tests.rs b/src/authenticator/get_assertion/tests.rs
+index 4386e6c..8698bdf 100644
+--- a/src/authenticator/get_assertion/tests.rs
++++ b/src/authenticator/get_assertion/tests.rs
+@@ -1,18 +1,117 @@
++use std::borrow::Cow;
++
+ use passkey_types::{
+     Passkey, StoredHmacSecret,
+     ctap2::{
+-        Aaguid, Ctap2Error,
++        Aaguid, Ctap2Error, StatusCode,
+         get_assertion::{ExtensionInputs, Options, Request},
++        make_credential::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity},
+     },
+     rand::random_vec,
+ };
+ 
+ use crate::{
+-    Authenticator, MockUserValidationMethod,
++    Authenticator, BackupFlags, CredentialStore, MockUserValidationMethod, PasskeyAccessor, UiHint,
++    UserCheck, UserValidationMethod,
+     extensions::{self, prf_eval_request},
+     user_validation::MockUiHint,
+ };
+ 
++#[derive(Clone)]
++struct BackedUpPasskey {
++    passkey: Passkey,
++    backup_flags: BackupFlags,
++}
++
++impl PasskeyAccessor for BackedUpPasskey {
++    fn backup_flags(&self) -> BackupFlags {
++        self.backup_flags
++    }
++    fn key(&self) -> Cow<'_, coset::CoseKey> {
++        Cow::Borrowed(&self.passkey.key)
++    }
++    fn credential_id(&self) -> &[u8] {
++        &self.passkey.credential_id
++    }
++    fn rp_id(&self) -> &str {
++        &self.passkey.rp_id
++    }
++    fn user_handle(&self) -> Option<&[u8]> {
++        self.passkey.user_handle.as_deref().map(|value| &**value)
++    }
++    fn username(&self) -> Option<&str> {
++        self.passkey.username.as_deref()
++    }
++    fn user_display_name(&self) -> Option<&str> {
++        self.passkey.user_display_name.as_deref()
++    }
++    fn counter(&self) -> Option<u32> {
++        self.passkey.counter
++    }
++    fn set_counter(&mut self, counter: u32) {
++        self.passkey.counter = Some(counter);
++    }
++    fn extensions(&self) -> Cow<'_, passkey_types::CredentialExtensions> {
++        Cow::Borrowed(&self.passkey.extensions)
++    }
++}
++
++struct OneCredentialStore(BackedUpPasskey);
++
++#[async_trait::async_trait]
++impl CredentialStore for OneCredentialStore {
++    type PasskeyItem = BackedUpPasskey;
++    async fn find_credentials(
++        &self,
++        _: Option<&[passkey_types::webauthn::PublicKeyCredentialDescriptor]>,
++        _: &str,
++        _: Option<&[u8]>,
++    ) -> Result<Vec<Self::PasskeyItem>, StatusCode> {
++        Ok(vec![self.0.clone()])
++    }
++    async fn save_credential(
++        &mut self,
++        _: Passkey,
++        _: PublicKeyCredentialUserEntity,
++        _: PublicKeyCredentialRpEntity,
++        _: Options,
++    ) -> Result<(), StatusCode> {
++        Ok(())
++    }
++    async fn update_credential(&mut self, _: &Self::PasskeyItem) -> Result<(), StatusCode> {
++        Ok(())
++    }
++    async fn get_info(&self) -> crate::StoreInfo {
++        crate::StoreInfo {
++            discoverability: crate::credential_store::DiscoverabilitySupport::Full,
++        }
++    }
++}
++
++struct AlwaysVerified;
++
++#[async_trait::async_trait]
++impl UserValidationMethod for AlwaysVerified {
++    type PasskeyItem = BackedUpPasskey;
++    async fn check_user<'a>(
++        &self,
++        _: UiHint<'a, Self::PasskeyItem>,
++        _: bool,
++        _: bool,
++    ) -> Result<UserCheck, Ctap2Error> {
++        Ok(UserCheck {
++            presence: true,
++            verification: true,
++        })
++    }
++    fn is_presence_enabled(&self) -> bool {
++        true
++    }
++    fn is_verification_enabled(&self) -> Option<bool> {
++        Some(true)
++    }
++}
++
+ fn create_passkey(hmac_secret: Option<Vec<u8>>) -> Passkey {
+     let builder = Passkey::mock("example.com".into());
+ 
+@@ -43,6 +142,44 @@ fn good_request() -> Request {
+     }
+ }
+ 
++#[tokio::test]
++async fn get_assertion_replaces_backup_flags_from_immutable_credential() {
++    for (eligible, backed_up, expected) in [
++        (false, false, passkey_types::ctap2::Flags::empty()),
++        (true, false, passkey_types::ctap2::Flags::BE),
++        (
++            true,
++            true,
++            passkey_types::ctap2::Flags::BE | passkey_types::ctap2::Flags::BS,
++        ),
++    ] {
++        let passkey = BackedUpPasskey {
++            passkey: create_passkey(None),
++            backup_flags: BackupFlags::new(eligible, backed_up).unwrap(),
++        };
++        let mut authenticator = Authenticator::new(
++            Aaguid::new_empty(),
++            OneCredentialStore(passkey),
++            AlwaysVerified,
++        );
++        let response = authenticator
++            .get_assertion(good_request())
++            .await
++            .expect("assertion should succeed");
++        assert_eq!(
++            response.auth_data.flags
++                & (passkey_types::ctap2::Flags::BE | passkey_types::ctap2::Flags::BS),
++            expected,
++        );
++        assert!(
++            response
++                .auth_data
++                .flags
++                .contains(passkey_types::ctap2::Flags::UP | passkey_types::ctap2::Flags::UV)
++        );
++    }
++}
++
+ #[tokio::test]
+ async fn get_assertion_returns_no_credentials_found() {
+     // Arrange
+diff --git a/src/authenticator/get_assertion.rs b/src/authenticator/get_assertion.rs
+index b3f51bd..0a79a6b 100644
+--- a/src/authenticator/get_assertion.rs
++++ b/src/authenticator/get_assertion.rs
+@@ -84,6 +84,7 @@ where
+ 
+         // 8. If no credentials were located in step 1, return CTAP2_ERR_NO_CREDENTIALS.
+         let mut credential = maybe_credential?;
++        let backup_flags = credential.backup_flags();
+ 
+         // 9. If more than one credential was located in step 1 and allowList is present and not
+         //    empty, select any applicable credential and proceed to step 12. Otherwise, order the
+@@ -129,9 +130,10 @@ where
+         //      concatenation is safe to use here because the authenticator data describes its own
+         //      length. The hash of the serialized client data (which potentially has a variable
+         //      length) is always the last element.
+-        let auth_data = AuthenticatorData::new(&input.rp_id, credential.counter())
++        let mut auth_data = AuthenticatorData::new(&input.rp_id, credential.counter())
+             .set_flags(flags)
+             .set_assertion_extensions(extensions.signed)?;
++        auth_data.flags = backup_flags.apply(auth_data.flags);
+ 
+         let mut signature_target = auth_data.to_vec();
+         signature_target.extend(input.client_data_hash);
+diff --git a/src/authenticator/make_credential/tests.rs b/src/authenticator/make_credential/tests.rs
+index eddcff5..fdbb72a 100644
+--- a/src/authenticator/make_credential/tests.rs
++++ b/src/authenticator/make_credential/tests.rs
+@@ -75,6 +75,32 @@ async fn assert_storage_on_success() {
+     assert_eq!(store.len(), 1);
+ }
+ 
++#[tokio::test]
++async fn make_credential_replaces_backup_flags_from_immutable_input() {
++    for (eligible, backed_up, expected) in [
++        (false, false, Flags::empty()),
++        (true, false, Flags::BE),
++        (true, true, Flags::BE | Flags::BS),
++    ] {
++        let shared_store = Arc::new(Mutex::new(MemoryStore::new()));
++        let user_mock = MockUserValidationMethod::verified_user(1);
++        let mut authenticator = Authenticator::new(Aaguid::new_empty(), shared_store, user_mock);
++        let response = authenticator
++            .make_credential_with_backup_flags(
++                good_request(),
++                BackupFlags::new(eligible, backed_up).unwrap(),
++            )
++            .await
++            .expect("registration should succeed");
++        assert_eq!(response.auth_data.flags & (Flags::BE | Flags::BS), expected);
++        assert!(response.auth_data.flags.contains(Flags::UP | Flags::UV));
++    }
++    assert_eq!(
++        BackupFlags::new(false, true),
++        Err(Ctap2Error::InvalidOption)
++    );
++}
++
+ #[tokio::test]
+ async fn assert_excluded_credentials() {
+     let cred_id: Bytes = random_vec(16).into();
+diff --git a/src/authenticator/make_credential.rs b/src/authenticator/make_credential.rs
+index 0edb65b..b1b24e6 100644
+--- a/src/authenticator/make_credential.rs
++++ b/src/authenticator/make_credential.rs
+@@ -7,6 +7,7 @@ use passkey_types::{
+     },
+ };
+ 
++use crate::authenticator::BackupFlags;
+ use crate::{Authenticator, CoseKeyPair, CredentialStore, UiHint, UserValidationMethod};
+ 
+ impl<S, U> Authenticator<S, U>
+@@ -16,6 +17,16 @@ where
+ {
+     /// This method is invoked by the host to request generation of a new credential in the authenticator.
+     pub async fn make_credential(&mut self, input: Request) -> Result<Response, StatusCode> {
++        self.make_credential_with_backup_flags(input, BackupFlags::DEVICE_BOUND)
++            .await
++    }
++
++    /// Create a credential with independently validated CTAP backup flags.
++    pub async fn make_credential_with_backup_flags(
++        &mut self,
++        input: Request,
++        backup_flags: BackupFlags,
++    ) -> Result<Response, StatusCode> {
+         if !input.options.up {
+             return Err(Ctap2Error::InvalidOption.into());
+         };
+@@ -55,6 +66,7 @@ where
+                     &input.options,
+                 )
+                 .await?;
++                return Err(Ctap2Error::CredentialExcluded.into());
+             }
+         }
+ 
+@@ -161,10 +173,11 @@ where
+         )
+         .unwrap();
+ 
+-        let auth_data = AuthenticatorData::new(&input.rp.id, passkey.counter)
++        let mut auth_data = AuthenticatorData::new(&input.rp.id, passkey.counter)
+             .set_flags(flags)
+             .set_attested_credential_data(acd)
+             .set_make_credential_extensions(extensions.signed)?;
++        auth_data.flags = backup_flags.apply(auth_data.flags);
+ 
+         let response = Response {
+             fmt: "none".into(),
+diff --git a/src/authenticator.rs b/src/authenticator.rs
+index c071449..7cda19e 100644
+--- a/src/authenticator.rs
++++ b/src/authenticator.rs
+@@ -6,6 +6,46 @@ use passkey_types::{
+ 
+ use crate::{CredentialStore, UserValidationMethod, user_validation::UiHint};
+ 
++/// Validated CTAP backup eligibility and state bits.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BackupFlags {
++    eligible: bool,
++    backed_up: bool,
++}
++
++impl BackupFlags {
++    /// Legacy device-bound credentials advertise neither backup bit.
++    pub const DEVICE_BOUND: Self = Self {
++        eligible: false,
++        backed_up: false,
++    };
++
++    /// Reject the invalid CTAP combination where a non-eligible key is backed up.
++    pub fn new(eligible: bool, backed_up: bool) -> Result<Self, Ctap2Error> {
++        if backed_up && !eligible {
++            return Err(Ctap2Error::InvalidOption);
++        }
++        Ok(Self {
++            eligible,
++            backed_up,
++        })
++    }
++
++    pub(crate) fn apply(self, mut flags: Flags) -> Flags {
++        // `Flags::default()` in passkey-types currently carries BE|BS. Backup state
++        // is credential truth, so first clear those inherited bits, then write this
++        // validated pair while preserving UP, UV, AT, ED, and every other flag.
++        flags.remove(Flags::BE | Flags::BS);
++        if self.eligible {
++            flags.insert(Flags::BE);
++        }
++        if self.backed_up {
++            flags.insert(Flags::BS);
++        }
++        flags
++    }
++}
++
+ pub mod extensions;
+ mod get_assertion;
+ mod get_info;
+@@ -242,3 +282,28 @@ where
+ 
+ #[cfg(test)]
+ mod tests;
++
++#[cfg(test)]
++mod backup_flag_tests {
++    use super::*;
++
++    #[test]
++    fn backup_flags_replace_default_bits_without_touching_user_flags() {
++        let user_flags = Flags::UP | Flags::UV;
++        for (eligible, backed_up, expected) in [
++            (false, false, Flags::empty()),
++            (true, false, Flags::BE),
++            (true, true, Flags::BE | Flags::BS),
++        ] {
++            let flags = BackupFlags::new(eligible, backed_up)
++                .unwrap()
++                .apply(Flags::default() | user_flags);
++            assert_eq!(flags & (Flags::BE | Flags::BS), expected);
++            assert!(flags.contains(user_flags));
++        }
++        assert_eq!(
++            BackupFlags::new(false, true),
++            Err(Ctap2Error::InvalidOption)
++        );
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index a9381e6..a6ec1ea 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -43,7 +43,7 @@ use p256::{
+ use passkey_types::{Bytes, ctap2::Ctap2Error};
+ 
+ pub use self::{
+-    authenticator::{Authenticator, CredentialIdLength, extensions},
++    authenticator::{Authenticator, BackupFlags, CredentialIdLength, extensions},
+     credential_store::{CredentialStore, DiscoverabilitySupport, MemoryStore, StoreInfo},
+     ctap2::Ctap2Api,
+     passkey::PasskeyAccessor,
+diff --git a/src/passkey.rs b/src/passkey.rs
+index b03dec3..4576148 100644
+--- a/src/passkey.rs
++++ b/src/passkey.rs
+@@ -1,5 +1,6 @@
+ use std::{borrow::Cow, ops::Deref};
+ 
++use crate::authenticator::BackupFlags;
+ use coset::CoseKey;
+ use passkey_types::{
+     CredentialExtensions,
+@@ -12,6 +13,10 @@ use passkey_types::Passkey;
+ /// A trait to model the different aspects of a passkey, this allows the abstraction of a passkey
+ /// on custom items.
+ pub trait PasskeyAccessor {
++    /// Immutable backup state associated with this credential.
++    fn backup_flags(&self) -> BackupFlags {
++        BackupFlags::DEVICE_BOUND
++    }
+     /// The private key
+     ///
+     /// This is a Cow in case the type does not save the private key in Cose format.

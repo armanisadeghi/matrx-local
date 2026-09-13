@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Pure Rust core/provenance gate. No FFI, OS provider, release, or database work.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CORE="$ROOT/desktop/native-vault-provider/core"
+PROVENANCE="$CORE/provenance"
+ARCHIVE_SHA256='20bf5800e3f6287580da985fb88e678f37c078d62242cb536941c44d852ab37c'
+PATCH_SHA256='af3acb38c587a39728627e234120df48c836c545eeb607c5986e7080a68f259c'
+work="$(mktemp -d "${TMPDIR:-/tmp}/native-vault-core.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+check_sha256() {
+  local expected="$1" file="$2" actual
+  actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  test "$actual" = "$expected"
+}
+
+archive="$work/passkey-authenticator-0.5.0.crate"
+curl --fail --location --silent --show-error \
+  'https://static.crates.io/crates/passkey-authenticator/passkey-authenticator-0.5.0.crate' -o "$archive"
+check_sha256 "$ARCHIVE_SHA256" "$archive"
+check_sha256 "$PATCH_SHA256" "$PROVENANCE/passkey-authenticator-0.5.0.patch"
+mkdir "$work/upstream"
+tar -xzf "$archive" -C "$work/upstream" --strip-components=1
+# The release archive omits these notices; the vendored copy intentionally retains matching notices.
+for license in LICENSE-APACHE LICENSE-MIT; do
+  test -s "$CORE/vendor/passkey-authenticator/$license"
+done
+python3 - "$CORE/Cargo.toml" "$CORE/Cargo.lock" <<'PY'
+from pathlib import Path
+import re, sys
+manifest, lock = (Path(x).read_text() for x in sys.argv[1:])
+expected = '[patch.crates-io]\npasskey-authenticator = { path = "vendor/passkey-authenticator" }'
+if expected not in manifest or manifest.count('[patch.crates-io]') != 1:
+    raise SystemExit('only the approved passkey-authenticator path patch is allowed')
+if re.search(r'^source = "git\+', lock, re.M):
+    raise SystemExit('git dependency found in locked graph')
+entry = re.search(r'\[\[package\]\]\nname = "passkey-types".*?(?=\n\[\[package\]\]|\Z)', lock, re.S)
+if entry is None or 'registry+https://github.com/rust-lang/crates.io-index' not in entry.group(0):
+    raise SystemExit('passkey-types must resolve from the registry')
+PY
+cp -a "$work/upstream/." "$work/reproduced"
+git -C "$work/reproduced" apply "$PROVENANCE/passkey-authenticator-0.5.0.patch"
+diff -qr --exclude target "$work/reproduced" "$CORE/vendor/passkey-authenticator"
+for tree in "$work/reproduced" "$CORE/vendor/passkey-authenticator"; do
+  test "$(find "$tree" -type f ! -path '*/target/*' | wc -l | tr -d ' ')" = 25
+done
+
+# The one source file is copied unchanged into both temporary root-lock graphs.
+for mode in pristine patched; do
+  copy="$work/$mode"
+  mkdir "$copy"
+  rsync -a --exclude target "$CORE/" "$copy/"
+  printf '// provenance adapter isolates the pinned authenticator dependency.\n' > "$copy/src/lib.rs"
+  cp "$PROVENANCE/semantic_adapter.rs" "$copy/tests/semantic_adapter.rs"
+cmp "$PROVENANCE/semantic_adapter.rs" "$copy/tests/semantic_adapter.rs"
+cmp "$CORE/Cargo.lock" "$copy/Cargo.lock"
+  python3 - "$copy/Cargo.toml" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+needle = 'default = []\n'
+if needle not in s:
+    raise SystemExit('missing [features] default declaration')
+p.write_text(s.replace(needle, needle + 'patched-adapter = []\n', 1))
+PY
+  if [ "$mode" = pristine ]; then
+    rm -rf "$copy/vendor/passkey-authenticator"
+    cp -a "$work/upstream/." "$copy/vendor/passkey-authenticator/"
+    set +e
+    cargo test --locked --manifest-path "$copy/Cargo.toml" --test semantic_adapter > "$work/pristine.log" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F 'device_bound_backup_flags_are_absent_on_make_and_get' "$work/pristine.log"
+    grep -F 'eligible_not_backed_up_has_only_be_on_make_and_get' "$work/pristine.log"
+    grep -F 'cross_user_handle_exclusion_requires_credential_excluded' "$work/pristine.log"
+    grep -F 'eligible_backed_up_is_intentional_control ... ok' "$work/pristine.log"
+  else
+    cargo test --locked --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
+  fi
+done
+
+cd "$CORE"
+cargo test --locked --features protocol-test-harness
+cargo build --locked --features protocol-test-harness --bin protocol-harness
+uv run --no-project --with 'fido2==2.2.1' python "$PROVENANCE/fido2_verifier.py" target/debug/protocol-harness

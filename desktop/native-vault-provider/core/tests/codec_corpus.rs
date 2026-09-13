@@ -125,6 +125,24 @@ async fn canonical_valid_source_rejects_each_json_and_bound_mutation() {
         canonical_source(&serde_json::to_vec(&empty_handle).unwrap(), 4096),
         Err(FixedError::InvalidSource)
     );
+    let mut oversized_id = object(&source);
+    oversized_id.insert(
+        "credential_id".into(),
+        serde_json::Value::String(URL_SAFE_NO_PAD.encode([2_u8; 1024])),
+    );
+    assert_eq!(
+        canonical_source(&serde_json::to_vec(&oversized_id).unwrap(), 4096),
+        Err(FixedError::InvalidSource)
+    );
+    let mut oversized_handle = object(&source);
+    oversized_handle.insert(
+        "user_handle".into(),
+        serde_json::Value::String(URL_SAFE_NO_PAD.encode([3_u8; 65])),
+    );
+    assert_eq!(
+        canonical_source(&serde_json::to_vec(&oversized_handle).unwrap(), 4096),
+        Err(FixedError::InvalidSource)
+    );
     assert_eq!(
         canonical_source(&source, source.len() - 1),
         Err(FixedError::InvalidSource)

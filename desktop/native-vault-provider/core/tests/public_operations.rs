@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use coset::iana;
-use native_vault_core::{FixedError, StoredCredential, authenticate, prepare_registration};
+use native_vault_core::{
+    FixedError, RegistrationPersister, StoredCredential, authenticate, prepare_registration,
+};
 use passkey_authenticator::{UiHint, UserCheck, UserValidationMethod};
 use passkey_types::{
-    ctap2::{Ctap2Error, get_assertion, make_credential},
+    ctap2::{Ctap2Error, Flags, get_assertion, make_credential},
     webauthn,
 };
 
@@ -27,6 +29,13 @@ impl UserValidationMethod for Uv {
     }
     fn is_verification_enabled(&self) -> Option<bool> {
         Some(true)
+    }
+}
+struct Persist;
+#[async_trait]
+impl RegistrationPersister for Persist {
+    async fn persist(&mut self, _: &[u8]) -> Result<(), FixedError> {
+        Ok(())
     }
 }
 fn make() -> make_credential::Request {
@@ -84,12 +93,55 @@ async fn public_factory_refuses_rk_get() {
 async fn public_factory_refuses_unknown_descriptors() {
     let mut m = make();
     m.exclude_list = Some(vec![webauthn::PublicKeyCredentialDescriptor {
-        ty: webauthn::PublicKeyCredentialType::Unknown("x".into()),
+        ty: webauthn::PublicKeyCredentialType::Unknown,
         id: vec![1; 16].into(),
         transports: None,
     }]);
     assert!(matches!(
         prepare_registration(m, Uv, &[], 4096).await,
+        Err(FixedError::InvalidRequest)
+    ));
+}
+#[tokio::test]
+async fn public_factory_registers_and_authenticates_discoverably() {
+    let prepared = prepare_registration(make(), Uv, &[], 4096).await.unwrap();
+    let source = prepared.canonical_source_bytes().to_vec();
+    let make_response = prepared
+        .commit_with(&mut Persist)
+        .await
+        .unwrap()
+        .into_response();
+    assert!(
+        make_response
+            .auth_data
+            .flags
+            .contains(Flags::UP | Flags::UV | Flags::BE | Flags::BS)
+    );
+    for allow in [None, Some(vec![])] {
+        let mut request = get(false);
+        request.allow_list = allow;
+        let assertion = authenticate(&source, request, Uv, 4096).await.unwrap();
+        assert!(
+            assertion
+                .auth_data
+                .flags
+                .contains(Flags::UP | Flags::UV | Flags::BE | Flags::BS)
+        );
+        assert_eq!(assertion.auth_data.counter, None);
+    }
+}
+#[tokio::test]
+async fn public_factory_refuses_unknown_allow_descriptor() {
+    let p = prepare_registration(make(), Uv, &[], 4096).await.unwrap();
+    let s = p.canonical_source_bytes().to_vec();
+    let mut r = get(false);
+    r.allow_list = Some(vec![webauthn::PublicKeyCredentialDescriptor {
+        ty: webauthn::PublicKeyCredentialType::Unknown,
+        id: vec![1; 16].into(),
+        transports: None,
+    }]);
+    assert!(matches!(
+        authenticate(&s, r, Uv, 4096).await,
         Err(FixedError::InvalidRequest)
     ));
 }

@@ -19,7 +19,7 @@ importers:
         version: 0.11.3(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.18.4(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.18.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.13.3(react@19.2.4)
@@ -245,8 +245,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.18.4':
-    resolution: {integrity: sha512-FLUvLYFqE/u5DavXOuaU8Xx6N/uGpqG9WbYq4lwRTe2riagOmnZrj00PML4cfjKJowP8VwP/UWbwSXlB3BGh1A==}
+  '@ai-matrx/design-system@0.18.6':
+    resolution: {integrity: sha512-cJAgSBWIi5GEkr4vssN4A8HgW1RLTOzh5klGC3aatfoxZZ2NdJcwTRFGEcF8qRyzRJ3+R2VzM88ybkMgXKeTFA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3640,8 +3640,8 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
-  zod@4.6.3:
-    resolution: {integrity: sha512-qTMC0QXIpf4iH+G0rCJl6ZjKiFpqAU9++JDN8tqts3KP58MWeJU/in9tDccsHqlOolCIrBKsiPXR8vCLhe4QhA==}
+  zod@4.6.4:
+    resolution: {integrity: sha512-AXSD6hvGdvRjajG/l1cC+d6IrhH+sjmPKtYeQdJIK8MFJl3LyClzS+o/YsVC+zQZPupAaeH5skwwm8YqYH7BqA==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -3651,7 +3651,7 @@ snapshots:
   '@ai-matrx/agents@0.11.0(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/data': 0.13.1(@supabase/supabase-js@2.116.0)(react@19.2.4)
-      '@ai-matrx/design-system': 0.18.4(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@ai-matrx/design-system': 0.18.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit': 0.13.3(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
@@ -3680,7 +3680,7 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.18.4(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.18.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/kit': 0.13.3(react@19.2.4)
       '@dnd-kit/core': 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3717,7 +3717,7 @@ snapshots:
       tailwind-merge: 3.7.0
       vaul: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       xlsx: 0.18.5
-      zod: 4.6.3
+      zod: 4.6.4
     transitivePeerDependencies:
       - '@types/react'
       - '@types/react-dom'
@@ -7218,6 +7218,6 @@ snapshots:
 
   zod@4.3.6: {}
 
-  zod@4.6.3: {}
+  zod@4.6.4: {}
 
   zwitch@2.0.4: {}

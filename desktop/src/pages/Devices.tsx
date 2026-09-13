@@ -38,11 +38,10 @@ import { Badge, Button, ScrollArea } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type { PermissionInfo, PermissionStatusValue } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
-import { PLUGIN_KEYS, type PermissionKey } from "@/hooks/use-permissions";
+import { hookAuthoritativeKeys, type PermissionKey } from "@/hooks/use-permissions";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 import { useAudioDevices } from "@/contexts/AudioDevicesContext";
 import type { AudioDeviceInfo } from "@/lib/transcription/types";
-import { PLATFORM } from "@/lib/platformCtx";
 import { logWarn } from "@/lib/error-reporting";
 import {
   actionNeededFromPermission,
@@ -59,19 +58,6 @@ import {
   safeRatio,
 } from "@ai-matrx/kit/format";
 
-const TRIGGER_REQUIRED_KEYS = new Set<string>([
-  "screen_recording",
-  "automation",
-  "local_network",
-  "mail",
-  "contacts",
-  "calendar",
-  "reminders",
-  "photos",
-  "location",
-  "speech_recognition",
-]);
-
 interface DevicesProps {
   engineStatus: EngineStatus;
   engineUrl: string | null;
@@ -87,6 +73,12 @@ const STATUS_CONFIG: Record<
     bgColor: "bg-emerald-500/10 border-emerald-500/20",
     label: "Granted",
   },
+  limited: {
+    icon: <CheckCircle2 className="h-4 w-4" />,
+    color: "text-emerald-500",
+    bgColor: "bg-emerald-500/10 border-emerald-500/20",
+    label: "Limited",
+  },
   denied: {
     icon: <XCircle className="h-4 w-4" />,
     color: "text-red-500",
@@ -97,7 +89,13 @@ const STATUS_CONFIG: Record<
     icon: <AlertCircle className="h-4 w-4" />,
     color: "text-amber-500",
     bgColor: "bg-amber-500/10 border-amber-500/20",
-    label: "Not Set",
+    label: "Not asked yet",
+  },
+  first_use: {
+    icon: <HelpCircle className="h-4 w-4" />,
+    color: "text-zinc-400",
+    bgColor: "bg-zinc-500/10 border-zinc-400/20",
+    label: "Asked on first use",
   },
   restricted: {
     icon: <XCircle className="h-4 w-4" />,
@@ -115,8 +113,16 @@ const STATUS_CONFIG: Record<
     icon: <HelpCircle className="h-4 w-4" />,
     color: "text-zinc-400",
     bgColor: "bg-zinc-500/10 border-zinc-400/20",
-    label: "Unknown",
+    label: "Could not read",
   },
+};
+
+// Sections that are device INVENTORIES (a Wi‑Fi scan, the list of connected
+// hardware) carry no permission status at all: the badge is absent, never a
+// made-up "Granted".
+const INVENTORY_CONFIG = {
+  color: "text-muted-foreground",
+  bgColor: "bg-muted/40 border-border",
 };
 
 function StatusBadge({ status }: { status: PermissionStatusValue }) {
@@ -142,7 +148,8 @@ function SectionCard({
 }: {
   icon: React.ReactNode;
   title: string;
-  status: PermissionStatusValue;
+  /** Omit for inventory sections that have no OS permission of their own. */
+  status?: PermissionStatusValue;
   description: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
@@ -151,7 +158,7 @@ function SectionCard({
   useEffect(() => {
     if (defaultOpen) setOpen(true);
   }, [defaultOpen]);
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.unknown;
+  const cfg = status ? (STATUS_CONFIG[status] ?? STATUS_CONFIG.unknown) : INVENTORY_CONFIG;
 
   return (
     <Card
@@ -176,7 +183,7 @@ function SectionCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-medium">{title}</h3>
-              <StatusBadge status={status} />
+              {status && <StatusBadge status={status} />}
             </div>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {description}
@@ -199,7 +206,7 @@ function SectionCard({
 }
 
 function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
-  const { request } = usePermissionsContext();
+  const { request, permissions: hookPermissions } = usePermissionsContext();
   const actionNeeded = useMemo(
     () =>
       perm
@@ -217,41 +224,50 @@ function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
     const source = `devices-permission:${perm.permission}`;
     actionNeededStore.reconcileLocal(source, actionNeeded ? [actionNeeded] : null);
   }, [actionNeeded, perm?.permission]);
-  if (!perm || perm.status === "granted") return null;
+  if (!perm || perm.status === "granted" || perm.status === "limited") return null;
 
-  const isTriggerRequired =
-    PLATFORM.is_mac &&
-    perm.status === "not_determined" &&
-    TRIGGER_REQUIRED_KEYS.has(perm.permission);
+  const key = perm.permission as PermissionKey;
+  const hookState = hookPermissions.get(key);
+  const isFirstUse = perm.status === "first_use";
+  // "Grant Access" only when a click makes the OS show its own prompt (the
+  // owning process asks and reads the answer back); otherwise the Settings
+  // pane is the honest destination.
+  const canGrant = perm.status === "not_determined" && hookState?.canPrompt === true;
 
   return (
     <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
       <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-amber-500">
-          Permission Required
+          {isFirstUse ? "Approved on first use" : "Permission Required"}
         </p>
-        {perm.user_instructions && (
+        {isFirstUse ? (
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {perm.user_instructions}
+            macOS asks for this the first time a tool uses it. There is nothing to switch on before that.
           </p>
+        ) : (
+          perm.user_instructions && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {perm.user_instructions}
+            </p>
+          )
         )}
-        {perm.grant_instructions && (
+        {!isFirstUse && perm.grant_instructions && (
           <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">
             {perm.grant_instructions}
           </p>
         )}
       </div>
       <button
-        onClick={() => void request(perm.permission as PermissionKey)}
+        onClick={() => void request(key)}
         className="shrink-0 flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-amber-500 border border-amber-500/30 hover:bg-amber-500/10 transition-colors"
       >
-        {isTriggerRequired ? (
+        {canGrant ? (
           <AlertCircle className="h-3 w-3" />
         ) : (
           <ExternalLink className="h-3 w-3" />
         )}
-        {isTriggerRequired ? "Request Access" : "Open Settings"}
+        {canGrant ? "Grant Access" : "Open Settings"}
       </button>
     </div>
   );
@@ -1925,6 +1941,7 @@ export function Devices({ engineStatus }: DevicesProps) {
   // page-level copy drifted from the Dashboard's).
   const {
     permissions: pluginPermissions,
+    summary: permissionSummary,
     checkAll: recheckPlugin,
     isLoading: pluginLoading,
     devicePermissions,
@@ -1962,16 +1979,19 @@ export function Devices({ engineStatus }: DevicesProps) {
 
   /**
    * Build the merged permission map:
-   * - For plugin-managed keys (mic, camera, screen_recording, accessibility,
-   *   full_disk_access, input_monitoring), override the status field with the
-   *   Tauri plugin's authoritative TCC value.
-   * - For all other keys (bluetooth, wifi, network, location), use engine status.
-   * - Keep the engine's device listing and instruction text in all cases.
+   * - For every key this app answers for on this platform (the Tauri plugin's
+   *   keys AND the app-owned ones — contacts, calendar, location, bluetooth…),
+   *   the STATUS is the shared hook's value; the engine row only contributes
+   *   its device listing and instruction text. Same truth as the Dashboard.
+   * - Engine-owned keys (screen recording on macOS; everything on
+   *   Windows/Linux) keep the engine status.
    */
+  const authoritative = useMemo(() => hookAuthoritativeKeys(), []);
   const permissions = useMemo((): Record<string, PermissionInfo> => {
     const merged: Record<string, PermissionInfo> = { ...enginePermissions };
     for (const [key, pluginState] of pluginPermissions.entries()) {
-      if (PLUGIN_KEYS.has(key)) {
+      if (pluginState.status === "unavailable") continue;
+      if (authoritative.has(key)) {
         const engineEntry = enginePermissions[key];
         if (engineEntry) {
           merged[key] = {
@@ -1997,14 +2017,15 @@ export function Devices({ engineStatus }: DevicesProps) {
       }
     }
     return merged;
-  }, [enginePermissions, pluginPermissions]);
+  }, [authoritative, enginePermissions, pluginPermissions]);
 
   const p = (key: string): PermissionInfo | null => permissions[key] ?? null;
 
-  const grantedCount = Object.values(permissions).filter(
-    (x) => x.status === "granted",
-  ).length;
-  const totalCount = Object.keys(permissions).length;
+  // ONE count, shared with the Dashboard and the Permissions modal.
+  const grantedCount = permissionSummary.granted;
+  const totalCount = permissionSummary.total;
+  const countsReady = permissionSummary.complete;
+  const hasRows = Object.keys(permissions).length > 0;
   const dedicatedPermissionKeys = new Set([
     "microphone",
     "camera",
@@ -2042,14 +2063,9 @@ export function Devices({ engineStatus }: DevicesProps) {
       status: (p("bluetooth")?.status ?? "unknown") as PermissionStatusValue,
     },
     {
-      key: "wifi",
-      status: (p("wifi")?.status ?? "unknown") as PermissionStatusValue,
-    },
-    {
       key: "network",
       status: (p("network")?.status ?? "unknown") as PermissionStatusValue,
     },
-    { key: "connected", status: "granted" as PermissionStatusValue },
     {
       key: "location",
       status: (p("location")?.status ?? "unknown") as PermissionStatusValue,
@@ -2067,7 +2083,9 @@ export function Devices({ engineStatus }: DevicesProps) {
         title="Devices & Permissions"
         description={
           platform
-            ? `${platform} — ${grantedCount}/${totalCount} permissions granted`
+            ? countsReady
+              ? `${platform} — ${grantedCount}/${totalCount} permissions granted`
+              : `${platform} — checking permissions…`
             : "Device access and system permissions"
         }
       >
@@ -2104,7 +2122,7 @@ export function Devices({ engineStatus }: DevicesProps) {
           ) : (
             <>
               {/* Summary badges */}
-              {totalCount > 0 && (
+              {hasRows && (
                 <div className="flex flex-wrap gap-2">
                   {sections.map(({ key, status }) => {
                     const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.unknown;
@@ -2213,13 +2231,7 @@ export function Devices({ engineStatus }: DevicesProps) {
               <SectionCard
                 icon={<Wifi className="h-5 w-5" />}
                 title="WiFi Networks"
-                status={
-                  (p("wifi")?.status ?? "unknown") as PermissionStatusValue
-                }
-                description={
-                  p("wifi")?.user_details ||
-                  "Scan and discover WiFi networks in range"
-                }
+                description="Scan and discover WiFi networks in range"
                 defaultOpen={requestedPermission === "wifi"}
               >
                 <WifiCard perm={p("wifi")} />
@@ -2245,7 +2257,6 @@ export function Devices({ engineStatus }: DevicesProps) {
               <SectionCard
                 icon={<Usb className="h-5 w-5" />}
                 title="Connected Devices"
-                status="granted"
                 description="Monitors, USB devices, peripherals, and connected hardware"
               >
                 <ConnectedDevicesCard />

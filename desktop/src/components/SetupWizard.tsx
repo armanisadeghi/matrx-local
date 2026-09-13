@@ -171,7 +171,7 @@ export function SetupWizard({
       emitClientLog("data", `${label}: [unserializable]`, "setup");
     }
   }, []);
-  const { permissions: permissionStates } = usePermissionsContext();
+  const { summary: permissionSummary } = usePermissionsContext();
 
   // ── Load Tauri optional status ─────────────────────────────────────────
 
@@ -844,16 +844,8 @@ export function SetupWizard({
                   <ShieldCheck className="h-4 w-4 text-muted-foreground" />
                   <span>
                     {(() => {
-                      const granted = Array.from(
-                        permissionStates.values(),
-                      ).filter((s) => s.status === "granted").length;
-                      const total = Array.from(
-                        permissionStates.values(),
-                      ).filter(
-                        (s) =>
-                          s.status !== "unavailable" && s.status !== "loading",
-                      ).length;
-                      if (total === 0) return "Checking permissions…";
+                      if (!permissionSummary.complete) return "Checking permissions…";
+                      const { granted, total } = permissionSummary;
                       return granted === total
                         ? `All ${total} permissions granted`
                         : `${granted} of ${total} permissions granted`;

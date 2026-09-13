@@ -58,3 +58,46 @@ def test_parent_app_infoplist_declares_folder_usage_keys() -> None:
         f"desktop/src-tauri/Info.plist is missing folder usage keys "
         f"{missing} — macOS will silently EPERM those folders (no prompt)."
     )
+
+
+# Every privacy-gated surface the parent app declares. The helper must declare
+# the SAME set: macOS resolves the prompt and the usage string against the
+# bundle whose process triggered the API call, and a missing key is not a
+# warning — Location requests are silently ignored (the app never even appears
+# in System Settings → Location) and Speech Recognition CRASHES the process.
+PRIVACY_KEYS = (
+    "NSMicrophoneUsageDescription",
+    "NSCameraUsageDescription",
+    "NSScreenCaptureUsageDescription",
+    "NSContactsUsageDescription",
+    "NSCalendarsUsageDescription",
+    "NSRemindersUsageDescription",
+    "NSPhotoLibraryUsageDescription",
+    "NSLocationUsageDescription",
+    "NSLocationWhenInUseUsageDescription",
+    "NSBluetoothAlwaysUsageDescription",
+    "NSLocalNetworkUsageDescription",
+    "NSSpeechRecognitionUsageDescription",
+    "NSAppleEventsUsageDescription",
+)
+
+
+def test_engine_helper_specs_declare_every_privacy_usage_key() -> None:
+    for rel in MAC_SPECS:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        missing = [k for k in PRIVACY_KEYS if k not in text]
+        assert not missing, (
+            f"{rel} is missing privacy usage keys {missing} — macOS silently "
+            "ignores the matching request from the helper bundle (Location "
+            "never appears in System Settings) or terminates the process "
+            "(Speech Recognition)."
+        )
+
+
+def test_parent_app_infoplist_declares_every_privacy_usage_key() -> None:
+    text = (REPO_ROOT / "desktop/src-tauri/Info.plist").read_text(encoding="utf-8")
+    missing = [k for k in PRIVACY_KEYS if k not in text]
+    assert not missing, (
+        f"desktop/src-tauri/Info.plist is missing privacy usage keys {missing} "
+        "— the desktop app owns these requests and macOS will refuse them."
+    )

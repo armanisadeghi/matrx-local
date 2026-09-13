@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { engine, type SystemInfo, type BrowserStatus } from "@/lib/api";
+import { engine, type SystemInfo } from "@/lib/api";
 import {
   ENGINE_STARTUP_TIMEOUT_SECONDS,
   isTauri,
@@ -27,7 +27,6 @@ interface EngineState {
   url: string | null;
   tools: string[];
   systemInfo: SystemInfo | null;
-  browserStatus: BrowserStatus | null;
   engineVersion: string;
   error: string | null;
   wsConnected: boolean;
@@ -39,7 +38,6 @@ export function useEngine() {
     url: null,
     tools: [],
     systemInfo: null,
-    browserStatus: null,
     engineVersion: "",
     error: null,
     wsConnected: false,
@@ -260,15 +258,6 @@ export function useEngine() {
         emitClientLog("info", `System: ${systemInfo?.platform ?? "?"} / ${systemInfo?.hostname ?? "?"}`, "engine");
       } catch {
         emitClientLog("warn", "Could not load system info (non-critical)", "engine");
-      }
-
-      // Load browser status
-      try {
-        const browserStatus = await engine.getBrowserStatus();
-        update({ browserStatus });
-        emitClientLog("info", `Browser: ${browserStatus?.chrome_found ? "available" : "not found"}`, "engine");
-      } catch {
-        emitClientLog("warn", "Could not load browser status (non-critical)", "engine");
       }
 
       // Establish the full engine session before starting any authenticated

@@ -45,6 +45,21 @@ from app.common.keychain_helper import (  # noqa: E402
 if _KEYCHAIN_HELPER_ARGUMENT in _bootstrap_sys.argv[1:]:
     raise SystemExit(_run_keychain_helper())
 
+# The Claude session-index scan (~47,000 small JSON files) is pure Python and
+# holds the GIL for ~25s, so a thread does not protect the event loop — it
+# starves it, and on 2026-09-13 that starvation expired the browser pool's
+# launch bound and made the Dashboard report a browser that was in fact fine.
+# It runs in a short-lived copy of this executable instead; dispatch it here,
+# before the dev/live isolation guard and any application import, so the helper
+# never boots an engine or touches runtime state.
+from app.common.claude_index_helper import (  # noqa: E402
+    HELPER_ARGUMENT as _CLAUDE_INDEX_HELPER_ARGUMENT,
+    run_claude_index_helper as _run_claude_index_helper,
+)
+
+if _CLAUDE_INDEX_HELPER_ARGUMENT in _bootstrap_sys.argv[1:]:
+    raise SystemExit(_run_claude_index_helper())
+
 # ── Windows UTF-8 fix — before every other import ────────────────────────────
 # Windows defaults to CP1252 for stdout/stderr. Our log messages contain
 # Unicode symbols (✓ → ← ─ ⚠) that CP1252 cannot encode, causing

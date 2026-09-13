@@ -33,9 +33,6 @@ import {
   MapPin,
   Network,
   Terminal,
-  Wifi,
-  MessageSquare,
-  Mail,
   AudioLines,
   CheckCircle2,
   XCircle,
@@ -45,10 +42,16 @@ import {
   ShieldCheck,
   ChevronRight,
   AlertTriangle,
+  Clock,
 } from "lucide-react";
 import { isTauri } from "@/lib/sidecar";
 import { PLATFORM } from "@/lib/platformCtx";
-import type { PermissionKey, PermissionState, PermissionStatus } from "@/hooks/use-permissions";
+import {
+  isGranted,
+  type PermissionKey,
+  type PermissionState,
+  type PermissionStatus,
+} from "@/hooks/use-permissions";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 
 // ---------------------------------------------------------------------------
@@ -70,9 +73,6 @@ const PERMISSION_ICONS: Record<PermissionKey, React.ReactNode> = {
   location: <MapPin className="h-5 w-5" />,
   local_network: <Network className="h-5 w-5" />,
   automation: <Terminal className="h-5 w-5" />,
-  network: <Wifi className="h-5 w-5" />,
-  messages: <MessageSquare className="h-5 w-5" />,
-  mail: <Mail className="h-5 w-5" />,
   speech_recognition: <AudioLines className="h-5 w-5" />,
 };
 
@@ -83,34 +83,17 @@ const PERMISSION_ORDER: PermissionKey[] = [
   "full_disk_access",
   "microphone",
   "input_monitoring",
-  "automation",
   "camera",
   "bluetooth",
-  "local_network",
-  "messages",
-  "mail",
   "contacts",
   "calendar",
   "reminders",
   "photos",
   "location",
   "speech_recognition",
-  "network",
-];
-
-// macOS permissions that must be triggered by app usage before they appear in Settings
-const TRIGGER_REQUIRED_KEYS = new Set<PermissionKey>([
-  "screen_recording",
   "automation",
   "local_network",
-  "mail",
-  "contacts",
-  "calendar",
-  "reminders",
-  "photos",
-  "location",
-  "speech_recognition",
-]);
+];
 
 // ---------------------------------------------------------------------------
 // Status badge helpers
@@ -125,6 +108,13 @@ function StatusBadge({ status }: { status: PermissionStatus }) {
           Granted
         </Badge>
       );
+    case "limited":
+      return (
+        <Badge className="gap-1 bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30 hover:bg-green-500/20">
+          <CheckCircle2 className="h-3 w-3" />
+          Limited
+        </Badge>
+      );
     case "denied":
       return (
         <Badge className="gap-1 bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30 hover:bg-red-500/20">
@@ -136,7 +126,14 @@ function StatusBadge({ status }: { status: PermissionStatus }) {
       return (
         <Badge variant="outline" className="gap-1 text-muted-foreground">
           <HelpCircle className="h-3 w-3" />
-          Not Requested
+          Not asked yet
+        </Badge>
+      );
+    case "first_use":
+      return (
+        <Badge variant="outline" className="gap-1 text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          Asked on first use
         </Badge>
       );
     case "restricted":
@@ -162,7 +159,8 @@ function StatusBadge({ status }: { status: PermissionStatus }) {
     default:
       return (
         <Badge variant="outline" className="gap-1 text-muted-foreground">
-          Unknown
+          <HelpCircle className="h-3 w-3" />
+          Could not read
         </Badge>
       );
   }
@@ -185,16 +183,25 @@ function PermissionRow({
   onRequest,
   focused = false,
 }: PermissionRowProps) {
-  const isGranted = state.status === "granted";
+  const granted = isGranted(state.status);
   const isUnavailable = state.status === "unavailable";
   const isRestricted = state.status === "restricted";
+  // What one click does for this row — decided by the key's authority, so
+  // the button never promises a prompt the OS will not show, and never sends
+  // the person to a Settings pane where the app is not listed yet.
+  const action: "grant" | "settings" | "none" =
+    granted || isUnavailable || isRestricted || state.status === "loading"
+      ? "none"
+      : state.status === "not_determined" && state.canPrompt
+        ? "grant"
+        : "settings";
 
   return (
     <div
       id={`permission-row-${state.key}`}
       tabIndex={-1}
       className={`flex items-start gap-4 rounded-lg p-4 transition-colors ${
-        isGranted
+        granted
           ? "bg-green-500/5 dark:bg-green-500/5"
           : "bg-muted/40 hover:bg-muted/60"
       } ${focused ? "ring-2 ring-primary" : ""}`}
@@ -202,7 +209,7 @@ function PermissionRow({
       {/* Icon */}
       <div
         className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-          isGranted
+          granted
             ? "bg-green-500/15 text-green-600 dark:text-green-400"
             : "bg-muted text-muted-foreground"
         }`}
@@ -230,20 +237,30 @@ function PermissionRow({
 
       {/* Actions */}
       <div className="flex shrink-0 flex-col items-end gap-2">
-        {isGranted ? (
-          <CheckCircle2 className="mt-1 h-5 w-5 text-green-500" />
+        {granted ? (
+          state.status === "limited" ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={isRequesting}
+              onClick={() => onRequest(state.key)}
+              className="h-8 gap-1.5 text-xs"
+              title="Granted with a scope you chose — change it in System Settings"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Adjust
+            </Button>
+          ) : (
+            <CheckCircle2 className="mt-1 h-5 w-5 text-green-500" />
+          )
         ) : isUnavailable ? (
           <span className="text-xs text-muted-foreground">N/A</span>
         ) : isRestricted ? (
           <span className="text-xs text-orange-500">MDM/Restricted</span>
-        ) : (state.key === "microphone" ||
-            state.key === "camera" ||
-            state.key === "screen_recording") &&
-          state.status === "not_determined" ? (
-          // Mic & camera: AVFoundation can show an in-app OS dialog the first time.
-          // Screen recording: the engine's CGRequestScreenCaptureAccess shows the
-          // native prompt AND is what finally lists the engine in System Settings —
-          // so this is a real "Grant", not an "Open Settings" dead end.
+        ) : action === "grant" ? (
+          // A real prompt: the OS dialog comes from the process that owns
+          // this key (this app for mic/camera/contacts/calendar/…; the
+          // engine for screen recording), and the answer is read back.
           <Button
             size="sm"
             variant="default"
@@ -254,7 +271,7 @@ function PermissionRow({
             {isRequesting ? (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Requesting…
+                Waiting for macOS…
               </>
             ) : (
               <>
@@ -263,22 +280,12 @@ function PermissionRow({
               </>
             )}
           </Button>
-        ) : PLATFORM.is_mac && state.status === "not_determined" && TRIGGER_REQUIRED_KEYS.has(state.key) ? (
-          // MacOS requires these to be triggered by app usage first
+        ) : action === "none" ? null : (
+          // Denied, first-use, unknown, or Settings-only keys: the pane is
+          // the only control there is.
           <Button
             size="sm"
-            variant="outline"
-            disabled
-            className="h-8 gap-1.5 text-xs text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-500/10 opacity-100"
-          >
-            <AlertTriangle className="h-3 w-3" />
-            Open Feature to Approve
-          </Button>
-        ) : (
-          // All others: open the specific System Settings pane
-          <Button
-            size="sm"
-            variant="default"
+            variant={state.status === "first_use" ? "outline" : "default"}
             disabled={isRequesting}
             onClick={() => onRequest(state.key)}
             className="h-8 gap-1.5 text-xs"
@@ -317,7 +324,7 @@ export function PermissionsModal({
   onOpenChange,
   focusKey,
 }: PermissionsModalProps) {
-  const { permissions, isLoading, checkAll, request } = usePermissionsContext();
+  const { permissions, isLoading, summary, checkAll, request } = usePermissionsContext();
   const [requestingKey, setRequestingKey] = useState<PermissionKey | null>(null);
 
   // Re-check all when the modal opens
@@ -349,18 +356,16 @@ export function PermissionsModal({
     [request],
   );
 
-  // Compute stats
+  // Rows in display order. Counts come from the ONE shared summary so this
+  // modal, the Dashboard and the Setup wizard can never disagree.
   const orderedStates = PERMISSION_ORDER.map((key) => permissions.get(key)).filter(
     Boolean,
   ) as PermissionState[];
-
-  const grantedCount = orderedStates.filter((s) => s.status === "granted").length;
-  const relevantCount = orderedStates.filter((s) => s.status !== "unavailable").length;
+  const grantedCount = summary.granted;
+  const relevantCount = summary.total;
   const progressPercent = relevantCount > 0 ? Math.round((grantedCount / relevantCount) * 100) : 0;
-
-  const ungrantedCount = orderedStates.filter(
-    (s) => s.status !== "granted" && s.status !== "unavailable" && s.status !== "loading",
-  ).length;
+  const ungrantedCount = Math.max(relevantCount - grantedCount, 0);
+  const showCounts = summary.complete;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -383,7 +388,7 @@ export function PermissionsModal({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
-                {isLoading ? (
+                {!showCounts ? (
                   <span className="flex items-center gap-1.5">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Checking permissions…
@@ -392,18 +397,24 @@ export function PermissionsModal({
                   `${grantedCount} of ${relevantCount} permissions granted`
                 )}
               </span>
-              {!isLoading && ungrantedCount > 0 && (
+              {showCounts && ungrantedCount > 0 && (
                 <span className="text-xs text-amber-600 dark:text-amber-400">
                   {ungrantedCount} need{ungrantedCount === 1 ? "s" : ""} attention
                 </span>
               )}
-              {!isLoading && ungrantedCount === 0 && (
+              {showCounts && ungrantedCount === 0 && (
                 <span className="text-xs text-green-600 dark:text-green-400 font-medium">
                   All permissions granted
                 </span>
               )}
             </div>
-            <Progress value={isLoading ? undefined : progressPercent} className="h-2" />
+            <Progress value={showCounts ? progressPercent : undefined} className="h-2" />
+            {showCounts && summary.firstUse.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {summary.firstUse.length === 1 ? "One permission is" : `${summary.firstUse.length} permissions are`}{" "}
+                approved by macOS the first time the app uses them and {summary.firstUse.length === 1 ? "is" : "are"} not counted.
+              </p>
+            )}
           </div>
         </DialogHeader>
 
@@ -414,7 +425,7 @@ export function PermissionsModal({
           <div className="space-y-2 p-6 pt-4">
             {/* Ungranted first */}
             {orderedStates
-              .filter((s) => s.status !== "granted" && s.status !== "unavailable")
+              .filter((s) => !isGranted(s.status) && s.status !== "unavailable")
               .map((state) => (
                 <PermissionRow
                   key={state.key}
@@ -426,13 +437,13 @@ export function PermissionsModal({
               ))}
 
             {/* Granted (collapsed-looking section) */}
-            {orderedStates.some((s) => s.status === "granted") && (
+            {orderedStates.some((s) => isGranted(s.status)) && (
               <>
                 <div className="py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground/60">
                   Granted
                 </div>
                 {orderedStates
-                  .filter((s) => s.status === "granted")
+                  .filter((s) => isGranted(s.status))
                   .map((state) => (
                     <PermissionRow
                       key={state.key}

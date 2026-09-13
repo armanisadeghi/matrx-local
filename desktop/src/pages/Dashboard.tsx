@@ -2,17 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
   Activity,
-  Bluetooth,
   Chrome,
   Cpu,
   Download,
-  Globe,
   Loader2,
-  Mic,
-  Monitor,
   Server,
   Shield,
-  Wifi,
   Wrench,
   Zap,
   CheckCircle2,
@@ -22,6 +17,8 @@ import {
   User,
   Mail,
   LogOut,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { SetupWizard } from "@/components/SetupWizard";
@@ -29,17 +26,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge, Button } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { SystemInfo, BrowserStatus, PermissionInfo } from "@/lib/api";
+import type { SystemInfo } from "@/lib/api";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { PermissionsModal } from "@/components/PermissionsModal";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
+import { useBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";
+import { isGranted, type PermissionState } from "@/hooks/use-permissions";
 
 interface DashboardProps {
   engineStatus: EngineStatus;
   engineUrl: string | null;
   tools: string[];
   systemInfo: SystemInfo | null;
-  browserStatus: BrowserStatus | null;
   onRefresh: () => void;
   user: SupabaseUser | null;
   onSignOut?: () => void;
@@ -50,83 +48,42 @@ export function Dashboard({
   engineUrl,
   tools,
   systemInfo,
-  browserStatus,
   onRefresh,
   user,
   onSignOut,
 }: DashboardProps) {
-  const [installingBrowser, setInstallingBrowser] = useState(false);
-  const [browserInstallMessage, setBrowserInstallMessage] = useState<
-    string | null
-  >(null);
-  const [browserInstallError, setBrowserInstallError] = useState(false);
   const [permissionsModalOpen, setPermissionsModalOpen] = useState(false);
 
-  // Shared permission stores: plugin-backed Map (authoritative TCC identity
-  // for the .app bundle) + the ONE engine device-permission list. No private
-  // page-level copies (they drifted from each other historically).
-  const {
-    permissions: nativePermissions,
-    isLoading: nativePermsLoading,
-    devicePermissions: permissions,
-    refreshDevicePermissions,
-  } = usePermissionsContext();
+  // ONE permission model app-wide (PermissionsContext). The count comes from
+  // `summary`, computed over queryable keys only and reported only once every
+  // key has answered — the Dashboard never shows a number that changes its
+  // denominator a few seconds later.
+  const { permissions, summary, refreshDevicePermissions } =
+    usePermissionsContext();
 
   useEffect(() => {
     if (engineStatus !== "connected") return;
+    // Engine-owned keys (screen recording) answer only once the engine is up.
     void refreshDevicePermissions();
   }, [engineStatus, refreshDevicePermissions]);
 
-  const installBrowser = useCallback(async () => {
-    setInstallingBrowser(true);
-    setBrowserInstallMessage(null);
-    setBrowserInstallError(false);
-    try {
-      const result = await engine.installCapability("browser_automation");
-      const ok = result.status === "complete";
-      if (ok) {
-        setBrowserInstallMessage(
-          "Installed successfully — restart the engine to activate.",
-        );
-        onRefresh();
-      } else {
-        setBrowserInstallError(true);
-        setBrowserInstallMessage(
-          `Install failed: ${result.error || result.message}`,
-        );
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const engineCrashed =
-        errMsg.includes("fetch") ||
-        errMsg.includes("network") ||
-        errMsg.includes("Failed to fetch") ||
-        errMsg.includes("Load failed");
-      setBrowserInstallError(true);
-      setBrowserInstallMessage(
-        engineCrashed
-          ? "Engine became unreachable during install — the OS may have killed it. Restart the engine and try again."
-          : `Error: ${errMsg}`,
-      );
-    } finally {
-      setInstallingBrowser(false);
-    }
-  }, [onRefresh]);
+  const deviceAccessValue = summary.complete
+    ? `${summary.granted}/${summary.total}`
+    : "—";
+  const deviceAccessDescription = summary.complete
+    ? summary.unknown.length > 0
+      ? `${summary.granted} granted · ${summary.unknown.length} could not be read`
+      : `${summary.granted} of ${summary.total} permissions granted`
+    : "Checking permissions…";
+  const deviceAccessVariant: "success" | "warning" | "default" = !summary.complete
+    ? "default"
+    : summary.total > 0 && summary.granted === summary.total
+      ? "success"
+      : "warning";
 
-  // Use native permissions from the Tauri plugin as source of truth for counts
-  const nativeGrantedCount = Array.from(nativePermissions.values()).filter(
-    (p) => p.status === "granted",
-  ).length;
-  const nativeTotalCount = Array.from(nativePermissions.values()).filter(
-    (p) => p.status !== "unavailable" && p.status !== "loading",
-  ).length;
-  // Keep engine-checked counts as fallback when native check hasn't run yet
-  const grantedCount =
-    nativeTotalCount > 0
-      ? nativeGrantedCount
-      : permissions.filter((p) => p.status === "granted").length;
-  const totalCount =
-    nativeTotalCount > 0 ? nativeTotalCount : permissions.length;
+  const visibleRows = Array.from(permissions.values()).filter(
+    (p) => p.status !== "unavailable",
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -217,30 +174,13 @@ export function Dashboard({
               icon={<Wrench className="h-4 w-4" />}
               variant="default"
             />
-            <BrowserStatusCard
-              browserStatus={browserStatus}
-              engineStatus={engineStatus}
-              installing={installingBrowser}
-              installMessage={browserInstallMessage}
-              installError={browserInstallError}
-              onInstall={installBrowser}
-            />
+            <BrowserStatusCard engineStatus={engineStatus} />
             <StatusCard
               title="Device Access"
-              value={totalCount > 0 ? `${grantedCount}/${totalCount}` : "---"}
-              description={
-                totalCount > 0
-                  ? `${grantedCount} permissions granted`
-                  : "Checking..."
-              }
+              value={deviceAccessValue}
+              description={deviceAccessDescription}
               icon={<Shield className="h-4 w-4" />}
-              variant={
-                grantedCount === totalCount && totalCount > 0
-                  ? "success"
-                  : grantedCount > 0
-                    ? "warning"
-                    : "default"
-              }
+              variant={deviceAccessVariant}
             />
           </div>
 
@@ -311,61 +251,20 @@ export function Dashboard({
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {nativePermsLoading && nativeTotalCount === 0 ? (
+                {visibleRows.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Checking permissions…
+                    No device permissions apply on this platform.
                   </p>
-                ) : nativeTotalCount > 0 ? (
+                ) : (
                   <>
-                    {Array.from(nativePermissions.values())
-                      .filter((p) => p.status !== "unavailable")
-                      .slice(0, 8)
-                      .map((p) => (
-                        <div
-                          key={p.key}
-                          className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors cursor-pointer"
-                          onClick={() => setPermissionsModalOpen(true)}
-                        >
-                          <span className="text-muted-foreground">
-                            {p.status === "granted" ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                            ) : p.status === "denied" ? (
-                              <XCircle className="h-3.5 w-3.5 text-red-500" />
-                            ) : p.status === "loading" ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                            ) : (
-                              <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                            )}
-                          </span>
-                          <span className="flex-1 text-sm">{p.label}</span>
-                          {p.status !== "granted" && p.status !== "loading" && (
-                            <span className="text-xs text-amber-500">
-                              {p.status === "denied" ? "Denied" : "Not Granted"}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    {nativeTotalCount > 8 && (
-                      <button
-                        className="w-full text-xs text-muted-foreground hover:text-foreground pt-1 text-center"
+                    {visibleRows.map((p) => (
+                      <PermissionRow
+                        key={p.key}
+                        state={p}
                         onClick={() => setPermissionsModalOpen(true)}
-                      >
-                        View all {nativeTotalCount} permissions →
-                      </button>
-                    )}
-                  </>
-                ) : permissions.length > 0 ? (
-                  <>
-                    {permissions.map((p) => (
-                      <DeviceStatusRow key={p.permission} perm={p} />
+                      />
                     ))}
                   </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {engineStatus === "connected"
-                      ? "Checking device permissions..."
-                      : "Connect to engine to check device access"}
-                  </p>
                 )}
               </CardContent>
             </Card>
@@ -407,47 +306,73 @@ export function Dashboard({
   );
 }
 
-// Map permission keys to icons
-const PERMISSION_ICONS: Record<string, React.ReactNode> = {
-  microphone: <Mic className="h-3.5 w-3.5" />,
-  camera: <Monitor className="h-3.5 w-3.5" />,
-  accessibility: <Shield className="h-3.5 w-3.5" />,
-  bluetooth: <Bluetooth className="h-3.5 w-3.5" />,
-  network: <Wifi className="h-3.5 w-3.5" />,
-  screen_recording: <Monitor className="h-3.5 w-3.5" />,
-  location: <Globe className="h-3.5 w-3.5" />,
-};
+/** Plain-language status word for a permission row. Every status has one. */
+export function permissionStatusLabel(status: PermissionState["status"]): string {
+  switch (status) {
+    case "granted":
+      return "Granted";
+    case "limited":
+      return "Limited";
+    case "denied":
+      return "Denied";
+    case "restricted":
+      return "Restricted";
+    case "not_determined":
+      return "Not asked yet";
+    case "first_use":
+      return "Asked on first use";
+    case "loading":
+      return "Checking…";
+    case "unavailable":
+      return "Not on this platform";
+    default:
+      return "Could not read";
+  }
+}
 
-const PERMISSION_LABELS: Record<string, string> = {
-  microphone: "Microphone",
-  camera: "Camera",
-  accessibility: "Accessibility",
-  bluetooth: "Bluetooth",
-  network: "Network",
-  screen_recording: "Screen Recording",
-  location: "Location",
-};
-
-function DeviceStatusRow({ perm }: { perm: PermissionInfo }) {
-  const icon = PERMISSION_ICONS[perm.permission] ?? (
-    <HelpCircle className="h-3.5 w-3.5" />
-  );
-  const label = PERMISSION_LABELS[perm.permission] ?? perm.permission;
-
-  const statusIcon =
-    perm.status === "granted" ? (
+function PermissionRow({
+  state,
+  onClick,
+}: {
+  state: PermissionState;
+  onClick: () => void;
+}) {
+  const granted = isGranted(state.status);
+  const icon =
+    state.status === "loading" ? (
+      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+    ) : granted ? (
       <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-    ) : perm.status === "denied" ? (
+    ) : state.status === "denied" || state.status === "restricted" ? (
       <XCircle className="h-3.5 w-3.5 text-red-500" />
+    ) : state.status === "first_use" ? (
+      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
     ) : (
       <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
     );
+  const trailing =
+    state.status === "granted"
+      ? null
+      : state.status === "loading"
+        ? null
+        : state.status === "first_use"
+          ? "text-muted-foreground"
+          : state.status === "limited"
+            ? "text-emerald-600"
+            : "text-amber-500";
 
   return (
-    <div className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors">
+    <div
+      className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors cursor-pointer"
+      onClick={onClick}
+    >
       <span className="text-muted-foreground">{icon}</span>
-      <span className="flex-1 text-sm">{label}</span>
-      {statusIcon}
+      <span className="flex-1 text-sm">{state.label}</span>
+      {trailing && (
+        <span className={`text-xs ${trailing}`}>
+          {permissionStatusLabel(state.status)}
+        </span>
+      )}
     </div>
   );
 }
@@ -511,32 +436,118 @@ function InfoRow({
   );
 }
 
-function BrowserStatusCard({
-  browserStatus,
-  engineStatus,
-  installing,
-  installMessage,
-  installError,
-  onInstall,
-}: {
-  browserStatus: BrowserStatus | null;
-  engineStatus: EngineStatus;
-  installing: boolean;
-  installMessage: string | null;
-  installError: boolean;
-  onInstall: () => void;
-}) {
-  const isReady = browserStatus?.chrome_found === true;
-  const isChecking = browserStatus === null;
-  const canInstall = engineStatus === "connected" && !isReady && !isChecking;
+/**
+ * What the Browser card says for each engine-reported state. ONE source of
+ * truth — `GET /browser-runtime/status` via BrowserRuntimeContext — the same
+ * answer the top banner and the Scraping page use. (This card used to read a
+ * different signal, a package-import flag captured at engine start, and said
+ * "Not Installed" while the banner said "needs a restart" about the same
+ * browser.)
+ */
+export function browserCardPresentation(
+  status: { code: string; available: boolean; install_percent: number | null } | null,
+  loaded: boolean,
+  installing: boolean,
+): {
+  value: string;
+  description: string;
+  variant: "success" | "warning" | "default";
+  action: "install" | "repair" | null;
+} {
+  if (!loaded || status === null) {
+    return {
+      value: "Checking…",
+      description: "Detecting browser…",
+      variant: "default",
+      action: null,
+    };
+  }
+  if (installing || status.code === "installing") {
+    const pct = status.install_percent;
+    return {
+      value: "Installing…",
+      description: pct !== null ? `${pct}% downloaded` : "Downloading Chromium",
+      variant: "default",
+      action: null,
+    };
+  }
+  if (status.available) {
+    return {
+      value: "Ready",
+      description: "Chromium is running for browser-based scraping",
+      variant: "success",
+      action: null,
+    };
+  }
+  switch (status.code) {
+    case "browser_starting":
+      return {
+        value: "Starting…",
+        description: "Chromium is starting; no action needed",
+        variant: "default",
+        action: null,
+      };
+    case "browser_launch_failed":
+      return {
+        value: "Not running",
+        description: "Chromium is installed but did not start",
+        variant: "warning",
+        action: "repair",
+      };
+    case "playwright_package_missing":
+    case "browser_not_installed":
+    default:
+      return {
+        value: "Not installed",
+        description: "Needed for browser-based scraping (~90 MB)",
+        variant: "warning",
+        action: "install",
+      };
+  }
+}
 
-  const variant = isChecking ? "default" : isReady ? "success" : "warning";
+function BrowserStatusCard({ engineStatus }: { engineStatus: EngineStatus }) {
+  const { status, loaded, installing, percent, message, error, actions } =
+    useBrowserRuntimeContext();
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const view = browserCardPresentation(status, loaded, installing);
   const indicatorColor =
-    variant === "success"
+    view.variant === "success"
       ? "text-emerald-500"
-      : variant === "warning"
+      : view.variant === "warning"
         ? "text-amber-500"
         : "text-muted-foreground";
+
+  const run = useCallback(async () => {
+    setBusy(true);
+    setLocalError(null);
+    try {
+      if (status?.code === "playwright_package_missing") {
+        // The Playwright package itself is absent from this engine; the
+        // browser download needs it first. One click does both.
+        const result = await engine.installCapability("browser_automation");
+        if (result.status !== "complete") {
+          setLocalError(
+            `Could not install the browser driver: ${result.error || result.message}`,
+          );
+          return;
+        }
+      }
+      // Downloads Chromium when it is missing; when it is on disk and merely
+      // not running, the engine skips the download and just starts it.
+      await actions.install();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [actions, status?.code]);
+
+  const canAct =
+    engineStatus === "connected" && view.action !== null && !busy && !installing;
+  const shownError = localError ?? error;
 
   return (
     <Card>
@@ -550,31 +561,28 @@ function BrowserStatusCard({
           </span>
         </div>
         <div className="mt-2">
-          <span className="text-2xl font-bold">
-            {isChecking ? "Checking..." : isReady ? "Ready" : "Not Installed"}
-          </span>
+          <span className="text-2xl font-bold">{view.value}</span>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          {isReady
-            ? browserStatus?.chrome_version
-              ? `Chromium ${browserStatus.chrome_version}`
-              : "Playwright ready"
-            : isChecking
-              ? "Detecting browser..."
-              : "Required for browser-based scraping"}
+          {installing && message ? `${message} (${percent}%)` : view.description}
         </p>
-        {canInstall && (
+        {view.action && (
           <Button
             size="sm"
             variant="outline"
             className="mt-2 h-7 w-full gap-1.5 text-xs"
-            onClick={onInstall}
-            disabled={installing}
+            onClick={() => void run()}
+            disabled={!canAct}
           >
-            {installing ? (
+            {busy || installing ? (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Installing... (~60s)
+                {view.action === "repair" ? "Starting…" : "Installing…"}
+              </>
+            ) : view.action === "repair" ? (
+              <>
+                <RefreshCw className="h-3 w-3" />
+                Start browser
               </>
             ) : (
               <>
@@ -584,11 +592,14 @@ function BrowserStatusCard({
             )}
           </Button>
         )}
-        {installMessage && (
-          <p
-            className={`mt-1.5 text-[11px] leading-tight ${installError ? "text-red-400" : "text-emerald-400"}`}
-          >
-            {installMessage}
+        {shownError && (
+          <p className="mt-1.5 text-[11px] leading-tight text-red-400">
+            {shownError}
+          </p>
+        )}
+        {!view.action && status?.reason && !status.available && (
+          <p className="mt-1.5 text-[11px] leading-tight text-muted-foreground">
+            {status.reason}
           </p>
         )}
       </CardContent>

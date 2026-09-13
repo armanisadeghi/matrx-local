@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => {
   const engine = {
     setTokenProvider: vi.fn(), isHealthy: vi.fn(async () => true), discover: vi.fn(async () => "http://engine.test"),
     getPlatformContext: vi.fn(async () => ({})), listTools: vi.fn(async () => []), getVersion: vi.fn(async () => "test"),
-    getSystemInfo: vi.fn(async () => ({})), getBrowserStatus: vi.fn(async () => ({})), connectWebSocket: vi.fn(async () => undefined),
+    getSystemInfo: vi.fn(async () => ({})), connectWebSocket: vi.fn(async () => undefined),
     disconnect: vi.fn(), clearPythonToken: vi.fn(async () => undefined), syncTokenToPython: vi.fn(async () => undefined),
     configureCloudSync: vi.fn(async () => undefined), reconfigureCloudSync: vi.fn(async () => undefined), cloudHeartbeat: vi.fn(async () => undefined), prepareSessionTransition: vi.fn(async () => ({ status: "aligned", origin: "http://engine.test", generation: "g", credentialRevision: 0, subject: null })),
     get: vi.fn(async () => ({})), getInstanceInfo: vi.fn(async () => ({})), listInstances: vi.fn(async () => []), getHardware: vi.fn(async () => ({})),

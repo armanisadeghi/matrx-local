@@ -178,7 +178,6 @@ function AppInner() {
     url,
     tools,
     systemInfo,
-    browserStatus,
     engineVersion,
     error: engineError,
     refresh,
@@ -429,7 +428,6 @@ function AppInner() {
             engineUrl={url}
             tools={tools}
             systemInfo={systemInfo}
-            browserStatus={browserStatus}
             onRefresh={refresh}
             user={auth.user}
             onSignOut={auth.signOut}
@@ -510,7 +508,6 @@ function AppInner() {
       url,
       tools,
       systemInfo,
-      browserStatus,
       refresh,
       auth,
       engineVersion,

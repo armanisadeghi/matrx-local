@@ -284,6 +284,26 @@ app = BUNDLE(
         'NSBluetoothAlwaysUsageDescription':
             'AI Matrx needs Bluetooth access to discover and interact with nearby '
             'devices.',
+        # Location / Local Network / Speech Recognition: the DESKTOP APP owns
+        # these requests (the helper has no run loop, so a request from here is
+        # silently ignored and the helper never appears in System Settings).
+        # The keys must still exist on this bundle: macOS resolves the usage
+        # string against the bundle that triggers the API, and a missing
+        # NSSpeechRecognitionUsageDescription TERMINATES the process the moment
+        # any Speech API is touched — even a status read.
+        'NSLocationUsageDescription':
+            'AI Matrx can access your location when you use location-aware AI '
+            'tools. Location data is only used for the tool you explicitly '
+            'invoke and is not stored or transmitted without your consent.',
+        'NSLocationWhenInUseUsageDescription':
+            'AI Matrx accesses your location only while the app is in the '
+            'foreground and only when you invoke a location tool.',
+        'NSLocalNetworkUsageDescription':
+            'AI Matrx browses your local network to discover devices and '
+            'services when you use network discovery AI tools.',
+        'NSSpeechRecognitionUsageDescription':
+            "AI Matrx can use Apple's speech recognition for voice-to-text "
+            'when the local Whisper model is not available.',
         # Files & Folders (Documents/Desktop/Downloads/volumes): these TCC
         # services are gated per app SEPARATELY from Full Disk Access, and a
         # missing usage string means macOS denies readdir SILENTLY with

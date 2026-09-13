@@ -81,14 +81,27 @@ def playwright_package_present() -> bool:
         return False
 
 
+# Playwright writes this marker into a versioned browser directory only after
+# the download was extracted completely. The directory itself appears at the
+# START of the download, so "a chromium-* directory exists" is not evidence
+# of a browser — it is exactly what a half-finished first-boot download looks
+# like (observed 2026-09-13: status said "starting" for a folder that held no
+# executable yet).
+INSTALL_COMPLETE_MARKER = "INSTALLATION_COMPLETE"
+
+
 def browser_binary_present() -> bool:
-    """Is at least one usable Chromium build present in this world's path?"""
+    """Is at least one COMPLETELY installed Chromium build in this world's path?"""
     path = browsers_path()
     try:
         entries = os.listdir(path)
     except OSError:
         return False
-    return any(entry.startswith(marker) for marker in BROWSER_MARKERS for entry in entries)
+    return any(
+        entry.startswith(marker) and (path / entry / INSTALL_COMPLETE_MARKER).exists()
+        for marker in BROWSER_MARKERS
+        for entry in entries
+    )
 
 
 @dataclass(frozen=True)
@@ -152,12 +165,22 @@ _install = _InstallState()
 _launch_error: str | None = None
 # The pool is live in the running engine.
 _pool_live = False
+# A retry of the pool launch is scheduled and has not run yet. The FIRST boot
+# attempt is not evidence of a broken browser: the engine's startup phases can
+# starve the event loop long enough for a perfectly healthy Chromium to miss its
+# launch bound (2026-09-13 — the pool's 30s bound expired inside the startup
+# session-index scan and the Dashboard told the user the browser "would not
+# start" while it launched in 3.7s from a terminal). While a retry is pending
+# this is a TRANSIENT state, not an ask: the user is told it is still starting
+# and is asked for nothing.
+_retry_pending = False
 
 
 def record_pool_started() -> None:
-    global _launch_error, _pool_live
+    global _launch_error, _pool_live, _retry_pending
     _launch_error = None
     _pool_live = True
+    _retry_pending = False
 
 
 def record_pool_stopped() -> None:
@@ -166,10 +189,31 @@ def record_pool_stopped() -> None:
 
 
 def record_launch_failure(exc: BaseException | str) -> None:
-    """Remember WHY the pool could not start, so status can say it out loud."""
-    global _launch_error, _pool_live
+    """Remember WHY the pool could not start, so status can say it out loud.
+
+    Always clears the pending-retry flag: the retry either has not been
+    scheduled yet (a caller schedules it right after this) or has just run and
+    failed, and in that second case the failure is final and must stand.
+    """
+    global _launch_error, _pool_live, _retry_pending
     _launch_error = str(exc).strip() or exc.__class__.__name__
     _pool_live = False
+    _retry_pending = False
+
+
+def record_retry_pending() -> None:
+    """A pool-launch retry is scheduled; hold back the failure state until it runs."""
+    global _retry_pending
+    _retry_pending = True
+
+
+def retry_pending() -> bool:
+    return _retry_pending
+
+
+def pool_is_live() -> bool:
+    """Is the browser pool up in THIS engine right now?"""
+    return _pool_live
 
 
 def install_in_progress() -> bool:
@@ -234,6 +278,20 @@ def status() -> BrowserRuntimeStatus:
             installing=False,
         )
 
+    if _retry_pending:
+        # A launch failed, but another attempt is coming. Saying "would not
+        # start" here would be a lie with a button on it.
+        return BrowserRuntimeStatus(
+            available=False,
+            code="browser_starting",
+            reason="The built-in browser is still starting",
+            browsers_path=path,
+            installing=_install.running,
+            install_percent=_install.percent,
+            install_message=_install.message,
+            pool_restart_pending=True,
+        )
+
     if _launch_error:
         return BrowserRuntimeStatus(
             available=False,
@@ -266,6 +324,11 @@ def browser_action_needed(feature: str = FEATURE) -> ActionNeeded | None:
     """
     current = status()
     if current.available:
+        return None
+
+    if current.code == "browser_starting":
+        # Transient by definition: a retry is already scheduled and the person
+        # has nothing to do. An ask here would be noise that clears itself.
         return None
 
     if current.code == "browser_launch_failed":

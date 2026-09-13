@@ -46,9 +46,15 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
   // because a status call is still in flight.
   const browserAvailable = browserRuntime ? browserRuntime.available : true;
   const browserInstalling = browserRuntime?.installing ?? false;
-  const unavailableNote = browserInstalling
-    ? "Downloading the built-in browser — available when it finishes."
-    : "The built-in browser isn't installed yet. Install it on this page to use this method.";
+  // Installed, but the engine's first pool launch lost a race and the retry has
+  // not run yet. Saying "not installed" here would be false, and pointing at an
+  // Install button would be a dead end.
+  const browserStarting = browserRuntime?.status?.code === "browser_starting";
+  const unavailableNote = browserStarting
+    ? "The built-in browser is still starting — available in a moment."
+    : browserInstalling
+      ? "Downloading the built-in browser — available when it finishes."
+      : "The built-in browser isn't installed yet. Install it on this page to use this method.";
 
   return (
     <Tooltip>
@@ -80,7 +86,11 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
                 {m.label}
                 {disabled && (
                   <span className="ml-1 text-[10px] font-normal">
-                    {browserInstalling ? "(downloading)" : "(not installed)"}
+                    {browserStarting
+                      ? "(starting)"
+                      : browserInstalling
+                        ? "(downloading)"
+                        : "(not installed)"}
                   </span>
                 )}
               </button>

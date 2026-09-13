@@ -100,6 +100,25 @@ describe("BrowserRuntimeNotice", () => {
     runtime = makeRuntime({ loaded: false });
     expect(renderToStaticMarkup(<BrowserRuntimeNotice />)).toBe("");
   });
+
+  it("says the browser is starting instead of claiming it is missing", () => {
+    // The engine lost one pool launch to a starved event loop and has already
+    // scheduled the retry. Chromium is on disk, so the install wording would be
+    // false and an Install button would be a dead control.
+    runtime = makeRuntime({
+      status: {
+        ...makeRuntime().status!,
+        code: "browser_starting",
+        reason: "The built-in browser is still starting",
+        pool_restart_pending: true,
+      },
+    });
+    const html = renderToStaticMarkup(<BrowserRuntimeNotice />);
+
+    expect(html).toContain("still starting");
+    expect(html).not.toContain("isn't installed yet");
+    expect(html).not.toContain("<button");
+  });
 });
 
 describe("MethodSelector browser gating", () => {
@@ -124,6 +143,16 @@ describe("MethodSelector browser gating", () => {
     const html = renderSelector();
 
     expect(html).not.toContain('aria-disabled="true"');
+    expect(html).not.toContain("(not installed)");
+  });
+
+  it("says (starting), never (not installed), while the pool retry is pending", () => {
+    runtime = makeRuntime({
+      status: { ...makeRuntime().status!, code: "browser_starting" },
+    });
+    const html = renderSelector();
+
+    expect(html).toContain("(starting)");
     expect(html).not.toContain("(not installed)");
   });
 

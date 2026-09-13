@@ -208,14 +208,6 @@ function toolInvocationKey(
   return `${tool}:${stableJson(input)}`;
 }
 
-export interface BrowserStatus {
-  chrome_found: boolean;
-  chrome_path: string | null;
-  chrome_version: string | null;
-  profile_found: boolean;
-  browser_running: boolean;
-}
-
 // The scrape result shape lives in ONE module — local, browser and remote
 // scrapes all speak it. Re-exported here so existing `@/lib/api` importers
 // keep working; new code should import from `@/lib/scrape-result`.
@@ -2161,38 +2153,6 @@ class EngineAPI {
     });
   }
 
-  /** Get browser status — returns defaults until a real endpoint is added. */
-  async getBrowserStatus(): Promise<BrowserStatus> {
-    if (!this.baseUrl)
-      return {
-        chrome_found: false,
-        chrome_path: null,
-        chrome_version: null,
-        profile_found: false,
-        browser_running: false,
-      };
-    try {
-      const result = await this.invokeTool("SystemInfo", {});
-      const meta = result.metadata ?? {};
-      return {
-        chrome_found: Boolean(meta.playwright_available),
-        chrome_path: meta.chrome_path ? String(meta.chrome_path) : null,
-        chrome_version: meta.chrome_version
-          ? String(meta.chrome_version)
-          : null,
-        profile_found: false,
-        browser_running: false,
-      };
-    } catch {
-      return {
-        chrome_found: false,
-        chrome_path: null,
-        chrome_version: null,
-        profile_found: false,
-        browser_running: false,
-      };
-    }
-  }
 
   /** Scrape URLs using the engine's multi-strategy scraper. */
   async scrape(urls: string[], useCache = true): Promise<ToolResult> {
@@ -5275,9 +5235,13 @@ export interface InstanceInfo {
 
 export type PermissionStatusValue =
   | "granted"
+  /** Granted with a scope the person chose (limited Contacts/Photos, write-only Calendar). */
+  | "limited"
   | "denied"
   | "not_determined"
   | "restricted"
+  /** macOS decides the first time the app uses it; nothing to switch on before that. */
+  | "first_use"
   | "unavailable"
   | "unknown";
 

@@ -168,26 +168,28 @@ def test_successful_permission_request_resolves_every_matching_requirement(
     async def exercise() -> None:
         registry = get_action_needed_registry()
         await registry.reset()
+        # screen_recording is the only permission the ENGINE still requests on
+        # macOS — Contacts/Calendar/etc. are requested by the desktop app.
         first = permissions_routes.os_permission_needed(
-            feature="contacts-search",
-            permission_key="contacts",
-            source="devices.contacts",
+            feature="screenshot",
+            permission_key="screen_recording",
+            source="devices.screen",
         )
         second = permissions_routes.os_permission_needed(
-            feature="contacts-create",
-            permission_key="contacts",
-            source="devices.contacts",
+            feature="screen-record",
+            permission_key="screen_recording",
+            source="devices.screen",
         )
         unrelated = permissions_routes.os_permission_needed(
             feature="calendar-list",
             permission_key="calendar",
             source="devices.calendar",
         )
-        await registry.reconcile_operation("contacts.search", first)
-        await registry.reconcile_operation("contacts.create", second)
+        await registry.reconcile_operation("screen.shot", first)
+        await registry.reconcile_operation("screen.record", second)
         await registry.reconcile_operation("calendar.list", unrelated)
 
-        response = await permissions_routes.request_permission("contacts")
+        response = await permissions_routes.request_permission("screen_recording")
 
         assert response["status"] == "granted"
         active = await _active_fingerprints()

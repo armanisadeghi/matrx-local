@@ -32,3 +32,10 @@ production regression, not a hypothetical.
 8. **New config value, URL, or key?** → pick its category first (CLAUDE.md
    § Configuration posture): env vars are dev-only, no shipped
    behavior may depend on `.env`, and our secrets never exist on the client.
+9. **Anything that shows a permission status, count, or "Grant" button?** →
+   there is ONE model (`app/services/permissions/FEATURE.md`): the authority
+   table decides who reads and who prompts; counts come only from
+   `summarizePermissions()`; a not-yet-asked permission is never "denied",
+   and nobody is sent to a Settings pane where the app is not listed yet.
+   The Dashboard once showed "6/18" then "10/19" and a Location "Request
+   access" that did nothing.

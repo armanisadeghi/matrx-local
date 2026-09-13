@@ -706,13 +706,23 @@ async def check_bluetooth() -> PermissionResult:
                                 )
 
             is_on = "attrib_on" in bt_power.lower() if bt_power else len(devices) > 0
+            # radio state, not the TCC grant — the desktop app reads
+            # CBManager.authorization. system_profiler tells us whether the
+            # Bluetooth radio is powered on and what is paired; it says nothing
+            # about the Bluetooth privacy permission, so the wording here talks
+            # about the radio only. A radio that is off is not a denial: the
+            # user simply has not turned it on.
             return PermissionResult(
                 permission="bluetooth",
-                status=PermissionStatus.GRANTED if is_on else PermissionStatus.DENIED,
-                details=f"Bluetooth {'on' if is_on else 'off'}, {len(devices)} device(s) paired",
+                status=PermissionStatus.GRANTED if is_on else PermissionStatus.NOT_DETERMINED,
+                details=(
+                    f"Bluetooth is on — {len(devices)} device(s) paired"
+                    if is_on
+                    else "Bluetooth is turned off"
+                ),
                 devices=devices,
                 grant_instructions="System Settings > Bluetooth > Turn On. Also: Privacy & Security > Bluetooth > Enable for Matrx Local",
-                user_details=f"Bluetooth is active — {len(devices)} device(s) paired"
+                user_details=f"Bluetooth is on — {len(devices)} device(s) paired"
                 if is_on
                 else "Bluetooth is turned off",
                 user_instructions=""
@@ -952,182 +962,6 @@ def _network_instructions() -> str:
 # ---------------------------------------------------------------------------
 
 
-async def check_wifi() -> PermissionResult:
-    """Scan and return available WiFi networks."""
-    networks: list[dict[str, Any]] = []
-    details = ""
-
-    try:
-        if PLATFORM["is_mac"]:
-            networks, details = await _wifi_scan_macos()
-        elif PLATFORM["is_windows"]:
-            networks, details = await _wifi_scan_windows()
-        else:
-            networks, details = await _wifi_scan_linux()
-    except Exception as e:
-        details = f"WiFi scan failed: {e}"
-
-    status = PermissionStatus.GRANTED if networks else PermissionStatus.NOT_DETERMINED
-
-    return PermissionResult(
-        permission="wifi",
-        status=status,
-        details=details or f"{len(networks)} networks found",
-        devices=networks,
-        grant_instructions=_wifi_instructions(),
-        user_details=f"WiFi active — {len(networks)} network(s) visible"
-        if networks
-        else "No WiFi networks found",
-        user_instructions=""
-        if networks
-        else "Enable WiFi and click Scan to discover networks",
-    )
-
-
-async def _wifi_scan_macos() -> tuple[list[dict[str, Any]], str]:
-    """Scan WiFi networks on macOS via airport or system_profiler."""
-    import re as _re
-
-    airport = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
-    try:
-        out, _, rc = await _run([airport, "-s"], timeout=15)
-        if rc == 0:
-            lines = out.strip().split("\n")
-            bssid_pat = _re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", _re.IGNORECASE)
-            networks: list[dict[str, Any]] = []
-            for line in lines[1:]:
-                m = bssid_pat.search(line)
-                if m:
-                    ssid = line[: m.start()].strip()
-                    rest = line[m.end():].strip().split()
-                    if len(rest) >= 4:
-                        networks.append({
-                            "ssid": ssid or "(hidden)",
-                            "bssid": m.group(0),
-                            "rssi": int(rest[0]) if rest[0].lstrip("-").isdigit() else 0,
-                            "channel": rest[1],
-                            "security": " ".join(rest[3:]),
-                            "connected": False,
-                        })
-            if networks:
-                networks.sort(key=lambda n: n.get("rssi", -100), reverse=True)
-                return networks, f"{len(networks)} networks found via airport"
-    except (FileNotFoundError, Exception):
-        pass
-
-    # Fallback: system_profiler
-    try:
-        out, _, _ = await _run(["system_profiler", "SPAirPortDataType", "-json"], timeout=20)
-        data = json.loads(out)
-        networks = []
-        sec_labels = {
-            "spairport_security_mode_wpa3_transition": "WPA3/WPA2",
-            "spairport_security_mode_wpa3_personal": "WPA3",
-            "spairport_security_mode_wpa2_personal": "WPA2",
-            "spairport_security_mode_wpa_personal": "WPA",
-            "spairport_security_mode_none": "Open",
-            "spairport_security_mode_wpa2_enterprise": "WPA2-Ent",
-        }
-        seen_current: str | None = None
-        for iface_group in data.get("SPAirPortDataType", []):
-            for iface in iface_group.get("spairport_airport_interfaces", []):
-                cur = iface.get("spairport_current_network_information")
-                if cur:
-                    seen_current = cur.get("_name", "")
-                    rssi_raw = cur.get("spairport_signal_noise", "")
-                    rssi = 0
-                    try:
-                        rssi = int(str(rssi_raw).split()[0])
-                    except Exception:
-                        pass
-                    raw_sec = cur.get("spairport_security_mode", "")
-                    networks.append({
-                        "ssid": seen_current or "(hidden)",
-                        "rssi": rssi,
-                        "channel": str(cur.get("spairport_network_channel", "")),
-                        "security": sec_labels.get(raw_sec, raw_sec.replace("spairport_security_mode_", "").replace("_", "-")),
-                        "connected": True,
-                    })
-                for net in iface.get("spairport_other_local_wireless_networks", []):
-                    ssid = net.get("_name", "")
-                    if ssid == seen_current:
-                        continue
-                    rssi_raw = net.get("spairport_signal_noise", "")
-                    rssi = 0
-                    try:
-                        rssi = int(str(rssi_raw).split()[0])
-                    except Exception:
-                        pass
-                    raw_sec = net.get("spairport_security_mode", "")
-                    networks.append({
-                        "ssid": ssid or "(hidden)",
-                        "rssi": rssi,
-                        "channel": str(net.get("spairport_network_channel", "")),
-                        "security": sec_labels.get(raw_sec, raw_sec.replace("spairport_security_mode_", "").replace("_", "-")),
-                        "connected": False,
-                    })
-        networks.sort(key=lambda n: (not n.get("connected", False), -(n.get("rssi") or 0)))
-        return networks, f"{len(networks)} networks found via system_profiler"
-    except Exception as e:
-        return [], f"WiFi scan failed: {e}"
-
-
-async def _wifi_scan_windows() -> tuple[list[dict[str, Any]], str]:
-    out, _, _ = await _run(["netsh", "wlan", "show", "networks", "mode=bssid"], timeout=10)
-    networks: list[dict[str, Any]] = []
-    current: dict[str, Any] = {}
-    for line in out.split("\n"):
-        line = line.strip()
-        if line.startswith("SSID") and "BSSID" not in line:
-            if current:
-                networks.append(current)
-            ssid = line.split(":", 1)[1].strip() if ":" in line else ""
-            current = {"ssid": ssid}
-        elif "Signal" in line:
-            val = line.split(":", 1)[1].strip().replace("%", "")
-            current["signal_percent"] = int(val) if val.isdigit() else 0
-        elif "Authentication" in line:
-            current["security"] = line.split(":", 1)[1].strip()
-        elif "Channel" in line:
-            current["channel"] = line.split(":", 1)[1].strip()
-        elif "BSSID" in line:
-            current["bssid"] = line.split(":", 1)[1].strip()
-    if current and "ssid" in current:
-        networks.append(current)
-    networks.sort(key=lambda n: n.get("signal_percent", 0), reverse=True)
-    return networks, f"{len(networks)} networks found"
-
-
-async def _wifi_scan_linux() -> tuple[list[dict[str, Any]], str]:
-    out, stderr, rc = await _run(
-        ["nmcli", "-t", "-f", "SSID,BSSID,SIGNAL,CHAN,SECURITY", "device", "wifi", "list"],
-        timeout=10,
-    )
-    if rc != 0:
-        return [], f"nmcli error: {stderr}"
-    networks: list[dict[str, Any]] = []
-    for line in out.strip().split("\n"):
-        parts = line.split(":")
-        if len(parts) >= 5:
-            networks.append({
-                "ssid": parts[0],
-                "bssid": parts[1],
-                "signal_percent": int(parts[2]) if parts[2].isdigit() else 0,
-                "channel": parts[3],
-                "security": parts[4],
-            })
-    networks.sort(key=lambda n: n.get("signal_percent", 0), reverse=True)
-    return networks, f"{len(networks)} networks found"
-
-
-def _wifi_instructions() -> str:
-    if PLATFORM["is_mac"]:
-        return "Ensure WiFi is enabled in System Settings > Network > WiFi"
-    elif PLATFORM["is_windows"]:
-        return "Enable WiFi in Settings > Network & internet > WiFi"
-    return "Enable WiFi: nmcli radio wifi on"
-
-
 # ---------------------------------------------------------------------------
 # Screen Recording (macOS-specific)
 # ---------------------------------------------------------------------------
@@ -1244,7 +1078,24 @@ async def request_screen_recording() -> PermissionResult:
 
 
 async def request_engine_permission(name: str) -> PermissionResult:
-    """Request an engine-owned macOS grant after an explicit user click."""
+    """Request a macOS grant the ENGINE actually owns — screen recording only.
+
+    On macOS the engine helper (``Matrx Engine.app``) is a background
+    PyInstaller bundle with no run loop, so the TCC request APIs that need one
+    do nothing: ``CLLocationManager.requestWhenInUseAuthorization()`` returns
+    without ever prompting and the helper never even appears in System Settings
+    → Location. Contacts, Calendar, Reminders, Photos, Location, Speech
+    Recognition and Bluetooth are therefore requested by the DESKTOP APP
+    (Tauri/Rust), which is a real foreground app; this module stays the
+    read-only status source for them.
+
+    Screen recording is the exception and stays here: screen capture runs in
+    THIS process (``screencapture``), ``CGRequestScreenCaptureAccess`` works
+    without a run loop, and that call is what lists the app under Screen
+    Recording at all.
+
+    Off macOS there is no TCC, so a "request" is just a re-check.
+    """
     checker = PERMISSION_CHECKERS.get(name)
     if checker is None:
         raise ValueError(f"Unknown permission: {name}")
@@ -1252,54 +1103,10 @@ async def request_engine_permission(name: str) -> PermissionResult:
         return await checker()
     if name == "screen_recording":
         return await request_screen_recording()
-
-    loop = asyncio.get_running_loop()
-    done: asyncio.Future[None] = loop.create_future()
-
-    def finish(*_args: Any) -> None:
-        if not done.done():
-            loop.call_soon_threadsafe(done.set_result, None)
-
-    if name == "contacts":
-        from Contacts import CNContactStore
-
-        CNContactStore.alloc().init().requestAccessForEntityType_completionHandler_(0, finish)
-    elif name in {"calendar", "reminders"}:
-        from EventKit import EKEventStore
-
-        entity_type = 0 if name == "calendar" else 1
-        store = EKEventStore.alloc().init()
-        if name == "calendar" and hasattr(store, "requestFullAccessToEventsWithCompletion_"):
-            store.requestFullAccessToEventsWithCompletion_(finish)
-        elif name == "reminders" and hasattr(store, "requestFullAccessToRemindersWithCompletion_"):
-            store.requestFullAccessToRemindersWithCompletion_(finish)
-        else:
-            store.requestAccessToEntityType_completion_(entity_type, finish)
-    elif name == "photos":
-        from Photos import PHPhotoLibrary
-
-        PHPhotoLibrary.requestAuthorizationForAccessLevel_handler_(2, finish)
-    elif name == "speech_recognition":
-        from Speech import SFSpeechRecognizer
-
-        SFSpeechRecognizer.requestAuthorization_(finish)
-    elif name == "location":
-        from CoreLocation import CLLocationManager
-
-        manager = CLLocationManager.alloc().init()
-        manager.requestWhenInUseAuthorization()
-        # CoreLocation has no completion callback; keep the manager alive and
-        # give the TCC callback a short window before rechecking.
-        await asyncio.sleep(1.0)
-        return await checker()
-    else:
-        return await checker()
-
-    try:
-        await asyncio.wait_for(done, timeout=30.0)
-    except asyncio.TimeoutError:
-        pass
-    return await checker()
+    raise ValueError(
+        f"'{name}' is requested by the desktop app, not the engine: on macOS "
+        "only screen_recording can be requested by this process."
+    )
 
 
 async def check_screen_recording() -> PermissionResult:
@@ -1603,12 +1410,19 @@ async def check_messages() -> PermissionResult:
 
         chat_db = _Path.home() / "Library" / "Messages" / "chat.db"
         if not chat_db.exists():
+            # No chat.db means Messages was never set up on this Mac. That is
+            # not a denied permission and not an unknown one — there is simply
+            # nothing here to read, and pointing the user at Full Disk Access
+            # would send them to fix a permission that is not the problem.
             return PermissionResult(
                 permission="messages",
-                status=PermissionStatus.UNKNOWN,
-                details="chat.db not found — Messages may not be configured on this device.",
-                grant_instructions="Enable Full Disk Access in System Settings → Privacy & Security → Full Disk Access",
-                deep_link="x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+                status=PermissionStatus.UNAVAILABLE,
+                details="Messages is not set up on this Mac — no message database exists.",
+                user_details=(
+                    "Messages is not set up on this Mac, so there is no "
+                    "iMessage/SMS history to read. Sign in to Messages to use "
+                    "message tools."
+                ),
             )
 
         try:
@@ -1641,25 +1455,36 @@ async def check_messages() -> PermissionResult:
 
 
 async def check_mail() -> PermissionResult:
-    """Check Mail.app automation access (macOS only).
+    """Report Mail.app automation access as NOT YET ASKED (macOS only).
 
-    Mail has no dedicated TCC service. Access is via Apple Events (Automation).
-    We return UNKNOWN with instructions to grant Automation access since we cannot
-    query the Automation TCC table from a background sidecar process reliably.
+    Mail has no dedicated TCC service; access is Automation (Apple Events) for
+    Mail.app, and macOS asks the first time a Mail tool actually runs. There is
+    nothing to probe beforehand — but UNKNOWN is not the honest answer either,
+    because the UI renders UNKNOWN as "Not Granted", which tells the user
+    something was refused when nobody has ever been asked. NOT_DETERMINED is
+    what is true: no decision exists yet, and the first Mail tool call creates
+    one.
     """
     if PLATFORM["is_mac"]:
         return PermissionResult(
             permission="mail",
-            status=PermissionStatus.UNKNOWN,
-            details="Mail access is via Automation (Apple Events) — cannot be probed from sidecar.",
+            status=PermissionStatus.NOT_DETERMINED,
+            details=(
+                "Mail access is Automation (Apple Events) permission for "
+                "Mail.app; macOS asks the first time a Mail tool runs"
+            ),
             grant_instructions=(
                 "System Settings → Privacy & Security → Automation → "
                 "AI Matrx → enable 'Mail'"
             ),
-            user_details="Mail access lets AI tools read and send emails via Mail.app.",
+            user_details=(
+                "Mail access has not been requested yet. macOS will ask you "
+                "the first time AI Matrx reads or sends mail through Mail.app."
+            ),
             user_instructions=(
-                "To grant Mail access: System Settings → Privacy & Security → "
-                "Automation → AI Matrx → enable Mail"
+                "Nothing to do now — approve the macOS prompt when it appears. "
+                "You can change it later in System Settings → Privacy & "
+                "Security → Automation → AI Matrx → Mail."
             ),
             deep_link="x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
         )
@@ -1822,7 +1647,11 @@ PERMISSION_CHECKERS: dict[str, PermissionChecker] = {
     "accessibility": check_accessibility,
     "bluetooth": check_bluetooth,
     "network": check_network,
-    "wifi": check_wifi,
+    # NOT "wifi": a Wi-Fi scan is a NETWORK INVENTORY (airport /
+    # system_profiler, 10-20s), not an OS permission. It has no TCC service,
+    # nothing to grant, and it was the sole reason GET /devices/permissions and
+    # GET /setup/status took 10-20 seconds. Wi-Fi networks are served by
+    # GET /devices/wifi and the WifiNetworks tool, which run their own scan.
     "screen_recording": check_screen_recording,
     "location": check_location,
     "contacts": check_contacts,
@@ -1833,17 +1662,6 @@ PERMISSION_CHECKERS: dict[str, PermissionChecker] = {
     "mail": check_mail,
     "speech_recognition": check_speech_recognition,
 }
-
-
-async def _run_permission_check(name: str, checker: PermissionChecker) -> PermissionResult:
-    # WiFi probes can invoke slow platform tooling; retain the all-scan timeout
-    # while keeping the public catalog's checker itself reusable.
-    if name == "wifi":
-        # macOS system_profiler has its own 20s fallback deadline. The outer
-        # deadline must be longer or it deterministically cancels a valid
-        # fallback and surfaces an empty-string TimeoutError in the log.
-        return await asyncio.wait_for(checker(), timeout=25)
-    return await checker()
 
 
 async def check_all_permissions() -> list[dict[str, Any]]:
@@ -1860,10 +1678,7 @@ async def check_all_permissions() -> list[dict[str, Any]]:
     )
 
     scan = asyncio.gather(
-        *(
-            _run_permission_check(name, checker)
-            for name, checker in PERMISSION_CHECKERS.items()
-        ),
+        *(checker() for checker in PERMISSION_CHECKERS.values()),
         return_exceptions=True,
     )
     try:

@@ -17,6 +17,32 @@ export function BrowserRuntimeNotice() {
 
   const { status, installing, percent, message, error, actions } = runtime;
   const sizeHint = status?.download_size_hint ?? "~90 MB";
+  // The engine failed one pool launch and has already scheduled the retry. The
+  // browser IS installed, so "isn't installed yet" would be a lie and an
+  // Install button would be a dead control — say what is actually happening and
+  // ask for nothing (the engine clears this on its own, either way).
+  const starting = status?.code === "browser_starting";
+
+  if (starting) {
+    return (
+      <div
+        className="rounded-lg border border-amber-300/70 bg-amber-50/90 p-3 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100"
+        role="status"
+        data-testid="browser-runtime-notice"
+      >
+        <div className="flex items-start gap-3">
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">The built-in browser is still starting</p>
+            <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">
+              Pages that need a real browser will work as soon as it comes up.
+              Everything else keeps working meanwhile.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

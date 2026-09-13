@@ -109,3 +109,73 @@ def test_present_browser_raises_no_prompt_at_all(runtime, monkeypatch):
     assert status.available is True
     assert status.code == "ready"
     assert runtime.browser_action_needed() is None
+
+
+def test_a_retried_launch_reports_starting_and_asks_for_nothing(runtime, monkeypatch):
+    """One starved boot attempt must not accuse a healthy browser.
+
+    The launch bound is wall clock, and the engine's own startup can eat it:
+    on 2026-09-13 it expired 47s into Phase 3, inside the minute-long Claude
+    session-index scan, and every boot told the user the browser "would not
+    start" while it launched in 3.7s from a terminal. While
+    the one scheduled retry is pending, the honest state is "still starting" —
+    and a transient state is never an ask.
+    """
+    monkeypatch.setattr(runtime, "browser_binary_present", lambda: True)
+    runtime.record_launch_failure(
+        RuntimeError("Chromium did not finish launching within 30s")
+    )
+    runtime.record_retry_pending()
+
+    status = runtime.status()
+    assert status.available is False
+    assert status.code == "browser_starting"
+    assert status.reason == "The built-in browser is still starting"
+    assert status.pool_restart_pending is True
+    assert "would not start" not in (status.reason or "")
+    assert runtime.browser_action_needed() is None
+
+
+def test_the_ask_returns_once_the_retry_has_also_failed(runtime, monkeypatch):
+    monkeypatch.setattr(runtime, "browser_binary_present", lambda: True)
+    runtime.record_launch_failure(RuntimeError("first attempt"))
+    runtime.record_retry_pending()
+    assert runtime.browser_action_needed() is None
+
+    # The retry ran and failed: the failure is final, and now it IS an ask.
+    runtime.record_launch_failure(RuntimeError("Chromium crashed on launch"))
+
+    status = runtime.status()
+    assert status.code == "browser_launch_failed"
+    assert "Chromium crashed on launch" in (status.reason or "")
+    item = runtime.browser_action_needed()
+    assert item is not None
+    assert item.action.label == "Repair browser"
+
+
+def test_a_retry_that_succeeds_clears_the_state_completely(runtime, monkeypatch):
+    monkeypatch.setattr(runtime, "browser_binary_present", lambda: True)
+    runtime.record_launch_failure(RuntimeError("first attempt"))
+    runtime.record_retry_pending()
+
+    runtime.record_pool_started()
+
+    assert runtime.retry_pending() is False
+    assert runtime.pool_is_live() is True
+    assert runtime.status().code == "ready"
+    assert runtime.browser_action_needed() is None
+
+
+def test_a_half_downloaded_browser_directory_is_not_an_installed_browser(runtime, tmp_path):
+    """The versioned directory appears when the download STARTS; only Playwright's
+    INSTALLATION_COMPLETE marker proves the executable is there. Without this,
+    first boot said "starting" about an empty folder and would never re-download."""
+    browsers = tmp_path / "playwright-browsers"
+    partial = browsers / "chromium_headless_shell-1234"
+    partial.mkdir(parents=True)
+    assert runtime.browser_binary_present() is False
+    assert runtime.status().code == "browser_not_installed"
+
+    (partial / runtime.INSTALL_COMPLETE_MARKER).write_text("")
+    assert runtime.browser_binary_present() is True
+    assert runtime.status().code != "browser_not_installed"

@@ -115,11 +115,13 @@ async def _ensure_playwright_browsers() -> None:
     )
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
 
-    # Quick check: skip install if at least one versioned browser directory exists.
-    browser_markers = ("chromium-", "firefox-", "webkit-", "chromium_headless_shell-")
-    if os.path.isdir(browsers_path) and any(
-        e.startswith(m) for m in browser_markers for e in os.listdir(browsers_path)
-    ):
+    # Skip the download only when a browser is COMPLETELY installed. The one
+    # presence check lives in browser_runtime (it requires Playwright's
+    # INSTALLATION_COMPLETE marker); a directory left by an interrupted
+    # download must trigger a fresh install, not a permanent "already present".
+    from app.services.scraper.browser_runtime import browser_binary_present
+
+    if browser_binary_present():
         logger.debug(
             "[app/main.py] Playwright browsers already present at %s", browsers_path
         )
@@ -1175,6 +1177,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.scraper import browser_runtime as _browser_runtime
 
         _registry.annotate("scraper", search_available=engine.has_search)
+
+        # A pool launch that timed out during boot is NOT proof of a broken
+        # browser: the startup phases themselves can consume the launch bound.
+        # Schedule the one retry BEFORE publishing anything, so the user is told
+        # "still starting" instead of being handed a repair button for a browser
+        # that is about to come up on its own.
+        if _browser_runtime.status().code == "browser_launch_failed":
+            from app.services.scraper.engine import schedule_browser_pool_retry
+
+            schedule_browser_pool_retry(engine)
+
         _browser_status = _browser_runtime.sync_service_registry()
         print(
             "[phase:scraper] Scraper engine ready"

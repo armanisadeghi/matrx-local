@@ -146,7 +146,6 @@ async def test_single_permission_catalog_covers_full_scan_and_404s_unknown(
         "accessibility",
         "bluetooth",
         "network",
-        "wifi",
         "screen_recording",
         "location",
         "contacts",

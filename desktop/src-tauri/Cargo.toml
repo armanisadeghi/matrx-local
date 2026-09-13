@@ -50,7 +50,18 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3.2", features = ["NSFileManager", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", features = ["NSFileManager", "NSString", "NSURL", "NSError"] }
+# Privacy (TCC) permissions the APP process must request itself — Contacts,
+# Calendars, Reminders, Photos, Location, Speech Recognition, Bluetooth. The
+# nested Python engine has no run loop and cannot own these prompts (see
+# src/tcc.rs). Default features on: they only pull the framework bindings.
+block2 = "0.6"
+objc2-contacts = "0.3.2"
+objc2-event-kit = "0.3.2"
+objc2-photos = "0.3.2"
+objc2-core-location = "0.3.2"
+objc2-speech = "0.3.2"
+objc2-core-bluetooth = "0.3.2"
 
 [features]
 # No features are enabled by default — acceleration is opt-in per platform.

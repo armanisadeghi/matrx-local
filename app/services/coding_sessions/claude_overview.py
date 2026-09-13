@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.common import claude_index_helper
 from app.common.system_logger import get_logger
 from app.services.coding_sessions.claude_session_index import (
     ClaudeSessionIndexEntry,
@@ -213,16 +214,95 @@ def _session_index(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
     return entries, totals
 
 
+# One scan at a time. The startup warm-up and a screen open commonly overlap,
+# and two concurrent readers would mean two ~60s child processes doing identical
+# work — the second caller waits for the first and then finds the cache warm.
+_INDEX_READ_LOCK = asyncio.Lock()
+
+
+async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
+    """Run the scan in a short-lived helper process. Raises on any failure."""
+    command = claude_index_helper.helper_command(root)
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=claude_index_helper.HELPER_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise TimeoutError(
+            "session-index helper exceeded "
+            f"{claude_index_helper.HELPER_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
+    if process.returncode != 0:
+        detail = (stderr or b"").decode("utf-8", errors="replace").strip()[:500]
+        raise RuntimeError(detail or f"exit status {process.returncode}")
+    return claude_index_helper.decode_payload(stdout)
+
+
+async def _session_index_async(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
+    """The cached index, read in a helper PROCESS, never inside this engine.
+
+    The scan is ~63,000 ``json.loads`` calls and about a minute of work. Running
+    it here — even on a thread — put a minute of GIL, allocator, thread-pool and
+    disk pressure inside the engine during startup, which is when the browser
+    pool's launch bound was being measured (the 2026-09-13 false "Chromium would
+    not start" report; see :mod:`app.common.claude_index_helper` for exactly
+    what was measured and what was not). A separate process removes that
+    pressure from the engine entirely.
+
+    The fingerprint walk stays in a thread on purpose: it is a stat-only rglob
+    and it must run in THIS process, because its whole job is to decide whether
+    a scan is needed at all.
+    """
+    global _INDEX_CACHE
+    fingerprint = await asyncio.to_thread(_tree_fingerprint, root)
+    if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
+        return _INDEX_CACHE[1], _INDEX_CACHE[2]
+    async with _INDEX_READ_LOCK:
+        # A concurrent caller may have finished the very scan we were about to
+        # start while we waited for the lock.
+        if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
+            return _INDEX_CACHE[1], _INDEX_CACHE[2]
+        return await _scan_index(root, fingerprint)
+
+
+async def _scan_index(
+    root: Path, fingerprint: tuple[int, int]
+) -> tuple[dict[str, Any], dict[str, int]]:
+    global _INDEX_CACHE
+    try:
+        entries, totals = await _read_index_in_helper(root)
+    except Exception as exc:
+        logger.warning(
+            "[claude_overview] Session-index helper process unavailable (%s) — "
+            "falling back to an in-process scan, which puts the whole ~60s read "
+            "back inside this engine and can make unrelated timeouts fire. "
+            "Remedy: check that the engine executable can spawn itself with "
+            "%s; the Coding Sessions screen is correct either way.",
+            exc,
+            claude_index_helper.HELPER_ARGUMENT,
+        )
+        return await asyncio.to_thread(_session_index, root)
+    _INDEX_CACHE = (fingerprint, entries, totals)
+    return entries, totals
+
+
 async def warm_index_cache(root: Path | None = None) -> None:
     """Read the index once at engine start so the FIRST screen open is instant.
 
     Without this the first open after an engine start pays the whole cold read
     (~47,000 records, ~25s here) while the person watches a spinner. The engine
     has nothing else to do at startup, so it pays that cost before anyone asks.
-    Runs in a thread: the scan is pure blocking I/O and must never sit on the
-    event loop.
+    Runs in a helper PROCESS, not a thread: a minute of scanning must not sit
+    inside the engine while its other startup phases are being timed.
     """
-    await asyncio.to_thread(_session_index, root or default_sessions_root())
+    await _session_index_async(root or default_sessions_root())
 
 
 # ── Identity: the two spellings of one session ──────────────────────────────
@@ -528,9 +608,7 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     # 46,034 files and ~25s on a cold cache. On the event loop that freezes
     # every other request in the engine for the whole scan, so it runs in a
     # thread; the UI shows its loading state and nothing else stalls.
-    entries, totals = await asyncio.to_thread(
-        _session_index, default_sessions_root()
-    )
+    entries, totals = await _session_index_async(default_sessions_root())
     transcripts = await asyncio.to_thread(_transcripts)
     cloud, cloud_meta = await cloud_inventory()
     queue = await _queue_by_session()
@@ -910,7 +988,7 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
     """Every fact behind one row's status, from every system that touched it."""
     from app.services.coding_sessions.service import get_coding_session_bridge_outbox
 
-    entries, _totals = await asyncio.to_thread(_session_index, default_sessions_root())
+    entries, _totals = await _session_index_async(default_sessions_root())
     entry = entries.get(session_id)
     transcripts = await asyncio.to_thread(_transcripts)
     size, mtime_ns = transcripts.get(session_id, (0, 0))

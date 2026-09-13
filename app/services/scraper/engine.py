@@ -121,6 +121,22 @@ RESEARCH_EFFORT_LIMITS = {"low": 10, "medium": 25, "high": 50, "extreme": 100}
 # On timeout the pool is reaped and recorded as a launch failure: a STATE with
 # a one-click repair, exactly like any other unlaunchable browser.
 BROWSER_POOL_START_TIMEOUT_SECONDS = 30.0
+# ONE timed-out attempt is not evidence of a broken browser. The bound is wall
+# clock, and the engine's own startup can consume it: on 2026-09-13 the bound
+# expired 47s into Phase 3, inside the minute-long Claude session-index scan,
+# and a Chromium that launches in 3.7s from a terminal was declared dead on
+# every boot. So a failed FIRST launch schedules
+# exactly one retry, shortly after boot settles, with a doubled bound; only if
+# that also fails does "would not start" stand.
+BROWSER_POOL_RETRY_DELAY_SECONDS = 20.0
+BROWSER_POOL_RETRY_TIMEOUT_SECONDS = BROWSER_POOL_START_TIMEOUT_SECONDS * 2
+# The user-initiated repair gets the same generous bound as the retry: someone
+# is watching a progress bar, and a second false failure is worse than a wait.
+BROWSER_POOL_REPAIR_TIMEOUT_SECONDS = BROWSER_POOL_START_TIMEOUT_SECONDS * 2
+
+# The one scheduled retry task, kept referenced so the loop cannot garbage
+# collect it mid-sleep.
+_pool_retry_task: "asyncio.Task[None] | None" = None
 
 
 class BrowserUnavailable(RuntimeError):
@@ -295,6 +311,9 @@ class ScraperEngine:
         # path in run.py can reap the whole browser tree we own if the graceful
         # lifespan teardown never runs (crash / hung shutdown).
         self._driver_pid: int | None = None
+        # Serializes pool launches (boot, the boot retry, the post-download
+        # start and the user's repair click can all arrive at once).
+        self._pool_start_lock = asyncio.Lock()
 
     @property
     def is_ready(self) -> bool:
@@ -399,7 +418,7 @@ class ScraperEngine:
             self.has_search,
         )
 
-    async def ensure_browser_pool(self) -> bool:
+    async def ensure_browser_pool(self, timeout: float | None = None) -> bool:
         """Start the browser pool if it isn't running. Never raises.
 
         Split out of ``start()`` so the one-click browser install can bring
@@ -415,6 +434,18 @@ class ScraperEngine:
         if self._browser_pool is not None:
             return True
 
+        # One launch at a time. The boot retry, the post-download start and the
+        # user's "Repair browser" click can all land together; two concurrent
+        # ``pool.start()`` calls race on the same driver and leave an orphan
+        # Chromium tree behind.
+        async with self._pool_start_lock:
+            if self._browser_pool is not None:
+                return True
+            return await self._start_browser_pool(
+                timeout if timeout is not None else BROWSER_POOL_START_TIMEOUT_SECONDS
+            )
+
+    async def _start_browser_pool(self, timeout: float) -> bool:
         pool = None
         try:
             from matrx_scraper.browser_pool import PlaywrightBrowserPool
@@ -426,9 +457,7 @@ class ScraperEngine:
             # Bounded on purpose: this runs inside the app lifespan, and an
             # unbounded hung launch blocks the ENTIRE engine from ever
             # accepting a request (see BROWSER_POOL_START_TIMEOUT_SECONDS).
-            await asyncio.wait_for(
-                pool.start(), timeout=BROWSER_POOL_START_TIMEOUT_SECONDS
-            )
+            await asyncio.wait_for(pool.start(), timeout=timeout)
             self._browser_pool = pool
             self._driver_pid = _extract_driver_pid(pool)
             browser_runtime.record_pool_started()
@@ -440,8 +469,7 @@ class ScraperEngine:
         except Exception as pw_exc:
             if isinstance(pw_exc, asyncio.TimeoutError):
                 pw_exc = TimeoutError(
-                    "Chromium did not finish launching within "
-                    f"{BROWSER_POOL_START_TIMEOUT_SECONDS:.0f}s"
+                    f"Chromium did not finish launching within {timeout:.0f}s"
                 )
             # A timed-out (or half-failed) launch can leave a live driver node
             # + Chromium tree behind. Reap ONLY the PID recorded on THIS
@@ -698,6 +726,84 @@ class ScraperEngine:
 
 
 _engine: Optional[ScraperEngine] = None
+
+
+def schedule_browser_pool_retry(
+    engine: "ScraperEngine", delay: float = BROWSER_POOL_RETRY_DELAY_SECONDS
+) -> bool:
+    """Give a failed FIRST pool launch exactly one more chance, later and slower.
+
+    Boot is the worst moment to judge a browser: the engine is still warming
+    caches and reconciling indexes, and a launch bound measured in wall clock
+    can expire on a browser that is perfectly healthy. So when Phase 3's attempt
+    fails with the binary present, the state stays "still starting" (no ask, no
+    button) until this retry has had its turn with a doubled bound. Returns
+    whether a retry was actually scheduled.
+    """
+    global _pool_retry_task
+
+    if _pool_retry_task is not None and not _pool_retry_task.done():
+        return False
+    if not browser_runtime.browser_binary_present():
+        # Nothing to retry: the honest state is "not installed", which already
+        # carries its own one-click download.
+        return False
+
+    browser_runtime.record_retry_pending()
+    logger.info(
+        "[scraper/engine.py] Browser pool launch failed at startup (%s) — retrying once "
+        "in %.0fs with a %.0fs bound; reported as still starting until then",
+        browser_runtime.status().reason,
+        delay,
+        BROWSER_POOL_RETRY_TIMEOUT_SECONDS,
+    )
+    _pool_retry_task = asyncio.create_task(_retry_browser_pool(engine, delay))
+    # Hold the reference until it finishes; without this the loop may collect a
+    # task that is only sleeping.
+    _pool_retry_task.add_done_callback(lambda _task: None)
+    return True
+
+
+async def _retry_browser_pool(engine: "ScraperEngine", delay: float) -> None:
+    try:
+        await asyncio.sleep(delay)
+        if engine.has_browser:
+            browser_runtime.record_pool_started()
+        else:
+            started = await engine.ensure_browser_pool(
+                timeout=BROWSER_POOL_RETRY_TIMEOUT_SECONDS
+            )
+            if started:
+                logger.info(
+                    "[scraper/engine.py] Browser pool retry succeeded — browser-rendered "
+                    "scraping is available; the startup failure was transient"
+                )
+            else:
+                logger.info(
+                    "[scraper/engine.py] Browser pool retry failed (%s) — the browser is "
+                    "now reported as unable to start, with a one-click repair",
+                    browser_runtime.status().reason,
+                )
+        browser_runtime.sync_service_registry()
+        await browser_runtime.publish_action_needed()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # A retry that explodes must not leave the UI stuck on "still starting".
+        logger.warning(
+            "[scraper/engine.py] Browser pool retry raised; recording the launch failure "
+            "so the user gets the repair action instead of an endless starting state",
+            exc_info=True,
+        )
+        browser_runtime.record_launch_failure("the retry could not be completed")
+        try:
+            browser_runtime.sync_service_registry()
+            await browser_runtime.publish_action_needed()
+        except Exception:
+            logger.warning(
+                "[scraper/engine.py] Could not publish the browser failure state",
+                exc_info=True,
+            )
 
 
 def get_scraper_engine() -> ScraperEngine:

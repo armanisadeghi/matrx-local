@@ -1,38 +1,49 @@
 /**
- * usePermissions — Unified macOS permissions hook for AI Matrx Desktop.
+ * usePermissions — the ONE model of OS privacy permissions for the desktop.
  *
- * Architecture:
+ * Every permission key names exactly one AUTHORITY — the process that can
+ * both read its status truthfully and make macOS show its prompt:
  *
- * All permissions that can be checked/requested from within the Tauri .app
- * process use tauri-plugin-macos-permissions or direct Tauri commands so that
- * macOS TCC associates the grant with the correct principal (the .app bundle,
- * not the Python sidecar).
+ *   plugin   tauri-plugin-macos-permissions in THIS app process
+ *            (microphone, camera, accessibility, full disk access, input
+ *            monitoring). The plugin reads the framework status; the prompt
+ *            (mic/camera) or the System Settings hand-off (the rest) is the
+ *            app's own.
+ *   app      Rust commands in THIS app process (`src-tauri/src/tcc.rs`):
+ *            contacts, calendar, reminders, photos, location, speech
+ *            recognition, bluetooth. macOS attributes the prompt to the app
+ *            bundle, which carries every NS*UsageDescription key and has the
+ *            run loop the frameworks need. The nested Python engine has
+ *            neither — its requests were silently ignored, which is why
+ *            "Request access" used to do nothing and the app never appeared
+ *            in System Settings → Location Services.
+ *   engine   The Python engine: screen recording. Screen capture runs in the
+ *            engine process and its CGRequestScreenCaptureAccess is what
+ *            lists the app under Screen Recording. On Windows/Linux every
+ *            platform permission is engine-reported.
+ *   first_use  Not queryable by any public API (Automation / Apple Events,
+ *            Local Network). macOS asks the first time the app uses them;
+ *            there is nothing to switch on before that. These are shown as
+ *            a STATE and never counted.
  *
- * The Python engine REST is only used for status display of things that
- * cannot be checked from the frontend at all (e.g. bluetooth adapter state).
+ * The count on the Dashboard comes from ONE place — `summary` — computed
+ * over queryable keys only, and only reported once every key has answered.
+ * Before this, the Dashboard mixed two lists with different lengths (an
+ * engine list that included Wi‑Fi scans and Mail, a plugin map that did not)
+ * and the number changed under the user's eyes ("6/18", then "10/19").
  *
  * Known Apple quirks handled here:
- *
- * - Screen Recording: CGPreflightScreenCaptureAccess() returns false even when
- *   already granted until the app is restarted. We supplement it with a
- *   functional test via the engine to detect this "already granted but preflight
- *   lying" case and mark it as granted.
- *
- * - Camera/Microphone: requestXxxPermission() fires an ObjC async callback and
- *   returns immediately. We wait 800 ms before re-checking so the OS dialog has
- *   time to fire and the user has a moment to respond.
- *
- * - Contacts/Calendar/Photos/Location: These MUST be triggered by the main
- *   .app process. The Python sidecar cannot prompt TCC dialogs on behalf of the
- *   app. We open System Settings directly since we don't have ObjC bindings for
- *   these in the plugin, and rely on the engine for read-only status display.
- *
- * - Input Monitoring / Automation / Local Network: Same — open Settings + rely
- *   on focus-return re-check.
+ * - CGPreflightScreenCaptureAccess() reads false in the app process until
+ *   relaunch after an in-session grant; the ENGINE's answer is used.
+ * - Camera/Microphone plugin checks are booleans; a false before this UI
+ *   ever asked is "not determined", not "denied".
+ * - SCShareableContent must never be used for status (it re-triggers the
+ *   Sequoia 30-day consent prompt) — see checker.py.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { isTauri } from "@/lib/sidecar";
+import { PLATFORM } from "@/lib/platformCtx";
 import { engine, type PermissionInfo } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -52,21 +63,24 @@ export type PermissionKey =
   | "photos"
   | "bluetooth"
   | "location"
+  | "speech_recognition"
   | "local_network"
-  | "automation"
-  | "network"
-  | "messages"
-  | "mail"
-  | "speech_recognition";
+  | "automation";
 
 export type PermissionStatus =
   | "granted"
+  /** Granted with a scope the person chose (limited Contacts/Photos, write-only Calendar). */
+  | "limited"
   | "denied"
   | "not_determined"
   | "restricted"
+  /** macOS decides on first use; not queryable, never counted. */
+  | "first_use"
   | "unavailable"
   | "unknown"
   | "loading";
+
+export type PermissionAuthority = "plugin" | "app" | "engine" | "first_use";
 
 export interface PermissionState {
   key: PermissionKey;
@@ -74,164 +88,207 @@ export interface PermissionState {
   label: string;
   description: string;
   tools: string[];
-  /** true = plugin can show an in-app OS dialog; false = must go to Settings */
+  /** Who answers and who prompts for this key on THIS platform. */
+  authority: PermissionAuthority;
+  /** true = a click makes macOS show its own dialog; false = System Settings */
   canPrompt: boolean;
   settingsUrl: string;
   detail?: string;
+}
+
+export interface PermissionSummary {
+  /** granted + limited, over queryable keys on this platform */
+  granted: number;
+  /** queryable keys on this platform (never includes first-use or unavailable) */
+  total: number;
+  /** false while any key is still loading — do not show numbers before this */
+  complete: boolean;
+  /** keys macOS approves on first use — shown as a state, never counted */
+  firstUse: PermissionKey[];
+  /** keys whose status could not be read (engine offline, framework missing) */
+  unknown: PermissionKey[];
 }
 
 // ---------------------------------------------------------------------------
 // Static metadata
 // ---------------------------------------------------------------------------
 
-const PERMISSION_META: Record<
-  PermissionKey,
-  Pick<PermissionState, "label" | "description" | "tools" | "canPrompt" | "settingsUrl">
-> = {
+type Platform = "mac" | "windows" | "linux";
+
+interface PermissionMeta {
+  label: string;
+  description: string;
+  tools: string[];
+  /** Authority on macOS; on other platforms every listed key is engine-owned. */
+  macAuthority: PermissionAuthority;
+  /** Platforms where this permission exists at all. */
+  platforms: Platform[];
+  settingsUrl: string;
+}
+
+const SETTINGS = "x-apple.systempreferences:com.apple.preference.security";
+
+export const PERMISSION_META: Record<PermissionKey, PermissionMeta> = {
   microphone: {
     label: "Microphone",
     description: "Audio recording, live transcription, voice tools",
     tools: ["RecordAudio", "TranscribeAudio", "ListAudioDevices", "PlayAudio"],
-    canPrompt: true,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    macAuthority: "plugin",
+    platforms: ["mac", "windows", "linux"],
+    settingsUrl: `${SETTINGS}?Privacy_Microphone`,
   },
   camera: {
     label: "Camera",
     description: "Camera capture for vision and document tools",
     tools: ["CaptureCamera"],
-    canPrompt: true,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+    macAuthority: "plugin",
+    platforms: ["mac", "windows", "linux"],
+    settingsUrl: `${SETTINGS}?Privacy_Camera`,
   },
   screen_recording: {
     label: "Screen Recording",
     description: "Screenshot tool and screen-based automation",
     tools: ["Screenshot", "BrowserScreenshot"],
-    // Screen recording CAN be prompted when not_determined (the OS shows the
-    // native "AI Matrx.app would like to record your screen" dialog).
-    // Once denied or granted, CGRequestScreenCaptureAccess has no effect —
-    // the user must change it in System Settings. The request() function
-    // handles this by prompting when not_determined and opening Settings otherwise.
-    canPrompt: true,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    macAuthority: "engine",
+    platforms: ["mac", "windows", "linux"],
+    settingsUrl: `${SETTINGS}?Privacy_ScreenCapture`,
   },
   accessibility: {
     label: "Accessibility",
     description: "Keyboard simulation, mouse control, window management",
     tools: ["TypeText", "Hotkey", "MouseClick", "MouseMove", "ListWindows", "FocusWindow", "MoveWindow", "MinimizeWindow", "FocusApp"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    macAuthority: "plugin",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Accessibility`,
   },
   full_disk_access: {
     label: "Full Disk Access",
-    description: "Read and write files outside standard app folders",
-    tools: ["ReadFile", "WriteFile", "ListDirectory", "SearchFiles", "DeleteFile"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    description: "Read and write files outside standard app folders; Messages history",
+    tools: ["ReadFile", "WriteFile", "ListDirectory", "SearchFiles", "DeleteFile", "ListMessages"],
+    macAuthority: "plugin",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_AllFiles`,
   },
   input_monitoring: {
     label: "Input Monitoring",
     description: "Global keyboard and mouse event monitoring",
     tools: ["MonitorInput"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+    macAuthority: "plugin",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_ListenEvent`,
   },
   contacts: {
     label: "Contacts",
     description: "Read and search your address book",
     tools: ["SearchContacts", "GetContact"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+    macAuthority: "app",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Contacts`,
   },
   calendar: {
     label: "Calendar",
     description: "Read and create calendar events",
     tools: ["ListEvents", "CreateEvent"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
-  },
-  photos: {
-    label: "Photos Library",
-    description: "Read images from your photo library",
-    tools: ["SearchPhotos", "GetPhoto"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos",
+    macAuthority: "app",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Calendars`,
   },
   reminders: {
     label: "Reminders",
     description: "Read and create reminders in macOS Reminders",
     tools: ["ListReminders", "CreateReminder"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
+    macAuthority: "app",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Reminders`,
+  },
+  photos: {
+    label: "Photos Library",
+    description: "Read images from your photo library",
+    tools: ["SearchPhotos", "GetPhoto"],
+    macAuthority: "app",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Photos`,
   },
   bluetooth: {
     label: "Bluetooth",
     description: "Discover and list nearby Bluetooth devices",
     tools: ["BluetoothDevices", "ConnectedDevices"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth",
+    macAuthority: "app",
+    platforms: ["mac", "windows", "linux"],
+    settingsUrl: `${SETTINGS}?Privacy_Bluetooth`,
   },
   location: {
     label: "Location Services",
     description: "Access current GPS/network location",
     tools: ["GetLocation"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
-  },
-  local_network: {
-    label: "Local Network",
-    description: "Discover devices and services on your local network",
-    tools: ["NetworkScan", "MDNSDiscover", "WifiNetworks"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork",
-  },
-  automation: {
-    label: "Automation (Apple Events)",
-    description: "Send commands to other apps via AppleScript",
-    tools: ["AppleScript", "LaunchApp", "FocusApp"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-  },
-  network: {
-    label: "Network Access",
-    description: "Connect to internet and local network services",
-    tools: ["NetworkInfo", "PortScan"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.network",
-  },
-  messages: {
-    label: "Messages & iMessage",
-    description: "Read iMessage/SMS history and send messages",
-    tools: ["ListMessages", "ListConversations", "SendMessage"],
-    canPrompt: false,
-    // Messages access requires Full Disk Access (to read chat.db) and
-    // Automation (to send via Messages.app). Direct the user to both.
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
-  },
-  mail: {
-    label: "Mail",
-    description: "Read and send emails via Mail.app",
-    tools: ["ListEmails", "SendEmail", "GetEmailAccounts"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+    macAuthority: "app",
+    platforms: ["mac", "windows"],
+    settingsUrl: `${SETTINGS}?Privacy_LocationServices`,
   },
   speech_recognition: {
     label: "Speech Recognition",
     description: "Transcribe audio using Apple's on-device speech engine",
     tools: ["TranscribeWithAppleSpeech", "ListSpeechLocales"],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
+    macAuthority: "app",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_SpeechRecognition`,
+  },
+  local_network: {
+    label: "Local Network",
+    description: "Discover devices and services on your local network",
+    tools: ["NetworkScan", "MDNSDiscover", "WifiNetworks"],
+    macAuthority: "first_use",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_LocalNetwork`,
+  },
+  automation: {
+    label: "Automation (Apple Events)",
+    description: "Send commands to other apps via AppleScript — including Mail",
+    tools: ["AppleScript", "LaunchApp", "FocusApp", "SendEmail", "ListEmails"],
+    macAuthority: "first_use",
+    platforms: ["mac"],
+    settingsUrl: `${SETTINGS}?Privacy_Automation`,
   },
 };
 
-// Keys whose check/request go through tauri-plugin-macos-permissions
-const PLUGIN_KEYS = new Set<PermissionKey>([
-  "microphone",
-  "camera",
-  "screen_recording",
-  "accessibility",
-  "full_disk_access",
-  "input_monitoring",
-]);
+export const ALL_PERMISSION_KEYS = Object.keys(PERMISSION_META) as PermissionKey[];
+
+function currentPlatform(): Platform {
+  if (PLATFORM.is_mac) return "mac";
+  if (PLATFORM.is_windows) return "windows";
+  return "linux";
+}
+
+/** Authority for `key` on the running platform (`null` = does not exist here). */
+export function authorityFor(key: PermissionKey, platform: Platform = currentPlatform()): PermissionAuthority | null {
+  const meta = PERMISSION_META[key];
+  if (!meta.platforms.includes(platform)) return null;
+  return platform === "mac" ? meta.macAuthority : "engine";
+}
+
+/** Keys the Tauri plugin answers for (macOS). Exported for consumers that
+ * merge engine device rows with this hook's statuses. */
+export const PLUGIN_KEYS = new Set<PermissionKey>(
+  ALL_PERMISSION_KEYS.filter((key) => PERMISSION_META[key].macAuthority === "plugin"),
+);
+
+/** Keys the app's own Rust commands answer for (macOS). */
+export const APP_KEYS = new Set<PermissionKey>(
+  ALL_PERMISSION_KEYS.filter((key) => PERMISSION_META[key].macAuthority === "app"),
+);
+
+/** Keys whose status on this platform comes from THIS hook, not the engine
+ * device list. Pages that also render engine rows must override those rows'
+ * status with the hook's value for these keys, or they will contradict the
+ * Dashboard. */
+export function hookAuthoritativeKeys(platform: Platform = currentPlatform()): Set<PermissionKey> {
+  return new Set(
+    ALL_PERMISSION_KEYS.filter((key) => {
+      const authority = authorityFor(key, platform);
+      return authority === "plugin" || authority === "app" || authority === "first_use";
+    }),
+  );
+}
 
 // How long to wait after firing a prompt request before re-checking status.
 // AVFoundation completionHandler fires async; we need a small buffer.
@@ -262,6 +319,48 @@ export function pluginBooleanPermissionStatus(
   return explicitlyRequested ? "denied" : "not_determined";
 }
 
+/** Is this status a usable grant? `limited` is a grant the person scoped. */
+export function isGranted(status: PermissionStatus): boolean {
+  return status === "granted" || status === "limited";
+}
+
+/** Does this status count toward the "N of M" number? */
+export function isCountable(status: PermissionStatus): boolean {
+  return status !== "unavailable" && status !== "first_use" && status !== "unknown" && status !== "loading";
+}
+
+/**
+ * The ONE summary every surface shows. Pure so it can be tested and so the
+ * Dashboard, the Permissions modal and the Setup wizard can never disagree.
+ */
+export function summarizePermissions(
+  permissions: Map<PermissionKey, PermissionState>,
+): PermissionSummary {
+  let granted = 0;
+  let total = 0;
+  let complete = true;
+  const firstUse: PermissionKey[] = [];
+  const unknown: PermissionKey[] = [];
+  for (const state of permissions.values()) {
+    if (state.status === "loading") {
+      complete = false;
+      continue;
+    }
+    if (state.status === "first_use") {
+      firstUse.push(state.key);
+      continue;
+    }
+    if (state.status === "unknown") {
+      unknown.push(state.key);
+      continue;
+    }
+    if (!isCountable(state.status)) continue;
+    total += 1;
+    if (isGranted(state.status)) granted += 1;
+  }
+  return { granted, total, complete, firstUse, unknown };
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -269,14 +368,14 @@ export function pluginBooleanPermissionStatus(
 export interface UsePermissionsReturn {
   permissions: Map<PermissionKey, PermissionState>;
   isLoading: boolean;
+  /** The one count. `complete === false` means "still checking" — show that, not a number. */
+  summary: PermissionSummary;
   /**
-   * The engine's raw per-device permission list (Dashboard/Devices rows).
-   * ONE shared copy — pages must consume this instead of fetching their own
-   * engine.getDevicePermissions() snapshot (the historical private copies
-   * were never reconciled with each other or with the plugin results).
+   * The engine's raw per-device rows (Devices page: device inventories,
+   * instructions). ONE shared copy. For keys in `hookAuthoritativeKeys()`
+   * the STATUS in these rows is not authoritative — this hook's Map is.
    */
   devicePermissions: PermissionInfo[];
-  /** Engine-reported platform for the device list ("Darwin", "Windows"...). */
   devicePlatform: string;
   deviceLastRefresh: Date | null;
   refreshDevicePermissions: (force?: boolean) => Promise<void>;
@@ -286,35 +385,63 @@ export interface UsePermissionsReturn {
   openSettings: (key: PermissionKey) => Promise<void>;
 }
 
+interface TccPermissionState {
+  permission: string;
+  status: string;
+  detail: string | null;
+  owner: string;
+}
+
+const TCC_STATUSES = new Set<PermissionStatus>([
+  "granted",
+  "limited",
+  "denied",
+  "not_determined",
+  "restricted",
+  "unavailable",
+]);
+
+function tccStatus(raw: string): PermissionStatus {
+  return TCC_STATUSES.has(raw as PermissionStatus) ? (raw as PermissionStatus) : "unknown";
+}
+
+function engineStatus(raw: string): PermissionStatus {
+  switch (raw) {
+    case "granted":
+    case "denied":
+    case "not_determined":
+    case "restricted":
+    case "unavailable":
+      return raw;
+    default:
+      return "unknown";
+  }
+}
+
 function buildInitialState(): Map<PermissionKey, PermissionState> {
   const map = new Map<PermissionKey, PermissionState>();
-  for (const [key, meta] of Object.entries(PERMISSION_META) as [
-    PermissionKey,
-    (typeof PERMISSION_META)[PermissionKey],
-  ][]) {
-    map.set(key, { key, status: "loading", ...meta });
+  const platform = currentPlatform();
+  for (const key of ALL_PERMISSION_KEYS) {
+    const meta = PERMISSION_META[key];
+    const authority = authorityFor(key, platform);
+    map.set(key, {
+      key,
+      status: authority === null ? "unavailable" : "loading",
+      label: meta.label,
+      description: meta.description,
+      tools: meta.tools,
+      authority: authority ?? "engine",
+      canPrompt:
+        authority === "app" ||
+        authority === "engine" ||
+        (authority === "plugin" && (key === "microphone" || key === "camera")),
+      settingsUrl: meta.settingsUrl,
+    });
   }
   return map;
 }
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-function fallbackPermissionState(key: PermissionKey): PermissionState {
-  const label = key
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-
-  return {
-    key,
-    status: "unknown",
-    label,
-    description: "Permission reported by the engine",
-    tools: [],
-    canPrompt: false,
-    settingsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy",
-  };
-}
 
 export function usePermissions(): UsePermissionsReturn {
   const [permissions, setPermissions] = useState<Map<PermissionKey, PermissionState>>(
@@ -330,14 +457,11 @@ export function usePermissions(): UsePermissionsReturn {
   const updatePermission = useCallback(
     (key: PermissionKey, status: PermissionStatus, detail?: string) => {
       setPermissions((prev) => {
+        const current = prev.get(key);
+        if (!current) return prev; // unknown key: never invent a row
         const next = new Map(prev);
-        const current =
-          next.get(key) ??
-          (PERMISSION_META[key]
-            ? { key, status: "loading" as PermissionStatus, ...PERMISSION_META[key] }
-            : fallbackPermissionState(key));
         const { detail: _stale, ...rest } = current;
-        next.set(key, { ...rest, status, ...(detail !== undefined ? { detail } : {}) });
+        next.set(key, { ...rest, status, ...(detail ? { detail } : {}) });
         return next;
       });
     },
@@ -345,88 +469,34 @@ export function usePermissions(): UsePermissionsReturn {
   );
 
   /**
-   * Check a plugin-native permission.
-   *
-   * All checks go through tauri-plugin-macos-permissions which calls the
-   * correct underlying framework API for each permission type:
-   *   - microphone / camera  → AVCaptureDevice.authorizationStatus (AVFoundation)
-   *   - screen_recording     → CGPreflightScreenCaptureAccess (CoreGraphics)
-   *   - accessibility        → AXIsProcessTrusted
-   *   - full_disk_access     → file-system probe
-   *   - input_monitoring     → IOKit
-   *
-   * Plugin limitation — microphone & camera: The plugin only returns a boolean.
-   * We persist whether this UI has made an explicit native request, allowing a
-   * later false result to be presented as denied instead of "Not Requested"
-   * forever. An installation denied outside this app remains indeterminate
-   * until the user explicitly tries the grant action.
-   *
-   * Screen recording: Uses CGPreflightScreenCaptureAccess() — a read-only
-   * status query that never triggers a permission dialog. Known limitation:
-   * returns false until app restart after an in-session grant. Do NOT use
-   * SCShareableContent for status checks — it triggers the macOS Sequoia
-   * recurring 30-day consent prompt on every invocation.
+   * Plugin-native check (this app process). Read-only, never prompts:
+   *   microphone / camera  → AVCaptureDevice.authorizationStatus
+   *   accessibility        → AXIsProcessTrusted
+   *   full_disk_access     → file-system probe
+   *   input_monitoring     → IOHIDCheckAccess
    */
   const checkPluginPermission = useCallback(
     async (key: PermissionKey): Promise<PermissionStatus> => {
-      if (!isTauri()) return "unavailable";
+      if (!isTauri()) return "unknown";
       try {
         const perms = await import("tauri-plugin-macos-permissions-api");
-        let granted: boolean;
         switch (key) {
           case "microphone":
-            granted = await perms.checkMicrophonePermission();
             return pluginBooleanPermissionStatus(
-              granted,
+              await perms.checkMicrophonePermission(),
               wasExplicitlyRequested("microphone"),
             );
-
           case "camera":
-            granted = await perms.checkCameraPermission();
             return pluginBooleanPermissionStatus(
-              granted,
+              await perms.checkCameraPermission(),
               wasExplicitlyRequested("camera"),
             );
-
-          case "screen_recording": {
-            // THE ENGINE is authoritative here, not this window: screen capture
-            // runs in the Python engine (`screencapture`), and macOS grants the
-            // permission per-process — the Tauri app's own preflight answers a
-            // question nobody asked. Asking the plugin instead is what let the
-            // Setup Wizard (engine-sourced) say "denied" while the Permissions
-            // modal (plugin-sourced) said "Not Requested" on the same screen.
-            //
-            // Safe to call on every checkAll: the engine's check is a read-only
-            // CGPreflightScreenCaptureAccess. (It once used SCShareableContent,
-            // which ACTIVELY TRIGGERS the macOS Sequoia 30-day consent dialog on
-            // every call — never reintroduce that; see checker.py.)
-            try {
-              const res = (await engine.get(
-                "/devices/permissions/screen_recording",
-              )) as { status?: string };
-              if (res.status === "granted") return "granted";
-              if (res.status === "denied") return "denied";
-              if (res.status === "not_determined") return "not_determined";
-            } catch {
-              // Engine not up yet — fall back to this process's own preflight
-              // rather than reporting a permission state we cannot know.
-            }
-            granted = await perms.checkScreenRecordingPermission();
-            return granted ? "granted" : "not_determined";
-          }
-
           case "accessibility":
-            granted = await perms.checkAccessibilityPermission();
-            return granted ? "granted" : "not_determined";
-
+            return (await perms.checkAccessibilityPermission()) ? "granted" : "not_determined";
           case "full_disk_access":
-            granted = await perms.checkFullDiskAccessPermission();
-            return granted ? "granted" : "not_determined";
-
+            return (await perms.checkFullDiskAccessPermission()) ? "granted" : "not_determined";
           case "input_monitoring":
-            granted = await perms.checkInputMonitoringPermission();
-            return granted ? "granted" : "not_determined";
-
+            return (await perms.checkInputMonitoringPermission()) ? "granted" : "not_determined";
           default:
             return "unknown";
         }
@@ -437,67 +507,91 @@ export function usePermissions(): UsePermissionsReturn {
     [],
   );
 
+  /** App-owned check (Rust, this process). Read-only class-level status. */
+  const checkAppPermission = useCallback(
+    async (key: PermissionKey): Promise<{ status: PermissionStatus; detail?: string }> => {
+      if (!isTauri()) return { status: "unknown", detail: "Available in the desktop app only." };
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const result = await invoke<TccPermissionState>("tcc_permission_status", { permission: key });
+        const status = tccStatus(result.status);
+        return result.detail ? { status, detail: result.detail } : { status };
+      } catch (err) {
+        console.error(`[permissions] app status for ${key} failed:`, err);
+        return { status: "unknown", detail: "The app could not read this permission's status." };
+      }
+    },
+    [],
+  );
+
+  /** Engine-owned check (screen recording on macOS; everything on Windows/Linux). */
+  const checkEnginePermission = useCallback(
+    async (key: PermissionKey): Promise<{ status: PermissionStatus; detail?: string }> => {
+      try {
+        const result = await engine.getDevicePermission(key);
+        return { status: engineStatus(result.status), detail: result.user_details || result.details };
+      } catch {
+        if (key === "screen_recording" && isTauri()) {
+          // Engine not up yet. The app's own preflight can only prove a grant
+          // (true); false here is NOT a denial — report unknown, not a guess.
+          try {
+            const perms = await import("tauri-plugin-macos-permissions-api");
+            if (await perms.checkScreenRecordingPermission()) return { status: "granted" };
+          } catch {
+            // fall through
+          }
+        }
+        return { status: "unknown", detail: "Confirmed once the engine is running." };
+      }
+    },
+    [],
+  );
+
   // ── Check ──────────────────────────────────────────────────────────────────
 
   const check = useCallback(
     async (key: PermissionKey): Promise<PermissionStatus> => {
-      if (PLUGIN_KEYS.has(key)) {
+      const authority = authorityFor(key);
+      if (authority === null) {
+        updatePermission(key, "unavailable");
+        return "unavailable";
+      }
+      if (authority === "first_use") {
+        updatePermission(
+          key,
+          "first_use",
+          "macOS asks for this the first time the app uses it. Until then there is nothing to switch on.",
+        );
+        return "first_use";
+      }
+      if (authority === "plugin") {
         const status = await checkPluginPermission(key);
         updatePermission(key, status);
         return status;
       }
-      try {
-        const result = await engine.getDevicePermission(key);
-        const status = result.status as PermissionStatus;
-        updatePermission(key, status, result.details);
+      if (authority === "app") {
+        const { status, detail } = await checkAppPermission(key);
+        updatePermission(key, status, detail);
         return status;
-      } catch {
-        updatePermission(key, "unknown");
-        return "unknown";
       }
+      const { status, detail } = await checkEnginePermission(key);
+      updatePermission(key, status, detail);
+      return status;
     },
-    [checkPluginPermission, updatePermission],
+    [checkAppPermission, checkEnginePermission, checkPluginPermission, updatePermission],
   );
 
   const checkAll = useCallback(async () => {
     setIsLoading(true);
-
-    const pluginChecks = Array.from(PLUGIN_KEYS).map(async (key) => {
-      const status = await checkPluginPermission(key);
-      updatePermission(key, status);
-    });
-
-    const engineCheck = (async () => {
-      try {
-        const result = await engine.getDevicePermissions();
-        setDevicePermissions(result.permissions);
-        setDevicePlatform(result.platform);
-        setDeviceLastRefresh(new Date());
-        for (const p of result.permissions) {
-          const key = p.permission as PermissionKey;
-          if (!PLUGIN_KEYS.has(key)) {
-            updatePermission(key, p.status as PermissionStatus, p.details);
-          }
-        }
-      } catch {
-        const engineKeys = Object.keys(PERMISSION_META).filter(
-          (k) => !PLUGIN_KEYS.has(k as PermissionKey),
-        ) as PermissionKey[];
-        for (const key of engineKeys) {
-          updatePermission(key, "unknown");
-        }
-      }
-    })();
-
-    await Promise.all([...pluginChecks, engineCheck]);
+    await Promise.all(ALL_PERMISSION_KEYS.map((key) => check(key)));
     setIsLoading(false);
-  }, [checkPluginPermission, updatePermission]);
+  }, [check]);
 
   /**
-   * Refresh the shared engine device-permission list (Dashboard/Devices).
-   * `force` bypasses the engine's TTL cache — use from explicit "Refresh"
-   * affordances only. Also folds statuses back into the permission Map so
-   * every consumer stays consistent.
+   * Refresh the shared engine device rows (Devices page). `force` bypasses
+   * the engine's TTL cache — use from explicit "Refresh" affordances only.
+   * Engine-authority keys fold their status back into the Map so the moment
+   * the engine comes up, screen recording stops reading "unknown".
    */
   const refreshDevicePermissions = useCallback(
     async (force: boolean = false) => {
@@ -508,9 +602,9 @@ export function usePermissions(): UsePermissionsReturn {
         setDeviceLastRefresh(new Date());
         for (const p of result.permissions) {
           const key = p.permission as PermissionKey;
-          if (!PLUGIN_KEYS.has(key)) {
-            updatePermission(key, p.status as PermissionStatus, p.details);
-          }
+          if (!(key in PERMISSION_META)) continue;
+          if (authorityFor(key) !== "engine") continue;
+          updatePermission(key, engineStatus(p.status), p.user_details || p.details);
         }
       } catch {
         // Engine unreachable — keep the last known list.
@@ -534,24 +628,77 @@ export function usePermissions(): UsePermissionsReturn {
 
   const request = useCallback(
     async (key: PermissionKey) => {
+      const authority = authorityFor(key);
+      if (authority === null) return;
       if (!isTauri()) {
         await openSettings(key);
         return;
       }
 
+      // ── App-owned (Rust): the real prompt, then the real answer ──────────
+      if (authority === "app") {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const result = await invoke<TccPermissionState>("tcc_request_permission", { permission: key });
+          const status = tccStatus(result.status);
+          updatePermission(key, status, result.detail ?? undefined);
+          // Denied/restricted: the answer is recorded and the app IS listed in
+          // System Settings now — that pane is the only place to change it.
+          // Not-determined: the prompt is still open (or Location Services are
+          // off, which the detail says) — sending the user to Settings would
+          // show them a list without the app in it.
+          if (status === "denied" || status === "restricted") await openSettings(key);
+        } catch (err) {
+          console.error(`[permissions] app request for ${key} failed:`, err);
+          await check(key);
+        }
+        return;
+      }
+
+      // ── Engine-owned ──────────────────────────────────────────────────────
+      if (authority === "engine") {
+        if (key === "screen_recording" && PLATFORM.is_mac) {
+          // Screen capture runs in the engine, so the ENGINE asks — and until
+          // it calls CGRequestScreenCaptureAccess once, macOS never lists it
+          // under Screen Recording. On Sequoia a grant only takes effect on
+          // the next launch, so System Settings still opens afterwards.
+          try {
+            await engine.post("/devices/permissions/request/screen-recording", {});
+          } catch (err) {
+            console.error("[permissions] engine screen-recording request failed:", err);
+          }
+          await delay(POST_REQUEST_DELAY_MS);
+          const status = await check(key);
+          if (status !== "granted") await openSettings(key);
+          return;
+        }
+        try {
+          await engine.post(`/devices/permissions/request/${key}`, {});
+          await delay(POST_REQUEST_DELAY_MS);
+          const status = await check(key);
+          if (status !== "granted") await openSettings(key);
+        } catch (err) {
+          console.error(`[permissions] engine request for ${key} failed:`, err);
+          await openSettings(key);
+        }
+        return;
+      }
+
+      // ── First-use: nothing to ask; the Settings pane is the only control ──
+      if (authority === "first_use") {
+        await openSettings(key);
+        return;
+      }
+
+      // ── Plugin-owned ──────────────────────────────────────────────────────
       switch (key) {
-        // ── Microphone & Camera: AVFoundation in-app dialog on first request ──
         case "microphone":
         case "camera": {
           try {
             const perms = await import("tauri-plugin-macos-permissions-api");
             markExplicitlyRequested(key);
-            if (key === "microphone") {
-              await perms.requestMicrophonePermission();
-            } else {
-              await perms.requestCameraPermission();
-            }
-            // Wait for the async AVFoundation callback to settle before re-checking
+            if (key === "microphone") await perms.requestMicrophonePermission();
+            else await perms.requestCameraPermission();
             await delay(POST_REQUEST_DELAY_MS);
             await check(key);
           } catch (err) {
@@ -560,105 +707,46 @@ export function usePermissions(): UsePermissionsReturn {
           }
           break;
         }
-
-        // ── Screen Recording: ask the ENGINE first, then open System Settings ──
-        // Screen capture runs in the Python engine (`screencapture`), so the
-        // ENGINE is the process that needs the grant — and until it calls
-        // CGRequestScreenCaptureAccess once, macOS never lists it under Screen
-        // Recording. Sending the user straight to System Settings (what this
-        // used to do) sent them to a pane with nothing to switch on.
-        //
-        // The engine's request registers it and shows the native prompt; we then
-        // still open System Settings, because on macOS Sequoia a grant only
-        // takes effect on the next app launch and the user may need to flip the
-        // switch there.
-        case "screen_recording": {
-          try {
-            await engine.post("/devices/permissions/request/screen-recording", {});
-          } catch (err) {
-            console.error("[permissions] Engine screen-recording request failed:", err);
-          }
-          await delay(POST_REQUEST_DELAY_MS);
-          await check(key);
-          await openSettings(key);
-          break;
-        }
-
-        case "contacts":
-        case "calendar":
-        case "reminders":
-        case "photos":
-        case "location":
-        case "speech_recognition": {
-          try {
-            await engine.post(`/devices/permissions/request/${key}`, {});
-            await delay(POST_REQUEST_DELAY_MS);
-            const status = await check(key);
-            if (status !== "granted") await openSettings(key);
-          } catch (err) {
-            console.error(`[permissions] Engine request for ${key} failed:`, err);
-            await openSettings(key);
-          }
-          break;
-        }
-
-        // ── Accessibility, Full Disk Access, Input Monitoring: open Settings ──
-        // These cannot be prompted with an in-app dialog — the plugin's request
-        // calls open System Settings directly, same as openSettings().
         case "accessibility":
         case "full_disk_access":
         case "input_monitoring": {
+          // No in-app dialog exists for these; the plugin's request opens the
+          // exact System Settings pane (same as openSettings).
           try {
             const perms = await import("tauri-plugin-macos-permissions-api");
-            if (key === "accessibility") {
-              await perms.requestAccessibilityPermission();
-            } else if (key === "full_disk_access") {
-              await perms.requestFullDiskAccessPermission();
-            } else {
-              await perms.requestInputMonitoringPermission();
-            }
+            if (key === "accessibility") await perms.requestAccessibilityPermission();
+            else if (key === "full_disk_access") await perms.requestFullDiskAccessPermission();
+            else await perms.requestInputMonitoringPermission();
           } catch (err) {
             console.error(`[permissions] Failed to open settings for ${key}:`, err);
             await openSettings(key);
           }
           break;
         }
-
-        // ── All others: open the specific System Settings pane directly ───────
-        // Contacts, Calendar, Reminders, Photos, Location, Local Network,
-        // Automation, Network, Messages, Mail, Speech Recognition — these require
-        // ObjC frameworks not exposed by the plugin. Opening System Settings is
-        // the correct action.
         default:
           await openSettings(key);
-          break;
       }
     },
-    [check, openSettings],
+    [check, openSettings, updatePermission],
   );
 
   // ── Initial check ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    checkAll();
+    void checkAll();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // NOTE: We intentionally do NOT re-check permissions on window focus.
-  //
-  // The hook is instantiated by multiple components simultaneously (Dashboard,
-  // Voice, Devices, PermissionsModal, SetupWizard). A focus listener here would
-  // fire checkAll() N times in parallel on every focus event — once per mounted
-  // consumer. With the old SCShareableContent-based screen recording check, this
-  // triggered the macOS Sequoia 30-day consent dialog on every System Settings
-  // round-trip, causing repeated prompts.
-  //
-  // The Refresh button in PermissionsModal and Devices pages provides a manual
-  // recheck path. macOS TCC status for CGPreflightScreenCaptureAccess only
-  // updates after an app restart anyway, so auto-recheck provides no real value.
+  // NOTE: no re-check on window focus. Consumers share ONE instance via
+  // PermissionsProvider; explicit Refresh buttons and the post-request checks
+  // above are the recheck paths. (A focus listener once re-triggered the
+  // macOS Sequoia 30-day screen-recording consent on every Settings round trip.)
+
+  const summary = useMemo(() => summarizePermissions(permissions), [permissions]);
 
   return {
     permissions,
     isLoading,
+    summary,
     devicePermissions,
     devicePlatform,
     deviceLastRefresh,
@@ -674,15 +762,14 @@ export function usePermissions(): UsePermissionsReturn {
 // Utility exports
 // ---------------------------------------------------------------------------
 
-export function isGranted(status: PermissionStatus): boolean {
-  return status === "granted";
-}
-
 export function hasRequiredPermissions(
   permissions: Map<PermissionKey, PermissionState>,
   requiredKeys: PermissionKey[],
 ): boolean {
-  return requiredKeys.every((key) => permissions.get(key)?.status === "granted");
+  return requiredKeys.every((key) => {
+    const state = permissions.get(key);
+    return state ? isGranted(state.status) : false;
+  });
 }
 
 export function getFirstMissingPermission(
@@ -691,9 +778,7 @@ export function getFirstMissingPermission(
 ): PermissionState | null {
   for (const key of requiredKeys) {
     const state = permissions.get(key);
-    if (state && state.status !== "granted") return state;
+    if (state && !isGranted(state.status)) return state;
   }
   return null;
 }
-
-export { PLUGIN_KEYS, PERMISSION_META };

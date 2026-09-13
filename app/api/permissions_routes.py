@@ -385,17 +385,41 @@ async def request_screen_recording_permission():
 
 @router.post("/permissions/request/{name}")
 async def request_permission(name: str):
-    """Explicit-click request for grants owned by the Python engine process."""
-    requestable = {
-        "screen_recording",
-        "contacts",
-        "calendar",
-        "reminders",
-        "photos",
-        "location",
-        "speech_recognition",
-    }
+    """Explicit-click request for grants owned by the Python engine process.
+
+    On macOS that is screen recording and nothing else. The engine helper is a
+    background bundle with no run loop, so Contacts/Calendar/Reminders/Photos/
+    Location/Speech Recognition/Bluetooth requests made here are silently
+    ignored (Location never even lists the app in System Settings) — the
+    desktop app performs those, and this process only reports their status.
+    Off macOS there is no TCC and the checker itself is the request.
+    """
+    requestable = (
+        {"screen_recording"}
+        if PLATFORM["is_mac"]
+        else {
+            "screen_recording",
+            "contacts",
+            "calendar",
+            "reminders",
+            "photos",
+            "location",
+            "speech_recognition",
+        }
+    )
     if name not in requestable:
+        if PLATFORM["is_mac"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "permission_owned_by_desktop_app",
+                    "permission": name,
+                    "message": (
+                        f"'{name}' is requested by the desktop app, not the "
+                        "engine; the engine only reports its status."
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=400,
             detail={"code": "permission_not_requestable", "permission": name},

@@ -448,6 +448,7 @@ are condensed under Completed. Still open:
   publishing: `uv lock && uv sync --extra all` and drop the `--no-sync`
   workaround note in tests/conftest.py if desired.
 ## Completed
+- [BUG] Dashboard stopped lying (Arman, 2026-09-13): ONE permission model with a per-key authority — app-owned TCC requests/status moved to Rust (`desktop/src-tauri/src/tcc.rs`), engine keeps only screen recording, one `summarizePermissions()` count, first-use keys shown as a state; Browser card reads `/browser-runtime/status` only; boot pool-launch retry + `browser_starting` state; Claude index warm-up in a helper subprocess; helper specs gained Location/Speech/LocalNetwork usage keys; Wi‑Fi/Mail/Messages are no longer "permissions". Doc: `app/services/permissions/FEATURE.md` — 2026-09-13
 - 2026-08-30 — Claude Code screen rebuilt: one list + one Sync everything button; old 1,148-line ClaudeHistorySync deleted; V31 `claude_session_synced` makes per-conversation sync state real (MXL-D-084, MXL-D-086 closed). Commit f835747a4, released v1.4.63.
 
 - [TASK-005] Preserved retired mirror columns without hiding unknown drift — 2026-08-25 (`613fa2651`, MXL-D-082)

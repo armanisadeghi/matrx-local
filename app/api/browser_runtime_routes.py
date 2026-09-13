@@ -10,6 +10,15 @@ things the first-run wizard cannot do for an app that is already running:
 install into THIS world's browsers path (``MATRX_HOME_DIR`` — Hard Rule 9), and
 restart the scraper's browser pool afterwards so the user does not have to
 relaunch the app.
+
+**"Repair browser" repairs — it does not re-download a browser that is already
+there.** The button is offered whenever Chromium is installed but the pool would
+not launch, and until 2026-09-13 it answered that by fetching ~90 MB the machine
+already had, which is minutes of waiting for a problem the download cannot fix.
+So the route looks first: pool already live → say so and stop; binary present but
+no pool → skip straight to starting the pool; only a genuinely missing binary is
+downloaded. The SSE event shape is identical in every case, so the UI is
+unchanged.
 """
 
 from __future__ import annotations
@@ -59,6 +68,11 @@ async def install_browser_runtime() -> StreamingResponse:
                 },
             )
             yield await _sse_event("complete", {"message": "Install already in progress"})
+            return
+
+        if browser_runtime.browser_binary_present():
+            async for event in _repair_without_downloading():
+                yield event
             return
 
         async with _install_lock:
@@ -145,6 +159,83 @@ async def install_browser_runtime() -> StreamingResponse:
         _stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _repair_without_downloading():
+    """The binary is on disk: start the pool instead of re-fetching Chromium."""
+    from app.api.setup_routes import _sse_event
+    from app.services.scraper.engine import (
+        BROWSER_POOL_REPAIR_TIMEOUT_SECONDS,
+        get_scraper_engine,
+    )
+
+    if browser_runtime.pool_is_live():
+        logger.info(
+            "[browser_runtime_routes] Repair requested but the browser pool is already "
+            "live — nothing to install or start"
+        )
+        yield await _sse_event(
+            "progress",
+            {
+                "component": "browser_engine",
+                "status": "ready",
+                "message": "The browser is already running — nothing to repair.",
+                "percent": 100,
+            },
+        )
+        yield await _sse_event(
+            "complete", {"message": "Browser already available", "installed": True}
+        )
+        return
+
+    logger.info(
+        "[browser_runtime_routes] Repair requested with the browser already on disk at "
+        "%s — starting the pool, no download",
+        str(browser_runtime.browsers_path()),
+    )
+    yield await _sse_event(
+        "progress",
+        {
+            "component": "browser_engine",
+            "status": "installing",
+            "message": "Starting the browser…",
+            "percent": 50,
+        },
+    )
+
+    engine = get_scraper_engine()
+    if engine.is_ready:
+        started = await engine.ensure_browser_pool(
+            timeout=BROWSER_POOL_REPAIR_TIMEOUT_SECONDS
+        )
+    else:
+        # No running scraper to attach the pool to; the browser is installed and
+        # the next engine start picks it up. Say that, do not claim success.
+        started = False
+        logger.warning(
+            "[browser_runtime_routes] Repair requested while the scraper engine is not "
+            "running — the browser is installed but cannot be started from here"
+        )
+
+    status = browser_runtime.sync_service_registry()
+    await browser_runtime.publish_action_needed()
+    yield await _sse_event(
+        "progress",
+        {
+            "component": "browser_engine",
+            "status": "ready" if started else "error",
+            "message": (
+                "Browser ready — pages that need JavaScript will now load."
+                if started
+                else "The browser is installed but would not start. Restart the app and try again."
+            ),
+            "percent": 100,
+        },
+    )
+    yield await _sse_event(
+        "complete",
+        {"message": "Browser repair finished", "installed": status.available},
     )
 
 

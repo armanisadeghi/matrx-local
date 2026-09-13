@@ -127,6 +127,23 @@ startup always completes. Pinned by
 `test_a_hung_browser_launch_times_out_instead_of_blocking_startup` in
 `tests/unit/test_scraper_local_lane.py`.
 
+**But ONE timed-out launch is not a verdict.** The bound is wall clock and boot
+is the noisiest moment in the engine's life: on 2026-09-13 it expired 47s into
+Phase 3, inside the minute-long Claude session-index warm-up, and every boot
+told the user "Chromium is installed but would not start" while the same
+browser launched in 3.7s from a terminal. So a failed FIRST launch schedules
+exactly one retry (`schedule_browser_pool_retry` in `engine.py`,
+`BROWSER_POOL_RETRY_DELAY_SECONDS` later, with a doubled bound). Until that
+retry has run the state is `browser_starting` — "The built-in browser is still
+starting", `available=False`, and **no ActionNeeded**, because a transient state
+is never an ask. Only when the retry also fails does `browser_launch_failed`
+stand. Pinned in `tests/unit/test_browser_runtime_state.py`.
+
+**"Repair browser" repairs.** `POST /browser-runtime/install` used to re-download
+~90 MB of Chromium the machine already had. It now looks first: pool live → say
+so; binary present, no pool → start the pool (no download); only a genuinely
+missing binary is fetched. Same SSE events in every case, so the UI is unchanged.
+
 ---
 
 ## The client payload contract — `result_contract.py`

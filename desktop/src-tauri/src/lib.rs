@@ -22,6 +22,7 @@ use tauri_plugin_updater::UpdaterExt;
 
 mod lifecycle_log;
 mod native_vault;
+mod tcc;
 
 mod transcription;
 use transcription::commands::*;
@@ -2214,6 +2215,8 @@ pub fn run() {
         ))
         // Universal download manager — initialized in .setup() below after AppHandle is available
         .invoke_handler(tauri::generate_handler![
+            tcc::tcc_permission_status,
+            tcc::tcc_request_permission,
             start_sidecar,
             stop_sidecar,
             restart_sidecar,

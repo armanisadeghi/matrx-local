@@ -431,10 +431,11 @@ fn valid_make(r: &passkey_types::ctap2::make_credential::Request) -> bool {
         && r.extensions.is_none()
         && r.pin_auth.is_none()
         && r.pin_protocol.is_none()
-        && r.pub_key_cred_params.len() == 1
-        && r.pub_key_cred_params[0].ty
-            == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
-        && r.pub_key_cred_params[0].alg == iana::Algorithm::ES256
+        && !r.pub_key_cred_params.is_empty()
+        && r.pub_key_cred_params.iter().all(|param| {
+            param.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
+                && param.alg == iana::Algorithm::ES256
+        })
 }
 fn valid_get(r: &passkey_types::ctap2::get_assertion::Request) -> bool {
     valid_rp(&r.rp_id)
@@ -529,6 +530,50 @@ mod tests {
         ) -> Result<UserCheck, Ctap2Error> {
             Ok(UserCheck {
                 presence: true,
+                verification: true,
+            })
+        }
+        fn is_presence_enabled(&self) -> bool {
+            true
+        }
+        fn is_verification_enabled(&self) -> Option<bool> {
+            Some(true)
+        }
+    }
+    struct DeniedUv;
+    #[async_trait]
+    impl UserValidationMethod for DeniedUv {
+        type PasskeyItem = StoredCredential;
+        async fn check_user<'a>(
+            &self,
+            _: UiHint<'a, StoredCredential>,
+            _: bool,
+            _: bool,
+        ) -> Result<UserCheck, Ctap2Error> {
+            Ok(UserCheck {
+                presence: true,
+                verification: false,
+            })
+        }
+        fn is_presence_enabled(&self) -> bool {
+            true
+        }
+        fn is_verification_enabled(&self) -> Option<bool> {
+            Some(true)
+        }
+    }
+    struct DeniedUp;
+    #[async_trait]
+    impl UserValidationMethod for DeniedUp {
+        type PasskeyItem = StoredCredential;
+        async fn check_user<'a>(
+            &self,
+            _: UiHint<'a, StoredCredential>,
+            _: bool,
+            _: bool,
+        ) -> Result<UserCheck, Ctap2Error> {
+            Ok(UserCheck {
+                presence: false,
                 verification: true,
             })
         }
@@ -655,6 +700,7 @@ mod tests {
                     .flags
                     .contains(Flags::UP | Flags::UV | Flags::BE | Flags::BS)
             );
+            assert_eq!(assertion.auth_data.counter, None);
         }
     }
     #[tokio::test]
@@ -689,9 +735,26 @@ mod tests {
             id: vec![1; 16].into(),
             transports: None,
         };
+        let mut request = make_request(Some(vec![descriptor]));
+        let source_record: SourceV1 = serde_json::from_slice(&source).unwrap();
+        let old_handle = decode(&source_record.user_handle).unwrap();
+        request.user.id = b"different-new-user".to_vec().into();
+        assert_ne!(&*request.user.id, old_handle.as_slice());
         assert!(matches!(
-            prepare_registration(make_request(Some(vec![descriptor])), Uv, &existing, 4096).await,
+            prepare_registration(request, Uv, &existing, 4096).await,
             Err(FixedError::CredentialExcluded)
+        ));
+    }
+
+    #[tokio::test]
+    async fn actual_user_presence_and_verification_denials_are_refused() {
+        assert!(matches!(
+            prepare_registration(make_request(None), DeniedUv, &[], 4096).await,
+            Err(FixedError::VerificationDenied)
+        ));
+        assert!(matches!(
+            prepare_registration(make_request(None), DeniedUp, &[], 4096).await,
+            Err(FixedError::VerificationDenied)
         ));
     }
 

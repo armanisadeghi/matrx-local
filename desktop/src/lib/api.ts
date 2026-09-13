@@ -909,6 +909,89 @@ export interface ClaudeCaptureReconcileResult {
   batch?: string[];
 }
 
+/**
+ * The coding-session ARTIFACTS lane — what a session BUILT (its scratchpad
+ * deliverables), copied to a durable per-session folder and published to
+ * AI Matrx. Every number here is the engine's own manifest count; the screen
+ * never derives one.
+ */
+export interface CodingSessionArtifactsBlocker {
+  code: string;
+  message: string;
+  remedy?: string;
+  since?: string | null;
+  lane?: string;
+}
+
+export interface CodingSessionArtifactsTick {
+  at: string;
+  seconds: number;
+  captured: number;
+  uploaded: number;
+  failed: number;
+}
+
+export interface CodingSessionArtifactsStatus {
+  active: boolean;
+  roots: string[];
+  durable_root: string;
+  sessions: number;
+  files: number;
+  bytes: number;
+  uploaded: number;
+  pending_upload: number;
+  failed_upload: number;
+  abandoned_upload: number;
+  skipped_over_size: number;
+  skipped_over_count: number;
+  cloud_enabled: boolean;
+  blocker: CodingSessionArtifactsBlocker | null;
+  last_error: { code?: string; message?: string; [key: string]: string | undefined } | null;
+  last_run_at: string | null;
+  last_run_seconds: number | null;
+  /** Empty object until the lane has run once. */
+  last_tick: CodingSessionArtifactsTick | Record<string, never>;
+  limits: {
+    max_file_bytes: number;
+    max_files_per_session: number;
+    uploads_per_tick: number;
+    max_upload_attempts: number;
+    scan_interval_seconds: number;
+  };
+}
+
+export interface CodingSessionArtifactsSessionSummary {
+  provider: CodingSessionProvider;
+  cli_session_id: string;
+  project_slug: string;
+  scratchpad: string;
+  durable_dir: string;
+  files: number;
+  bytes: number;
+  uploaded: number;
+  pending_upload: number;
+  failed_upload: number;
+  abandoned_upload: number;
+  skipped_over_size: number;
+  skipped_over_count: number;
+}
+
+export interface CodingSessionArtifactEntry {
+  size: number;
+  mtime: number;
+  sha256: string;
+  captured_at: string;
+  file_id: string | null;
+  uploaded_at: string | null;
+  upload_error: string | null;
+  upload_attempts: number;
+}
+
+export interface CodingSessionArtifactsSessionDetail
+  extends CodingSessionArtifactsSessionSummary {
+  entries: Record<string, CodingSessionArtifactEntry>;
+}
+
 export interface WorkspaceDiscoveryNode {
   path: string;
   name: string;
@@ -2876,6 +2959,36 @@ class EngineAPI {
       `/coding-session/claude/labels/sync?dry_run=${dryRun ? "true" : "false"}`,
       { method: "POST" },
     );
+  }
+
+  /** GET /coding-session/artifacts/status — the artifacts lane, every number. */
+  async getCodingSessionArtifactsStatus(): Promise<CodingSessionArtifactsStatus> {
+    return this.request("/coding-session/artifacts/status");
+  }
+
+  /** GET /coding-session/artifacts/sessions — one summary per session the lane holds. */
+  async getCodingSessionArtifactsSessions(): Promise<{
+    sessions: CodingSessionArtifactsSessionSummary[];
+  }> {
+    return this.request("/coding-session/artifacts/sessions");
+  }
+
+  /**
+   * GET /coding-session/artifacts/sessions/{id} — the summary plus every
+   * manifest entry. 404 `artifacts_session_unknown` when the lane holds
+   * nothing for that session.
+   */
+  async getCodingSessionArtifactsSession(
+    cliSessionId: string,
+  ): Promise<CodingSessionArtifactsSessionDetail> {
+    return this.request(
+      `/coding-session/artifacts/sessions/${encodeURIComponent(cliSessionId)}`,
+    );
+  }
+
+  /** POST /coding-session/artifacts/sync — one capture+publish tick, now. */
+  async syncCodingSessionArtifacts(): Promise<CodingSessionArtifactsTick> {
+    return this.request("/coding-session/artifacts/sync", { method: "POST" });
   }
 
   async getClaudeSessionDetailOperation(operationId: string, afterSessionRef?: string): Promise<ClaudeSessionDetailOperationPage> {

@@ -17,12 +17,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
   CloudUpload,
+  FolderOpen,
   Loader2,
   Pin,
   RefreshCw,
@@ -41,12 +43,22 @@ import {
   SessionDiagnosisDialog,
 } from "@/components/coding-sessions/SessionDiagnosisDialog";
 import { Badge, Button, BasicInput as Input } from "@ai-matrx/design-system";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { engine } from "@/lib/api";
 import type {
   ClaudeConversation,
   ClaudeOverview,
   ClaudeSessionState,
   ClaudeSyncResult,
+  CodingSessionArtifactsSessionDetail,
+  CodingSessionArtifactsSessionSummary,
+  CodingSessionArtifactsStatus,
   CodingSessionBridgeStatus,
   CodingSessionProvider,
   CodingSessionProviderReadinessStatus,
@@ -160,6 +172,269 @@ function QueueCount({
   );
 }
 
+/**
+ * Reveal a durable folder in the OS file manager through the ONE validated
+ * native command this app already exposes (`open_filesystem_path`, Rust
+ * `filesystem.rs`) — never plugin-shell, which would hand the renderer an
+ * arbitrary executable surface.
+ */
+async function revealInFinder(path: string): Promise<void> {
+  await invoke("open_filesystem_path", { path, reveal: true });
+}
+
+function RevealButton({ path, label = "Reveal in Finder" }: { path: string; label?: string }) {
+  const [revealing, setRevealing] = useState(false);
+  const [revealError, setRevealError] = useState<string | null>(null);
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={revealing}
+        title={path}
+        onClick={() => {
+          setRevealing(true);
+          setRevealError(null);
+          revealInFinder(path)
+            .catch((reason: unknown) => {
+              setRevealError(reason instanceof Error ? reason.message : String(reason));
+            })
+            .finally(() => setRevealing(false));
+        }}
+      >
+        <FolderOpen className="mr-2 h-4 w-4" />
+        {label}
+      </Button>
+      {revealError && (
+        <span className="max-w-64 truncate text-xs text-destructive" role="alert" title={revealError}>
+          {revealError}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function whenLocal(value: string | null | undefined): string {
+  if (!value) return "—";
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return value;
+  return new Date(ms).toLocaleString();
+}
+
+/**
+ * The per-row artifacts number: the lane's file count for this session, or
+ * "—" when the lane holds nothing for it. Loading and endpoint failure are
+ * each shown as themselves — never as a dash that looks like "none".
+ */
+function ArtifactsCell({
+  sessions,
+  error,
+  sessionId,
+  onOpen,
+}: {
+  sessions: Map<string, CodingSessionArtifactsSessionSummary> | null;
+  error: string | null;
+  sessionId: string;
+  onOpen: () => void;
+}) {
+  if (error) {
+    return (
+      <span className="text-destructive" title={`The artifacts lane could not be read: ${error}`}>
+        ?
+      </span>
+    );
+  }
+  if (!sessions) {
+    return <span className="text-muted-foreground" title="Asking the artifacts lane…">…</span>;
+  }
+  const summary = sessions.get(sessionId);
+  if (!summary) {
+    return (
+      <span className="text-muted-foreground" title="The artifacts lane holds no files for this session.">
+        —
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title={`${summary.files.toLocaleString()} file${summary.files === 1 ? "" : "s"} kept (${formatFileSize(summary.bytes)}) · ${summary.uploaded.toLocaleString()} in AI Matrx · ${summary.pending_upload.toLocaleString()} pending${summary.failed_upload > 0 ? ` · ${summary.failed_upload.toLocaleString()} failed` : ""}. Click to see every file.`}
+      className="underline decoration-dotted underline-offset-4 hover:decoration-solid"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+    >
+      {summary.files.toLocaleString()}
+      <span className="ml-1 text-xs text-muted-foreground">
+        ({summary.uploaded.toLocaleString()}↑
+        {summary.pending_upload > 0 ? ` ${summary.pending_upload.toLocaleString()} pending` : ""}
+        {summary.failed_upload > 0 ? (
+          <span className="text-destructive"> {summary.failed_upload.toLocaleString()} failed</span>
+        ) : null}
+        )
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Every artifact the lane holds for one session — the manifest, row by row.
+ * Same shape as the conversation diagnosis: the engine's record, never a
+ * client-side guess; a 404 from the lane is shown as the lane's own words.
+ */
+function SessionArtifactsDialog({
+  sessionId,
+  onClose,
+}: {
+  sessionId: string | null;
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<CodingSessionArtifactsSessionDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setDetail(await engine.getCodingSessionArtifactsSession(sessionId));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    setDetail(null);
+    void load();
+  }, [load]);
+
+  const entries = detail
+    ? Object.entries(detail.entries).sort(([a], [b]) => a.localeCompare(b))
+    : [];
+
+  return (
+    <Dialog open={Boolean(sessionId)} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[88vh] max-w-5xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Artifacts this session built</DialogTitle>
+          <DialogDescription>
+            Every file the artifacts lane kept for session {sessionId}, and whether AI Matrx holds it.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-center justify-between gap-3">
+          {detail ? (
+            <span className="text-sm">
+              {detail.files.toLocaleString()} file{detail.files === 1 ? "" : "s"} ·{" "}
+              {formatFileSize(detail.bytes)} · {detail.uploaded.toLocaleString()} in AI Matrx ·{" "}
+              {detail.pending_upload.toLocaleString()} pending
+              {detail.failed_upload > 0 ? ` · ${detail.failed_upload.toLocaleString()} failed` : ""}
+              {detail.abandoned_upload > 0 ? ` · ${detail.abandoned_upload.toLocaleString()} abandoned` : ""}
+              {detail.skipped_over_size > 0 ? ` · ${detail.skipped_over_size.toLocaleString()} skipped (over size)` : ""}
+              {detail.skipped_over_count > 0 ? ` · ${detail.skipped_over_count.toLocaleString()} skipped (over count)` : ""}
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground">{error ? "Not available" : "Loading…"}</span>
+          )}
+          <div className="flex items-center gap-2">
+            {detail && <RevealButton path={detail.durable_dir} />}
+            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {detail && (
+          <div className="flex max-h-[68vh] flex-col gap-3 overflow-y-auto pr-1">
+            <div className="grid grid-cols-[11rem_1fr] gap-3 rounded-lg border px-3 py-2 text-sm">
+              <div className="text-muted-foreground">Project</div>
+              <div className="min-w-0 break-words">{detail.project_slug}</div>
+              <div className="text-muted-foreground">Scratchpad</div>
+              <div className="min-w-0 break-all font-mono text-xs">{detail.scratchpad}</div>
+              <div className="text-muted-foreground">Durable folder</div>
+              <div className="min-w-0 break-all font-mono text-xs">{detail.durable_dir}</div>
+            </div>
+            {entries.length === 0 ? (
+              <p className="px-1 text-sm text-muted-foreground">
+                The lane holds no files for this session.
+              </p>
+            ) : (
+              <div className="overflow-auto rounded-md border">
+                <table className="w-full min-w-[820px] text-xs">
+                  <thead className="bg-muted/40 text-left">
+                    <tr>
+                      <th className="px-2 py-1">File</th>
+                      <th className="px-2 py-1 text-right">Size</th>
+                      <th className="px-2 py-1">Captured</th>
+                      <th className="px-2 py-1">AI Matrx</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {entries.map(([relativePath, entry]) => (
+                      <tr key={relativePath}>
+                        <td className="px-2 py-1.5 align-top">
+                          <div className="break-all font-mono">{relativePath}</div>
+                          <div className="text-muted-foreground" title={entry.sha256}>
+                            sha256 {entry.sha256.slice(0, 12)}
+                          </div>
+                        </td>
+                        <td className="px-2 py-1.5 text-right align-top tabular-nums">
+                          {formatFileSize(entry.size)}
+                        </td>
+                        <td className="px-2 py-1.5 align-top whitespace-nowrap">
+                          {whenLocal(entry.captured_at)}
+                        </td>
+                        <td className="px-2 py-1.5 align-top">
+                          {entry.file_id ? (
+                            <>
+                              <Badge variant="outline">Uploaded</Badge>
+                              <div className="mt-1 text-muted-foreground">
+                                {whenLocal(entry.uploaded_at)} · file{" "}
+                                <span className="font-mono">{entry.file_id}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <Badge variant={entry.upload_error ? "destructive" : "outline"}>
+                                {entry.upload_error ? "Upload failed" : "Pending"}
+                              </Badge>
+                              <div className="mt-1 text-muted-foreground">
+                                {entry.upload_attempts} attempt{entry.upload_attempts === 1 ? "" : "s"}
+                              </div>
+                              {entry.upload_error && (
+                                <div className="mt-1 max-w-96 break-words text-destructive">
+                                  {entry.upload_error}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function CodingSessions() {
   const [data, setData] = useState<ClaudeOverview | null>(null);
   const [bridge, setBridge] = useState<CodingSessionBridgeStatus | null>(null);
@@ -175,15 +450,29 @@ export function CodingSessions() {
   const [showAccounts, setShowAccounts] = useState(false);
   const [evidence, setEvidence] = useState<DeliveryEvidenceFilter | null>(null);
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
+  // The artifacts lane: status is null until the engine answers (loading),
+  // and an endpoint failure is its own error — never a zero, never a blank.
+  const [artifacts, setArtifacts] = useState<CodingSessionArtifactsStatus | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [artifactSessions, setArtifactSessions] = useState<Map<
+    string,
+    CodingSessionArtifactsSessionSummary
+  > | null>(null);
+  const [artifactSessionsError, setArtifactSessionsError] = useState<string | null>(null);
+  const [artifactsSyncing, setArtifactsSyncing] = useState(false);
+  const [artifactsDialogId, setArtifactsDialogId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     // Provider state must survive a Claude-specific failure: a broken
     // transcript read is no reason to stop reporting Codex or Cursor.
-    const [overview, status, ready] = await Promise.allSettled([
-      engine.getClaudeOverview(),
-      engine.getCodingSessionStatus(),
-      engine.getCodingSessionProviderReadiness(),
-    ]);
+    const [overview, status, ready, artifactStatus, artifactList] =
+      await Promise.allSettled([
+        engine.getClaudeOverview(),
+        engine.getCodingSessionStatus(),
+        engine.getCodingSessionProviderReadiness(),
+        engine.getCodingSessionArtifactsStatus(),
+        engine.getCodingSessionArtifactsSessions(),
+      ]);
     if (overview.status === "fulfilled") {
       setData(overview.value);
       setError(null);
@@ -196,6 +485,28 @@ export function CodingSessions() {
     }
     if (status.status === "fulfilled") setBridge(status.value);
     if (ready.status === "fulfilled") setReadiness(ready.value);
+    if (artifactStatus.status === "fulfilled") {
+      setArtifacts(artifactStatus.value);
+      setArtifactsError(null);
+    } else {
+      setArtifactsError(
+        artifactStatus.reason instanceof Error
+          ? artifactStatus.reason.message
+          : String(artifactStatus.reason),
+      );
+    }
+    if (artifactList.status === "fulfilled") {
+      setArtifactSessions(
+        new Map(artifactList.value.sessions.map((row) => [row.cli_session_id, row])),
+      );
+      setArtifactSessionsError(null);
+    } else {
+      setArtifactSessionsError(
+        artifactList.reason instanceof Error
+          ? artifactList.reason.message
+          : String(artifactList.reason),
+      );
+    }
     setLoading(false);
   }, []);
 
@@ -230,6 +541,21 @@ export function CodingSessions() {
       );
     } finally {
       setResuming(false);
+    }
+  };
+
+  const syncArtifactsNow = async () => {
+    setArtifactsSyncing(true);
+    setArtifactsError(null);
+    try {
+      await engine.syncCodingSessionArtifacts();
+      await load();
+    } catch (nextError) {
+      setArtifactsError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    } finally {
+      setArtifactsSyncing(false);
     }
   };
 
@@ -560,6 +886,147 @@ export function CodingSessions() {
             )}
           </div>
 
+          {/*
+            The artifacts lane: what sessions BUILT, kept durably on this Mac
+            and published to AI Matrx. Every number is the engine's own
+            manifest count; a file count in the table below is the door.
+          */}
+          <div className="overflow-hidden rounded-lg border" data-testid="artifacts-lane">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/50 px-4 py-2">
+              <div className="text-xs font-medium uppercase text-muted-foreground">
+                Artifacts
+                <span className="ml-2 normal-case">
+                  files a session built, kept on this Mac and published to AI Matrx
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={artifactsSyncing || !artifacts}
+                onClick={() => void syncArtifactsNow()}
+              >
+                {artifactsSyncing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                {artifactsSyncing ? "Syncing…" : "Sync now"}
+              </Button>
+            </div>
+
+            {artifactsError && (
+              <div
+                className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 p-4 text-sm"
+                role="alert"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <div>
+                  <p className="font-medium">Couldn't read the artifacts lane</p>
+                  <p className="mt-1 font-mono text-xs text-muted-foreground">{artifactsError}</p>
+                </div>
+              </div>
+            )}
+
+            {!artifacts && !artifactsError && (
+              <p className="px-4 py-3 text-sm text-muted-foreground">
+                Asking the engine what it has kept…
+              </p>
+            )}
+
+            {artifacts && (
+              <>
+                {artifacts.blocker && (
+                  <div
+                    className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 p-4 text-sm"
+                    role="alert"
+                    data-testid="artifacts-blocker"
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    <div className="flex-1">
+                      <p className="font-medium">Artifact publishing to AI Matrx is paused</p>
+                      <p className="mt-1">{artifacts.blocker.message}</p>
+                      {artifacts.blocker.remedy && (
+                        <p className="mt-1 text-muted-foreground">{artifacts.blocker.remedy}</p>
+                      )}
+                      <p className="mt-1 font-mono text-xs text-muted-foreground">
+                        {artifacts.blocker.code}
+                        {artifacts.blocker.since ? ` · since ${formatStamp(artifacts.blocker.since)}` : ""}
+                      </p>
+                      {artifacts.blocker.code === "no_organization" && (
+                        <div className="mt-3">
+                          <Button size="sm" onClick={() => requestOrganizationPicker()}>
+                            Choose organization
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {artifacts.last_error && (
+                  <div className="flex items-start gap-3 border-b border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div>
+                      <p className="font-medium">The last artifacts pass hit an error</p>
+                      <p className="mt-1 font-mono text-xs text-muted-foreground">
+                        {artifacts.last_error.code ? `${artifacts.last_error.code} — ` : ""}
+                        {artifacts.last_error.message ?? JSON.stringify(artifacts.last_error)}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <p className="px-4 py-2 text-sm">
+                  <span className="tabular-nums">{artifacts.sessions.toLocaleString()}</span> session
+                  {artifacts.sessions === 1 ? "" : "s"} ·{" "}
+                  <span className="tabular-nums">{artifacts.files.toLocaleString()}</span> file
+                  {artifacts.files === 1 ? "" : "s"} · {formatFileSize(artifacts.bytes)} ·{" "}
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    {artifacts.uploaded.toLocaleString()} in AI Matrx
+                  </span>{" "}
+                  · <span className="tabular-nums">{artifacts.pending_upload.toLocaleString()}</span> pending
+                  {" · "}
+                  <span className={artifacts.failed_upload > 0 ? "text-destructive" : "tabular-nums"}>
+                    {artifacts.failed_upload.toLocaleString()} failed
+                  </span>
+                  {" · "}
+                  <span className={artifacts.abandoned_upload > 0 ? "text-destructive" : "tabular-nums"}>
+                    {artifacts.abandoned_upload.toLocaleString()} abandoned
+                  </span>
+                  {" · "}
+                  <span
+                    className="tabular-nums"
+                    title={`Skipped: ${artifacts.skipped_over_size.toLocaleString()} over ${formatFileSize(artifacts.limits.max_file_bytes)}, ${artifacts.skipped_over_count.toLocaleString()} past the ${artifacts.limits.max_files_per_session.toLocaleString()}-file per-session cap.`}
+                  >
+                    skipped {artifacts.skipped_over_size.toLocaleString()} over size /{" "}
+                    {artifacts.skipped_over_count.toLocaleString()} over count
+                  </span>
+                </p>
+
+                <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+                  {artifacts.active
+                    ? artifacts.blocker
+                      ? "Lane running · publishing paused"
+                      : "Lane running"
+                    : "Lane stopped"}
+                  {artifacts.cloud_enabled ? "" : " · cloud publishing off"}
+                  {" · last tick "}
+                  {"at" in artifacts.last_tick
+                    ? `${formatStamp(artifacts.last_tick.at)} · ${artifacts.last_tick.seconds}s · captured ${artifacts.last_tick.captured.toLocaleString()} · uploaded ${artifacts.last_tick.uploaded.toLocaleString()} · failed ${artifacts.last_tick.failed.toLocaleString()}`
+                    : "never"}
+                  {` · scans every ${artifacts.limits.scan_interval_seconds}s`}
+                </p>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2 text-xs text-muted-foreground">
+                  <span className="min-w-0 break-all font-mono" title="Durable copies live here, outside /tmp, one folder per session.">
+                    {artifacts.durable_root}
+                  </span>
+                  <RevealButton path={artifacts.durable_root} />
+                </div>
+              </>
+            )}
+          </div>
+
           {data && (
             <div>
               <button
@@ -638,6 +1105,12 @@ export function CodingSessions() {
                   <th className="px-4 py-2 text-right font-medium">Size</th>
                   <th
                     className="px-4 py-2 text-right font-medium"
+                    title="Files this session built that the artifacts lane kept on this Mac (in AI Matrx / pending). Click a number to see every file."
+                  >
+                    Artifacts
+                  </th>
+                  <th
+                    className="px-4 py-2 text-right font-medium"
                     title="Judged against AI Matrx's own record of the session. Click a row for every fact behind it."
                   >
                     In AI Matrx?
@@ -685,6 +1158,14 @@ export function CodingSessions() {
                     <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
                       {formatFileSize(row.bytes)}
                     </td>
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      <ArtifactsCell
+                        sessions={artifactSessions}
+                        error={artifactSessionsError}
+                        sessionId={row.session_id}
+                        onOpen={() => setArtifactsDialogId(row.session_id)}
+                      />
+                    </td>
                     <td
                       className={`px-4 py-2 text-right ${SESSION_STATE_TONE[row.state]}`}
                       title={SESSION_STATE_HINT[row.state]}
@@ -706,7 +1187,7 @@ export function CodingSessions() {
                 {!loading && conversations.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="px-4 py-8 text-center text-muted-foreground"
                     >
                       {query || filter !== "all"
@@ -748,6 +1229,10 @@ export function CodingSessions() {
         sessionId={diagnosisId}
         onClose={() => setDiagnosisId(null)}
         onChanged={load}
+      />
+      <SessionArtifactsDialog
+        sessionId={artifactsDialogId}
+        onClose={() => setArtifactsDialogId(null)}
       />
     </div>
   );

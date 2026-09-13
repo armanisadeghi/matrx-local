@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 from app.services.codex_usage import allowance
 
@@ -45,20 +46,6 @@ class _Process:
         self.returncode = -9
 
 
-class _Selector:
-    def __init__(self) -> None:
-        self.stream: _Stream | None = None
-
-    def register(self, stream: _Stream, _events: int) -> None:
-        self.stream = stream
-
-    def select(self, _timeout: float):
-        return [(object(), object())] if self.stream and self.stream._lines else []
-
-    def close(self) -> None:
-        return None
-
-
 def test_allowance_reports_missing_cli_without_starting_process(monkeypatch) -> None:
     monkeypatch.setattr(allowance.shutil, "which", lambda _name: None)
     assert allowance._read_allowance_sync()["status"] == "unavailable"
@@ -90,14 +77,14 @@ def test_allowance_sanitizes_response_and_cleans_owned_process(monkeypatch) -> N
     monkeypatch.setattr(
         allowance.subprocess, "Popen", lambda *_args, **_kwargs: process
     )
-    monkeypatch.setattr(allowance.selectors, "DefaultSelector", _Selector)
 
     result = allowance._read_allowance_sync()
 
     assert result["status"] == "available"
-    assert result["account_hash"] != "private-account"
+    assert "account_hash" not in result
     assert result["limits"] == [
         {
+            "bucket": "five-hour",
             "used_percent": 25,
             "remaining_percent": 75,
             "window_minutes": 300,
@@ -116,12 +103,25 @@ def test_allowance_timeout_cleans_owned_process(monkeypatch) -> None:
     monkeypatch.setattr(
         allowance.subprocess, "Popen", lambda *_args, **_kwargs: process
     )
-    monkeypatch.setattr(allowance.selectors, "DefaultSelector", _Selector)
 
     result = allowance._read_allowance_sync()
 
     assert result["status"] == "unavailable"
     assert "timed out" in result["reason"]
+    assert process.terminated
+
+
+def test_allowance_rejects_non_object_json_and_cleans_process(monkeypatch) -> None:
+    process = _Process(["[]\n"])
+    monkeypatch.setattr(allowance.shutil, "which", lambda _name: "/safe/codex")
+    monkeypatch.setattr(
+        allowance.subprocess, "Popen", lambda *_args, **_kwargs: process
+    )
+
+    result = allowance._read_allowance_sync()
+
+    assert result["status"] == "unavailable"
+    assert "non-object" in result["reason"]
     assert process.terminated
 
 
@@ -152,6 +152,35 @@ def test_allowance_service_single_flight_and_cache(monkeypatch) -> None:
         first, second = await asyncio.gather(service.read(), service.read())
         third = await service.read()
         assert first == second == third
+
+    asyncio.run(exercise())
+    assert calls == 1
+
+
+def test_cancelled_waiter_keeps_shared_allowance_read(monkeypatch) -> None:
+    service = allowance.AllowanceService()
+    release = threading.Event()
+    calls = 0
+
+    def read() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        release.wait(timeout=1)
+        return {"status": "available", "observed_at": "now", "limits": []}
+
+    monkeypatch.setattr(allowance, "_read_allowance_sync", read)
+
+    async def exercise() -> None:
+        waiting = asyncio.create_task(service.read())
+        await asyncio.sleep(0)
+        waiting.cancel()
+        try:
+            await waiting
+        except asyncio.CancelledError:
+            pass
+        release.set()
+        await asyncio.sleep(0.05)
+        assert (await service.read())["status"] == "available"
 
     asyncio.run(exercise())
     assert calls == 1

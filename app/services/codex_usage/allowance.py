@@ -1,16 +1,15 @@
-"""Read the Codex account allowance without making a model request."""
+"""Read Codex account allowance without a model turn, reset, or purchase."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import selectors
+import queue
 import shutil
 import subprocess
+import threading
 import time
 from datetime import UTC, datetime
-
 
 _ALLOWANCE_TIMEOUT_SECONDS = 12.0
 _CACHE_SECONDS = 60.0
@@ -28,12 +27,12 @@ def _unavailable(reason: str) -> dict[str, object]:
 def _number(value: object) -> float | int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    return value
+    return (
+        value if value == value and value not in (float("inf"), float("-inf")) else None
+    )
 
 
-def _sanitize_limit(value: object) -> dict[str, float | int | None] | None:
+def _sanitize_limit(bucket: str, value: object) -> dict[str, object] | None:
     if not isinstance(value, dict):
         return None
     used = _number(value.get("usedPercent"))
@@ -42,11 +41,14 @@ def _sanitize_limit(value: object) -> dict[str, float | int | None] | None:
         remaining = max(0, min(100, 100 - used))
     if used is None and remaining is not None:
         used = max(0, min(100, 100 - remaining))
-    window = _number(value.get("windowDurationMins"))
-    reset = _number(value.get("resetsAt"))
+    window, reset = (
+        _number(value.get("windowDurationMins")),
+        _number(value.get("resetsAt")),
+    )
     if used is None and remaining is None and window is None and reset is None:
         return None
     return {
+        "bucket": bucket[:80] or "Current allowance",
         "used_percent": used,
         "remaining_percent": remaining,
         "window_minutes": window,
@@ -59,21 +61,29 @@ def _sanitize_result(result: object) -> dict[str, object]:
         return _unavailable("Codex returned an invalid allowance response.")
     raw_limits = result.get("rateLimitsByLimitId")
     if isinstance(raw_limits, dict):
-        candidates = list(raw_limits.values())
+        candidates = [(str(key), value) for key, value in raw_limits.items()]
     else:
-        candidates = [result.get("rateLimits")]
-    limits = [limit for item in candidates if (limit := _sanitize_limit(item))]
+        candidates = [("Current allowance", result.get("rateLimits"))]
+    limits = [
+        limit
+        for bucket, item in candidates
+        if (limit := _sanitize_limit(bucket, item)) is not None
+    ]
     if not limits:
         return _unavailable("Codex did not expose a readable account allowance.")
-    response: dict[str, object] = {
+    return {
         "status": "available",
         "observed_at": datetime.now(UTC).isoformat(),
         "limits": limits,
     }
-    account_id = result.get("accountId")
-    if isinstance(account_id, str) and account_id and account_id.lower() != "unknown":
-        response["account_hash"] = hashlib.sha256(account_id.encode()).hexdigest()[:16]
-    return response
+
+
+def _reader(source, output: queue.Queue[str]) -> None:
+    try:
+        for line in iter(source.readline, ""):
+            output.put(line)
+    finally:
+        output.put("")
 
 
 def _read_allowance_sync() -> dict[str, object]:
@@ -81,7 +91,8 @@ def _read_allowance_sync() -> dict[str, object]:
     if not executable:
         return _unavailable("The Codex CLI is not installed on this device.")
     process: subprocess.Popen[str] | None = None
-    selector: selectors.BaseSelector | None = None
+    reader: threading.Thread | None = None
+    output: queue.Queue[str] = queue.Queue()
     try:
         process = subprocess.Popen(
             [executable, "app-server", "--stdio"],
@@ -93,9 +104,9 @@ def _read_allowance_sync() -> dict[str, object]:
         )
         if process.stdin is None or process.stdout is None:
             return _unavailable("The Codex CLI did not open an allowance channel.")
+        reader = threading.Thread(target=_reader, args=(process.stdout, output))
+        reader.start()
         deadline = time.monotonic() + _ALLOWANCE_TIMEOUT_SECONDS
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
 
         def send(message: dict[str, object]) -> None:
             process.stdin.write(json.dumps(message) + "\n")
@@ -110,15 +121,18 @@ def _read_allowance_sync() -> dict[str, object]:
         )
         initialized = False
         while time.monotonic() < deadline:
-            if not selector.select(max(0, deadline - time.monotonic())):
+            try:
+                line = output.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty:
                 break
-            line = process.stdout.readline()
             if not line:
                 break
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(message, dict):
+                return _unavailable("Codex returned a non-object allowance message.")
             if message.get("id") == 1:
                 if "error" in message:
                     return _unavailable("Codex declined allowance initialization.")
@@ -137,15 +151,10 @@ def _read_allowance_sync() -> dict[str, object]:
                     return _unavailable("Codex could not read the account allowance.")
                 return _sanitize_result(message.get("result"))
         return _unavailable("Codex allowance read timed out.")
-    except OSError:
+    except (OSError, ValueError):
         return _unavailable("The Codex CLI could not be started.")
     finally:
-        if selector is not None:
-            selector.close()
         if process is not None:
-            for stream in (process.stdin, process.stdout):
-                if stream is not None:
-                    stream.close()
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -153,16 +162,32 @@ def _read_allowance_sync() -> dict[str, object]:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    stream.close()
+        if reader is not None:
+            reader.join(timeout=2)
 
 
 class AllowanceService:
-    """A short-lived, single-flight cache around the account-only CLI read."""
+    """Short-lived shared account-only read; cancelled callers cannot cancel it."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._inflight: asyncio.Task[dict[str, object]] | None = None
         self._cached: dict[str, object] | None = None
         self._expires_at = 0.0
+
+    async def _finish(self, task: asyncio.Task[dict[str, object]]) -> None:
+        try:
+            response = task.result()
+        except BaseException:
+            return
+        async with self._lock:
+            if self._inflight is task:
+                self._inflight = None
+                self._cached = response
+                self._expires_at = time.monotonic() + _CACHE_SECONDS
 
     async def read(self) -> dict[str, object]:
         async with self._lock:
@@ -172,17 +197,11 @@ class AllowanceService:
                 self._inflight = asyncio.create_task(
                     asyncio.to_thread(_read_allowance_sync)
                 )
+                self._inflight.add_done_callback(
+                    lambda task: asyncio.create_task(self._finish(task))
+                )
             task = self._inflight
-        try:
-            response = await task
-        finally:
-            async with self._lock:
-                if self._inflight is task:
-                    self._inflight = None
-        async with self._lock:
-            self._cached = response
-            self._expires_at = time.monotonic() + _CACHE_SECONDS
-        return response
+        return await asyncio.shield(task)
 
 
 allowance_service = AllowanceService()

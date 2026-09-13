@@ -24,6 +24,30 @@ private struct PrivateSession: Codable { let version: Int; let phase: String; le
 private struct Token: Decodable { let access_token: String; let token_type: String; let expires_in: Int; let refresh_token: String; let scope: String? }
 private struct Identity: Decodable { let sub: String; let email: String?; let email_verified: Bool? }
 
+/// URLSession's convenience completion handler has already accumulated the
+/// response. This delegate refuses redirects and cancels as soon as the fixed
+/// envelope limit is crossed.
+private final class BoundedTransport: NSObject, URLSessionDataDelegate {
+    private var data = Data(); private let limit = 64 * 1024
+    private let completion: (Result<(Data, HTTPURLResponse), Error>) -> Void
+    init(_ completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { self.completion = completion }
+    func start(_ request: URLRequest) {
+        let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 10; config.timeoutIntervalForResource = 10
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        session.dataTask(with: request).resume()
+    }
+    func urlSession(_: URLSession, task _: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse, newRequest _: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) { guard data.count <= limit - chunk.count else { dataTask.cancel(); return }; data.append(chunk) }
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { completion(.failure(error)); return }
+        guard let response = dataTaskResponse() else { completion(.failure(EnrollmentError.message("Account connection is unavailable. Try again."))); return }
+        completion(.success((data, response)))
+    }
+    private var response: HTTPURLResponse?
+    func urlSession(_: URLSession, dataTask _: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) { self.response = response as? HTTPURLResponse; completionHandler(response.expectedContentLength > Int64(limit) ? .cancel : .allow) }
+    private func dataTaskResponse() -> HTTPURLResponse? { response }
+}
+
 private extension Data { func urlSafeBase64() -> String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") } }
 private extension String { var validToken: Bool { !isEmpty && utf8.count <= 16 * 1024 && utf8.allSatisfy { $0 >= 0x21 && $0 <= 0x7e } } }
 private extension UUID { var canonical: String { uuidString.lowercased() } }
@@ -150,9 +174,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             return "\(pair.key)=\(encoded)"
         }.joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            do { guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
-        }.resume()
+        BoundedTransport { [weak self] result in
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
+        }.start(request)
     }
     private func authenticateAndPersist(_ token: Token, generation: String, key: String) {
         let context = LAContext(); var detail: NSError?
@@ -161,9 +185,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     private func userinfo(_ token: Token, generation: String, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
-            do { guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.canonical == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
-        }.resume()
+        BoundedTransport { [weak self] result in
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.canonical == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
+        }.start(request)
     }
     private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
     @objc private func disconnect() {

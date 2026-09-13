@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 import {
   AlertCircle,
   Check,
@@ -246,11 +247,10 @@ export function InlineProgressBar({
 
 // ── Elapsed time (never-looks-frozen readouts) ──────────────────────────────
 
-/** "M:SS" for elapsed readouts. */
+/** "M:SS" for elapsed readouts — the package's clock voice, under this name
+ *  because the module is imported for it. No arithmetic of its own. */
 export function formatElapsed(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
+  return formatDurationSeconds(totalSeconds, { style: "clock" });
 }
 
 /**

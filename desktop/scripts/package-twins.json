@@ -13,6 +13,7 @@
     "Register: common-docs /projects/npm-package-extraction/DUPLICATION-CENSUS.md (common-docs).",
     "A SHAPE rule (`shapeWhy` + `shapeAllow` + `shapeCensus` on a row) catches the same capability under an UNREGISTERED name, or with no name at all. `shapeAllow` = provably NOT this capability, silent. `shapeCensus` = pre-existing bodies that ARE it and are not collapsed yet: loud every run, shrink-only, and a stale entry fails the guard."
   ],
+  "$catalogFloor": 179,
   "twins": [
     {
       "name": "isUuidShape",
@@ -1128,6 +1129,12 @@
       "name": "TableCaption",
       "package": "@ai-matrx/design-system",
       "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": []
+    },
+    {
+      "name": "base64ByteLength",
+      "package": "@ai-matrx/kit/base64",
+      "why": "THE decoded byte length of base64 text (kit 0.13.5, 2026-09-12). There is exactly ONE honest way to compute it and five live sites had written it five ways: `b64.length * 3 / 4` OVERSTATES every padded payload by one or two bytes, because four base64 characters carry three bytes and a trailing `=` / `==` is exactly the bytes that were never there. A sixth adversarial review fixed three sites by hand; a seventh found a FOURTH still wrong (matrx-extend tools/handlers/read.ts, feeding size_bytes) and two of the repairs living as private copies under this same name in aidream's dashboard and in matrx-local. A capability re-derived from memory at every call site is a package export nobody had written yet. The number it returns is real BYTES, which is what formatFileSize wants \u2014 the input lane exists because a base64 STRING LENGTH reaching that formatter prints a confident, wrong \" KB\". NOTE 2026-09-12: the module landed in this repo for kit 0.13.5 but is NOT in the published 0.13.5 tarball \u2014 that release was cut from a tree that predated it. The two npm consumers (matrx-extend, matrx-local) therefore still carry censused local copies, and they are blocked on a kit release that actually contains the module, not on a version number.",
       "allow": []
     }
   ]

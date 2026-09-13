@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { isCurrentOAuthCallback } from "@/lib/oauth";
 import { Zap, ArrowLeft, ExternalLink, CheckCircle2, RefreshCw } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 
 // Production redirect URI — must exactly match the redirect_uri sent in the
 // authorization request (see use-auth.ts getRedirectUri()). The OS intercepts
@@ -213,7 +214,7 @@ export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingPr
                 </div>
 
                 <div className="w-24 text-right text-xs text-muted-foreground/50 tabular-nums">
-                    {String(Math.floor(elapsed / 60)).padStart(2, "0")}:{String(elapsed % 60).padStart(2, "0")}
+                    {formatDurationSeconds(elapsed, { style: "clock" })}
                 </div>
             </header>
 

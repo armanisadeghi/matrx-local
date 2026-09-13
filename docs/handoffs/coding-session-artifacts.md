@@ -37,3 +37,33 @@ mirrors the CONVERSATION to AI Matrx but never the files, so:
 
 Order: local durable mirror + screen first (no dependency, stops the loss
 today), then the server endpoint, then engine upload, then the frontend list.
+
+## State — 2026-09-12 17:25 PT (Work session)
+
+Shipped on origin/main (engine): `app/services/coding_sessions/artifacts.py`
++ routes `/coding-session/artifacts/{status,sessions,sessions/{id},sync}`
+(commit 1660c7145), organization resolver personal-org fallback
+(dba7c70bc — this also unblocks file sync and screenshot publishing for
+multi-org users with no default). Tests: `tests/unit/test_coding_session_artifacts.py`,
+`tests/unit/test_organization_resolver.py`.
+
+Measured on Arman's Mac: 723 scratchpads → 8,599 deliverables / 600 MB
+captured in 6.8 s (4,630 files skipped by the 2,000-per-session cap in two
+sessions full of browser-profile/cache files; 6 files over 25 MB). One real
+session (bf9b08ed…, 191 files, 34 MB) published to the server in 21 s as
+admin@admin.com; `files.files` rows carry `metadata.kind =
+coding_session_artifact` + `metadata.cli_session_id`.
+
+Known transport defect (NOT fixed, documented): uploads through the edge
+(Cloudflare → files.matrxserver.com AND server.app) drop the connection
+mid-body intermittently (12 MB bodies died at 2 MB and 11 MB, then
+succeeded; a 20 MB file failed 8/8). Small files finish before the drop.
+The lane retries across ticks and abandons after 8 attempts with a visible
+`upload_error`/`abandoned_upload` count; the local durable copy is kept
+regardless. Root cause (Cloudflare vs. this Mac's network under load)
+unproven — direct-to-origin is firewalled so it could not be isolated.
+
+In flight: desktop screen (Artifacts lane line + column + diagnosis
+dialog) and the AI Matrx conversation "Artifacts" panel (matrx-frontend),
+both dispatched to Opus builders 17:20 PT. Release v1.4.92 (engine lane,
+resolver, throughput publisher) building; screen ships in the next one.

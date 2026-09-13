@@ -27,6 +27,36 @@
       "allow": []
     },
     {
+      "name": "isOwnEcho",
+      "package": "@ai-matrx/realtime",
+      "why": "Echo suppression. The notes middleware's ~60-line isOwnEcho (monotonic updated_at + equal-timestamp content match + same-actor-while-saving) was deleted in the 2026-09-07 adoption; manager.ledger.classify covers every leg. NOTE: features/files/redux/request-ledger.ts is a DIFFERENT mechanism (a server-stamped metadata.request_id under a documented wire contract) and is allowed.",
+      "allow": []
+    },
+    {
+      "name": "scheduleReconnect",
+      "package": "@ai-matrx/realtime",
+      "why": "Reconnect backoff. Four hand-rolled ladders (notes, marketing crawl activity, vision-interview room, transcript-studio) were deleted in the 2026-09-07 adoption; the package owns jittered backoff with the 30s stability reset.",
+      "allow": []
+    },
+    {
+      "name": "BACKOFF_RESET_AFTER_MS",
+      "package": "@ai-matrx/realtime",
+      "why": "The stability-reset constant. Resetting the attempt counter on SUBSCRIBED lets a flapping channel cycle at the 1s floor forever, firing a full catch-up each time \u2014 the package encodes the 30s rule once.",
+      "allow": []
+    },
+    {
+      "name": "RECONNECT_ALARM_ATTEMPT",
+      "package": "@ai-matrx/realtime",
+      "why": "Sustained-outage alarm threshold; the package exports RECONNECT_ALARM_ATTEMPTS and screams through its diagnostics sink. Deleted from the notes middleware 2026-09-07.",
+      "allow": []
+    },
+    {
+      "name": "attachRealtime",
+      "package": "@ai-matrx/realtime",
+      "why": "Per-hook refcounted channel attach. Four hand-copied maps (useAnnotations, usePages, useFileAnalysis, useExtractionJobs) collapsed into lib/realtime/sharedChannel.ts on 2026-09-07, whose exported door is `openShared` \u2014 the ONE sanctioned home for the app-shaped fan-in the package's room registry deliberately does not cover for pg-changes. This row exists so a fifth per-hook copy cannot come back.",
+      "allow": []
+    },
+    {
       "name": "toMs",
       "package": "@ai-matrx/realtime",
       "why": "Realtime timestamp normalizer, deleted in the 2026-08-31 realtime adoption.",
@@ -116,7 +146,62 @@
       "why": "THE UNIT LAW: the fleet's ~35 duration twins variously took milliseconds, seconds and minutes behind an identical `formatDuration(n)` signature, so kit ships formatDurationMs / formatDurationSeconds / formatDurationMinutes and NO bare `formatDuration`. Two host copies had already re-grown under this exact name (observational-memory format.ts, marketing crawl-session-panels.tsx) and were deleted 2026-09-07. A local `formatDuration` that BINDS unit+style+fallback and delegates is an adapter, not a twin; a local `formatDurationMs` is always a twin.",
       "shapeWhy": "A millisecond count becoming a unit string is this capability whatever it is called. The name lane read GREEN on all four formatDuration* exports while aidream's dashboard carried SEVEN bodies under the private names fmtMs and fmtMsSummary, each with its own rounding, and 115 more files in this repo turned ms into `2.3s` / `1.5m` / `3m ago` inline. Pattern and its proof: scripts/duration-shape.mjs. Plain time arithmetic can never match \u2014 the rule requires a DIVISION, MODULO or THRESHOLD COMPARISON against a time base PAIRED with a duration unit label, so a timeout budget (30 * 1000), an API seconds field and a rate denominator all stay untouched. `shapeCensus` below is the pre-existing census, not an exemption: it is reported every run and is ratcheted shrink-only \u2014 a stale entry FAILS the guard.",
       "allow": [],
-      "shapeCensus": []
+      "shapeCensus": [
+        {
+          "file": "src/pages/Ports.tsx",
+          "reason": "IS a duration formatter, on a voice @ai-matrx/kit/format does not have. It prints ONE coarsest unit with a BARE SECONDS tier below a minute and NO seconds above it (45s -> 90m -> 5h -> 3d). `compact` always keeps a seconds tier under an hour (\"30m 00s\"), `coarse` never prints seconds at all (\"< 1 min\"), and no option reaches the shape in between. Collapsing it onto either style changes what a live screen reads, so the honest fix is a new kit style \u2014 a decision for the kit package's own program \u2014 not a silent re-voicing by the lane that taught this guard the seconds base. Loud and ratcheted: the moment kit grows that voice and this body goes, the entry FAILS as stale."
+        },
+        {
+          "file": "src/pages/Settings.tsx",
+          "reason": "IS a duration formatter, on a voice @ai-matrx/kit/format does not have. It prints ONE coarsest unit with a BARE SECONDS tier below a minute and NO seconds above it (45s -> 90m -> 5h -> 3d). `compact` always keeps a seconds tier under an hour (\"30m 00s\"), `coarse` never prints seconds at all (\"< 1 min\"), and no option reaches the shape in between. Collapsing it onto either style changes what a live screen reads, so the honest fix is a new kit style \u2014 a decision for the kit package's own program \u2014 not a silent re-voicing by the lane that taught this guard the seconds base. Loud and ratcheted: the moment kit grows that voice and this body goes, the entry FAILS as stale."
+        },
+        {
+          "file": "src/lib/coding-session-ui.ts",
+          "reason": "IS a duration formatter (`formatRetryDuration`), and cannot be collapsed by this session for two reasons at once: it CEILS outward (Math.ceil, so a retry promise is never shorter than the truth), and kit's `round` option offers only \"nearest\" and \"down\"; and it DROPS the seconds tier when the remainder is zero (\"5m\", never \"5m 00s\"), which is the same missing single-coarsest-unit voice recorded above. Collapsing it would under-promise a retry delay on a live surface. The honest fix is a kit option plus a kit voice, which is the kit package's own program."
+        }
+      ],
+      "shapeAllow": [
+        {
+          "file": "src/App.tsx",
+          "reason": "NOT a rendering: `(Date.now() - bgStartTimeRef.current) / 1000` is the seconds DATA FIELD handed to bgSessActions.finalize(sessionId, durationSecs) and persisted. The rule's own text exempts plain time arithmetic feeding an API field; the unit label that pulls it into the window belongs to the formatDurationSeconds call on the line below, which is the collapsed render."
+        }
+      ]
+    },
+    {
+      "name": "formatUsd",
+      "package": "@ai-matrx/kit/format",
+      "why": "THE honest money formatter (kit 0.12.0, 2026-09-12). `$${(cost ?? 0).toFixed(4)}` rendered \"$0.0000\" for a cost NOBODY MEASURED and a reader walked away believing the run was free; the same `?? 0` then went into a SUM, so an unmeasured cost was invisible inside an analytics total that rode into an agent payload. Unknown is an em-dash, a MEASURED zero is still \"$0.00\". Named Usd not Currency under the UNIT LAW: it prepends a literal `$` with no locale handling, and a EUR amount wearing a `$` is the same class of lie. Census: currency in ~85 files across four clients with zero package coverage before this.",
+      "allow": []
+    },
+    {
+      "name": "formatCount",
+      "package": "@ai-matrx/kit/format",
+      "why": "Rides the formatUsd row's contract: locale-grouped integer, em-dash for unknown, \"0\" for a measured zero. There is deliberately no compact (\"1.2M\") voice yet \u2014 see features/admin/spend/explorer/labels.ts in the formatFileSize shapeAllow list, which is the collapse target waiting on one.",
+      "allow": []
+    },
+    {
+      "name": "formatPercentFromFraction",
+      "package": "@ai-matrx/kit/format",
+      "why": "The percentage half of the honest-number contract (~149 files, zero package coverage before kit 0.12.0). The long name is the point: half the fleet's twins took a 0..1 fraction and half took a 0..100 percentage, a 100x error that renders plausibly, so the unit is in the name. Does NOT clamp \u2014 over 100% is usually a real signal.",
+      "allow": []
+    },
+    {
+      "name": "safeRatio",
+      "package": "@ai-matrx/kit/format",
+      "why": "The indeterminate-division guard behind formatPercentFromFraction. `0 / 0` is not zero, it is unknown, and this returns null for it rather than letting NaN reach the screen as \"NaN% used\".",
+      "allow": []
+    },
+    {
+      "name": "sumKnown",
+      "package": "@ai-matrx/kit/format",
+      "why": "THE function that closes the lying-screen class. `?? 0` was never typed in front of a formatter \u2014 it was typed in front of `+`, because a nullable number must become a number before it can be added. This returns { total, known, unknown } so a caller cannot present a total as complete without ignoring a field it was handed, and it is the only thing that separates \"all zero\" from \"nothing measured\".",
+      "allow": []
+    },
+    {
+      "name": "isKnownNumber",
+      "package": "@ai-matrx/kit/format",
+      "why": "The predicate that makes `?? 0` unnecessary: true only for a real, usable measurement, so a measured 0 passes and null/undefined/NaN/Infinity do not. Rides the formatUsd row.",
+      "allow": []
     },
     {
       "name": "formatDurationSeconds",
@@ -157,8 +242,15 @@
     {
       "name": "formatFileSize",
       "package": "@ai-matrx/kit/format",
-      "why": "THE byte-size formatter. It was hiding inside @ai-matrx/media's UploadProgressList React component, so six matrx-frontend twins could only reach it by depending on the media React bundle to print a byte count. Moved to kit 2026-09-07 with the display decisions written down (binary units, short labels, one decimal below ten in a unit, whole bytes below 1 KB, em-dash for unknown/negative \u2014 NEVER a confident '0 B').",
-      "shapeWhy": "A byte count becoming a unit string is this capability whatever it is called. The 2026-09-07 census predicted this gap ('the census method needs a shape pass') and the 2026-09-11 re-verification proved it: formatBytes, fmtBytes, humanSize, bytesHuman, formatSize, and ~60 bare inline JSX expressions that are not definitions at all and can never be caught by a name. A second review the same day proved the rule was blind to the DECIMAL (SI) family \u2014 1000 / 1e6 / 1_000_000 \u2014 and to a GB-input body that MULTIPLIES; five live twins were returning zero findings. Both are covered now. Pattern and its proof: scripts/byte-size-shape.mjs. A capacity constant can never match: the division arms require a DIVISION or THRESHOLD COMPARISON against a byte base, and the multiply arm requires BOTH a non-literal operand (so 80 * 1024 * 1024 is out) AND the unit label on the same line outside any comment (so `limitMb * 1024 * 1024; // 25 MB` is out). Legitimate byte ceilings stay untouched.",
+      "why": "THE byte-size formatter. It was hiding inside @ai-matrx/media's UploadProgressList React component, so six matrx-frontend twins could only reach it by depending on the media React bundle to print a byte count. Moved to kit 2026-09-07 with the display decisions written down (binary units, short labels, one decimal below ten in a unit, whole bytes below 1 KB, em-dash for unknown/negative \u2014 NEVER a confident '0 B'). 2026-09-11: the name lane read GREEN while 134 byte-size bodies lived in 67 files under OTHER names \u2014 this row now also carries the SHAPE rule below, which is what actually closed the class.",
+      "shapeRule": "byte-size",
+      "shapeWhy": "A byte count becoming a unit string is this capability whatever it is called. The 2026-09-07 census predicted this gap ('the census method needs a shape pass') and the 2026-09-11 re-verification proved it: formatBytes, fmtBytes, humanSize, bytesHuman, formatSize, and ~60 bare inline JSX expressions that are not definitions at all and can never be caught by a name. A second review the same day proved the rule was blind to the DECIMAL (SI) family \u2014 1000 / 1e6 / 1_000_000 \u2014 and to a GB-input body that MULTIPLIES; five live twins were returning zero findings. Both are covered now. Pattern and its proof: scripts/byte-size-shape.mjs. A capacity constant can never match: the division arms require a DIVISION or THRESHOLD COMPARISON against a byte base, and the multiply arm requires BOTH a non-literal operand (so 80 * 1024 * 1024 is out) AND the unit label on the same line outside any comment (so `limitMb * 1024 * 1024; // 25 MB` is out). This repo has ~60 legitimate byte ceilings that must stay untouched.",
+      "allow": []
+    },
+    {
+      "name": "extractErrorMessage",
+      "package": "@ai-matrx/data/net",
+      "why": "THE caught-value-to-string extractor (PostgrestError, axios, and a FastAPI `detail` body \u2014 a string, or an object carrying `message`). Two host bodies were deleted 2026-09-11. utils/errors.ts held a near-byte copy of the package's, which meant the 2026-08-31 FastAPI `detail` fix had to be written TWICE, and it had already fallen behind on the package's nested-error lookup and its `fallback` parameter; it is now a one-line re-export door so this repo's ~100 `@/utils/errors` importers keep their path. features/agent-shortcuts/components/ShortcutForm.tsx held a STALE copy with no `detail` branch at all, so a server refusal that said exactly why was flattened into the caller's generic fallback on that form.",
       "allow": []
     },
     {
@@ -180,27 +272,518 @@
       "allow": []
     },
     {
+      "name": "Select",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectContent",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": [
+        {
+          "file": "src/components/ui/select.tsx",
+          "reason": "Not a twin: a forwardRef that BINDS this app's glass popup surface (from the host's own --glass-* tokens) and delegates to the package SelectContent."
+        }
+      ]
+    },
+    {
+      "name": "SelectItem",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectLabel",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectSeparator",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectScrollUpButton",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "SelectScrollDownButton",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "selectTriggerVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "The Radix Select primitive family. matrx-frontend's 218-line fork (components/ui/select.tsx, ~398 import sites) was the ORIGIN of the package body \u2014 a verbatim port with the portal seam inverted \u2014 and was collapsed to a re-export door on 2026-09-07. Every behavior lives in the package: selectTriggerVariants (sm/default/lg), the trigger's hideArrow, SelectItem's `description` second line, the scroll buttons, popper positioning, and the unconditional root (no hydration mount gate).",
+      "allow": []
+    },
+    {
+      "name": "Command",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandDialog",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandInput",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandList",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandEmpty",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandGroup",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandItem",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandSeparator",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CommandShortcut",
+      "package": "@ai-matrx/design-system",
+      "why": "The cmdk-backed Command palette family. matrx-frontend's fork (components/ui/command.tsx) was collapsed to a re-export door on 2026-09-07; the package body is a superset \u2014 same filtering (cmdk's own filter/shouldFilter/keywords pass through) plus a mobile bottom-sheet CommandDialog, the modal context, and a container escape hatch.",
+      "allow": []
+    },
+    {
+      "name": "CreatablePicker",
+      "package": "@ai-matrx/design-system",
+      "why": "P23's every-picker-takes-new-input control. The package copy says it was 'promoted' from components/ui/creatable-picker.tsx, but the origin was never deleted \u2014 two bodies with the same name and the same CreatableOption interface sat side by side until 2026-09-07, when the host file became a re-export door. The locked-vocabulary door, the manage door, the createExtra slot and footerActions all live in the package.",
+      "allow": []
+    },
+    {
+      "name": "Button",
+      "package": "@ai-matrx/design-system",
+      "why": "The one Button. components/ui/ButtonMine.tsx was a 127-line CVA reimplementation with its own hardcoded blue/gray palette and extra sizes; its 17 call sites moved to the package Button on 2026-09-07 after design-system 0.6.0 took the missing sizes (xs/md/xl/2xl/3xl/roundIcon) and variants (primary/success) in. components/ui/button.tsx is a re-export door, not a definition, so it does not match this row.",
+      "allow": []
+    },
+    {
+      "name": "buttonVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "The button's CVA recipe \u2014 the actual duplicated LOGIC behind the ButtonMine fork (deleted 2026-09-07). A re-grown `const buttonVariants = cva(...)` in this repo is a second button scale and a second palette; add the rung to the package instead.",
+      "allow": []
+    },
+    {
+      "name": "Tooltip",
+      "package": "@ai-matrx/design-system",
+      "why": "The ONE tooltip in the fleet (design-system 0.7.0). Two implementations existed \u2014 this repo's components/ui/tooltip.tsx (182 import sites) and @ai-matrx/tap-target's inlined port of it \u2014 so tap-target 0.2.0 deleted its copy and this repo's file became a re-export. A third copy is the failure this register exists to catch.",
+      "allow": []
+    },
+    {
+      "name": "TooltipTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "The ONE tooltip in the fleet (design-system 0.7.0). Two implementations existed \u2014 this repo's components/ui/tooltip.tsx (182 import sites) and @ai-matrx/tap-target's inlined port of it \u2014 so tap-target 0.2.0 deleted its copy and this repo's file became a re-export. A third copy is the failure this register exists to catch.",
+      "allow": []
+    },
+    {
+      "name": "TooltipContent",
+      "package": "@ai-matrx/design-system",
+      "why": "The ONE tooltip in the fleet (design-system 0.7.0). Two implementations existed \u2014 this repo's components/ui/tooltip.tsx (182 import sites) and @ai-matrx/tap-target's inlined port of it \u2014 so tap-target 0.2.0 deleted its copy and this repo's file became a re-export. A third copy is the failure this register exists to catch.",
+      "allow": []
+    },
+    {
+      "name": "TooltipProvider",
+      "package": "@ai-matrx/design-system",
+      "why": "The ONE tooltip in the fleet (design-system 0.7.0). Two implementations existed \u2014 this repo's components/ui/tooltip.tsx (182 import sites) and @ai-matrx/tap-target's inlined port of it \u2014 so tap-target 0.2.0 deleted its copy and this repo's file became a re-export. A third copy is the failure this register exists to catch.",
+      "allow": []
+    },
+    {
+      "name": "Drawer",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerContent",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerContentPrimitive",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerOverlay",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerHeader",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerBody",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerFooter",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerTitle",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "DrawerDescription",
+      "package": "@ai-matrx/design-system",
+      "why": "The vaul drawer family (design-system 0.7.0), which owns this app's iOS mobile rules: dvh not vh, pb-safe/pt-safe, a 44px grab-handle target, and DrawerBody as the flex-1 min-h-0 scroll shard. Re-deriving those per surface is exactly how they drifted.",
+      "allow": []
+    },
+    {
+      "name": "RadixDialogModalProvider",
+      "package": "@ai-matrx/design-system",
+      "why": "THE QUIET TWIN. A duplicated React CONTEXT never fails loudly \u2014 useContext matches by object identity, so a host provider and a package consumer silently miss each other. Owned by design-system since 0.5.0; the last host copy died with growth wave 2.",
+      "allow": []
+    },
+    {
+      "name": "useRadixDialogModal",
+      "package": "@ai-matrx/design-system",
+      "why": "THE QUIET TWIN. A duplicated React CONTEXT never fails loudly \u2014 useContext matches by object identity, so a host provider and a package consumer silently miss each other. Owned by design-system since 0.5.0; the last host copy died with growth wave 2.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialog",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogContent",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogContentPrimitive",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogOverlay",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogHeader",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogFooter",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogTitle",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogDescription",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogAction",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogCancel",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "AlertDialogPortal",
+      "package": "@ai-matrx/design-system",
+      "why": "The confirm/destroy surface (design-system 0.7.0). The package version is clamped to 85dvh with a sticky footer \u2014 the host fork could push Cancel/Continue below the fold on a short viewport, and Radix does not dismiss an ALERT dialog on backdrop click, so that was a dead end.",
+      "allow": []
+    },
+    {
+      "name": "Alert",
+      "package": "@ai-matrx/design-system",
+      "why": "The inline status banner (design-system 0.7.0), now carrying the full token-driven vocabulary: default | destructive | warning | success | info. A hand-rolled amber/emerald status div is the twin this replaces.",
+      "allow": []
+    },
+    {
+      "name": "AlertTitle",
+      "package": "@ai-matrx/design-system",
+      "why": "The inline status banner (design-system 0.7.0), now carrying the full token-driven vocabulary: default | destructive | warning | success | info. A hand-rolled amber/emerald status div is the twin this replaces.",
+      "allow": []
+    },
+    {
+      "name": "AlertDescription",
+      "package": "@ai-matrx/design-system",
+      "why": "The inline status banner (design-system 0.7.0), now carrying the full token-driven vocabulary: default | destructive | warning | success | info. A hand-rolled amber/emerald status div is the twin this replaces.",
+      "allow": []
+    },
+    {
+      "name": "alertVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "The inline status banner (design-system 0.7.0), now carrying the full token-driven vocabulary: default | destructive | warning | success | info. A hand-rolled amber/emerald status div is the twin this replaces.",
+      "allow": []
+    },
+    {
+      "name": "Slider",
+      "package": "@ai-matrx/design-system",
+      "why": "The range control (design-system 0.7.0). The package version renders one thumb PER VALUE (the host fork hardcoded a single Thumb and silently dropped a range's upper handle) and carries a 44px touch target.",
+      "allow": []
+    },
+    {
+      "name": "RadioGroup",
+      "package": "@ai-matrx/design-system",
+      "why": "Single-choice selection (design-system 0.7.0); size is declared on the group and inherited by items, plus a 44px touch target.",
+      "allow": []
+    },
+    {
+      "name": "RadioGroupItem",
+      "package": "@ai-matrx/design-system",
+      "why": "Single-choice selection (design-system 0.7.0); size is declared on the group and inherited by items, plus a 44px touch target.",
+      "allow": []
+    },
+    {
+      "name": "HoverCard",
+      "package": "@ai-matrx/design-system",
+      "why": "The rich hover surface (design-system 0.7.0). It PORTALS now (the host fork rendered inline and was clipped inside overflow-hidden ancestors) at z-[10001].",
+      "allow": []
+    },
+    {
+      "name": "HoverCardTrigger",
+      "package": "@ai-matrx/design-system",
+      "why": "The rich hover surface (design-system 0.7.0). It PORTALS now (the host fork rendered inline and was clipped inside overflow-hidden ancestors) at z-[10001].",
+      "allow": []
+    },
+    {
+      "name": "HoverCardContent",
+      "package": "@ai-matrx/design-system",
+      "why": "The rich hover surface (design-system 0.7.0). It PORTALS now (the host fork rendered inline and was clipped inside overflow-hidden ancestors) at z-[10001].",
+      "allow": []
+    },
+    {
+      "name": "Toggle",
+      "package": "@ai-matrx/design-system",
+      "why": "The pressed-state control and its group (design-system 0.7.0). They ship as ONE module because ToggleGroupItem reads the group's React CONTEXT \u2014 splitting them across files is how a context twin gets written.",
+      "allow": []
+    },
+    {
+      "name": "ToggleGroup",
+      "package": "@ai-matrx/design-system",
+      "why": "The pressed-state control and its group (design-system 0.7.0). They ship as ONE module because ToggleGroupItem reads the group's React CONTEXT \u2014 splitting them across files is how a context twin gets written.",
+      "allow": []
+    },
+    {
+      "name": "ToggleGroupItem",
+      "package": "@ai-matrx/design-system",
+      "why": "The pressed-state control and its group (design-system 0.7.0). They ship as ONE module because ToggleGroupItem reads the group's React CONTEXT \u2014 splitting them across files is how a context twin gets written.",
+      "allow": []
+    },
+    {
+      "name": "toggleVariants",
+      "package": "@ai-matrx/design-system",
+      "why": "The pressed-state control and its group (design-system 0.7.0). They ship as ONE module because ToggleGroupItem reads the group's React CONTEXT \u2014 splitting them across files is how a context twin gets written.",
+      "allow": []
+    },
+    {
+      "name": "ResizablePanelGroup",
+      "package": "@ai-matrx/design-system",
+      "why": "The react-resizable-panels v4 family (design-system 0.7.0). This repo had TWO forks \u2014 components/ui/resizable.tsx and components/ui/matrx/resizable.tsx \u2014 differing only in handle thickness, which is now the `size` prop. components/ui/matrx/resizable.tsx binds size=\"md\" and is allowlisted for ResizableHandle only.",
+      "allow": []
+    },
+    {
+      "name": "ResizablePanel",
+      "package": "@ai-matrx/design-system",
+      "why": "The react-resizable-panels v4 family (design-system 0.7.0). This repo had TWO forks \u2014 components/ui/resizable.tsx and components/ui/matrx/resizable.tsx \u2014 differing only in handle thickness, which is now the `size` prop. components/ui/matrx/resizable.tsx binds size=\"md\" and is allowlisted for ResizableHandle only.",
+      "allow": []
+    },
+    {
+      "name": "ResizableHandle",
+      "package": "@ai-matrx/design-system",
+      "why": "The react-resizable-panels v4 family (design-system 0.7.0). This repo had TWO forks \u2014 components/ui/resizable.tsx and components/ui/matrx/resizable.tsx \u2014 differing only in handle thickness, which is now the `size` prop. components/ui/matrx/resizable.tsx binds size=\"md\" and is allowlisted for ResizableHandle only.",
+      "allow": []
+    },
+    {
       "name": "Accordion",
       "package": "@ai-matrx/design-system",
-      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css \u2014 a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "why": "The Accordion family (design-system 0.8.0, census row 19c). The fork at components/ui/accordion.tsx was the fleet's only real implementation \u2014 workflow-studio's DB-authored scope was standing four bare <div>s in for it. Three fork defects died with it: a chevron-rotation selector that matched any icon passed as a direct trigger child instead of the chevron, a trigger with no focus-visible ring, and an open/close transition built on animate-accordion-down/-up \u2014 host-only Tailwind utilities, now package-owned .matrx-accordion-content CSS. Density is the `size` prop; the host binds nothing because its fork drew the package default (md).",
       "allow": []
     },
     {
       "name": "AccordionItem",
       "package": "@ai-matrx/design-system",
-      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css \u2014 a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "why": "The Accordion family (design-system 0.8.0, census row 19c). The fork at components/ui/accordion.tsx was the fleet's only real implementation \u2014 workflow-studio's DB-authored scope was standing four bare <div>s in for it. Three fork defects died with it: a chevron-rotation selector that matched any icon passed as a direct trigger child instead of the chevron, a trigger with no focus-visible ring, and an open/close transition built on animate-accordion-down/-up \u2014 host-only Tailwind utilities, now package-owned .matrx-accordion-content CSS. Density is the `size` prop; the host binds nothing because its fork drew the package default (md).",
       "allow": []
     },
     {
       "name": "AccordionTrigger",
       "package": "@ai-matrx/design-system",
-      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css \u2014 a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "why": "The Accordion family (design-system 0.8.0, census row 19c). The fork at components/ui/accordion.tsx was the fleet's only real implementation \u2014 workflow-studio's DB-authored scope was standing four bare <div>s in for it. Three fork defects died with it: a chevron-rotation selector that matched any icon passed as a direct trigger child instead of the chevron, a trigger with no focus-visible ring, and an open/close transition built on animate-accordion-down/-up \u2014 host-only Tailwind utilities, now package-owned .matrx-accordion-content CSS. Density is the `size` prop; the host binds nothing because its fork drew the package default (md).",
       "allow": []
     },
     {
       "name": "AccordionContent",
       "package": "@ai-matrx/design-system",
-      "why": "Accordion family. @ai-matrx/design-system 0.8.0 collapsed the fleet's last stand-in; the package owns the density prop, the focus-visible ring, the chevron slot selector and the .matrx-accordion-content keyframes in its styles.css \u2014 a host that forks it gets a component that jumps open, silently, because animate-accordion-* is a host-only utility name. This app defines none today; the row is here so an eighteenth fork in src/components/ui cannot land while the C20 supervised collapse of the other seventeen is still pending (C28, 2026-09-07).",
+      "why": "The Accordion family (design-system 0.8.0, census row 19c). The fork at components/ui/accordion.tsx was the fleet's only real implementation \u2014 workflow-studio's DB-authored scope was standing four bare <div>s in for it. Three fork defects died with it: a chevron-rotation selector that matched any icon passed as a direct trigger child instead of the chevron, a trigger with no focus-visible ring, and an open/close transition built on animate-accordion-down/-up \u2014 host-only Tailwind utilities, now package-owned .matrx-accordion-content CSS. Density is the `size` prop; the host binds nothing because its fork drew the package default (md).",
+      "allow": []
+    },
+    {
+      "name": "ArchiveFilter",
+      "package": "@ai-matrx/design-system",
+      "why": "THE ARCHIVED-ITEMS LAW's tri-state control (design-system 0.13.0): active | archived | all, default active, one click to reveal. `lib/entity-list`'s Filters & Sort panel rendered its own RadioSelect over a local ARCH_OPTIONS table until 2026-09-10; the panel keeps the URL/preference plumbing and `query.archived` is still a real server-side RPC parameter, but the control and its WORDS are the package's, so the frontend, workflow-studio, the dashboard and the desktop cannot drift apart. `lib/entity-list`'s `ArchivedFilter` type is now an alias of the package's `ArchiveFilterValue`. A local tri-state archive segmented control or option table anywhere in this repo is a twin.",
+      "allow": []
+    },
+    {
+      "name": "ArchivedDisclosure",
+      "package": "@ai-matrx/design-system",
+      "why": "THE ARCHIVED-ITEMS LAW's card-list control (design-system 0.14.0): the one-click \"Archived (N)\" reveal, closed by default, with `countLabel` for a capped/absent count and `keepWhileOpen` for a surface whose open state IS the archive view. Proven in Transcript Studio, lived at components/official/ArchivedDisclosure.tsx, deleted 2026-09-10 when the package took it \u2014 the law says the control is the same primitive everywhere, and a second home for half of it was the defect. Fourteen surfaces (masterwork \u00d74, pdf-extractor \u00d72, pdf scanner, page-extraction, canvas, hr fields, whatsapp-clone, organizations, agent templates, transcript-studio) import it from the package.",
+      "allow": []
+    },
+    {
+      "name": "MatrxDataTable",
+      "package": "@ai-matrx/design-system/data-table",
+      "why": "The canonical data-table body moved to design-system 0.15.1. The host's former full renderer must be deleted during the package cutover; consumers import the public package subpath directly.",
+      "allow": []
+    },
+    {
+      "name": "DataRowInspector",
+      "package": "@ai-matrx/design-system/data-table/data-row-inspector",
+      "why": "The table row inspector is package-owned with the table detail contract.",
+      "allow": []
+    },
+    {
+      "name": "DataRowWindow",
+      "package": "@ai-matrx/design-system/data-table/data-row-window",
+      "why": "The row window is package-owned. The sole permitted host definition is the Next dynamic boundary that delegates directly to the package export.",
+      "allow": []
+    },
+    {
+      "name": "MatrxUuidCell",
+      "package": "@ai-matrx/design-system/data-table/uuid-cell",
+      "why": "The UUID cell's copy and record-door behavior moved with the canonical table package.",
+      "allow": []
+    },
+    {
+      "name": "GenericTablePagination",
+      "package": "@ai-matrx/design-system/data-table/pagination",
+      "why": "Canonical table pagination, including the local-only All loaded sentinel, lives in design-system.",
+      "allow": []
+    },
+    {
+      "name": "useTableUrlState",
+      "package": "@ai-matrx/design-system/data-table/url-state",
+      "why": "The namespaced table URL-state contract moved to the table package.",
+      "allow": []
+    },
+    {
+      "name": "filterAndSortRows",
+      "package": "@ai-matrx/design-system/data-table/filter-engine",
+      "why": "Canonical local table filtering and sorting moved to the table package.",
+      "allow": []
+    },
+    {
+      "name": "completeLayeredFilterRules",
+      "package": "@ai-matrx/design-system/data-table/layered-filters",
+      "why": "The table's complete-rule normalizer moved to the table package.",
+      "allow": []
+    },
+    {
+      "name": "nextQueryState",
+      "package": "@ai-matrx/design-system/data-table/query-control",
+      "why": "Controlled table query-state transitions moved to the table package.",
+      "allow": []
+    },
+    {
+      "name": "_registerHost",
+      "package": "@ai-matrx/kit/opener",
+      "why": "The opener HOST REGISTRY. Four hand-rolled copies existed (kit's confirm plus this repo's sandbox-gate, scope-mismatch and value-prompts dialogs); the three host-side ones kept the registry in a module-level `let host`, which is the dual-loader-graph hazard \u2014 with unsplit dual ESM/CJS bundles each graph instantiates its own module, so host registration silently splits from its callers and the awaiting promise hangs forever with no error anywhere. Deleted here 2026-09-11 in the kit 0.10.0 adoption; `createOpener(slot)` owns the registry, the queue and the globalThis slot.",
+      "allow": []
+    },
+    {
+      "name": "_unregisterHost",
+      "package": "@ai-matrx/kit/opener",
+      "why": "The unregister half of the opener host registry, including the rule that only the CURRENT host may unregister (a superseded host's late unmount must not tear down the live one \u2014 the React double-mount / provider-swap case). Deleted here 2026-09-11 alongside _registerHost.",
+      "allow": []
+    },
+    {
+      "name": "useOpenerHost",
+      "package": "@ai-matrx/kit/opener-react",
+      "why": "The MOUNT-SIDE machinery of an imperative dialog host: registration, the ref-backed request queue, the tick-driven drain effect and the settle-once callback. Every dialog host in this repo was re-writing the same twenty lines, each with its own chance at the stale-`active`-closure bug that drops the second queued request forever. A host component that declares its own queueRef/tick/drain effect is this twin re-grown.",
+      "allow": []
+    },
+    {
+      "name": "createTaskChannelTopic",
+      "package": "@ai-matrx/realtime",
+      "why": "A `uniqueChannelTopic` twin under a local name: it appended a crypto.randomUUID() suffix to a per-conversation topic so a React 19 remount could not be handed the previous mount's still-joined channel. The package mints the unique INSTANCE topic for every Postgres Changes channel itself (and deliberately does NOT for broadcast/presence, where the topic IS the room \u2014 a hand-rolled suffix there splits the room). Deleted from src/state/lists.ts in the 2026-09-07 realtime adoption.",
+      "allow": []
+    },
+    {
+      "name": "subscribeSchedulerBroadcast",
+      "package": "@ai-matrx/realtime",
+      "why": "NOT a package twin \u2014 a sanctioned MIRROR. src/lib/scheduler-client/ is the hand-vendored copy of matrx-frontend/lib/scheduler-client/ (see its README's mirror policy), and this function is the ref-counted fan-out over the package's own `manager.open({private:true, wire:{mode:'raw'}})`. The channel logic itself is 100% the package's; what is local is the sch_task payload filtering the mirror exists to carry.",
+      "allow": []
+    },
+    {
+      "name": "ConfirmDialog",
+      "package": "@ai-matrx/design-system",
+      "why": "The extension's own `window.confirm` replacement (src/components/ConfirmDialog.tsx), deleted 2026-09-08. It was a genuine twin of the package's ConfirmDialog \u2014 same nine props, same six call shapes \u2014 but with an 80%-of-nothing scrim (`bg-black/40`), hardcoded `red-600` confirm and warning colours instead of tokens, no motion, no viewport clamp, no sticky footer, and sub-44px `py-1.5 text-xs` actions on a touch surface. Collapsing it onto the package also picked up the 0.11.6 sticky-footer fix (feedback bf8fb00b). TWO affordances were dropped rather than moved into the package, deliberately and on the record: the header X (Cancel and Escape are both present, and Radix owns Escape) and a destructive AlertTriangle glyph \u2014 an icon on every confirm in the platform is a taste decision that belongs to Arman, not to this lane. Backdrop-click dismissal is gone BY DESIGN: an AlertDialog does not dismiss on a stray click, which is the safer behaviour on a destructive action.",
       "allow": []
     },
     {
@@ -224,19 +807,19 @@
     {
       "name": "Avatar",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "AvatarImage",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "AvatarFallback",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
@@ -252,21 +835,9 @@
       "allow": []
     },
     {
-      "name": "Button",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "buttonVariants",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
       "name": "Card",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": [
         {
           "file": "src/components/ui/card.tsx",
@@ -277,31 +848,31 @@
     {
       "name": "CardHeader",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "CardTitle",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "CardDescription",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "CardContent",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
       "name": "CardFooter",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
@@ -313,7 +884,7 @@
     {
       "name": "Checkbox",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
@@ -425,7 +996,7 @@
     {
       "name": "Progress",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
@@ -436,12 +1007,6 @@
     },
     {
       "name": "ScrollBar",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "Select",
       "package": "@ai-matrx/design-system",
       "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
       "allow": []
@@ -459,60 +1024,7 @@
       "allow": []
     },
     {
-      "name": "SelectTrigger",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "SelectContent",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": [
-        {
-          "file": "src/components/ui/select.tsx",
-          "reason": "Not a twin: a forwardRef that BINDS this app's glass popup surface (from the host's own --glass-* tokens) and delegates to the package SelectContent."
-        }
-      ]
-    },
-    {
-      "name": "SelectItem",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "SelectLabel",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "SelectSeparator",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "SelectScrollUpButton",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "SelectScrollDownButton",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
       "name": "Separator",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
-      "allow": []
-    },
-    {
-      "name": "Slider",
       "package": "@ai-matrx/design-system",
       "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
       "allow": []
@@ -554,34 +1066,81 @@
       "allow": []
     },
     {
-      "name": "Tooltip",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "name": "createBrowserClient",
+      "package": "@ai-matrx/data/next",
+      "why": "The BROWSER Supabase client. Hand-rolling it re-grows the whole hazard set @ai-matrx/data/next owns: the auth-cookie options (a client on the default cookie name cannot see the session the other doors wrote), the globalThis-slot singleton (a per-module one splits auth state across ESM and CJS graphs), and static NEXT_PUBLIC_* member access (a dynamic lookup is undefined in every browser bundle). matrx-games' utils/supabase/client.ts body was deleted 2026-09-07 in favour of supabaseNext.browserClient(). Import the name from @supabase/ssr only inside the package.",
       "allow": []
     },
     {
-      "name": "TooltipProvider",
-      "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "name": "createServerClient",
+      "package": "@ai-matrx/data/next",
+      "why": "The SSR Supabase client and, with it, the cookie getAll/setAll dance that had been copied into three files here (server, middleware, and the AI Matrx OAuth callback route). The package owns serverClient / routeClient / middlewareSession: the swallowed Server-Component cookie write, the legacy storage-key migration, the split-jar heal, the 'nothing may run between construction and getUser()' rule, no-store headers and cookie carry-over onto redirects. Every one of those has logged users out at random at least once. All four matrx-games sites were collapsed 2026-09-07.",
       "allow": []
     },
     {
-      "name": "TooltipTrigger",
+      "name": "Table",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
-      "name": "TooltipContent",
+      "name": "TableHeader",
       "package": "@ai-matrx/design-system",
-      "why": "Design-system primitive. matrx-local carried its own fork of this family in desktop/src/components/ui/ until 2026-09-07, when the client-package catch-up drain found that this repo had NEVER been adopted onto @ai-matrx/design-system \u2014 the census row said 'all four repos' and five consumers exist. All seventeen forks were swapped and deleted that session (design-system 0.10.0). Census row 19.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": [
+        {
+          "file": "src/components/downloads/DownloadManagerModal.tsx",
+          "reason": "A DIFFERENT capability: a column-header STRIP for a flexbox list \u2014 a flex <div> of <span> labels driven by a `columns: Array<{label, className}>` array. @ai-matrx/design-system's TableHeader renders a <thead> for a real <table>, and this modal contains no <table> at all, so the package component could not be used here without invalid markup."
+        }
+      ]
+    },
+    {
+      "name": "TableBody",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
     },
     {
-      "name": "ArchiveFilter",
+      "name": "TableFooter",
       "package": "@ai-matrx/design-system",
-      "why": "THE ARCHIVED-ITEMS LAW's one control (Arman, 2026-09-09 \u2014 common-docs/policies/archived-items.md): the tri-state active/archived/all segmented toggle every list on the platform reveals its archive with. Shipped in design-system 0.13.0. This repo carried a local copy for part of one session \u2014 written because 0.13.0 existed unpublished and THE LATEST LAW forbids consuming an unpublished package \u2014 and deleted it the moment 0.13.0 landed. The register row is what stops the next host inventing a second answer: a boolean showArchived, a badge, or another segmented control. A behaviour the package lacks is a package change (THE SAME-SESSION LAW), never a local re-definition.",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
       "allow": []
+    },
+    {
+      "name": "TableRow",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": []
+    },
+    {
+      "name": "TableHead",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": []
+    },
+    {
+      "name": "TableCell",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": []
+    },
+    {
+      "name": "TableCaption",
+      "package": "@ai-matrx/design-system",
+      "why": "Design-system primitive. Until 2026-09-07 this repo's DB-authored component scope (src/lib/content-ir/db-component/component-scope.tsx) defined a dependency-free `div` stand-in under this name and handed it to agent-authored components \u2014 an Accordion with no trigger, a Collapsible that could not collapse, a Table that widened its panel. Census row 19c. The package ships all of them (design-system 0.5.2/0.7.1, and 0.8.0 for the Accordion family, built for this row).",
+      "allow": []
+    },
+    {
+      "name": "base64ByteLength",
+      "package": "@ai-matrx/kit/base64",
+      "why": "THE decoded byte length of base64 text (kit 0.13.5, 2026-09-12). There is exactly ONE honest way to compute it and five live sites had written it five ways: `b64.length * 3 / 4` OVERSTATES every padded payload by one or two bytes, because four base64 characters carry three bytes and a trailing `=` / `==` is exactly the bytes that were never there. A sixth adversarial review fixed three sites by hand; a seventh found a FOURTH still wrong (matrx-extend tools/handlers/read.ts, feeding size_bytes) and two of the repairs living as private copies under this same name in aidream's dashboard and in matrx-local. A capability re-derived from memory at every call site is a package export nobody had written yet. The number it returns is real BYTES, which is what formatFileSize wants \u2014 the input lane exists because a base64 STRING LENGTH reaching that formatter prints a confident, wrong \" KB\".",
+      "allow": [],
+      "census": [
+        {
+          "file": "src/pages/TauriFetchBrowser.tsx",
+          "reason": "IS `base64ByteLength` from @ai-matrx/kit/base64, added in the same session (kit 0.13.5). BLOCKED ON A PUBLISH, not on a decision: this app resolves @ai-matrx/kit from the npm registry at `latest`, which is still 0.13.4, so the package subpath does not exist here yet. This body is one of the five hand-written spellings the package export was created to end \u2014 aidream's dashboard carried the IDENTICAL function under the IDENTICAL name, which is what made the case for a package export rather than a fourth repair. The moment kit 0.13.5 publishes, delete this function and import from the package; this entry FAILS as stale the second that happens."
+        }
+      ]
     }
   ]
 }

@@ -42,7 +42,7 @@ import type { DownloadEntry } from "@/lib/downloads/types";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatDurationSeconds, formatFileSize } from "@ai-matrx/kit/format";
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 
@@ -51,12 +51,12 @@ function formatSpeed(bps: number | undefined): string {
   return `${formatFileSize(bps)}/s`;
 }
 
+// ADAPTER: binds the ETA voice. The local second/minute/hour cascade inside
+// it was collapsed onto the package 2026-09-12. Voice: `compact`, rounding
+// down — an ETA that under-promises never lies.
 function formatEta(seconds: number | null | undefined): string {
   if (seconds == null || seconds <= 0) return "—";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600)
-    return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  return formatDurationSeconds(seconds, { style: "compact", round: "down" });
 }
 
 function formatPercent(pct: number): string {

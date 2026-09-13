@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatDurationSeconds, formatFileSize } from "@ai-matrx/kit/format";
 /** Minimal download progress shape accepted by this component.
  *  Compatible with both DownloadProgress (transcription) and LlmDownloadProgress (LLM). */
 export interface DownloadProgressData {
@@ -134,12 +134,12 @@ function formatSpeed(bps: number): string {
   return `${formatFileSize(bps)}/s`;
 }
 
+// ADAPTER: binds the ETA voice and the "~… remaining" wording. The local
+// minute/second cascade inside it was collapsed onto the package 2026-09-12.
+// Voice: `compact`, rounding down — an ETA that under-promises never lies.
 function formatEta(sec: number | null): string {
   if (sec === null || sec <= 0) return "";
-  if (sec < 60) return `~${sec}s remaining`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `~${m}m ${s}s remaining`;
+  return `~${formatDurationSeconds(sec, { style: "compact", round: "down" })} remaining`;
 }
 
 // ── Status phases ──────────────────────────────────────────────────────────

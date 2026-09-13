@@ -344,6 +344,73 @@ export function aliasesIn(rawSource) {
   // ── a top-level pass-through wrapper ──
   for (const w of passThroughWrappers(source, imported)) out.push(w);
 
+  // ── an OBJECT PROPERTY that hands the export on under a second key ──
+  for (const w of objectPropertyAliases(lines, imported)) out.push(w);
+
+  return out;
+}
+
+/**
+ * AN OBJECT PROPERTY THAT RE-NAMES A COLLAPSED EXPORT (2026-09-12, the seventh
+ * review's declared-limit fixtures).
+ *
+ * THE TWO SHAPES, both live:
+ *   `formatBytes: (v) => formatFileSize(v),`   — a property PASS-THROUGH
+ *   `format: formatFileSize,`                  — a point-free HAND-OFF
+ * A registry, a column table, a transform map or a props object is exactly
+ * where a second name for a collapsed export survives longest, because the
+ * property key becomes the spelling every call site uses and NOTHING in the
+ * file mentions the export again. matrx-extend's tool-display registry carried
+ * `formatBytes: (v) => formatFileSize(v)` under a string-union key — the
+ * `format-input-shape.mjs` lane, which judges what ENTERS `formatFileSize`,
+ * hunts that spelling and could never have seen a field routed through it.
+ *
+ * These lines are INDENTED, which is why neither the name lane (column-zero
+ * definitions) nor `passThroughWrappers` (top-level only) could reach them.
+ *
+ * THE SAME DECLARED LIMIT AS THE WRAPPER LANE: an ADAPTER is not a finding.
+ * `duration: (v) => formatDurationMs(v, { style: "coarse" })` binds a decision
+ * and is the fleet's sanctioned shape, so an argument list that is not the
+ * parameter list verbatim never matches. A property whose key EQUALS the
+ * export's own name is the shorthand-equivalent and is not a rename.
+ */
+function objectPropertyAliases(lines, imported) {
+  const out = [];
+  const point = /^\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*,?\s*$/;
+  const arrow =
+    /^\s+([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>\s*(?:\{\s*return\s+)?([A-Za-z_$][\w$]*)\s*\(([^;)]*(?:\([^)]*\))?[^;]*?)\)\s*;?\s*\}?\s*,?\s*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const pm = point.exec(line);
+    if (pm && pm[1] !== pm[2] && imported.has(pm[2])) {
+      out.push({
+        name: pm[2],
+        alias: pm[1],
+        line: i + 1,
+        text: line.trim(),
+        form: "object-property hand-off",
+      });
+      continue;
+    }
+    const am = arrow.exec(line);
+    if (!am) continue;
+    const [, key, params, callee, args] = am;
+    if (key === callee || !imported.has(callee)) continue;
+    const names = params
+      .split(",")
+      .map((prm) => /^\s*(?:\.\.\.)?([A-Za-z_$][\w$]*)/.exec(prm)?.[1])
+      .filter(Boolean);
+    const passed = args.split(",").map((a) => a.trim().replace(/^\.\.\./, "")).filter(Boolean);
+    if (passed.length === 0 || passed.length !== names.length) continue;
+    if (passed.some((a, k) => a !== names[k])) continue;
+    out.push({
+      name: callee,
+      alias: key,
+      line: i + 1,
+      text: line.trim(),
+      form: "object-property pass-through",
+    });
+  }
   return out;
 }
 
@@ -732,6 +799,68 @@ if (SELF_TEST) {
       );
       process.exit(1);
     }
+
+  // ── THE TWO OBJECT-PROPERTY FORMS (2026-09-12, seventh review) ──
+  // Both were DECLARED LIMITS of the alias lane until this round: a registry,
+  // a column table or a transform map re-names a collapsed export through a
+  // property KEY, and every call site then speaks the key. The lines are
+  // indented, so the name lane (column-zero) and the top-level wrapper lane
+  // could not reach either of them. The live instance was matrx-extend's
+  // tool-display registry: `formatBytes: (v) => formatFileSize(v)`.
+  {
+    const KIT = 'import { formatFileSize } from "@ai-matrx/kit/format";';
+    const passThrough = [
+      KIT,
+      "export const TRANSFORMS = {",
+      "  formatBytes: (v) => formatFileSize(v),",
+      "};",
+    ].join("\n");
+    const found = twinsIn("planted-obj.ts", passThrough);
+    if (!found.some((f) => f.alias === "formatBytes")) {
+      console.error(
+        "SELF-TEST FAILED: an object-property PASS-THROUGH " +
+          "(`formatBytes: (v) => formatFileSize(v)`) was not reported.",
+      );
+      process.exit(1);
+    }
+    const handOff = [
+      KIT,
+      "const column = {",
+      "  header: \"Size\",",
+      "  format: formatFileSize,",
+      "};",
+    ].join("\n");
+    const handOffHits = twinsIn("planted-obj.ts", handOff);
+    if (!handOffHits.some((f) => f.alias === "format")) {
+      console.error(
+        "SELF-TEST FAILED: a point-free object-property HAND-OFF " +
+          "(`format: formatFileSize`) was not reported.",
+      );
+      process.exit(1);
+    }
+    // …AND THE DECLARED LIMIT HOLDS. An ADAPTER binds a decision and is the
+    // fleet's sanctioned shape; a lane that fired on ~15 of them across six
+    // repos is a lane somebody deletes.
+    const adapter = [
+      'import { formatDurationMs } from "@ai-matrx/kit/format";',
+      "const cells = {",
+      '  duration: (v) => formatDurationMs(v, { style: "coarse" }),',
+      "  formatFileSize: formatFileSize,",
+      "};",
+    ].join("\n");
+    const adapterHits = twinsIn("planted-obj.ts", adapter).filter(
+      (f) => f.alias === "duration" || f.alias === "formatFileSize",
+    );
+    if (adapterHits.length !== 0) {
+      console.error(
+        "SELF-TEST FAILED: an option-binding ADAPTER (or a property whose key " +
+          "IS the export's own name) was reported as an alias " +
+          `(${adapterHits.map((f) => f.text).join(" | ")}).`,
+      );
+      process.exit(1);
+    }
+  }
+
   }
   // ── every SHAPE lane must also be able to fail ──
   for (const rule of SHAPE_RULES) {
@@ -745,7 +874,7 @@ if (SELF_TEST) {
     `check:package-twins self-test PASSED (every lane can fail) — ` +
       `${TWINS.length} collapsed export(s) registered, plus ` +
       `${SHAPE_RULES.length} SHAPE rule(s): ` +
-      `${SHAPE_RULES.map((r) => r.id).join(", ")}, and the ALIAS lane.`,
+      `${SHAPE_RULES.map((r) => r.id).join(", ")}, and the ALIAS lane in five forms (specifier, assignment, wrapper, object-property pass-through, object-property hand-off).`,
   );
   process.exit(0);
 }

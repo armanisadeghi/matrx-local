@@ -1858,7 +1858,7 @@ function TranscribeTab({
                     </span>
                     {viewingSession.durationSecs > 0 && (
                       <span>
-                        · {formatDuration(viewingSession.durationSecs)}
+                        · {formatDurationSeconds(viewingSession.durationSecs, { style: "compact" })}
                       </span>
                     )}
                     {viewingSession.modelUsed && (
@@ -3845,9 +3845,6 @@ function tierLabel(tier: WhisperModelTier): string {
 function formatRam(mb: number): string {
   return formatFileSize(mb * 1024 * 1024);
 }
-
-const formatDuration = (secs: number): string =>
-  formatDurationSeconds(secs, { style: "compact" });
 
 function formatSessionTitle(date: Date): string {
   const now = new Date();

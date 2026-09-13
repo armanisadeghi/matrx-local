@@ -5,7 +5,6 @@ import { extendTailwindMerge } from "tailwind-merge";
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
 // bodies with twelve different roundings and five different words for
 // "unknown" — the clearest case in the fleet for one owner.
-import { formatDurationMs } from "@ai-matrx/kit/format";
 // THE `formatBytes` ALIAS IS GONE (2026-09-12): a compatibility spelling of a
 // collapsed export puts its call sites outside the input guard that judges
 // what ENTERS formatFileSize. Nothing imported it from here; every caller in
@@ -28,10 +27,13 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 
-/** "250ms" / "5.2s" / "5m 30s" / "1h 02m" — the elapsed-work voice. */
-export function formatDuration(ms: number): string {
-  return formatDurationMs(ms, { style: "compact" });
-}
+// `formatDuration(ms)` WAS HERE, and a SECOND `formatDuration(seconds)` lived
+// in PromptMatrix/BatchConfirmDialog.tsx — the same spelling over two
+// different units, which is the exact ambiguity THE UNIT LAW exists to stop
+// (the unit is in the NAME: formatDurationMs / formatDurationSeconds /
+// formatDurationMinutes, never a bare `number`). This one had zero importers
+// and is deleted; the other is now `formatEtaSeconds`. Call
+// `formatDurationMs` from "@ai-matrx/kit/format" directly.
 
 export function truncateUrl(url: string, maxLength = 60): string {
   if (url.length <= maxLength) return url;

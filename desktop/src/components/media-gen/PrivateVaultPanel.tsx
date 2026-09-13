@@ -36,6 +36,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button, Checkbox, BasicInput as Input, Label } from "@ai-matrx/design-system";
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 import type { MediaLibraryItem, MediaVaultOpResult } from "@/lib/api";
 import type {
   MediaVaultState,
@@ -183,9 +184,12 @@ export function VaultUnlockForm({
       </Button>
       {autoLockSeconds !== null && autoLockSeconds > 0 && (
         <p className="text-[11px] text-muted-foreground text-center">
+          {/* Hand-rolled minutes + pluralisation collapsed onto the package
+              2026-09-12. Voice: `long` — the prose voice, which spells the
+              unit, pluralises itself, and picks the right tier. */}
           The vault locks itself automatically after{" "}
-          {Math.round(autoLockSeconds / 60)} minute
-          {Math.round(autoLockSeconds / 60) === 1 ? "" : "s"} of inactivity.
+          {formatDurationSeconds(autoLockSeconds, { style: "long" })} of
+          inactivity.
         </p>
       )}
     </div>

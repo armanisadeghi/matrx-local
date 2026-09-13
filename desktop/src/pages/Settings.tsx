@@ -112,7 +112,11 @@ import { FilesystemIndexSettings } from "@/features/filesystem/FilesystemIndexSe
 
 // THE package formatters (`@ai-matrx/kit/format`, duplication census H1
 // 2026-09-07). THE UNIT LAW: the unit is in the name.
-import { formatDurationMs, formatFileSize } from "@ai-matrx/kit/format";
+import {
+  formatDurationMinutes,
+  formatDurationMs,
+  formatFileSize,
+} from "@ai-matrx/kit/format";
 type AuthActions = ReturnType<typeof useAuth>;
 
 /** Tri-state, mirroring the engine's ApiKeyValidation. `unknown` means we could
@@ -4673,10 +4677,15 @@ export function Settings({
                               Automatic Updates
                             </Label>
                             <p className="text-xs text-muted-foreground mt-0.5">
+                              {/* Local hour/minute ternary collapsed onto the
+                                  package 2026-09-12. The field is MINUTES, so
+                                  it goes to the minutes export. Voice:
+                                  `coarse` — read at a glance, never seconds. */}
                               Check for updates every{" "}
-                              {settings.updateCheckInterval >= 60
-                                ? `${Math.round(settings.updateCheckInterval / 60)}h`
-                                : `${settings.updateCheckInterval}m`}
+                              {formatDurationMinutes(
+                                settings.updateCheckInterval,
+                                { style: "coarse" },
+                              )}
                             </p>
                           </div>
                           <Switch

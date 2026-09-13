@@ -7,7 +7,7 @@
  */
 export { PromptMatrixPanel, PromptMatrixQueueBar } from "./PromptMatrixPanel";
 export { BatchQueuePanel } from "./BatchQueuePanel";
-export { BatchConfirmDialog, formatDuration } from "./BatchConfirmDialog";
+export { BatchConfirmDialog, formatEtaSeconds } from "./BatchConfirmDialog";
 export { BatchPreviewDialog, type PreviewRun } from "./BatchPreviewDialog";
 export { TemplateEditor } from "./TemplateEditor";
 export { VariableCard } from "./VariableCard";

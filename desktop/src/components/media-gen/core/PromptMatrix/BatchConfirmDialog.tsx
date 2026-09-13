@@ -37,7 +37,11 @@ import { formatDurationSeconds } from "@ai-matrx/kit/format";
  * same statement as an em-dash, so the fallback is bound here while the
  * reading itself is the package's coarse voice.
  */
-export function formatDuration(seconds: number): string {
+// THE UNIT LAW: the unit is in the NAME. This used to be `formatDuration`,
+// the same spelling matrx-local's lib/utils.ts used for a MILLISECOND body —
+// two exports, one name, two units, and nothing in the type system between
+// them. Renamed 2026-09-12; the ms twin was deleted.
+export function formatEtaSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "unknown";
   return formatDurationSeconds(seconds, { style: "coarse" });
 }
@@ -65,7 +69,7 @@ export function BatchConfirmDialog({
   const first = plan.combinations[0];
   const last = plan.combinations[plan.combinations.length - 1];
   const estimate =
-    secondsPerRun !== null ? formatDuration(secondsPerRun * total) : null;
+    secondsPerRun !== null ? formatEtaSeconds(secondsPerRun * total) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

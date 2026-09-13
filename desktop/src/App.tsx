@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
 import { ConfirmDialogHost, TooltipProvider } from "@ai-matrx/design-system";
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 import { AgentCatalogProvider } from "@ai-matrx/agents/catalog/react";
 import { AppLayout, type PageEntry } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
@@ -115,6 +116,14 @@ if (
 export default function App() {
   return (
     <ErrorBoundary>
+      {/* THE ONE CONFIRMATION SURFACE (@ai-matrx/design-system 0.11.0 +
+          @ai-matrx/kit 0.9.0). `confirm()` from `@ai-matrx/kit/confirm-opener`
+          resolves against this host; without it a destructive call would hang
+          forever rather than silently default-yes. Native `window.confirm` is
+          forbidden here — it cannot carry the consequence copy the destructive-
+          click law requires, ignores the theme, and in a Tauri webview wears the
+          OS chrome instead of the app's. */}
+      <ConfirmDialogHost />
       <DevTerminalProvider>
         <DownloadManagerProvider>
           {/* Media: ONE library store, ONE vault store, ONE action set + the
@@ -243,12 +252,13 @@ function AppInner() {
       const durationSecs = Math.round(
         (Date.now() - bgStartTimeRef.current) / 1000,
       );
-      const mins = Math.floor(durationSecs / 60);
-      const secs = durationSecs % 60;
       bgSessActions.finalize(bgSessionIdRef.current, durationSecs);
+      // Local `${mins}m ${secs}s` cascade collapsed onto the package
+      // 2026-09-12. Voice: `compact` — the elapsed-work readout ("5m 30s",
+      // "44s"), which also drops the "0m" a short recording used to carry.
       addNotification(
         "Recording Saved",
-        `${mins}m ${secs}s transcription saved. Open Speech to Text → Transcripts to review.`,
+        `${formatDurationSeconds(durationSecs, { style: "compact" })} transcription saved. Open Speech to Text → Transcripts to review.`,
         "success",
       );
       bgSessionIdRef.current = null;

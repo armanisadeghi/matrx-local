@@ -53,7 +53,7 @@ import { Badge, Button, Progress, ScrollArea, Tooltip, TooltipContent, TooltipTr
 import { useMediaGenApp } from "@/contexts/MediaGenContext";
 import type { ImageGenBatch, ImageGenJob } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { formatDuration } from "./BatchConfirmDialog";
+import { formatEtaSeconds } from "./BatchConfirmDialog";
 
 export function BatchQueuePanel() {
   const [state, actions] = useMediaGenApp();
@@ -163,7 +163,7 @@ export function BatchQueuePanel() {
         {secondsPerRun !== null && totalPending > 0 && !paused && (
           <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
             <Timer className="h-3 w-3" />
-            ~{formatDuration(secondsPerRun * totalPending)} left
+            ~{formatEtaSeconds(secondsPerRun * totalPending)} left
           </span>
         )}
 

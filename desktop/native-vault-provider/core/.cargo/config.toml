@@ -1,0 +1,9 @@
+# This crate is NOT part of the repo-root cargo workspace (see the root
+# Cargo.toml `exclude`), and its provenance gate reads its artifact by the
+# relative path `target/debug/protocol-harness`
+# (desktop/scripts/check-native-vault-core.sh). The repo-root
+# .cargo/config.toml redirects the target directory to
+# desktop/src-tauri/target for every cargo invocation inside the repo; this
+# closer config wins and keeps this project's artifacts local to itself.
+[build]
+target-dir = "target"

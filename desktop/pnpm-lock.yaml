@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@ai-matrx/agents':
         specifier: latest
-        version: 0.11.0(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.11.3(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/content-ir':
         specifier: latest
         version: 0.11.2
@@ -19,10 +19,10 @@ importers:
         version: 0.11.4(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.18.10(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.18.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.13.8(react@19.2.4)
+        version: 0.13.11(react@19.2.4)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -211,8 +211,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/agents@0.11.0':
-    resolution: {integrity: sha512-fpx/UxgN+vq4iJqEU3Vbja/lSTyxyizS9xtW58QmRwCLb+n7AtlFydf2YZeivYLcCSZIkqz7u9Fe32Z0AwN+/A==}
+  '@ai-matrx/agents@0.11.3':
+    resolution: {integrity: sha512-jH4xrZfFXFNh8TJXghdvPecNeAh28Nx2Hl+DwVqMUZGA3ubhIn7uM7c2emPTuBJjE12b5wFBu3TqpZqDXfUKig==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -236,8 +236,8 @@ packages:
     resolution: {integrity: sha512-WG4a2OkFHQ+0sJNHnOOqd3GEKnqwGLTJeo5aEo0bSuikpZ4A0OJtrNFUFpS2QBAK6QSqujMjX5XQwiwgLvGjFA==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/data@0.13.1':
-    resolution: {integrity: sha512-okdHsI1TDYs0GX+qeA+LN5CWZ5wDrMq+40KZhc3tORbCNj8BBcB5GlQ/15NaZeCDq8sgCzuJWDlbkJSW1zeKsg==}
+  '@ai-matrx/data@0.13.4':
+    resolution: {integrity: sha512-rbEZgPmBOkrXCqID+s97dgrY0+OHxy2jvZM+nM0/5/noNOGV52PJXNpKLz7Bpca4JvjX2zo/ve62yb/Ih4/xug==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -245,21 +245,21 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.18.10':
-    resolution: {integrity: sha512-4rg618pzPg7CIWOMid+z4odpUvwmhfSu7AFn8DXrFL/wdo2oeLbn4ahawBL0hAV1Ady08mEQDjuN45Yfq7O49A==}
+  '@ai-matrx/design-system@0.18.15':
+    resolution: {integrity: sha512-atInyD9yU8FYrndXGK6h7RGwurehlKximYyXwFHeW+qpG//A98zmKap7/+3GYbPGTeIFEj2uD2LFPoNfmn7New==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
 
-  '@ai-matrx/kit@0.13.8':
-    resolution: {integrity: sha512-7M+l5EQ+BV3GO524ag3KG/T/N9gAz0kz5Zbc9xA1NRlfgzVJRMR9DGmp2KR315GPVG4dWCvCaMALu0h4Pj9/+w==}
+  '@ai-matrx/kit@0.13.11':
+    resolution: {integrity: sha512-xSjgn8y+yR7RMv7gwBlkC034LbG7/nXBfpi/y0/dKjULA4WgF0g3Tjhxiran+a5FIQfuWAdKxTUdp3/tJQoXUw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
 
-  '@ai-matrx/realtime@0.7.10':
-    resolution: {integrity: sha512-bmPzCPXo6wBnCc/vYczRxK4dKByRmTfzu5SrcdJHH65C915b1xYujCKC5KmKzVDh7PqF4r0BbOFfYJNSRTYITQ==}
+  '@ai-matrx/realtime@0.7.12':
+    resolution: {integrity: sha512-Q8xXZhTLbh4kLeDE2BfyOHfOegMl/OH+vHhTSwZwfZDrQDiWxfdleQ/9dvU3/7Fn6jQMMJxjwgTNgFFii47aGg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3648,11 +3648,11 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/agents@0.11.0(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/agents@0.11.3(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@ai-matrx/data': 0.13.1(@supabase/supabase-js@2.116.0)(react@19.2.4)
-      '@ai-matrx/design-system': 0.18.10(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@ai-matrx/kit': 0.13.8(react@19.2.4)
+      '@ai-matrx/data': 0.13.4(@supabase/supabase-js@2.116.0)(react@19.2.4)
+      '@ai-matrx/design-system': 0.18.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@ai-matrx/kit': 0.13.11(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
@@ -3670,9 +3670,9 @@ snapshots:
     dependencies:
       ajv: 8.20.0
 
-  '@ai-matrx/data@0.13.1(@supabase/supabase-js@2.116.0)(react@19.2.4)':
+  '@ai-matrx/data@0.13.4(@supabase/supabase-js@2.116.0)(react@19.2.4)':
     dependencies:
-      '@ai-matrx/realtime': 0.7.10(react@19.2.4)
+      '@ai-matrx/realtime': 0.7.12(react@19.2.4)
       '@supabase/ssr': 0.12.7(@supabase/supabase-js@2.116.0)
     optionalDependencies:
       react: 19.2.4
@@ -3680,9 +3680,9 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.18.10(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.18.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@ai-matrx/kit': 0.13.8(react@19.2.4)
+      '@ai-matrx/kit': 0.13.11(react@19.2.4)
       '@dnd-kit/core': 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-alert-dialog': 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3722,7 +3722,7 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@ai-matrx/kit@0.13.8(react@19.2.4)':
+  '@ai-matrx/kit@0.13.11(react@19.2.4)':
     dependencies:
       dompurify: 3.4.15
       idb: 8.0.3
@@ -3731,7 +3731,7 @@ snapshots:
       marked: 16.4.2
       react: 19.2.4
 
-  '@ai-matrx/realtime@0.7.10(react@19.2.4)':
+  '@ai-matrx/realtime@0.7.12(react@19.2.4)':
     optionalDependencies:
       react: 19.2.4
 

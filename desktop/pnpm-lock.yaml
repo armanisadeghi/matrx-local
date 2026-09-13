@@ -22,7 +22,7 @@ importers:
         version: 0.18.9(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.13.4(react@19.2.4)
+        version: 0.13.5(react@19.2.4)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -252,8 +252,8 @@ packages:
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
 
-  '@ai-matrx/kit@0.13.4':
-    resolution: {integrity: sha512-Tn5oEYnUlHvMNT37y53BGIdN6fEtgoLQPgMZFWXxJiL9CbqyHFDVn0MYpM+FaJNSoG0fsddkccT5wwoNYsjEFg==}
+  '@ai-matrx/kit@0.13.5':
+    resolution: {integrity: sha512-NPOovGVthgxCxbnqlabvWh45QCYKD/tRJeVwLtWI1+WKoEHfGMkhIY7x4BGuwYJb/4rFCRJAbUUj1RngR9KlIw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3652,7 +3652,7 @@ snapshots:
     dependencies:
       '@ai-matrx/data': 0.13.1(@supabase/supabase-js@2.116.0)(react@19.2.4)
       '@ai-matrx/design-system': 0.18.9(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@ai-matrx/kit': 0.13.4(react@19.2.4)
+      '@ai-matrx/kit': 0.13.5(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
@@ -3682,7 +3682,7 @@ snapshots:
 
   '@ai-matrx/design-system@0.18.9(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@ai-matrx/kit': 0.13.4(react@19.2.4)
+      '@ai-matrx/kit': 0.13.5(react@19.2.4)
       '@dnd-kit/core': 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-alert-dialog': 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3722,7 +3722,7 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@ai-matrx/kit@0.13.4(react@19.2.4)':
+  '@ai-matrx/kit@0.13.5(react@19.2.4)':
     dependencies:
       dompurify: 3.4.15
       idb: 8.0.3

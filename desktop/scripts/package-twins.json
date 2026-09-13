@@ -146,6 +146,12 @@
       "why": "THE UNIT LAW: the fleet's ~35 duration twins variously took milliseconds, seconds and minutes behind an identical `formatDuration(n)` signature, so kit ships formatDurationMs / formatDurationSeconds / formatDurationMinutes and NO bare `formatDuration`. Two host copies had already re-grown under this exact name (observational-memory format.ts, marketing crawl-session-panels.tsx) and were deleted 2026-09-07. A local `formatDuration` that BINDS unit+style+fallback and delegates is an adapter, not a twin; a local `formatDurationMs` is always a twin.",
       "shapeWhy": "A millisecond count becoming a unit string is this capability whatever it is called. The name lane read GREEN on all four formatDuration* exports while aidream's dashboard carried SEVEN bodies under the private names fmtMs and fmtMsSummary, each with its own rounding, and 115 more files in this repo turned ms into `2.3s` / `1.5m` / `3m ago` inline. Pattern and its proof: scripts/duration-shape.mjs. Plain time arithmetic can never match \u2014 the rule requires a DIVISION, MODULO or THRESHOLD COMPARISON against a time base PAIRED with a duration unit label, so a timeout budget (30 * 1000), an API seconds field and a rate denominator all stay untouched. `shapeCensus` below is the pre-existing census, not an exemption: it is reported every run and is ratcheted shrink-only \u2014 a stale entry FAILS the guard.",
       "allow": [],
+      "shapeAllow": [
+        {
+          "file": "src/App.tsx",
+          "reason": "NOT a rendering: `(Date.now() - bgStartTimeRef.current) / 1000` is the seconds DATA FIELD handed to bgSessActions.finalize(sessionId, durationSecs) and persisted. The rule's own text exempts plain time arithmetic feeding an API field; the unit label that pulls it into the window belongs to the formatDurationSeconds call on the line below, which is the collapsed render."
+        }
+      ],
       "shapeCensus": [
         {
           "file": "src/pages/Ports.tsx",
@@ -158,12 +164,6 @@
         {
           "file": "src/lib/coding-session-ui.ts",
           "reason": "IS a duration formatter (`formatRetryDuration`), and cannot be collapsed by this session for two reasons at once: it CEILS outward (Math.ceil, so a retry promise is never shorter than the truth), and kit's `round` option offers only \"nearest\" and \"down\"; and it DROPS the seconds tier when the remainder is zero (\"5m\", never \"5m 00s\"), which is the same missing single-coarsest-unit voice recorded above. Collapsing it would under-promise a retry delay on a live surface. The honest fix is a kit option plus a kit voice, which is the kit package's own program."
-        }
-      ],
-      "shapeAllow": [
-        {
-          "file": "src/App.tsx",
-          "reason": "NOT a rendering: `(Date.now() - bgStartTimeRef.current) / 1000` is the seconds DATA FIELD handed to bgSessActions.finalize(sessionId, durationSecs) and persisted. The rule's own text exempts plain time arithmetic feeding an API field; the unit label that pulls it into the window belongs to the formatDurationSeconds call on the line below, which is the collapsed render."
         }
       ]
     },

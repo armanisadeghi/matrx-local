@@ -20,8 +20,10 @@ mod platform {
     use std::time::{Duration, Instant};
 
     #[derive(Deserialize, Serialize, Clone)]
-    struct State { version: u8, generation: u64, host_subject: Option<String>, provider_subject: Option<String> }
+    struct State { version: u8, generation: String, host_subject: Option<String>, provider_subject: Option<String> }
     fn subject(value: &str) -> bool { value.len() == 36 && value == value.to_ascii_lowercase() && value.as_bytes().iter().enumerate().all(|(i, c)| match i { 8|13|18|23 => *c == b'-', _ => c.is_ascii_hexdigit() }) }
+    fn generation() -> String { format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", rand_word(), (rand_word() >> 16) as u16, ((rand_word() as u16) & 0x0fff) | 0x4000, ((rand_word() as u16) & 0x3fff) | 0x8000, rand_word() & 0x0000_ffff_ffff_ffff) }
+    fn rand_word() -> u64 { unsafe { ((libc::arc4random() as u64) << 32) | libc::arc4random() as u64 } }
     fn dir() -> Result<PathBuf, TransitionResult> {
         let home = std::env::var_os("HOME").ok_or(TransitionResult::StateUnavailable)?;
         let path = PathBuf::from(home).join("Library/Group Containers/group.com.aimatrx.desktop.vault-status/NativeVault");
@@ -29,12 +31,12 @@ mod platform {
     }
     fn read(dir: &Path) -> Result<State, TransitionResult> {
         let path = dir.join("state.json");
-        if !path.exists() { return Ok(State { version: 1, generation: 0, host_subject: None, provider_subject: None }); }
+        if !path.exists() { return Ok(State { version: 1, generation: generation(), host_subject: None, provider_subject: None }); }
         let meta = fs::symlink_metadata(&path).map_err(|_| TransitionResult::StateUnavailable)?;
         if meta.file_type().is_symlink() || meta.len() > 2048 { return Err(TransitionResult::StateCorrupt); }
         let mut bytes = Vec::new(); File::open(path).map_err(|_| TransitionResult::StateUnavailable)?.take(2049).read_to_end(&mut bytes).map_err(|_| TransitionResult::StateUnavailable)?;
         let state: State = serde_json::from_slice(&bytes).map_err(|_| TransitionResult::StateCorrupt)?;
-        if state.version != 1 || state.host_subject.as_deref().is_some_and(|v| !subject(v)) || state.provider_subject.as_deref().is_some_and(|v| !subject(v)) { return Err(TransitionResult::StateCorrupt); }
+        if state.version != 1 || !subject(&state.generation) || state.host_subject.as_deref().is_some_and(|v| !subject(v)) || state.provider_subject.as_deref().is_some_and(|v| !subject(v)) { return Err(TransitionResult::StateCorrupt); }
         Ok(state)
     }
     fn write(dir: &Path, value: &State) -> Result<(), TransitionResult> {
@@ -53,7 +55,7 @@ mod platform {
     }
     pub fn reconcile(next: Option<String>, force: bool) -> TransitionResult {
         if next.as_deref().is_some_and(|v| !subject(v)) { return TransitionResult::StateCorrupt; }
-        match locked(|dir, mut state| { if !force && state.host_subject == next { return Ok(TransitionResult::Unchanged); }; state.generation = state.generation.checked_add(1).ok_or(TransitionResult::StateCorrupt)?; state.host_subject = if force { None } else { next }; state.provider_subject = None; write(dir, &state)?; Ok(TransitionResult::Applied) }) { Ok(v) => v, Err(v) => v }
+        match locked(|dir, mut state| { if !force && state.host_subject == next { return Ok(TransitionResult::Unchanged); }; state.generation = generation(); state.host_subject = if force { None } else { next }; state.provider_subject = None; write(dir, &state)?; Ok(TransitionResult::Applied) }) { Ok(v) => v, Err(v) => v }
     }
     pub fn status() -> HistoricalStatus { match locked(|_, state| Ok(state)) { Ok(state) if state.provider_subject.is_some() => HistoricalStatus { state: "configured", last_configured_subject: state.provider_subject }, Ok(_) => HistoricalStatus { state: "uninitialized", last_configured_subject: None }, Err(TransitionResult::StateCorrupt) => HistoricalStatus { state: "state_corrupt", last_configured_subject: None }, Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None }, Err(_) => HistoricalStatus { state: "state_unavailable", last_configured_subject: None } } }
 }

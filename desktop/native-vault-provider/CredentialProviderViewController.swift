@@ -19,13 +19,14 @@ private enum EnrollmentError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let value) = self { value } else { nil } }
 }
-private struct PublicState: Codable { let version: Int; let generation: Int; let host_subject: String?; let provider_subject: String? }
-private struct PrivateSession: Codable { let version: Int; let phase: String; let subject: String; let generation: Int; let access_token: String; let refresh_token: String; let expires_at_ms: Int64 }
+private struct PublicState: Codable { let version: Int; let generation: String; let host_subject: String?; let provider_subject: String? }
+private struct PrivateSession: Codable { let version: Int; let phase: String; let subject: String; let generation: String; let access_token: String; let refresh_token: String; let expires_at_ms: Int64 }
 private struct Token: Decodable { let access_token: String; let token_type: String; let expires_in: Int; let refresh_token: String; let scope: String? }
 private struct Identity: Decodable { let sub: String; let email: String?; let email_verified: Bool? }
 
 private extension Data { func urlSafeBase64() -> String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") } }
 private extension String { var validToken: Bool { !isEmpty && utf8.count <= 16 * 1024 && utf8.allSatisfy { $0 >= 0x21 && $0 <= 0x7e } } }
+private extension UUID { var canonical: String { uuidString.lowercased() } }
 private func constantTimeEqual(_ left: String, _ right: String) -> Bool {
     let lhs = Array(left.utf8), rhs = Array(right.utf8)
     var mismatch = lhs.count ^ rhs.count
@@ -66,11 +67,11 @@ private final class ProviderStore {
     }
     func read() throws -> PublicState {
         let file = directory.appendingPathComponent("state.json")
-        guard FileManager.default.fileExists(atPath: file.path) else { return PublicState(version: 1, generation: 0, host_subject: nil, provider_subject: nil) }
+        guard FileManager.default.fileExists(atPath: file.path) else { return PublicState(version: 1, generation: UUID().canonical, host_subject: nil, provider_subject: nil) }
         let data = try Data(contentsOf: file)
         guard data.count <= 2048 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
         let value = try JSONDecoder().decode(PublicState.self, from: data)
-        guard value.version == 1 && value.generation >= 0 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
+        guard value.version == 1, UUID(uuidString: value.generation)?.canonical == value.generation, value.host_subject.map({ UUID(uuidString: $0)?.canonical == $0 }) ?? true, value.provider_subject.map({ UUID(uuidString: $0)?.canonical == $0 }) ?? true else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
         return value
     }
     func write(_ value: PublicState) throws {
@@ -94,6 +95,7 @@ private final class ProviderStore {
 
 final class CredentialProviderViewController: ASCredentialProviderViewController, ASWebAuthenticationPresentationContextProviding {
     private var transaction: Transaction?
+    private var enrollmentGeneration: String?
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
 
@@ -115,6 +117,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         do {
             guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else { throw EnrollmentError.message("This build has no public Vault configuration. Install an updated AI Matrx build.") }
             let transaction = try Transaction(); self.transaction = transaction
+            let store = try ProviderStore()
+            // Capture the shared generation before leaving for web auth. A host
+            // actor transition during the await invalidates this transaction.
+            enrollmentGeneration = try store.locked { $0.generation }
             let challenge = Data(SHA256.hash(data: Data(transaction.verifier.utf8))).urlSafeBase64()
             var components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)!; components.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: clientID), URLQueryItem(name: "redirect_uri", value: callback.absoluteString), URLQueryItem(name: "state", value: transaction.state), URLQueryItem(name: "code_challenge", value: challenge), URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "scope", value: "openid email offline_access")]
             guard let url = components.url, window != nil else { throw EnrollmentError.message("Vault setup needs an active provider window. Try again.") }
@@ -131,10 +137,12 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard url.scheme == callback.scheme && url.host == callback.host && url.path == callback.path && url.port == nil && url.fragment == nil else { throw EnrollmentError.message("The account callback was rejected. Start connection again.") }
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             guard items.count == 2, Set(items.map(\.name)).count == 2, let returnedState = items.first(where: { $0.name == "state" })?.value, constantTimeEqual(returnedState, transaction.state), let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else { throw EnrollmentError.message("The account callback was rejected. Start connection again.") }
-            exchange(code: code, verifier: transaction.verifier, key: key)
+            guard let generation = enrollmentGeneration else { throw EnrollmentError.message("Vault connection expired. Start again.") }
+            enrollmentGeneration = nil
+            exchange(code: code, verifier: transaction.verifier, generation: generation, key: key)
         } catch { showError(error) }
     }
-    private func exchange(code: String, verifier: String, key: String) {
+    private func exchange(code: String, verifier: String, generation: String, key: String) {
         var request = URLRequest(url: tokenURL); request.httpMethod = "POST"; request.timeoutInterval = 10; request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(key, forHTTPHeaderField: "apikey")
         let parameters = ["grant_type": "authorization_code", "client_id": clientID, "redirect_uri": callback.absoluteString, "code": code, "code_verifier": verifier]
         let body = parameters.map { pair in
@@ -143,18 +151,18 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }.joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            do { guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.resume()
     }
-    private func authenticateAndPersist(_ token: Token, key: String) {
+    private func authenticateAndPersist(_ token: Token, generation: String, key: String) {
         let context = LAContext(); var detail: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &detail) else { showError(EnrollmentError.message("Vault protection is unavailable on this Mac.")); return }
-        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Protect your AI Matrx Vault session") { [weak self] allowed, _ in guard allowed else { return }; self?.userinfo(token, key: key, context: context) }
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Protect your AI Matrx Vault session") { [weak self] allowed, _ in guard allowed else { return }; self?.userinfo(token, generation: generation, key: key, context: context) }
     }
-    private func userinfo(_ token: Token, key: String, context: LAContext) {
+    private func userinfo(_ token: Token, generation: String, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
-            do { guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.uuidString.lowercased() == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in let next = PublicState(version: 1, generation: old.generation + 1, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, data.count <= 65536 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.canonical == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.resume()
     }
     private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
@@ -162,7 +170,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         do {
             let store = try ProviderStore()
             try store.locked { old in
-                let cleared = PublicState(version: 1, generation: old.generation + 1, host_subject: old.host_subject, provider_subject: nil)
+                let cleared = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
                 try store.write(cleared)
                 let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: keychainAccount, kSecAttrAccessGroup as String: keychainGroup, kSecUseDataProtectionKeychain as String: true]
                 // Local invalidation is authoritative; any server revocation is best-effort and only ever uses this provider session.

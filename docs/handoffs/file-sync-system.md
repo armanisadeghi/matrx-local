@@ -5,6 +5,13 @@ repos: [matrx-local, aidream]
 owner-context: user file sync — full local replica OR pointer-mapped virtual files; the Matrx alternative to Google Drive
 ---
 
+> **2026-09-13 — SUPERSEDED BY THE FOLDER-SYNC CAMPAIGN.** This engine is being rebuilt (Rust crate, any
+> folder, per-mapping direction, daemon) — plan and rulings in
+> `common-docs/projects/folder-sync/` (SCOPE.md, DECISIONS.md, REGISTER.md). Discovery measured the live
+> engine on the owner's machine: 14 open conflicts, all false, against zero-byte placeholders; 2 of 9,111
+> files ever hydrated; one red characterization test (fake lacks `auth_header`); test count here is stale
+> (52, not 35). Do not extend this engine; the campaign deletes it at G3. — folder-sync coordinator
+
 # File sync system — handoff
 
 ## Vision

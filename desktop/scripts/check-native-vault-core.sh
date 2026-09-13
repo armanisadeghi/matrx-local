@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pure Rust core/provenance gate. No FFI, OS provider, release, or database work.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="${MATRX_LOCAL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 CORE="$ROOT/desktop/native-vault-provider/core"
 PROVENANCE="$CORE/provenance"
 ARCHIVE_SHA256='20bf5800e3f6287580da985fb88e678f37c078d62242cb536941c44d852ab37c'
@@ -25,13 +25,32 @@ tar -xzf "$archive" -C "$work/upstream" --strip-components=1
 for license in LICENSE-APACHE LICENSE-MIT; do
   test -s "$CORE/vendor/passkey-authenticator/$license"
 done
-python3 - "$CORE/Cargo.toml" "$CORE/Cargo.lock" <<'PY'
+uv run --no-project --python 3.11 python - "$CORE/Cargo.toml" "$CORE/Cargo.lock" <<'PY'
 from pathlib import Path
-import re, sys
-manifest, lock = (Path(x).read_text() for x in sys.argv[1:])
-expected = '[patch.crates-io]\npasskey-authenticator = { path = "vendor/passkey-authenticator" }'
-if expected not in manifest or manifest.count('[patch.crates-io]') != 1:
-    raise SystemExit('only the approved passkey-authenticator path patch is allowed')
+import re, sys, tomllib
+manifest_text = Path(sys.argv[1]).read_text()
+manifest = tomllib.loads(manifest_text)
+patch = manifest.get('patch', {}).get('crates-io')
+expected = {'passkey-authenticator': {'path': 'vendor/passkey-authenticator'}}
+if patch != expected:
+    raise SystemExit('manifest patch table is not exactly the approved authenticator path patch')
+def paths(value, where=''):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f'{where}.{key}' if where else key
+            if key == 'path':
+                yield child, item
+            yield from paths(item, child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from paths(item, where)
+allowed_paths = [
+    ('bin.path', 'src/bin/protocol-harness.rs'),
+    ('patch.crates-io.passkey-authenticator.path', 'vendor/passkey-authenticator'),
+]
+if sorted(paths(manifest)) != allowed_paths:
+    raise SystemExit('manifest contains an unapproved path dependency')
+lock = Path(sys.argv[2]).read_text()
 if re.search(r'^source = "git\+', lock, re.M):
     raise SystemExit('git dependency found in locked graph')
 entry = re.search(r'\[\[package\]\]\nname = "passkey-types".*?(?=\n\[\[package\]\]|\Z)', lock, re.S)
@@ -72,10 +91,12 @@ PY
     status=$?
     set -e
     test "$status" -ne 0
-    grep -F 'device_bound_backup_flags_are_absent_on_make_and_get' "$work/pristine.log"
-    grep -F 'eligible_not_backed_up_has_only_be_on_make_and_get' "$work/pristine.log"
-    grep -F 'cross_user_handle_exclusion_requires_credential_excluded' "$work/pristine.log"
-    grep -F 'eligible_backed_up_is_intentional_control ... ok' "$work/pristine.log"
+    grep -Fx 'test device_bound_backup_flags_are_absent_on_make_and_get ... FAILED' "$work/pristine.log"
+    grep -Fx 'test eligible_not_backed_up_has_only_be_on_make_and_get ... FAILED' "$work/pristine.log"
+    grep -Fx 'test cross_user_handle_exclusion_requires_credential_excluded ... FAILED' "$work/pristine.log"
+    grep -Fx 'test eligible_backed_up_is_intentional_control ... ok' "$work/pristine.log"
+    grep -Fx 'test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s' "$work/pristine.log" ||
+      grep -E '^test result: FAILED\. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in [0-9.]+s$' "$work/pristine.log"
   else
     cargo test --locked --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
   fi

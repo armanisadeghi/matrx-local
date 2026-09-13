@@ -95,7 +95,29 @@ def token_route_fakes(monkeypatch: pytest.MonkeyPatch):
         lambda: outbox,
     )
     monkeypatch.setattr(key_manager, "clear_vault_keys", lambda: None)
+
+    # Token writes are compare-and-swap operations now. Keep the route and its
+    # process-local coordinator on the same fake repository so these tests
+    # exercise the production session fence instead of a separate SQLite row.
+    from app.services import auth_session
+
+    monkeypatch.setattr(
+        auth_session,
+        "_coordinator",
+        auth_session.AuthSessionCoordinator(repo),
+    )
     return repo, outbox
+
+
+async def _fenced_request(**kwargs: Any) -> token_routes.TokenRequest:
+    from app.services.auth_session import get_auth_session
+
+    state = await get_auth_session().snapshot()
+    return token_routes.TokenRequest(
+        **kwargs,
+        expected_generation=state.generation,
+        expected_credential_revision=state.credential_revision,
+    )
 
 
 @pytest.mark.anyio
@@ -110,8 +132,9 @@ async def test_verified_matching_token_is_saved_and_wakes_publisher(
         return TokenVerificationResult("verified", verified)
 
     monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
+    repo.row = None
     result = await token_routes.save_token(
-        token_routes.TokenRequest(
+        await _fenced_request(
             access_token="verified-token",
             refresh_token="refresh-token",
             user_id="user-1",
@@ -119,7 +142,10 @@ async def test_verified_matching_token_is_saved_and_wakes_publisher(
         )
     )
 
-    assert result == {"status": "ok", "user_id": "user-1"}
+    assert result["status"] == "ok"
+    assert result["user_id"] == "user-1"
+    assert result["credential_revision"] == 1
+    assert result["generation"]
     assert repo.saved is not None
     assert repo.saved["access_token"] == "verified-token"
     assert repo.saved["user_id"] == "user-1"
@@ -145,7 +171,7 @@ async def test_invalid_posted_token_leaves_previous_session_untouched(
     monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
     with pytest.raises(HTTPException) as raised:
         await token_routes.save_token(
-            token_routes.TokenRequest(access_token="wrong-project", user_id="user-1")
+            await _fenced_request(access_token="wrong-project", user_id="user-1")
         )
 
     assert raised.value.status_code == 401
@@ -169,7 +195,7 @@ async def test_invalid_posted_token_clears_only_its_own_stored_copy(
     monkeypatch.setattr(token_routes, "verify_supabase_token_result", _verify)
     with pytest.raises(HTTPException) as raised:
         await token_routes.save_token(
-            token_routes.TokenRequest(access_token="wrong-project", user_id="user-1")
+            await _fenced_request(access_token="wrong-project", user_id="user-1")
         )
 
     assert raised.value.status_code == 401
@@ -654,7 +680,7 @@ async def test_a_working_sign_in_clears_the_configuration_card(
     clean_action_needed_registry,
 ) -> None:
     """The source owns the requirement through retry success."""
-    _repo, _outbox = token_route_fakes
+    repo, _outbox = token_route_fakes
 
     async def _broken(_token: str) -> TokenVerificationResult:
         return TokenVerificationResult("misconfigured")
@@ -672,8 +698,9 @@ async def test_a_working_sign_in_clears_the_configuration_card(
         )
 
     monkeypatch.setattr(token_routes, "verify_supabase_token_result", _fixed)
+    repo.row = None
     await token_routes.save_token(
-        token_routes.TokenRequest(access_token="posted", user_id="user-1")
+        await _fenced_request(access_token="posted", user_id="user-1")
     )
 
     assert await _registered_auth_items(clean_action_needed_registry) == []

@@ -312,17 +312,19 @@ impl CredentialStore for CaptureStore {
         rp: &str,
         _: Option<&[u8]>,
     ) -> Result<Vec<Self::PasskeyItem>, StatusCode> {
-        let out: Vec<_> = self
-            .existing
-            .iter()
-            .filter(|c| {
-                c.rp_id() == rp
-                    && ids.map_or(false, |ids| {
-                        ids.iter().any(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey && id.id.as_slice() == c.credential_id())
+        let out: Vec<_> =
+            self.existing
+                .iter()
+                .filter(|c| {
+                    c.rp_id() == rp && ids.map_or(false, |ids| {
+                        ids.iter().any(|id| {
+                            id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
+                                && id.id.as_slice() == c.credential_id()
+                        })
                     })
-            })
-            .cloned()
-            .collect();
+                })
+                .cloned()
+                .collect();
         if out.is_empty() {
             Err(Ctap2Error::NoCredentials.into())
         } else {
@@ -361,9 +363,10 @@ impl CredentialStore for SingleSourceStore {
         if self.0.rp_id() != rp
             || ids.is_some_and(|ids| {
                 !ids.is_empty()
-                    && !ids
-                        .iter()
-                        .any(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey && id.id.as_slice() == self.0.credential_id())
+                    && !ids.iter().any(|id| {
+                        id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
+                            && id.id.as_slice() == self.0.credential_id()
+                    })
             })
         {
             Err(Ctap2Error::NoCredentials.into())
@@ -431,6 +434,10 @@ fn valid_make(r: &passkey_types::ctap2::make_credential::Request) -> bool {
         && r.extensions.is_none()
         && r.pin_auth.is_none()
         && r.pin_protocol.is_none()
+        && r.exclude_list.as_ref().is_none_or(|ids| {
+            ids.iter()
+                .all(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey)
+        })
         && !r.pub_key_cred_params.is_empty()
         && r.pub_key_cred_params.iter().all(|param| {
             param.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
@@ -446,6 +453,10 @@ fn valid_get(r: &passkey_types::ctap2::get_assertion::Request) -> bool {
         && r.extensions.is_none()
         && r.pin_auth.is_none()
         && r.pin_protocol.is_none()
+        && r.allow_list.as_ref().is_none_or(|ids| {
+            ids.iter()
+                .all(|id| id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey)
+        })
 }
 pub async fn prepare_registration<U>(
     request: passkey_types::ctap2::make_credential::Request,

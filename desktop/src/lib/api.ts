@@ -96,6 +96,26 @@ export interface EngineHealth {
   app_config?: AppConfigStatus;
 }
 
+export interface CodexUsageMetric {
+  model: string; effort?: string; project?: string; conversation_id?: string;
+  conversation_title?: string; root_id?: string; input_tokens: number;
+  cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
+  reasoning_output_tokens: number; total_tokens: number; response_count: number;
+  estimated_standard_credits?: number | null; credit_rate_known?: boolean;
+}
+
+export interface CodexUsageSnapshot {
+  collected_at: string;
+  range: { start: string; end: string };
+  collection: { state: "cached" | "refreshed"; in_progress: boolean };
+  coverage: { complete: boolean; scanned_files: number; indexed_files: number; notes: string[] };
+  totals: CodexUsageMetric & { estimated_standard_credits: number };
+  credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
+  models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
+  cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
+  qualification: string[];
+}
+
 export interface ToolInfo {
   name: string;
   description?: string;
@@ -1322,6 +1342,11 @@ class EngineAPI {
     const resp = await fetch(`${this.baseUrl}/settings`, { headers });
     if (!resp.ok) throw new Error(`Failed to get settings: ${resp.status}`);
     return resp.json();
+  }
+
+  async getCodexUsage(input: { start: string; end: string; grouping: "model" | "model_effort"; refresh?: boolean }): Promise<CodexUsageSnapshot> {
+    const params = new URLSearchParams({ start: input.start, end: input.end, grouping: input.grouping, refresh: String(Boolean(input.refresh)) });
+    return this.request<CodexUsageSnapshot>(`/codex-usage?${params.toString()}`);
   }
 
   /** Update engine runtime settings. */

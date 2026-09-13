@@ -51,6 +51,7 @@ from app.api.tts_routes import router as tts_router
 from app.api.ner_routes import router as ner_router
 from app.api.openai_compat_routes import router as openai_compat_router
 from app.api.hf_token_routes import router as hf_token_router
+from app.api.codex_usage_routes import router as codex_usage_router
 from app.api.scrape_routes import router as scrape_router
 from app.api.extension_bridge_routes import router as extension_bridge_router
 from app.api.extension_routes import router as extension_router
@@ -2186,6 +2187,7 @@ app.include_router(tts_router)
 app.include_router(ner_router)
 app.include_router(openai_compat_router)
 app.include_router(hf_token_router)
+app.include_router(codex_usage_router)
 app.include_router(scrape_router)
 app.include_router(extension_router)
 # Bridge-test endpoints — back the desktop frontend's "Bridge Test" page.

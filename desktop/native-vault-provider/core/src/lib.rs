@@ -312,19 +312,20 @@ impl CredentialStore for CaptureStore {
         rp: &str,
         _: Option<&[u8]>,
     ) -> Result<Vec<Self::PasskeyItem>, StatusCode> {
-        let out: Vec<_> =
-            self.existing
-                .iter()
-                .filter(|c| {
-                    c.rp_id() == rp && ids.map_or(false, |ids| {
+        let out: Vec<_> = self
+            .existing
+            .iter()
+            .filter(|c| {
+                c.rp_id() == rp
+                    && ids.map_or(false, |ids| {
                         ids.iter().any(|id| {
                             id.ty == passkey_types::webauthn::PublicKeyCredentialType::PublicKey
                                 && id.id.as_slice() == c.credential_id()
                         })
                     })
-                })
-                .cloned()
-                .collect();
+            })
+            .cloned()
+            .collect();
         if out.is_empty() {
             Err(Ctap2Error::NoCredentials.into())
         } else {

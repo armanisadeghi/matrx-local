@@ -106,6 +106,9 @@ mod platform {
             Some(unsafe { path.to_str(pool) }.to_owned())
         })
         .ok_or(TransitionResult::StateUnavailable)?;
+        dir_at(&root)
+    }
+    fn dir_at(root: &str) -> Result<File, TransitionResult> {
         let root = c(&root);
         let root_fd = unsafe {
             libc::open(
@@ -545,9 +548,7 @@ mod platform {
             let vault = path.join("NativeVault");
             std::fs::create_dir(&vault).unwrap();
             std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o755)).unwrap();
-            let dir = File::open(&vault).unwrap();
-
-            assert!(ensure_private_dir(dir.as_raw_fd()));
+            let dir = dir_at(path.to_str().unwrap()).unwrap();
             assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o700);
             assert!(
                 ensure_private_dir(dir.as_raw_fd()),
@@ -557,6 +558,21 @@ mod platform {
             std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o750)).unwrap();
             assert!(!ensure_private_dir(dir.as_raw_fd()));
             assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o750);
+
+            std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o4755)).unwrap();
+            assert!(matches!(dir_at(path.to_str().unwrap()), Err(TransitionResult::StateUnavailable)));
+            assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o4755);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        #[test]
+        fn mutating_path_refuses_a_legacy_directory_symlink() {
+            let (path, _) = temp();
+            let target = path.join("target");
+            std::fs::create_dir(&target).unwrap();
+            std::os::unix::fs::symlink(&target, path.join("NativeVault")).unwrap();
+
+            assert!(matches!(dir_at(path.to_str().unwrap()), Err(TransitionResult::StateUnavailable)));
+            assert!(std::fs::symlink_metadata(path.join("NativeVault")).unwrap().file_type().is_symlink());
             std::fs::remove_dir_all(path).unwrap();
         }
         #[test]

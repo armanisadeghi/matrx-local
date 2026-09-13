@@ -1,0 +1,33 @@
+# Cargo workspace root — AI Matrx Local.
+#
+# Added by folder-sync spike FS-C1 (common-docs/projects/folder-sync/REGISTER.md).
+# Three members: the sync library, the sync daemon binary, and the Tauri app.
+# The daemon and the app therefore compile the SAME `matrx-sync` crate — one
+# source, two packagings (folder-sync DECISIONS.md D1).
+#
+# Target directory: NOT the workspace root. `.cargo/config.toml` pins it to
+# `desktop/src-tauri/target` so every path the release pipeline already
+# hardcodes stays correct. Rationale and alternatives: crates/README.md.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/matrx-sync",
+    "crates/matrx-syncd",
+    "desktop/src-tauri",
+]
+
+# The app's own version is NOT inherited from here: scripts/release.sh bumps
+# `desktop/src-tauri/Cargo.toml`'s literal `version = "..."` line. The sync
+# crates version independently of the shipped app.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["AI Matrx"]
+
+# Pinned at the versions the Tauri crate already shipped (desktop/src-tauri
+# Cargo.toml, v1.4.106) so the daemon and the app can never diverge.
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+rusqlite = { version = "0.31", features = ["bundled"] }

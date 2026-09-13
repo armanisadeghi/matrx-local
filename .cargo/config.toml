@@ -1,0 +1,10 @@
+# Keep every workspace artifact where the release pipeline already looks.
+#
+# Adding the root Cargo workspace (FS-C1) would otherwise move the target
+# directory to `<repo>/target`, silently breaking the macOS re-sign step
+# (.github/workflows/release.yml) and the packaged-app discovery in
+# scripts/smoke.sh, both of which hardcode `desktop/src-tauri/target/...`.
+# Relative config paths resolve against the directory containing `.cargo`,
+# i.e. the repo root.
+[build]
+target-dir = "desktop/src-tauri/target"

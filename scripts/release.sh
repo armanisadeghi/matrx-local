@@ -36,7 +36,7 @@ VERSION_FILES=(
     pyproject.toml
     desktop/src-tauri/tauri.conf.json
     desktop/src-tauri/Cargo.toml
-    desktop/src-tauri/Cargo.lock
+    Cargo.lock
     desktop/package.json
     uv.lock
 )
@@ -943,7 +943,7 @@ command -v uv &>/dev/null || fail "uv is required to refresh uv.lock."
 uv lock >/dev/null
 ok "uv.lock → $NEW_VERSION"
 
-info "Refreshing desktop/src-tauri/Cargo.lock..."
+info "Refreshing Cargo.lock (workspace root)..."
 command -v cargo &>/dev/null || fail "cargo is required to refresh Cargo.lock."
 (cd desktop/src-tauri && cargo update -p aimatrx-desktop >/dev/null)
 ok "Cargo.lock → $NEW_VERSION"
@@ -959,7 +959,7 @@ git add \
     pyproject.toml \
     desktop/src-tauri/tauri.conf.json \
     desktop/src-tauri/Cargo.toml \
-    desktop/src-tauri/Cargo.lock \
+    Cargo.lock \
     desktop/package.json \
     uv.lock
 git commit -m "$COMMIT_MSG"

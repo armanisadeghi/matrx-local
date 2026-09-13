@@ -1,0 +1,17 @@
+[package]
+name = "matrx-syncd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "AI Matrx folder-sync daemon (scaffold — does not sync anything yet)"
+publish = false
+
+# The binary name is load-bearing: it is bundled as a Tauri externalBin
+# sidecar and MUST NOT match the app's engine kill patterns
+# ("Matrx Engine|matrx-engine|aimatrx-engine", desktop/src-tauri/src/lib.rs).
+[[bin]]
+name = "matrx-syncd"
+path = "src/main.rs"
+
+[dependencies]
+matrx-sync = { path = "../matrx-sync" }

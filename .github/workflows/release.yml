@@ -160,12 +160,16 @@ jobs:
         include:
           - platform: macos-15
             args: --target aarch64-apple-darwin --bundles app,dmg,updater --features metal
+            syncd_target: aarch64-apple-darwin
           - platform: macos-15
             args: --target x86_64-apple-darwin --bundles app,dmg,updater --features metal
+            syncd_target: x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: --bundles deb
+            syncd_target: ""
           - platform: windows-latest
             args: ""
+            syncd_target: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -526,6 +530,22 @@ jobs:
           # Write to GITHUB_ENV — use native path string (correct on all platforms)
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"WHISPER_CPP_SOURCE_DIR={dest}\n")
+
+      # ---- Rust folder-sync daemon sidecar ----
+      # matrx-syncd is declared in bundle.externalBin on every platform, so the
+      # -$TARGET_TRIPLE binary must exist before tauri-action runs or the build
+      # fails. Cargo-built here (not downloaded), so tauri's bundler signs it
+      # with the app on macOS — no separate re-sign step, unlike the
+      # pre-built llama.cpp binaries above.
+      - name: Build sync daemon sidecar (matrx-syncd)
+        shell: bash
+        run: |
+          chmod +x scripts/build-syncd.sh
+          if [ -n "${{ matrix.syncd_target }}" ]; then
+            ./scripts/build-syncd.sh --target "${{ matrix.syncd_target }}"
+          else
+            ./scripts/build-syncd.sh
+          fi
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0.5

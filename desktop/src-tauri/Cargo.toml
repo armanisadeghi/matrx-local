@@ -27,8 +27,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-macos-permissions = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
-rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest.workspace = true
+rusqlite.workspace = true
 base64 = "0.22"
 
 # Transcription (whisper.cpp)
@@ -36,7 +36,7 @@ whisper-cpp-plus = { version = "0.1", features = ["async"] }
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 cpal = "0.15"
 futures-util = "0.3"
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 log = "0.4"
 rubato = "1"
 audioadapter-buffers = "2.0.0"

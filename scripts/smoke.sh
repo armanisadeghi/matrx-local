@@ -209,12 +209,15 @@ find_app_binary() {
     windows)
       # tauri build leaves the runnable .exe in target/release; the NSIS/MSI
       # bundles under bundle/ are INSTALLERS, not the app.
+      # matrx-syncd.exe is a cargo workspace sibling that lands in the same
+      # directory (FS-C1) — it is a sidecar, never the app.
       find desktop/src-tauri/target/release -maxdepth 1 -type f -name "*.exe" 2>/dev/null \
-        | grep -vi -e setup -e installer -e uninstall | head -1
+        | grep -vi -e setup -e installer -e uninstall -e matrx-syncd | head -1
       ;;
     linux)
+      # "*matrx*" also matches the matrx-syncd workspace sibling (FS-C1).
       find desktop/src-tauri/target/release -maxdepth 1 -type f -executable \
-        -name "*matrx*" 2>/dev/null | head -1
+        -name "*matrx*" ! -name "matrx-syncd*" 2>/dev/null | head -1
       ;;
   esac
 }

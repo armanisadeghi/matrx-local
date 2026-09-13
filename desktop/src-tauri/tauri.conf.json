@@ -43,6 +43,7 @@
     ],
     "externalBin": [
       "sidecar/matrx-engine",
+      "sidecar/matrx-syncd",
       "sidecar/cloudflared",
       "binaries/llama-server",
       "binaries/uv"

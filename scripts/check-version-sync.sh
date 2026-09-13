@@ -37,8 +37,8 @@ versions = {
     "desktop/src-tauri/Cargo.toml": match_version(
         "desktop/src-tauri/Cargo.toml", r'^version\s*=\s*"([^"]+)"'
     ),
-    "desktop/src-tauri/Cargo.lock": match_version(
-        "desktop/src-tauri/Cargo.lock", "", package="aimatrx-desktop"
+    "Cargo.lock": match_version(
+        "Cargo.lock", "", package="aimatrx-desktop"
     ),
     "uv.lock": match_version("uv.lock", "", package="matrx-local"),
 }

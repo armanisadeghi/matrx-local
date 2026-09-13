@@ -789,16 +789,16 @@ info "Checking @ai-matrx packages are npm latest..."
 # Package logic is NEVER duplicated outside the package: a local re-definition of a
 # collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
 # run means the guard can actually fail.
-(cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || warn "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
+(cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || fail "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
 # Native browser confirmations block the renderer and bypass the app's dialog
 # stack. The package opener plus one host per React root is the only approved
 # path; run the self-test first so this release gate proves it can fail.
-(cd desktop && pnpm check:native-confirm:self-test && pnpm check:native-confirm) || warn "A native browser confirm is back in desktop/src. Import confirm from @ai-matrx/kit/confirm-opener and use the mounted ConfirmDialogHost."
+(cd desktop && pnpm check:native-confirm:self-test && pnpm check:native-confirm) || fail "A native browser confirm is back in desktop/src. Import confirm from @ai-matrx/kit/confirm-opener and use the mounted ConfirmDialogHost."
 # THERE IS ONE AGENT PICKER (ruling D1) and matrx-local is NEVER an exception
 # (ruling D4). This desktop shipped a 912-line hand-rolled AgentPicker with its
 # own sorts, filters and a hardcoded default-agent NAME; the guard is what stops
 # that class returning. Self-test first so a green run means it can fail.
-(cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || warn "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
+(cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || fail "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
 # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
 # ../common-docs/policies/archived-items.md): every list over an entity that can
 # be archived carries an archive filter, the default hides archived, revealing
@@ -806,7 +806,7 @@ info "Checking @ai-matrx packages are npm latest..."
 # the plumbing built end to end and NOTHING setting it, so 1,671 archived Claude
 # sessions rendered mixed in with live ones. Self-test first so a green run
 # means the detector can still fail.
-(cd desktop && pnpm check:archived-items-law:self-test && pnpm check:archived-items-law) || warn "A list hides archived rows with no way to reveal them (see above). Agent lists use @ai-matrx/agents/catalog's archFilter; anything else uses the tri-state ArchiveFilter with its value passed to the READER (the engine's archived=, the SQLite clause) — three states, never a boolean."
+(cd desktop && pnpm check:archived-items-law:self-test && pnpm check:archived-items-law) || fail "A list hides archived rows with no way to reveal them (see above). Agent lists use @ai-matrx/agents/catalog's archFilter; anything else uses the tri-state ArchiveFilter with its value passed to the READER (the engine's archived=, the SQLite clause) — three states, never a boolean."
 ok "@ai-matrx packages are npm latest; the one agent picker holds; archived items are reachable."
 
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
@@ -829,7 +829,12 @@ info "Checking release version manifests agree with pyproject.toml..."
 ok "Version manifests are synchronized."
 
 # ── TypeScript type-check ────────────────────────────────────────────────────
-info "Type and broad feature diagnostics belong to CI; release does not duplicate them."
+info "Running TypeScript type-check (pnpm tsc -b)..."
+if ! (cd desktop && pnpm tsc -b 2>&1); then
+    echo ""
+    fail "TypeScript errors detected. Fix them before releasing (shown above)."
+fi
+ok "TypeScript check passed."
 
 
 # Downloads, installs, and typechecking must not silently create source changes

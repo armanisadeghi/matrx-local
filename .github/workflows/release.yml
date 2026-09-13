@@ -74,6 +74,19 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      - name: TypeScript typecheck
+        working-directory: desktop
+        run: pnpm tsc -b
+
+      - name: Desktop unit tests
+        working-directory: desktop
+        run: pnpm test:unit
+        env:
+          # Unit tests must not depend on repository secrets. These values are
+          # syntactically valid but point only at the local Supabase test stub.
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: test-publishable-key
+
       - name: Install Playwright Chromium
         working-directory: desktop
         run: pnpm exec playwright install --with-deps chromium

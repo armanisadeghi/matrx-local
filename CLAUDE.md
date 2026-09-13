@@ -19,8 +19,6 @@
 **The Data Doctrine binds data work.** Custom data, table types, organizations, and access words are ruled by the AI Matrx Data Doctrine (Arman, 2026-09-10) — a doctrine document, presumed right against the code and any other doc, amended only by him (`common-docs/policies/doctrine-documents.md`). Its data rules live once at `common-docs/systems/platform/db-rules/DECISIONS.md`; the gap between them and the code is tracked in `common-docs/projects/data-doctrine-adoption/REGISTER.md`. Live names (scope, component, machinery, graveyard, is_personal…) stay until their convergence campaign runs — never rename on sight.
 <!-- nine-laws:end -->
 
-**Already shipped partial work now fixed and pushed? Request one expedited release from its existing owner AFTER completion; never seek preemptive author consent.** Ship-first pre-production and fatal-risk boundaries: [release policy](../common-docs/policies/deployment-is-the-deploy-agents-job.md).
-
 
 **Why you're reading this: you are doing DESKTOP-APP work in this repo.** This file
 carries what a desktop agent must know to avoid this repo's known failure modes —

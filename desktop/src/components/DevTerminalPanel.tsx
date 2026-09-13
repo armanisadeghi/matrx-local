@@ -53,6 +53,10 @@ import {
   CheckCircle,
   Filter,
 } from "lucide-react";
+// THE package count formatter (`@ai-matrx/kit/format`, kit 0.12.0) owns the
+// grouped-number voice, and refuses to print a confident number for a value
+// nobody measured. A measured `0` still reads "0".
+import { formatCount } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
 import {
   useClientLogSubscriber,
@@ -1050,7 +1054,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
               Lines
             </span>
             <span className="text-lg font-mono text-zinc-300">
-              {logs.length.toLocaleString()}
+              {formatCount(logs.length)}
             </span>
           </div>
           <div
@@ -1106,7 +1110,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
                 httpErrors > 0 ? "text-amber-400" : "text-zinc-300",
               )}
             >
-              {httpEntries.length.toLocaleString()}
+              {formatCount(httpEntries.length)}
             </span>
           </div>
         </div>
@@ -1171,7 +1175,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
                   {label}
                 </span>
                 <span className="text-[10px] font-mono text-zinc-600">
-                  {total.toLocaleString()} lines
+                  {formatCount(total)} lines
                 </span>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -1677,7 +1681,7 @@ export function DevTerminalPanel() {
         {/* Activity pulse */}
         <span className="flex shrink-0 items-center gap-1 px-2 text-[10px] text-zinc-600 font-mono">
           <Activity className="h-3 w-3" />
-          {allLogs.length.toLocaleString()}
+          {formatCount(allLogs.length)}
         </span>
 
         {/* Close */}

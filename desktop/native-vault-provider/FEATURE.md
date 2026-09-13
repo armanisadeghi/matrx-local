@@ -20,3 +20,11 @@ container nesting, UTF-8 and surrogate handling, and the closed token,
 userinfo, public-state, and active/refresh-pending private-session envelopes.
 It does not access Keychain or OAuth and is not evidence that enrollment is
 ready.
+
+## Shared state
+
+`NativeVaultState.swift` and the host's `native_vault.rs` use the Foundation-resolved App Group and held directory descriptors. Only explicit Connect initializes missing provider state, after private-session invalidation; ordinary reads never create it. Host status is historical metadata, with explicit busy/corrupt outcomes, and never means credential filling is ready. `desktop/scripts/test-native-vault-state.sh` and the Rust native-vault tests exercise the actual state implementation, including process contention and symlink refusal. Signed Keychain, enrollment lifecycle and OS credential delivery require separate acceptance under the canonical contract above.
+
+## Change log
+
+- 2026-09-13: Verified shared-state implementation and focused process/filesystem checks at `0eb823933`; documented its separation from unfinished native credential delivery.

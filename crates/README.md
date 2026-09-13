@@ -151,7 +151,52 @@ rustc 1.93.1) at commit `d98a0727b`. Nothing here is inferred.
 | 14 | `bash -n` on `smoke.sh`, `release.sh`, `build-syncd.sh`; `json.load` on both tauri configs; `yaml.safe_load` on `release.yml` and `ci.yml` | all parse |
 | 15 | `./scripts/smoke.sh packaged` | see below |
 
-<!-- SMOKE_RESULT -->
+### 15. `./scripts/smoke.sh packaged` — **CLEAN, exit 0**
+
+Run `.smoke/runs/20260913-164402-55287/` (commit `d98a0727b`, version 1.4.107,
+isolated home + ports 27100-27119). It does a full PyInstaller sidecar build and a
+real **release** `tauri build`, then launches the packaged app and watches it:
+
+```
+✅ packaged: sidecar + app built
+✅ packaged: app stayed up and the engine answered /health in 42s (http://127.0.0.1:27100)
+✅ packaged: no engine service in state=failed (/admin/status)
+⚠️ packaged: degraded services (informational, not a failure)
+     scraper: browser rendering unavailable (browser_starting)
+✅ packaged: app exited cleanly on a graceful quit signal in 0s
+✅ packaged: no orphaned children after shutdown
+✅ packaged app log: no fatal lines in the log
+✅ packaged: pre-existing live engine remained healthy and PID-stable (97663)
+
+Result: CLEAN — packaged smoke passed with no failures.
+```
+
+The one ⚠️ is the harness's own informational line about the scraper browser still
+warming up; it is not a failure and is unrelated to this change.
+
+That run's **release** bundle was inspected afterwards and carries the same layout as
+the debug one in row 9:
+
+```
+$ ls "target/release/bundle/macos/AI Matrx.app/Contents/MacOS/"
+aimatrx-desktop  cloudflared  llama-server  matrx-syncd  uv
+$ ls "target/release/bundle/macos/AI Matrx.app/Contents/Frameworks/"
+Matrx Engine.app
+```
+
+### 16. Native Vault core still builds outside the workspace
+
+```
+$ cd desktop/native-vault-provider/core && cargo metadata --format-version 1 --no-deps
+target_directory: .../desktop/native-vault-provider/core/target
+$ cargo build --locked --features protocol-test-harness --bin protocol-harness
+Finished dev profile ... ; target/debug/protocol-harness present
+```
+
+Before the `exclude` + local `.cargo/config.toml` were added, the same `cargo metadata`
+failed outright with *"current package believes it's in a workspace when it's not"* —
+which would have failed the `native-vault-core` CI job.
+
 
 ### What could NOT be proven here, and remains for CI
 

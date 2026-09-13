@@ -3,8 +3,10 @@
 Two independent paths, tried in order (see the cross-repo spec):
 
   1. Primary — Supabase PostgREST
-     ``GET {SUPABASE_URL}/rest/v1/app_config?app=eq.matrx-local`` with the
-     publishable key only (anon read via RLS; MUST work pre-login, so no JWT).
+     ``GET {SUPABASE_URL}/rest/v1/app_config?app=eq.matrx-local&select=<the
+     five columns below>`` with the publishable key only (anon read via RLS;
+     MUST work pre-login, so no JWT). The columns are named, never ``*`` — a
+     signed-out reader may read only what the table declares to ``anon``.
   2. Fallback — aidream
      ``GET {AIDREAM_SERVER_URL}/api/app-config/matrx-local`` (public,
      unauthenticated, server-cached). Protects against Supabase-side outages.
@@ -43,6 +45,15 @@ logger = get_logger()
 
 APP_KEY = "matrx-local"
 
+# The columns this client actually consumes — `AppConfigRow` has exactly these
+# five fields. Sent by NAME because a signed-out reader may read only the
+# columns `public.app_config` declares to `anon` (DD-186): the table no longer
+# answers `select=*` to the publishable key, and `updated_by`, `created_by`,
+# `organization_id`, `metadata` and `version` are not a desktop client's data.
+# Adding a field to `AppConfigRow` means adding it here AND declaring it in
+# matrx-frontend's `ANON_COLUMN_SURFACE`, or the read comes back without it.
+_SELECT_COLUMNS = "app,schema_version,min_supported_app_version,config,updated_at"
+
 # Per the spec: 5s total, 5s connect. Config fetch is a background concern —
 # it must never hold anything up for long.
 _TIMEOUT = httpx.Timeout(5.0, connect=5.0)
@@ -54,7 +65,7 @@ async def _fetch_postgrest() -> AppConfigRow:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.get(
             url,
-            params={"app": f"eq.{APP_KEY}"},
+            params={"app": f"eq.{APP_KEY}", "select": _SELECT_COLUMNS},
             headers={"apikey": SUPABASE_PUBLISHABLE_KEY, **SUPABASE_PROFILE_HEADERS},
         )
     resp.raise_for_status()

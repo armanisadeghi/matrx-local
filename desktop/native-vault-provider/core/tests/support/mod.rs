@@ -404,17 +404,12 @@ fn assertion_options(
         .map_err(|_| WireError::Invalid)
 }
 
-pub async fn prepare_wire_registration(frame: Frame) -> Result<PendingRegistration, FixedError> {
-    let Frame::Register {
-        id,
-        options,
-        origin,
-        uv,
-        ..
-    } = frame
-    else {
-        return Err(FixedError::InvalidRequest);
-    };
+async fn prepare_create(
+    id: String,
+    options: CreateOptions,
+    origin: String,
+    uv: bool,
+) -> Result<PendingRegistration, FixedError> {
     let options = creation_options(&options).map_err(|_| FixedError::InvalidRequest)?;
     let (hash, client_data_json) = client_data(ClientDataType::Create, &options.challenge, &origin)
         .map_err(|_| FixedError::InvalidRequest)?;
@@ -447,6 +442,33 @@ pub async fn prepare_wire_registration(frame: Frame) -> Result<PendingRegistrati
         source,
         prepared,
     })
+}
+pub async fn prepare_wire_registration(frame: Frame) -> Result<PendingRegistration, FixedError> {
+    let Frame::Register {
+        id,
+        options,
+        origin,
+        uv,
+        ..
+    } = frame
+    else {
+        return Err(FixedError::InvalidRequest);
+    };
+    prepare_create(id, options, origin, uv).await
+}
+pub async fn cancel_wire_registration(frame: Frame) -> Result<(), FixedError> {
+    let Frame::CancelRegister {
+        id,
+        options,
+        origin,
+        uv,
+    } = frame
+    else {
+        return Err(FixedError::InvalidRequest);
+    };
+    // The prepared operation is deliberately dropped without a persister, so it cannot expose a credential.
+    drop(prepare_create(id, options, origin, uv).await?);
+    Ok(())
 }
 impl PendingRegistration {
     pub async fn commit<P: RegistrationPersister>(

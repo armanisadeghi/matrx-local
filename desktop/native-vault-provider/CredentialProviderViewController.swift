@@ -24,6 +24,21 @@ private struct PrivateSession: Codable { let version: Int; let phase: String; le
 private struct Token: Decodable { let access_token: String; let token_type: String; let expires_in: Int; let refresh_token: String; let scope: String? }
 private struct Identity: Decodable { let sub: String; let email: String?; let email_verified: Bool? }
 
+private enum StrictEnvelope {
+    static func object(_ data: Data, required: Set<String>, optional: Set<String>) throws -> [String: Any] {
+        guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        let text = String(decoding: data, as: UTF8.self)
+        let expression = try NSRegularExpression(pattern: #""((?:\\.|[^"\\])*)"\s*:"#)
+        var keys = Set<String>()
+        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            let key = String(text[Range(match.range(at: 1), in: text)!])
+            guard keys.insert(key).inserted else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
+        guard required.isSubset(of: Set(raw.keys)), Set(raw.keys).isSubset(of: required.union(optional)) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        return raw
+    }
+}
+
 /// URLSession's convenience completion handler has already accumulated the
 /// response. This delegate refuses redirects and cancels as soon as the fixed
 /// envelope limit is crossed.
@@ -94,6 +109,7 @@ private final class ProviderStore {
         guard FileManager.default.fileExists(atPath: file.path) else { return PublicState(version: 1, generation: UUID().canonical, host_subject: nil, provider_subject: nil) }
         let data = try Data(contentsOf: file)
         guard data.count <= 2048 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
+        _ = try StrictEnvelope.object(data, required: ["version", "generation", "host_subject", "provider_subject"], optional: [])
         let value = try JSONDecoder().decode(PublicState.self, from: data)
         guard value.version == 1, UUID(uuidString: value.generation)?.canonical == value.generation, value.host_subject.map({ UUID(uuidString: $0)?.canonical == $0 }) ?? true, value.provider_subject.map({ UUID(uuidString: $0)?.canonical == $0 }) ?? true else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
         return value
@@ -175,7 +191,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }.joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
         BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; _ = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["id_token", "scope"]); let token = try JSONDecoder().decode(Token.self, from: data); guard token.token_type.lowercased() == "bearer", (1...86400).contains(token.expires_in), token.access_token.validToken, token.refresh_token.validToken else { throw EnrollmentError.message("Account response was rejected. Try again.") }; self?.authenticateAndPersist(token, generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.start(request)
     }
     private func authenticateAndPersist(_ token: Token, generation: String, key: String) {

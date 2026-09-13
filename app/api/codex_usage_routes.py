@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services.codex_usage import snapshot_service
+from app.services.codex_usage import CollectionBusyError, snapshot_service
 from app.services.codex_usage.allowance import allowance_service
 
 router = APIRouter(prefix="/codex-usage", tags=["codex-usage"])
@@ -44,3 +44,5 @@ async def get_codex_usage(
         return snapshot | {"requested_grouping": grouping}
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
+    except CollectionBusyError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc

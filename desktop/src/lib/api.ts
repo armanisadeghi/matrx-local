@@ -110,13 +110,26 @@ export interface CodexUsageSnapshot {
   collected_at: string;
   range: { start: string; end: string };
   collection: { state: "cached" | "refreshed" | "resumed"; in_progress: boolean };
-  coverage: { complete: boolean; scanned_files: number; indexed_files: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
+  coverage: { complete: boolean; scan_exhausted: boolean; scanned_files: number; indexed_files: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
   totals: CodexUsageMetric & { estimated_standard_credits: number };
   credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
   models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
   cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
   qualification: string[];
   activity: { classification: string; outbound_peer_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
+}
+
+export interface CodexAllowanceLimit {
+  used_percent: number | null;
+  remaining_percent: number | null;
+  window_minutes: number | null;
+  resets_at: number | null;
+}
+export interface CodexAllowance {
+  status: "available" | "unavailable";
+  observed_at: string;
+  reason?: string;
+  limits: CodexAllowanceLimit[];
 }
 
 export interface ToolInfo {
@@ -1350,6 +1363,10 @@ class EngineAPI {
   async getCodexUsage(input: { start: string; end: string; grouping: "model" | "model_effort"; refresh?: boolean }): Promise<CodexUsageSnapshot> {
     const params = new URLSearchParams({ start: input.start, end: input.end, grouping: input.grouping, refresh: String(Boolean(input.refresh)) });
     return this.request<CodexUsageSnapshot>(`/codex-usage?${params.toString()}`);
+  }
+
+  async getCodexAllowance(): Promise<CodexAllowance> {
+    return this.request<CodexAllowance>("/codex-usage/allowance");
   }
 
   /** Update engine runtime settings. */

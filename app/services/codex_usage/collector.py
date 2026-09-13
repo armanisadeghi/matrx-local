@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import copy
 import datetime as dt
 import json
 import re
@@ -90,6 +91,7 @@ class UsageScan:
     cursor: int = 0; cells: dict[tuple[str, str, str], collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(_metrics)); bins: dict[tuple[dt.datetime, str, str, str], collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(_metrics))
     seen_responses: set[str] = field(default_factory=set); seen_calls: set[str] = field(default_factory=set); targets: dict[str, collections.Counter[str]] = field(default_factory=lambda: collections.defaultdict(collections.Counter))
     duplicates: int = 0; foreign_records: int = 0; missing: int = 0; skipped: int = 0; truncated: int = 0; bytes_read: int = 0; notes: list[str] = field(default_factory=list)
+    last_scan_at: dt.datetime | None = None; published: dict[str, Any] | None = None
 
     def root(self, tid: str) -> str:
         seen: set[str] = set()
@@ -97,7 +99,7 @@ class UsageScan:
         return tid
 
     @property
-    def complete(self) -> bool: return self.cursor >= len(self.candidates)
+    def scan_exhausted(self) -> bool: return self.cursor >= len(self.candidates)
 
 
 def create_scan(start: dt.datetime, end: dt.datetime, home: Path | None = None) -> UsageScan:
@@ -152,6 +154,7 @@ def _read_candidate(scan: UsageScan, candidate: Candidate, began: float, batch_b
 
 def advance_scan(scan: UsageScan) -> None:
     began, batch_bytes, visited = time.monotonic(), 0, 0
+    scan.truncated = 0
     while scan.cursor < len(scan.candidates) and visited < MAX_FILES:
         if time.monotonic() - began >= MAX_SECONDS: scan.notes.append("time budget reached; continue collection to resume"); break
         candidate = scan.candidates[scan.cursor]
@@ -184,6 +187,7 @@ def advance_scan(scan: UsageScan) -> None:
                 for target in targets:
                     if target: scan.targets[candidate.thread_id][target] += 1
             if children: row["child_call_ids"] += 1; row["child_invocations"] += children
+    scan.last_scan_at = dt.datetime.now(dt.timezone.utc)
 
 
 def _estimate(row: dict[str, Any]) -> dict[str, Any]:
@@ -206,45 +210,69 @@ def snapshot(scan: UsageScan) -> dict[str, Any]:
         item = {"conversation_id": tid, "conversation_title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "root_id": scan.root(tid), "project": scan.threads.get(tid, {}).get("project", "unknown"), "model": model, "effort": effort, **_plain(values)}; rows.append(item)
     for tid in {row["conversation_id"] for row in rows}:
         group = [row for row in rows if row["conversation_id"] == tid]; activity = next((row for row in group if row["model"] == "unknown" and any(row[key] for key in ACTIVITY_FIELDS)), None)
-        if activity is not None:
-            anchor = max((row for row in group if row is not activity), key=lambda row: row["total_tokens"], default=activity)
-            if anchor is not activity:
-                for key in ACTIVITY_FIELDS: anchor[key] += activity[key]
-                rows.remove(activity)
-            if tid in scan.targets: anchor["peer_targets"] = [{"conversation_id": target, "title": scan.threads[target]["title"], "invocations": count} for target, count in scan.targets[tid].most_common() if target in scan.threads]
+        if activity is not None and tid in scan.targets:
+            # Tool call records do not carry a model attribution. Keep them on
+            # the explicit unknown row instead of assigning them to the largest
+            # token model in the same conversation.
+            activity["peer_targets"] = [{"conversation_id": target, "title": scan.threads[target]["title"], "invocations": count} for target, count in scan.targets[tid].most_common() if target in scan.threads]
     bins = [{"start": when.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(values)} for (when, tid, model, effort), values in sorted(scan.bins.items())]
     tasks = [{"id": tid, "title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "project": scan.threads.get(tid, {}).get("project", "unknown"), "root_id": scan.root(tid), "is_worker": tid != scan.root(tid), **{key: sum(row[key] for row in rows if row["conversation_id"] == tid) for key in ACTIVITY_FIELDS}} for tid in sorted({row["conversation_id"] for row in rows})]
     total = _plain(collections.Counter({key: sum(int(row.get(key, 0)) for row in rows) for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count")})); models, model_effort, projects = _aggregate(rows, ("model",)), _aggregate(rows, ("model", "effort")), _aggregate(rows, ("project",)); estimate = sum(float(row["estimated_standard_credits"] or 0) for row in models)
-    coverage = {"indexed_files": len(scan.candidates), "scanned_files": scan.cursor, "completed_candidates": scan.cursor, "total_candidates": len(scan.candidates), "can_resume": not scan.complete, "missing_files": scan.missing, "skipped_files": scan.skipped, "truncated_files": scan.truncated, "bytes_read": scan.bytes_read, "max_seconds": MAX_SECONDS, "max_bytes": MAX_BYTES, "max_indexed_files": MAX_FILES, "candidate_overflow": False, "budget_exhausted": not scan.complete, "complete": scan.complete, "notes": list(dict.fromkeys(scan.notes))}
-    return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(), "indexed_at": scan.created_at.isoformat(), "range": {"start": scan.start.isoformat(), "end": scan.end.isoformat()}, "coverage": coverage, "totals": total | {"estimated_standard_credits": estimate}, "credits": {"estimated_standard": estimate, "measured_allowance": None, "label": "Estimated standard credits — not actual Pro allowance debits", "unknown_models": sorted({str(row["model"]) for row in models if not row["credit_rate_known"]})}, "models": models, "model_effort": model_effort, "projects": projects, "cells": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "tasks": tasks, "bins": bins, "conversations": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "workers": [row for row in rows if row["conversation_id"] != row["root_id"]], "selected_view_groups": {"model": models, "model_effort": model_effort}, "activity": {"classification": "heuristic metadata classification; inbound wakes and causal cost are unknown without recipient provenance", "outbound_peer_calls": total["peer_message_invocations"], "child_calls": total["child_invocations"], "inbound_peer_wakes": "unknown", "causal_cost": "unknown"}, "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across collected files: {scan.duplicates} ignored.", f"Embedded owner filter excluded {scan.foreign_records} copied or foreign records.", "Peer activity is proved from function calls and embedded functions.exec JavaScript only; tool outputs and descriptions are not counted.", "Inbound peer wakes and causal cost are unknown without recipient provenance.", "No prompts, response text, tool arguments, tool output, credential values, or recipient identities are returned."]}
+    exhausted = scan.scan_exhausted; complete = exhausted and not (scan.missing or scan.skipped or scan.truncated)
+    coverage = {"indexed_files": len(scan.candidates), "scanned_files": scan.cursor, "completed_candidates": scan.cursor, "total_candidates": len(scan.candidates), "scan_exhausted": exhausted, "can_resume": not exhausted, "missing_files": scan.missing, "skipped_files": scan.skipped, "truncated_files": scan.truncated, "bytes_read": scan.bytes_read, "max_seconds": MAX_SECONDS, "max_bytes": MAX_BYTES, "max_indexed_files": MAX_FILES, "candidate_overflow": False, "budget_exhausted": not exhausted or bool(scan.truncated), "complete": complete, "notes": list(dict.fromkeys(scan.notes))}
+    collected_at = scan.last_scan_at or scan.created_at
+    return {"collected_at": collected_at.isoformat(), "indexed_at": scan.created_at.isoformat(), "range": {"start": scan.start.isoformat(), "end": scan.end.isoformat()}, "coverage": coverage, "totals": total | {"estimated_standard_credits": estimate}, "credits": {"estimated_standard": estimate, "measured_allowance": None, "label": "Estimated standard credits — not actual Pro allowance debits", "unknown_models": sorted({str(row["model"]) for row in models if not row["credit_rate_known"]})}, "models": models, "model_effort": model_effort, "projects": projects, "cells": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "tasks": tasks, "bins": bins, "conversations": sorted(rows, key=lambda row: row["total_tokens"], reverse=True), "workers": [row for row in rows if row["conversation_id"] != row["root_id"]], "selected_view_groups": {"model": models, "model_effort": model_effort}, "activity": {"classification": "heuristic metadata classification; inbound wakes and causal cost are unknown without recipient provenance", "outbound_peer_calls": total["peer_message_invocations"], "child_calls": total["child_invocations"], "inbound_peer_wakes": "unknown", "causal_cost": "unknown"}, "qualification": ["Local telemetry is not account billing or quota usage.", "Reasoning output is included in output tokens and is never double-counted.", f"Deduplicated response_id globally across collected files: {scan.duplicates} ignored.", f"Embedded owner filter excluded {scan.foreign_records} copied or foreign records.", "Peer activity counts invocation expressions in submitted tool code; they do not prove execution or successful delivery.", "Inbound peer wakes and causal cost are unknown without recipient provenance.", "Metadata titles and known recipient titles may be returned through the authenticated owner proxy; prompts, response text, tool arguments, tool output, credential values, and recipient message bodies are not returned."]}
 
 
 def collect_usage(start: dt.datetime, end: dt.datetime) -> dict[str, Any]:
     scan = create_scan(start, end); advance_scan(scan); return snapshot(scan)
 
 
+class CollectionBusyError(RuntimeError):
+    """Another exact-range collection has not finished yet."""
+
+
 class CodexUsageSnapshotService:
     """Four frozen in-memory range snapshots; refresh resumes incomplete work."""
-    def __init__(self) -> None: self._cache: OrderedDict[tuple[str, str], UsageScan] = OrderedDict(); self._lock = asyncio.Lock(); self._collect = asyncio.Lock(); self._inflight: dict[tuple[str, str], asyncio.Task[dict[str, Any]]] = {}
+    def __init__(self) -> None: self._cache: OrderedDict[tuple[str, str], UsageScan] = OrderedDict(); self._lock = asyncio.Lock(); self._inflight: dict[tuple[str, str], asyncio.Task[dict[str, Any]]] = {}; self._active_key: tuple[str, str] | None = None
     async def read(self, start: dt.datetime, end: dt.datetime, refresh: bool = False) -> dict[str, Any]:
         key = (start.astimezone(dt.timezone.utc).isoformat(), end.astimezone(dt.timezone.utc).isoformat())
         async with self._lock:
             scan = self._cache.get(key)
-            if scan and not refresh: self._cache.move_to_end(key); return snapshot(scan) | {"collection": {"state": "cached", "in_progress": False}}
-            if scan and scan.complete and refresh: scan = None
-            if scan is None:
-                scan = create_scan(start, end); self._cache[key] = scan
-                while len(self._cache) > MAX_CACHE_STATES: self._cache.popitem(last=False)
+            if scan and not refresh:
+                self._cache.move_to_end(key)
+                # Published snapshots are never assembled from mutable scan
+                # counters while the worker thread advances a later batch.
+                published = scan.published
+                if published is None:
+                    published = snapshot(scan)
+                    scan.published = published
+                return copy.deepcopy(published) | {"collection": {"state": "cached", "in_progress": key in self._inflight}}
+            if scan and scan.scan_exhausted and refresh: scan = None
             task = self._inflight.get(key)
             if task is None:
+                if self._active_key is not None:
+                    raise CollectionBusyError("Another Codex usage range is collecting; wait for it to finish before changing ranges.")
+                if scan is None:
+                    scan = create_scan(start, end)
+                    # A cache-only reader during this batch receives this
+                    # immutable empty/frozen snapshot, never live counters.
+                    scan.published = snapshot(scan)
+                    self._cache[key] = scan
+                    while len(self._cache) > MAX_CACHE_STATES: self._cache.popitem(last=False)
+                self._active_key = key
                 async def run() -> dict[str, Any]:
-                    async with self._collect: await asyncio.to_thread(advance_scan, scan)
-                    return snapshot(scan)
+                    await asyncio.to_thread(advance_scan, scan)
+                    scan.published = snapshot(scan)
+                    return copy.deepcopy(scan.published) | {"collection": {"state": "resumed" if not scan.scan_exhausted else "refreshed", "in_progress": False}}
                 task = asyncio.create_task(run()); self._inflight[key] = task
-        try: return (await task) | {"collection": {"state": "resumed" if not scan.complete else "refreshed", "in_progress": False}}
-        finally:
-            async with self._lock:
-                if self._inflight.get(key) is task: self._inflight.pop(key, None)
+                def done(_: asyncio.Task[dict[str, Any]]) -> None:
+                    # This runs only when the shared task itself has settled;
+                    # callers may cancel their own shielded wait independently.
+                    self._inflight.pop(key, None)
+                    if self._active_key == key: self._active_key = None
+                task.add_done_callback(done)
+        return await asyncio.shield(task)
 
 
 snapshot_service = CodexUsageSnapshotService()

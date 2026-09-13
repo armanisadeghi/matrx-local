@@ -125,6 +125,18 @@ def test_allowance_timeout_cleans_owned_process(monkeypatch) -> None:
     assert process.terminated
 
 
+def test_allowance_never_hashes_an_unknown_account_marker() -> None:
+    result = allowance._sanitize_result(
+        {
+            "accountId": "unknown",
+            "rateLimits": {"usedPercent": 10},
+        }
+    )
+
+    assert result["status"] == "available"
+    assert "account_hash" not in result
+
+
 def test_allowance_service_single_flight_and_cache(monkeypatch) -> None:
     service = allowance.AllowanceService()
     calls = 0

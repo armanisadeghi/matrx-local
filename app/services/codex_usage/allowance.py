@@ -58,11 +58,10 @@ def _sanitize_result(result: object) -> dict[str, object]:
     if not isinstance(result, dict):
         return _unavailable("Codex returned an invalid allowance response.")
     raw_limits = result.get("rateLimitsByLimitId")
-    if not isinstance(raw_limits, dict):
-        raw_limits = result.get("rateLimits")
-    candidates = (
-        list(raw_limits.values()) if isinstance(raw_limits, dict) else [raw_limits]
-    )
+    if isinstance(raw_limits, dict):
+        candidates = list(raw_limits.values())
+    else:
+        candidates = [result.get("rateLimits")]
     limits = [limit for item in candidates if (limit := _sanitize_limit(item))]
     if not limits:
         return _unavailable("Codex did not expose a readable account allowance.")
@@ -72,7 +71,7 @@ def _sanitize_result(result: object) -> dict[str, object]:
         "limits": limits,
     }
     account_id = result.get("accountId")
-    if isinstance(account_id, str) and account_id:
+    if isinstance(account_id, str) and account_id and account_id.lower() != "unknown":
         response["account_hash"] = hashlib.sha256(account_id.encode()).hexdigest()[:16]
     return response
 

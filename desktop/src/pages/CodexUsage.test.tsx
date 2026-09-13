@@ -42,5 +42,16 @@ describe("codexUsageRangeFor", () => {
     const latest = mocks.getCodexUsage.mock.calls[mocks.getCodexUsage.mock.calls.length - 1]![0];
     expect(latest.end).toBe("2026-09-13T14:00:00.000Z");
     expect(latest.start).toBe("2026-09-13T02:00:00.000Z");
+    expect(mocks.getCodexAllowance).toHaveBeenLastCalledWith(true);
+  });
+
+  it("selects a model scope from the interactive model table", async () => {
+    const row = { model: "gpt-5.6-terra", total_tokens: 10, response_count: 1, estimated_standard_credits: 2, input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+    mocks.getCodexUsage.mockResolvedValue({ ...snapshot, credits: { ...snapshot.credits, estimated_standard: 2 }, models: [row], cells: [row] });
+    await act(async () => { root.render(<CodexUsage />); await Promise.resolve(); });
+    const model = [...container.querySelectorAll("button")].find(button => button.textContent === "gpt-5.6-terra")!;
+    await act(async () => { model.click(); });
+    expect(container.textContent).toContain("model: gpt-5.6-terra");
+    expect(container.textContent).toContain("Clear model scope");
   });
 });

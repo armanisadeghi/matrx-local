@@ -24,9 +24,9 @@ def _parse(value: str, name: str) -> dt.datetime:
 
 
 @router.get("/allowance")
-async def get_codex_usage_allowance() -> dict:
+async def get_codex_usage_allowance(refresh: bool = Query(False, description="Bypass the short-lived local allowance cache")) -> dict:
     """Read a cached account allowance without collecting usage or starting a model."""
-    return await allowance_service.read()
+    return await allowance_service.read(refresh)
 
 
 @router.get("")

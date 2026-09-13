@@ -1365,8 +1365,8 @@ class EngineAPI {
     return this.request<CodexUsageSnapshot>(`/codex-usage?${params.toString()}`);
   }
 
-  async getCodexAllowance(): Promise<CodexAllowance> {
-    return this.request<CodexAllowance>("/codex-usage/allowance");
+  async getCodexAllowance(refresh = false): Promise<CodexAllowance> {
+    return this.request<CodexAllowance>(`/codex-usage/allowance?refresh=${String(refresh)}`);
   }
 
   /** Update engine runtime settings. */

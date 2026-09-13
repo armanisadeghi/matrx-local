@@ -189,9 +189,9 @@ class AllowanceService:
                 self._cached = response
                 self._expires_at = time.monotonic() + _CACHE_SECONDS
 
-    async def read(self) -> dict[str, object]:
+    async def read(self, refresh: bool = False) -> dict[str, object]:
         async with self._lock:
-            if self._cached is not None and time.monotonic() < self._expires_at:
+            if not refresh and self._cached is not None and time.monotonic() < self._expires_at:
                 return self._cached
             if self._inflight is None:
                 self._inflight = asyncio.create_task(

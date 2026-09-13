@@ -178,9 +178,8 @@ describe("extraction panels", () => {
     expect(html).toContain("<table");
     expect(html).toContain("Python");
     expect(html).toContain("Guido van Rossum");
-    // Copy-out affordances, so a table is never a dead end.
-    expect(html).toContain("TSV");
-    expect(html).toContain("Markdown");
+    // The canonical Alchemy transfer control owns copy and export formats.
+    expect(html).toContain('aria-label="Copy, transform or export Table 1"');
   });
 
   it("states how many links were carried vs how many exist", () => {

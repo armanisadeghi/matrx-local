@@ -24,18 +24,47 @@ private struct PrivateSession: Codable { let version: Int; let phase: String; le
 private struct Token: Decodable { let access_token: String; let token_type: String; let expires_in: Int; let refresh_token: String; let scope: String? }
 private struct Identity: Decodable { let sub: String; let email: String?; let email_verified: Bool? }
 
+private indirect enum JSONValue { case object([String: JSONValue]), array([JSONValue]), string(String), number(String), bool(Bool), null }
+
+/// Deliberately small JSON parser for fixed Auth/Keychain envelopes. It does
+/// not normalize duplicate keys: each decoded key is checked in its owning
+/// object, including keys expressed through Unicode escapes.
+private struct StrictJSON {
+    private var bytes: [UInt8]; private var index = 0
+    init(_ data: Data) throws { guard data.count <= 64 * 1024 else { throw EnrollmentError.message("Account response was rejected. Try again.") }; bytes = Array(data) }
+    mutating func parse() throws -> JSONValue { let value = try value(0); space(); guard index == bytes.count else { throw bad() }; return value }
+    private mutating func value(_ depth: Int) throws -> JSONValue {
+        guard depth <= 8 else { throw bad() }; space(); guard index < bytes.count else { throw bad() }
+        switch bytes[index] { case 123: return .object(try object(depth + 1)); case 91: return .array(try array(depth + 1)); case 34: return .string(try string()); case 116: try literal("true"); return .bool(true); case 102: try literal("false"); return .bool(false); case 110: try literal("null"); return .null; case 45, 48...57: return .number(try number()); default: throw bad() }
+    }
+    private mutating func object(_ depth: Int) throws -> [String: JSONValue] {
+        take(123); space(); var result: [String: JSONValue] = [:]; if accept(125) { return result }
+        while true { space(); guard index < bytes.count, bytes[index] == 34 else { throw bad() }; let key = try string(); guard result[key] == nil else { throw bad() }; space(); take(58); result[key] = try value(depth); space(); if accept(125) { return result }; take(44) }
+    }
+    private mutating func array(_ depth: Int) throws -> [JSONValue] {
+        take(91); space(); var result: [JSONValue] = []; if accept(93) { return result }
+        while true { result.append(try value(depth)); space(); if accept(93) { return result }; take(44) }
+    }
+    private mutating func string() throws -> String {
+        take(34); var scalars = String.UnicodeScalarView()
+        while index < bytes.count { let byte = bytes[index]; index += 1; if byte == 34 { return String(scalars) }; if byte < 32 { throw bad() }; if byte != 92 { scalars.append(UnicodeScalar(byte)); continue }; guard index < bytes.count else { throw bad() }; let escape = bytes[index]; index += 1
+            switch escape { case 34,92,47: scalars.append(UnicodeScalar(escape)); case 98: scalars.append("\u{08}"); case 102: scalars.append("\u{0c}"); case 110: scalars.append("\n"); case 114: scalars.append("\r"); case 116: scalars.append("\t"); case 117: let first = try hex4(); if (0xD800...0xDBFF).contains(first) { guard index + 1 < bytes.count, bytes[index] == 92, bytes[index+1] == 117 else { throw bad() }; index += 2; let second = try hex4(); guard (0xDC00...0xDFFF).contains(second) else { throw bad() }; scalars.append(UnicodeScalar(0x10000 + ((first - 0xD800) << 10) + second)!) } else { guard !(0xDC00...0xDFFF).contains(first), let scalar = UnicodeScalar(first) else { throw bad() }; scalars.append(scalar) }; default: throw bad() }
+        }; throw bad()
+    }
+    private mutating func hex4() throws -> UInt32 { guard index + 4 <= bytes.count else { throw bad() }; var value: UInt32 = 0; for _ in 0..<4 { let c = bytes[index]; index += 1; let digit: UInt32; switch c { case 48...57: digit = UInt32(c - 48); case 65...70: digit = UInt32(c - 55); case 97...102: digit = UInt32(c - 87); default: throw bad() }; value = value * 16 + digit }; return value }
+    private mutating func number() throws -> String { let start = index; _ = accept(45); guard index < bytes.count else { throw bad() }; if accept(48) { } else { guard digit19() else { throw bad() }; while digit() {} }; if accept(46) { guard digit() else { throw bad() }; while digit() {} }; if accept(69) || accept(101) { _ = accept(43) || accept(45); guard digit() else { throw bad() }; while digit() {} }; return String(decoding: bytes[start..<index], as: UTF8.self) }
+    private mutating func literal(_ text: String) throws { for byte in text.utf8 { guard index < bytes.count, bytes[index] == byte else { throw bad() }; index += 1 } }
+    private mutating func space() { while index < bytes.count, [9,10,13,32].contains(bytes[index]) { index += 1 } }
+    private mutating func accept(_ byte: UInt8) -> Bool { guard index < bytes.count, bytes[index] == byte else { return false }; index += 1; return true }
+    private mutating func take(_ byte: UInt8) { guard accept(byte) else { fatalError("strict JSON internal grammar error") } }
+    private mutating func digit() -> Bool { guard index < bytes.count, bytes[index] >= 48, bytes[index] <= 57 else { return false }; index += 1; return true }
+    private mutating func digit19() -> Bool { guard index < bytes.count, bytes[index] >= 49, bytes[index] <= 57 else { return false }; index += 1; return true }
+    private func bad() -> Error { EnrollmentError.message("Account response was rejected. Try again.") }
+}
+
 private enum StrictEnvelope {
-    static func object(_ data: Data, required: Set<String>, optional: Set<String>) throws -> [String: Any] {
-        guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw EnrollmentError.message("Account response was rejected. Try again.") }
-        let text = String(decoding: data, as: UTF8.self)
-        let expression = try NSRegularExpression(pattern: #""((?:\\.|[^"\\])*)"\s*:"#)
-        var keys = Set<String>()
-        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            let key = String(text[Range(match.range(at: 1), in: text)!])
-            guard keys.insert(key).inserted else { throw EnrollmentError.message("Account response was rejected. Try again.") }
-        }
-        guard required.isSubset(of: Set(raw.keys)), Set(raw.keys).isSubset(of: required.union(optional)) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
-        return raw
+    static func object(_ data: Data, required: Set<String>, optional: Set<String>) throws -> [String: JSONValue] {
+        var parser = try StrictJSON(data); guard case let .object(value) = try parser.parse(), required.isSubset(of: Set(value.keys)), Set(value.keys).isSubset(of: required.union(optional)) else { throw EnrollmentError.message("Account response was rejected. Try again.") }; return value
     }
 }
 
@@ -202,7 +231,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private func userinfo(_ token: Token, generation: String, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.canonical == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; _ = try StrictEnvelope.object(data, required: ["sub"], optional: ["email", "email_verified"]); let identity = try JSONDecoder().decode(Identity.self, from: data); guard UUID(uuidString: identity.sub)?.canonical == identity.sub else { throw EnrollmentError.message("Account identity was rejected. Try again.") }; let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try store.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.start(request)
     }
     private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }

@@ -7,6 +7,9 @@ import ipaddress
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.api.remote_auth import headers_indicate_tunnel
+from app.services.coding_sessions.artifacts import (
+    get_coding_session_artifacts_lane,
+)
 from app.services.coding_sessions import (
     BridgeMutationConflict,
     CaptureReconcileBlocked,
@@ -419,6 +422,38 @@ async def retry_pending_claude_history() -> dict[str, object]:
 async def claude_capture_status() -> dict[str, object]:
     """Report the capture reconciler: enabled, running, and recent backfills."""
     return await get_claude_capture_reconciler().status()
+
+
+@router.get("/artifacts/status")
+async def coding_session_artifacts_status() -> dict[str, object]:
+    """The artifacts lane: sessions/files kept durably, uploaded, pending,
+    failed, plus its blocker and last tick — every number the screen shows."""
+    return get_coding_session_artifacts_lane().status()
+
+
+@router.get("/artifacts/sessions")
+async def coding_session_artifacts_sessions() -> dict[str, object]:
+    """Per-session artifact counts (durable folder, files, uploaded, pending)."""
+    lane = get_coding_session_artifacts_lane()
+    return {"sessions": lane.session_summaries()}
+
+
+@router.get("/artifacts/sessions/{cli_session_id}")
+async def coding_session_artifacts_session(cli_session_id: str) -> dict[str, object]:
+    """Every captured file of one session with its upload state."""
+    detail = get_coding_session_artifacts_lane().session_detail(cli_session_id)
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "artifacts_session_unknown", "cli_session_id": cli_session_id},
+        )
+    return detail
+
+
+@router.post("/artifacts/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_coding_session_artifacts() -> dict[str, object]:
+    """Run one capture + publish tick now instead of waiting for the timer."""
+    return await get_coding_session_artifacts_lane().run_once()
 
 
 @router.post("/claude/capture/reconcile", status_code=status.HTTP_202_ACCEPTED)

@@ -1082,6 +1082,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("claude_capture_reconciler", exc)
 
+    # Phase 2i2: coding-session artifacts. The bridge mirrors what a session
+    # SAID; this lane keeps what it BUILT — every deliverable in a Claude
+    # scratchpad is copied to a durable per-session folder (outside /tmp,
+    # visible after an account switch, readable by any session on this Mac)
+    # and published to AI Matrx files tagged with the session id.
+    _registry.starting("coding_session_artifacts")
+    try:
+        from app.services.coding_sessions.artifacts import (
+            get_coding_session_artifacts_lane,
+        )
+
+        await get_coding_session_artifacts_lane().start_background()
+        _registry.ready(
+            "coding_session_artifacts",
+            source="claude_scratchpads",
+            upstream="/files/upload",
+        )
+        logger.info("[app/main.py] Phase 2i2: coding-session artifacts lane started ✓")
+    except Exception as exc:
+        logger.error(
+            "[app/main.py] Phase 2i2: coding-session artifacts lane FAILED to start — "
+            "session deliverables stay only in /tmp until this is fixed",
+            exc_info=True,
+        )
+        _registry.failed("coding_session_artifacts", exc)
+
     # Phase 2j: Claude label reconciler. The pin/title/archive reconciler used
     # to run ONLY when someone opened the Coding Sessions page and pressed
     # Sync, so pins sat days stale with nothing looking broken (2026-09-12).
@@ -1839,6 +1865,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _registry.stopping("claude_capture_reconciler")
             await asyncio.wait_for(_capture_reconciler.stop(), timeout=3.0)
             _registry.stopped("claude_capture_reconciler")
+        from app.services.coding_sessions.artifacts import (
+            get_coding_session_artifacts_lane as _get_artifacts_lane,
+        )
+
+        _artifacts_lane = _get_artifacts_lane()
+        if _artifacts_lane.active:
+            _registry.stopping("coding_session_artifacts")
+            await asyncio.wait_for(_artifacts_lane.stop_background(), timeout=3.0)
+            _registry.stopped("coding_session_artifacts")
             logger.info("[app/main.py] Claude capture reconciler stopped ✓")
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning(

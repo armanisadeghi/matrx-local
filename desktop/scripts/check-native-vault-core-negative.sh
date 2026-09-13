@@ -88,7 +88,7 @@ weak = '''    grep -F 'device_bound_backup_flags_are_absent_on_make_and_get' "$w
     grep -F 'eligible_backed_up_is_intentional_control' "$work/pristine.log" >/dev/null'''
 p.write_text(s[:start] + weak + s[end:])
 PY
-if NATIVE_VAULT_GUARD="$weak" NATIVE_VAULT_NEGATIVE_CHILD=1 NATIVE_VAULT_TEST_STOP_AFTER_SEMANTIC=1 "$0" >"$work/weakened.log" 2>&1; then
+if NATIVE_VAULT_GUARD="$weak" NATIVE_VAULT_NEGATIVE_CHILD=1 "$0" >"$work/weakened.log" 2>&1; then
   echo 'native-vault negative self-test did not fail against weakened semantic gate' >&2
   exit 1
 fi

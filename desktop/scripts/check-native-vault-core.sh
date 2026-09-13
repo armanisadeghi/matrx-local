@@ -125,12 +125,6 @@ PY
   fi
 done
 
-# Test-only negative-suite boundary: normal CI never sets this. It allows the
-# self-test to prove semantic-predicate causality without rerunning downstream RP work.
-if [ "${NATIVE_VAULT_TEST_STOP_AFTER_SEMANTIC:-}" = 1 ]; then
-  exit 0
-fi
-
 cd "$CORE"
 cargo test --locked --features protocol-test-harness
 cargo build --locked --features protocol-test-harness --bin protocol-harness

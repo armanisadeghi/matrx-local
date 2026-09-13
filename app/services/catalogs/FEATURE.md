@@ -19,7 +19,9 @@ mirrors its architecture 1:1 and imports its semver helpers).
 ## Precedence chain (implemented exactly, in `service.py`)
 
 1. **Fresh remote** — fetched this session (PostgREST primary
-   `GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local&select=*`
+   `GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local`, asking for
+   the fourteen public columns BY NAME (`_SELECT_COLUMNS` in `client.py`, never
+   `select=*` — see the Change Log entry for 2026-09-13),
    with the publishable key AND `Accept-Profile: public` — the server's
    default exposed schema is no longer `public`, so an unprofiled request
    404s with PGRST205 (see `SUPABASE_PROFILE_HEADERS` in `app/config.py`);
@@ -187,6 +189,18 @@ pattern via `desktop/src/lib/catalogs.ts` (`fetchCatalog(kind)`).
   (skips on 404 until that endpoint deploys, any other failure blocks).
 
 ## Change Log
+
+- **2026-09-13 — The anon read is column-bounded (DD-182).** `public.catalog_entries`
+  was serving `updated_by` — a platform admin's user uuid — to anyone holding the
+  publishable key, and that morning's base retrofit added `created_by`,
+  `organization_id`, `metadata`, `version` and `visibility` to the same anon-readable
+  table. `anon` now holds SELECT on exactly the fourteen columns aidream's public
+  `GET /api/catalogs/{app}` already published, so the feature's two public paths agree.
+  This client therefore asks for those columns by name: `select=*` is now REFUSED with
+  `42501 permission denied for table catalog_entries` (loudly — the fetch fails, the
+  log says why, and the aidream fallback path serves the same rows). Guard in
+  matrx-frontend: `pnpm check:anon-column-surface`, which fails if the live grant and
+  the declared list differ in either direction.
 
 - **2026-07-18 — Model-scoped text encoders.** Added tolerant adaptation of
   revision-pinned alternative encoder specs nested in image-gen model payloads;

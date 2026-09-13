@@ -3,7 +3,8 @@
 Two independent paths, tried in order (same posture as app_config/client.py):
 
   1. Primary — Supabase PostgREST
-     ``GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local&select=*``
+     ``GET {SUPABASE_URL}/rest/v1/catalog_entries?app=eq.matrx-local``
+     asking for the fourteen public columns by name (``_SELECT_COLUMNS``, never ``*``)
      with the publishable key only (anon read via RLS returns active rows;
      MUST work pre-login, so no JWT).
   2. Fallback — aidream
@@ -63,6 +64,35 @@ _TIMEOUT = httpx.Timeout(5.0, connect=5.0)
 _PAGE_SIZE = 1000
 _MAX_TOTAL_ROWS = 5000
 
+# THE PUBLIC COLUMN SURFACE OF public.catalog_entries — ask for it by name, never `*`.
+#
+# This list is the same fourteen columns aidream's unauthenticated
+# `GET /api/catalogs/{app}` publishes (`aidream/services/catalogs/service.py::_row_to_dict`),
+# and after DD-182 (2026-09-13) it is also exactly what the `anon` role is granted on the
+# table: the row carries `updated_by`, `created_by`, `organization_id`, `metadata`,
+# `version` and `visibility` that no client needs and that a signed-out caller must not
+# read. `select=*` asked Postgres for every column including those, so the two public
+# paths of one feature disagreed until the column grants were bounded — and a `*` here
+# would now be refused outright rather than quietly over-fetching.
+_SELECT_COLUMNS = ",".join(
+    (
+        "id",
+        "app",
+        "kind",
+        "key",
+        "schema_version",
+        "payload",
+        "artifact_url",
+        "artifact_sha256",
+        "artifact_size_bytes",
+        "min_app_version",
+        "is_active",
+        "sort_order",
+        "notes",
+        "updated_at",
+    )
+)
+
 
 def _unwrap_body(body: Any, source: str) -> list[Any]:
     """Accept a bare array (PostgREST) or an ``{"entries": [...]}`` wrapper
@@ -94,7 +124,7 @@ async def _fetch_postgrest(report: ParseReport | None = None) -> list[CatalogEnt
                 url,
                 params={
                     "app": f"eq.{APP_KEY}",
-                    "select": "*",
+                    "select": _SELECT_COLUMNS,
                     "order": "kind,key",
                 },
                 headers={

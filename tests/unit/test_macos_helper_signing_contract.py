@@ -121,3 +121,29 @@ def test_dylib_signing_loops_have_per_file_timeouts() -> None:
 
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert "perl -e 'alarm 120; exec @ARGV' codesign" in workflow
+
+
+def test_host_entitlements_without_profile_carry_no_restricted_keys() -> None:
+    """A Developer ID host with NO embedded provisioning profile is killed at
+    launch by macOS if it claims profile-backed entitlements (v1.4.92:
+    SIGKILL, "Launchd job spawn failed", while Gatekeeper said accepted).
+    The default Entitlements.plist is the no-profile host; the App-Group /
+    identifier claims live only in Entitlements.vault.plist, which only the
+    sealed release config (with the host profile) selects."""
+    import plistlib
+
+    src_tauri = TAURI_CONFIG.parent
+    restricted = {
+        "com.apple.application-identifier",
+        "com.apple.developer.team-identifier",
+        "com.apple.security.application-groups",
+    }
+    base = plistlib.loads((src_tauri / "Entitlements.plist").read_bytes())
+    assert not (restricted & set(base)), restricted & set(base)
+    vault = plistlib.loads((src_tauri / "Entitlements.vault.plist").read_bytes())
+    assert restricted <= set(vault)
+    sealed = json.loads((src_tauri / "tauri.release.macos.conf.json").read_text(encoding="utf-8"))
+    assert sealed["bundle"]["macOS"]["entitlements"] == "Entitlements.vault.plist"
+    assert "embedded.provisionprofile" in sealed["bundle"]["macOS"]["files"]
+    host_only = json.loads((src_tauri / "tauri.release.macos.host-only.conf.json").read_text(encoding="utf-8"))
+    assert "entitlements" not in host_only["bundle"]["macOS"]

@@ -136,6 +136,19 @@ fi
 echo "--- [4/6] native Vault provider boundary"
 if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
     echo "    ⚠️  SKIPPED: provider not shipped in this artifact (release inputs absent)"
+    # A host WITHOUT an embedded provisioning profile must not carry
+    # profile-backed (restricted) entitlements: macOS refuses to spawn such a
+    # process (SIGKILL, "Launchd job spawn failed") while Gatekeeper and the
+    # notarization ticket still say "accepted". v1.4.92 shipped exactly that.
+    HOST_ENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null || true)"
+    for key in com.apple.application-identifier com.apple.developer.team-identifier com.apple.security.application-groups; do
+        if [[ "$HOST_ENTS" == *"$key"* ]]; then
+            echo "ERROR: host carries the profile-backed entitlement '$key' but ships no provisioning profile — macOS will kill it at launch. Build the host with Entitlements.plist (no restricted keys) when the provider is absent." >&2
+            exit 1
+        fi
+    done
+    [[ ! -e "$APP_PATH/Contents/embedded.provisionprofile" ]] || { echo "ERROR: host embeds a provisioning profile although release inputs were absent" >&2; exit 1; }
+    echo "    ✅ host carries no profile-backed entitlements"
     if [[ "$DEV_MODE" == "--dev" ]]; then
         echo "--- [5/6] spctl assess: SKIPPED (--dev)"
         echo "--- [6/6] stapler validate: SKIPPED (--dev)"

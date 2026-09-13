@@ -115,13 +115,12 @@ where
         //    authenticator-specific way (e.g., flash the LED light). Request permission to create
         //    a credential. If the user declines permission, return the CTAP2_ERR_OPERATION_DENIED
         //    error.
-        let flags = backup_flags.apply(
-            self.check_user(
+        let flags = self
+            .check_user(
                 UiHint::RequestNewCredential(&input.user.clone().into(), &input.rp),
                 &input.options,
             )
-            .await?,
-        );
+            .await?;
 
         // 9. Generate a new credential key pair for the algorithm specified.
         let credential_id = passkey_types::rand::random_vec(self.credential_id_length.into());
@@ -174,10 +173,11 @@ where
         )
         .unwrap();
 
-        let auth_data = AuthenticatorData::new(&input.rp.id, passkey.counter)
+        let mut auth_data = AuthenticatorData::new(&input.rp.id, passkey.counter)
             .set_flags(flags)
             .set_attested_credential_data(acd)
             .set_make_credential_extensions(extensions.signed)?;
+        auth_data.flags = backup_flags.apply(auth_data.flags);
 
         let response = Response {
             fmt: "none".into(),

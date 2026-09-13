@@ -76,18 +76,29 @@ async fn assert_storage_on_success() {
 }
 
 #[tokio::test]
-async fn make_credential_emits_requested_backup_flags() {
-    let shared_store = Arc::new(Mutex::new(MemoryStore::new()));
-    let user_mock = MockUserValidationMethod::verified_user(1);
-    let mut authenticator = Authenticator::new(Aaguid::new_empty(), shared_store, user_mock);
-
-    let response = authenticator
-        .make_credential_with_backup_flags(good_request(), BackupFlags::new(true, true).unwrap())
-        .await
-        .expect("registration should succeed");
-
-    assert!(response.auth_data.flags.contains(Flags::BE));
-    assert!(response.auth_data.flags.contains(Flags::BS));
+async fn make_credential_replaces_backup_flags_from_immutable_input() {
+    for (eligible, backed_up, expected) in [
+        (false, false, Flags::empty()),
+        (true, false, Flags::BE),
+        (true, true, Flags::BE | Flags::BS),
+    ] {
+        let shared_store = Arc::new(Mutex::new(MemoryStore::new()));
+        let user_mock = MockUserValidationMethod::verified_user(1);
+        let mut authenticator = Authenticator::new(Aaguid::new_empty(), shared_store, user_mock);
+        let response = authenticator
+            .make_credential_with_backup_flags(
+                good_request(),
+                BackupFlags::new(eligible, backed_up).unwrap(),
+            )
+            .await
+            .expect("registration should succeed");
+        assert_eq!(response.auth_data.flags & (Flags::BE | Flags::BS), expected);
+        assert!(response.auth_data.flags.contains(Flags::UP | Flags::UV));
+    }
+    assert_eq!(
+        BackupFlags::new(false, true),
+        Err(Ctap2Error::InvalidOption)
+    );
 }
 
 #[tokio::test]

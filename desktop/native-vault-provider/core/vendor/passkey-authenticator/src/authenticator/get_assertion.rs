@@ -84,7 +84,7 @@ where
 
         // 8. If no credentials were located in step 1, return CTAP2_ERR_NO_CREDENTIALS.
         let mut credential = maybe_credential?;
-        let flags = credential.backup_flags().apply(flags);
+        let backup_flags = credential.backup_flags();
 
         // 9. If more than one credential was located in step 1 and allowList is present and not
         //    empty, select any applicable credential and proceed to step 12. Otherwise, order the
@@ -130,9 +130,10 @@ where
         //      concatenation is safe to use here because the authenticator data describes its own
         //      length. The hash of the serialized client data (which potentially has a variable
         //      length) is always the last element.
-        let auth_data = AuthenticatorData::new(&input.rp_id, credential.counter())
+        let mut auth_data = AuthenticatorData::new(&input.rp_id, credential.counter())
             .set_flags(flags)
             .set_assertion_extensions(extensions.signed)?;
+        auth_data.flags = backup_flags.apply(auth_data.flags);
 
         let mut signature_target = auth_data.to_vec();
         signature_target.extend(input.client_data_hash);

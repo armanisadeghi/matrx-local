@@ -32,11 +32,15 @@ impl BackupFlags {
     }
 
     pub(crate) fn apply(self, mut flags: Flags) -> Flags {
+        // `Flags::default()` in passkey-types currently carries BE|BS. Backup state
+        // is credential truth, so first clear those inherited bits, then write this
+        // validated pair while preserving UP, UV, AT, ED, and every other flag.
+        flags.remove(Flags::BE | Flags::BS);
         if self.eligible {
-            flags |= Flags::BE;
+            flags.insert(Flags::BE);
         }
         if self.backed_up {
-            flags |= Flags::BS;
+            flags.insert(Flags::BS);
         }
         flags
     }
@@ -278,3 +282,28 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod backup_flag_tests {
+    use super::*;
+
+    #[test]
+    fn backup_flags_replace_default_bits_without_touching_user_flags() {
+        let user_flags = Flags::UP | Flags::UV;
+        for (eligible, backed_up, expected) in [
+            (false, false, Flags::empty()),
+            (true, false, Flags::BE),
+            (true, true, Flags::BE | Flags::BS),
+        ] {
+            let flags = BackupFlags::new(eligible, backed_up)
+                .unwrap()
+                .apply(Flags::default() | user_flags);
+            assert_eq!(flags & (Flags::BE | Flags::BS), expected);
+            assert!(flags.contains(user_flags));
+        }
+        assert_eq!(
+            BackupFlags::new(false, true),
+            Err(Ctap2Error::InvalidOption)
+        );
+    }
+}

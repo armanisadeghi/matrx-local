@@ -20,11 +20,12 @@ use crate::{
 #[derive(Clone)]
 struct BackedUpPasskey {
     passkey: Passkey,
+    backup_flags: BackupFlags,
 }
 
 impl PasskeyAccessor for BackedUpPasskey {
     fn backup_flags(&self) -> BackupFlags {
-        BackupFlags::new(true, true).unwrap()
+        self.backup_flags
     }
     fn key(&self) -> Cow<'_, coset::CoseKey> {
         Cow::Borrowed(&self.passkey.key)
@@ -142,31 +143,41 @@ fn good_request() -> Request {
 }
 
 #[tokio::test]
-async fn get_assertion_emits_stored_backup_flags() {
-    let passkey = BackedUpPasskey {
-        passkey: create_passkey(None),
-    };
-    let mut authenticator = Authenticator::new(
-        Aaguid::new_empty(),
-        OneCredentialStore(passkey),
-        AlwaysVerified,
-    );
-    let response = authenticator
-        .get_assertion(good_request())
-        .await
-        .expect("assertion should succeed");
-    assert!(
-        response
-            .auth_data
-            .flags
-            .contains(passkey_types::ctap2::Flags::BE)
-    );
-    assert!(
-        response
-            .auth_data
-            .flags
-            .contains(passkey_types::ctap2::Flags::BS)
-    );
+async fn get_assertion_replaces_backup_flags_from_immutable_credential() {
+    for (eligible, backed_up, expected) in [
+        (false, false, passkey_types::ctap2::Flags::empty()),
+        (true, false, passkey_types::ctap2::Flags::BE),
+        (
+            true,
+            true,
+            passkey_types::ctap2::Flags::BE | passkey_types::ctap2::Flags::BS,
+        ),
+    ] {
+        let passkey = BackedUpPasskey {
+            passkey: create_passkey(None),
+            backup_flags: BackupFlags::new(eligible, backed_up).unwrap(),
+        };
+        let mut authenticator = Authenticator::new(
+            Aaguid::new_empty(),
+            OneCredentialStore(passkey),
+            AlwaysVerified,
+        );
+        let response = authenticator
+            .get_assertion(good_request())
+            .await
+            .expect("assertion should succeed");
+        assert_eq!(
+            response.auth_data.flags
+                & (passkey_types::ctap2::Flags::BE | passkey_types::ctap2::Flags::BS),
+            expected,
+        );
+        assert!(
+            response
+                .auth_data
+                .flags
+                .contains(passkey_types::ctap2::Flags::UP | passkey_types::ctap2::Flags::UV)
+        );
+    }
 }
 
 #[tokio::test]

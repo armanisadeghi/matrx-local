@@ -48,8 +48,13 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 it("starts browser-dev password sign-in through the real native fence", async () => {
-  await act(async () => {
-    await vi.waitFor(() => expect(auth.loading).toBe(false));
+  await vi.waitFor(async () => {
+    // Enter and leave act on every poll so React can commit the timer-driven
+    // native-fence completion before the assertion. Wrapping waitFor itself in
+    // one long act scope batches that commit until after waitFor returns and
+    // deadlocks on slower CI runners.
+    await act(async () => { await Promise.resolve(); });
+    expect(auth.loading).toBe(false);
   });
   expect(auth.isAuthenticated).toBe(false);
   await act(async () => { await auth.signInWithEmail("browser@example.test", "password"); });

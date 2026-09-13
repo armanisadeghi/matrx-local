@@ -67,3 +67,19 @@ In flight: desktop screen (Artifacts lane line + column + diagnosis
 dialog) and the AI Matrx conversation "Artifacts" panel (matrx-frontend),
 both dispatched to Opus builders 17:20 PT. Release v1.4.92 (engine lane,
 resolver, throughput publisher) building; screen ships in the next one.
+
+## Live on Arman's Mac — 2026-09-12 18:58 PT (v1.4.94 installed)
+
+v1.4.92 built clean but macOS killed it at spawn (host carried the Vault
+work's profile-backed entitlements with no profile — SIGKILL, error 163,
+while Gatekeeper/notarization said accepted). Fixed by d7716b470:
+entitlements split (Entitlements.plist = no-profile host;
+Entitlements.vault.plist only on the sealed path) + verifier guard proven
+red on the killed bundle. v1.4.94 verified before install and launched.
+
+Measured on the installed engine: delivery 191 envelopes/min (was 12),
+100-row tick 29.9 s, concurrency 8, no blocker; artifacts lane active —
+728 sessions, 5,986 files (394 MB) captured to
+~/Library/Application Support/MatrxLocal/coding-sessions/artifacts/claude_code/,
+uploading ~40/min under Arman's own account, 0 failed, no blocker.
+Peer cut v1.4.95 (Windows hook-file fix) right after.

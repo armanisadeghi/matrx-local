@@ -845,6 +845,12 @@ as `cancelled`, outbox drained to zero with validated receipts.
 
 ## Change log
 
+- 2026-09-13 — Coding-session artifact publishing overrides the operating system MIME registry
+  for `.ts`, `.tsx`, `.mts`, and `.cts`. Python classifies `.ts`/`.mts` as MPEG transport-stream
+  video on macOS, which sent TypeScript deliverables into media players; all TypeScript-family
+  artifacts now publish as `text/typescript`. Guard:
+  `tests/unit/test_coding_session_artifacts.py`.
+
 - 2026-09-12 — Claude pin/title/archive reconciliation now runs on a background loop (Phase 2j),
   not only when someone presses Sync on the Coding Sessions page; interval and on/off are user
   settings (`claude_label_sync_interval_minutes`, `claude_label_sync_auto_enabled`). Guard:

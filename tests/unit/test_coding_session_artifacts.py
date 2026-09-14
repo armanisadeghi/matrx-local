@@ -106,7 +106,14 @@ async def test_capture_keeps_deliverables_and_skips_working_copies(tmp_path: Pat
 
 
 async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_path: Path, monkeypatch) -> None:
-    _scratchpad(tmp_path)
+    pad = _scratchpad(tmp_path)
+    for filename in (
+        "useAgentApp.fixed.ts",
+        "component.tsx",
+        "module.mts",
+        "config.cts",
+    ):
+        (pad / filename).write_text("export const fixed = true;\n")
     client = _FakeFilesClient()
     db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
     monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
@@ -117,29 +124,41 @@ async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_pat
     monkeypatch.setattr(mod, "request_ui_session_refresh", _no_refresh)
     try:
         tick = await lane.run_once()
-        assert tick["uploaded"] == 2 and tick["failed"] == 0
+        assert tick["uploaded"] == 6 and tick["failed"] == 0
         paths = sorted(u["file_path"] for u in client.uploads)
         assert paths == [
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/component.tsx",
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/config.cts",
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/module.mts",
             "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/qd/page/desk.html",
             "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md",
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/useAgentApp.fixed.ts",
         ]
         meta = client.uploads[0]["metadata"]
         assert meta["kind"] == "coding_session_artifact"
         assert meta["cli_session_id"] == "11111111-2222-3333-4444-555555555555"
         assert client.uploads[0]["idempotency_key"].startswith("csa:")
+        typescript_uploads = [
+            upload
+            for upload in client.uploads
+            if Path(upload["file_path"]).suffix in {".ts", ".tsx", ".mts", ".cts"}
+        ]
+        assert len(typescript_uploads) == 4
+        assert {upload["mime_type"] for upload in typescript_uploads} == {
+            "text/typescript"
+        }
         status = lane.status()
-        assert status["uploaded"] == 2 and status["pending_upload"] == 0 and status["blocker"] is None
+        assert status["uploaded"] == 6 and status["pending_upload"] == 0 and status["blocker"] is None
 
         # Second tick: nothing new, nothing re-uploaded; manifest remembers file ids.
         tick = await lane.run_once()
-        assert tick["uploaded"] == 0 and len(client.uploads) == 2
+        assert tick["uploaded"] == 0 and len(client.uploads) == 6
         manifest = json.loads(
             (tmp_path / "durable" / "11111111-2222-3333-4444-555555555555" / MANIFEST_NAME).read_text()
         )
-        assert manifest["files"]["report.md"]["file_id"] == "file-1" or manifest["files"]["report.md"]["file_id"] == "file-2"
+        assert manifest["files"]["report.md"]["file_id"].startswith("file-")
     finally:
         await db.close()
-
 
 async def test_cloud_off_keeps_files_locally_and_says_so(tmp_path: Path, monkeypatch) -> None:
     _scratchpad(tmp_path)

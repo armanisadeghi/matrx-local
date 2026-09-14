@@ -90,10 +90,24 @@ _EXCLUDED_DIR_NAMES = frozenset(
 )
 _EXCLUDED_FILE_NAMES = frozenset({".DS_Store", MANIFEST_NAME})
 _EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo", ".sqlite3-wal", ".sqlite3-shm", ".db-wal", ".db-shm"})
+_CODE_MIME_OVERRIDES = {
+    # Python's platform MIME registry treats .ts/.mts as MPEG transport streams.
+    # In this lane they are coding-session deliverables, so that classification
+    # makes source files enter video renderers and fail as corrupt media.
+    ".ts": "text/typescript",
+    ".tsx": "text/typescript",
+    ".mts": "text/typescript",
+    ".cts": "text/typescript",
+}
 
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _artifact_mime_type(relative_path: str) -> str:
+    suffix = Path(relative_path).suffix.lower()
+    return _CODE_MIME_OVERRIDES.get(suffix) or mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
 
 
 def default_scratchpad_roots() -> list[Path]:
@@ -454,7 +468,7 @@ class CodingSessionArtifactsLane:
                 path = session.durable_dir / rel
                 try:
                     content = await asyncio.to_thread(path.read_bytes)
-                    mime = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+                    mime = _artifact_mime_type(rel)
                     response = await self._client.upload(
                         file_path=f"coding-sessions/{session.provider}/{session.cli_session_id}/{rel}",
                         content=content,

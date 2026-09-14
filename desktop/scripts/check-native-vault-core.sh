@@ -102,7 +102,7 @@ PY
     rm -rf "$copy/vendor/passkey-authenticator"
     cp -a "$work/upstream/." "$copy/vendor/passkey-authenticator/"
     set +e
-    cargo test --locked --manifest-path "$copy/Cargo.toml" --test semantic_adapter > "$work/pristine.log" 2>&1
+    cargo test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --test semantic_adapter > "$work/pristine.log" 2>&1
     status=$?
     set -e
     test "$status" -ne 0
@@ -121,7 +121,7 @@ PY
       exit 1
     fi
   else
-    cargo test --locked --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
+    cargo test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
   fi
 done
 

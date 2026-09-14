@@ -22,6 +22,7 @@ must_refuse() {
     exit 1
   fi
   grep -F "$marker" "$work/$name.log" >/dev/null || {
+    cat "$work/$name.log" >&2
     echo "native-vault negative probe failed before its predicate: $name" >&2
     exit 1
   }
@@ -85,12 +86,19 @@ end = s.index('\n  else\n    cargo test --locked', start)
 weak = '''    grep -F 'device_bound_backup_flags_are_absent_on_make_and_get' "$work/pristine.log" >/dev/null
     grep -F 'eligible_not_backed_up_has_only_be_on_make_and_get' "$work/pristine.log" >/dev/null
     grep -F 'cross_user_handle_exclusion_requires_credential_excluded' "$work/pristine.log" >/dev/null
-    grep -F 'eligible_backed_up_is_intentional_control' "$work/pristine.log" >/dev/null'''
+    grep -F 'eligible_backed_up_is_intentional_control' "$work/pristine.log" >/dev/null
+    # This mutation probes only the pristine semantic predicate. Stop before the
+    # patched-control build so unrelated Cargo state cannot mask its acceptance.
+    exit 0'''
 p.write_text(s[:start] + weak + s[end:])
 PY
 if NATIVE_VAULT_GUARD="$weak" NATIVE_VAULT_NEGATIVE_CHILD=1 "$0" >"$work/weakened.log" 2>&1; then
   echo 'native-vault negative self-test did not fail against weakened semantic gate' >&2
   exit 1
 fi
-grep -F 'native-vault negative probe accepted: pristine_semantic' "$work/weakened.log" >/dev/null
+if ! grep -F 'native-vault negative probe accepted: pristine_semantic' "$work/weakened.log" >/dev/null; then
+  cat "$work/weakened.log" >&2
+  echo 'native-vault weakened semantic probe failed before reaching the expected acceptance' >&2
+  exit 1
+fi
 printf 'PASS native-vault CI guard negative probes\n'

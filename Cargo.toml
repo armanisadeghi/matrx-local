@@ -36,4 +36,9 @@ authors = ["AI Matrx"]
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Latest published (0.40.2, checked 2026-09-13). No-legacy law: every touched
+# package moves to latest. `bundled` because no user machine may be assumed to
+# have a system sqlite3. libsqlite3-sys declares `links = "sqlite3"`, so every
+# crate in the workspace MUST share this one version — two rusqlite majors in
+# one binary do not resolve. Inherit it, never re-pin it locally.
+rusqlite = { version = "0.40.2", features = ["bundled"] }

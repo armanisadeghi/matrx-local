@@ -284,7 +284,24 @@ pub fn plan(
 ) -> Plan {
     let mut ops: Vec<PlanOp> = Vec::new();
 
-    // Collisions first: two distinct paths that fold to one name cannot both exist on a
+    // Renames FIRST. A case-only rename (`a.txt` → `A.txt`) is the single most common thing a Mac
+    // user does to a filename, and it collides with itself by construction: the old and the new
+    // spelling fold to one key. Detecting the rename before the collision pass lets identity
+    // decide — a path whose (volume, inode) matches the synced row, with unchanged content, is a
+    // move, not a dispute — which is what every champion does (F8).
+    let renames = detect_renames(local, remote, synced, direction);
+    let rename_pairs: BTreeSet<(String, String)> = renames.iter().cloned().collect();
+    for (from, to) in &renames {
+        ops.push(PlanOp::Rename {
+            side: Side::Remote,
+            from: from.clone(),
+            to: to.clone(),
+        });
+    }
+    let renamed_from: BTreeSet<&str> = renames.iter().map(|(f, _)| f.as_str()).collect();
+    let renamed_to: BTreeSet<&str> = renames.iter().map(|(_, t)| t.as_str()).collect();
+
+    // Collisions: two distinct paths that fold to one name cannot both exist on a
     // case-insensitive volume, so neither is acted on until the user resolves it.
     let mut colliding: BTreeSet<String> = BTreeSet::new();
     let mut by_key: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -303,6 +320,14 @@ pub fn plan(
         }
     }
     for (_, paths) in by_key.iter().filter(|(_, v)| v.len() > 1) {
+        // A group that is exactly one rename's two spellings is not a dispute — it is the move
+        // already planned above.
+        if paths.len() == 2
+            && (rename_pairs.contains(&(paths[0].to_string(), paths[1].to_string()))
+                || rename_pairs.contains(&(paths[1].to_string(), paths[0].to_string())))
+        {
+            continue;
+        }
         let first = paths[0];
         // Every member of the group is quarantined, so every member carries a conflict row. A
         // group where only the second path was reported left the first one silently frozen —
@@ -325,24 +350,16 @@ pub fn plan(
         }
     }
 
-    // Rename detection: a local path that is new, whose (volume, inode) identity belongs to a
-    // synced row whose old path has disappeared locally, with identical content, is a move — not
-    // a delete plus an upload.
-    let renames = detect_renames(local, remote, synced, direction, &colliding);
-    for (from, to) in &renames {
-        ops.push(PlanOp::Rename {
-            side: Side::Remote,
-            from: from.clone(),
-            to: to.clone(),
-        });
-    }
-    let renamed_from: BTreeSet<&str> = renames.iter().map(|(f, _)| f.as_str()).collect();
-    let renamed_to: BTreeSet<&str> = renames.iter().map(|(_, t)| t.as_str()).collect();
-
     let mut paths: BTreeSet<&str> = BTreeSet::new();
     paths.extend(local.paths().map(String::as_str));
     paths.extend(remote.paths().map(String::as_str));
     paths.extend(synced.paths().map(String::as_str));
+
+    // Every name any tree already holds. A conflict copy must not land on one of them (F1).
+    let mut occupied: BTreeSet<String> = BTreeSet::new();
+    occupied.extend(local.paths().cloned());
+    occupied.extend(remote.paths().cloned());
+    occupied.extend(synced.paths().cloned());
 
     for path in paths {
         if ctx.open_conflicts.contains(path)
@@ -394,7 +411,9 @@ pub fn plan(
         let decided = match (direction, is_dir) {
             (_, None) => Vec::new(),
             (Direction::TwoWay, Some(true)) => decide_two_way_dir(path, l, r, s, knobs),
-            (Direction::TwoWay, Some(false)) => decide_two_way_file(path, l, r, s, knobs, ctx),
+            (Direction::TwoWay, Some(false)) => {
+                decide_two_way_file(path, l, r, s, knobs, ctx, &mut occupied)
+            }
             (Direction::UploadOnly, Some(dir)) => decide_upload_only(path, l, r, s, dir, knobs),
             (Direction::DownloadOnly, Some(dir)) => decide_download_only(path, l, r, s, dir, knobs),
         };
@@ -447,7 +466,6 @@ fn detect_renames(
     remote: &RemoteTree,
     synced: &SyncedTree,
     direction: Direction,
-    colliding: &BTreeSet<String>,
 ) -> Vec<(String, String)> {
     if direction == Direction::DownloadOnly {
         // The cloud is authority; a local move is a local edit, not an instruction to the cloud.
@@ -465,7 +483,7 @@ fn detect_renames(
     let mut out = Vec::new();
     let mut consumed: BTreeSet<String> = BTreeSet::new();
     for (path, l) in local.iter() {
-        if l.is_dir || synced.contains(path) || colliding.contains(path) {
+        if l.is_dir || synced.contains(path) {
             continue;
         }
         let (Some(v), Some(f)) = (&l.volume_id, &l.file_id) else {
@@ -476,9 +494,6 @@ fn detect_renames(
         };
         if local.contains(&old.path_nfc) || consumed.contains(&old.path_nfc) {
             continue; // the old path still exists: this is a copy, not a move
-        }
-        if colliding.contains(&old.path_nfc) {
-            continue;
         }
         if l.content_hash.is_none() || l.content_hash != old.content_hash {
             continue; // content changed as well: handled as a delete plus a create
@@ -525,6 +540,7 @@ fn decide_two_way_dir(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decide_two_way_file(
     path: &str,
     l: Option<&LocalNode>,
@@ -532,6 +548,7 @@ fn decide_two_way_file(
     s: Option<&SyncedNode>,
     knobs: &Knobs,
     ctx: &PlanContext,
+    occupied: &mut BTreeSet<String>,
 ) -> Vec<PlanOp> {
     match (l, r, s) {
         (None, None, None) => Vec::new(),
@@ -548,7 +565,7 @@ fn decide_two_way_file(
                     path: path.to_string(),
                 }]
             } else {
-                conflict_copy(path, l, r, knobs, ctx)
+                conflict_copy(path, l, r, knobs, ctx, occupied)
             }
         }
         // Tracked on both sides.
@@ -565,7 +582,7 @@ fn decide_two_way_file(
                             path: path.to_string(),
                         }]
                     } else {
-                        conflict_copy(path, l, r, knobs, ctx)
+                        conflict_copy(path, l, r, knobs, ctx, occupied)
                     }
                 }
             }
@@ -630,16 +647,20 @@ fn decide_upload_only(
     if is_dir {
         return match (l.is_some(), r.is_some(), s.is_some()) {
             (true, false, _) => create_remote_dir(path, knobs),
-            (false, _, true) if knobs.upload_only_propagates_deletes => {
+            // Gone on BOTH sides: there is nothing to tombstone, only bookkeeping to drop. This
+            // arm must come first — behind the propagating-delete arm it emitted a tombstone with
+            // no `remote_file_id` and no precondition, an op no real executor can address, which
+            // would sit `failed` on the mapping's queue forever (F6).
+            (false, false, true) => vec![PlanOp::ForgetSynced {
+                path: path.to_string(),
+            }],
+            (false, true, true) if knobs.upload_only_propagates_deletes => {
                 vec![PlanOp::DeleteRemoteTombstone {
                     path: path.to_string(),
                     remote_file_id: r.and_then(|n| n.remote_file_id.clone()),
                     expected_version: r.and_then(|n| n.remote_version),
                 }]
             }
-            (false, false, true) => vec![PlanOp::ForgetSynced {
-                path: path.to_string(),
-            }],
             _ => Vec::new(),
         };
     }
@@ -835,8 +856,18 @@ fn conflict_copy(
     r: &RemoteNode,
     knobs: &Knobs,
     ctx: &PlanContext,
+    occupied: &mut BTreeSet<String>,
 ) -> Vec<PlanOp> {
-    let copy_path = naming::conflict_copy_path(path, &ctx.device_name, &ctx.today, knobs);
+    // F1: the copy must land on a free name. Two conflicts on one path, on one day, from one
+    // device rendered the SAME name, and the second destroyed the first.
+    let copy_path = naming::unique_conflict_copy_path(
+        path,
+        &ctx.device_name,
+        &ctx.today,
+        knobs,
+        |candidate| occupied.contains(candidate),
+    );
+    occupied.insert(copy_path.clone());
     let mut ops = vec![PlanOp::ConflictCopy {
         path: path.to_string(),
         copy_path: copy_path.clone(),

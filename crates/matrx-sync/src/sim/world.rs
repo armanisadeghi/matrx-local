@@ -356,14 +356,16 @@ impl World {
                 }
             }
         }
-        for (_, n) in self.synced.iter() {
-            if let Some(h) = &n.content_hash {
-                out.insert(h.clone());
-            }
-            if let Some(c) = &n.checksum {
-                out.insert(c.clone());
-            }
-        }
+        // `tree_synced` is deliberately NOT read here. It is bookkeeping of a past sync, not an
+        // extant copy — the same rule `live_content` applies at t0, and SPEC-ENGINE §4.3 as
+        // amended (2026-09-13, `6c226529`) states it outright: "tree_synced is bookkeeping of a
+        // past sync, not an extant copy, and is never counted as a content holder". Counting it
+        // here applied the rule to one side of the comparison and not the other, so content that
+        // survived only as a journal row passed as preserved. Independent verification found it
+        // (F4).
+        //
+        // A `local_edit_flagged` row's bytes are a surviving occurrence — and they are on disk,
+        // in `tree_local`, which is already counted above.
         out
     }
 

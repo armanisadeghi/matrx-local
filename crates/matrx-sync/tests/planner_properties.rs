@@ -23,9 +23,21 @@ use std::collections::BTreeSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// The path pool. It deliberately contains a case collision (`a.txt` / `A.txt`), a name Windows
-/// reserves (`CON.txt`) and two paths inside one folder, so those classes are exercised by the
-/// random generator rather than only by hand-written cases.
-const PATHS: &[&str] = &["a.txt", "A.txt", "CON.txt", "d/c.txt", "d/e.txt", "f.txt"];
+/// reserves (`CON.txt`), a path inside a folder, an **NFC/NFD twin pair** (`café.txt` spelled both
+/// ways — one filesystem entry on APFS and NTFS), and a **conflict-copy-shaped name** for the
+/// device and date this harness plans with, so a second conflict on `x.txt` lands on a name that
+/// is already taken. The last two were added after independent verification found both classes
+/// structurally unreachable by the old pool (F1, F5).
+const PATHS: &[&str] = &[
+    "a.txt",
+    "A.txt",
+    "CON.txt",
+    "d/c.txt",
+    "x.txt",
+    "x (conflicted copy from device-a 2026-09-13).txt",
+    "cafe\u{301}.txt",
+    "caf\u{e9}.txt",
+];
 
 /// Content ids. Small on purpose: collisions between generated contents are the interesting cases.
 const CONTENTS: &[&str] = &["c0", "c1", "c2"];
@@ -495,6 +507,23 @@ proptest! {
                 }
             }
         }
+
+        // D7: "both copies reach the cloud". The generic clause exempts conflict-copy paths, so
+        // without this nothing in the suite would catch a regression that left a copy local-only.
+        // Independent verification named the hole (F7).
+        if direction == Direction::TwoWay {
+            for c in &after.conflicts {
+                let Some(copy) = &c.conflict_copy_path else {
+                    continue;
+                };
+                prop_assert!(
+                    after.local.contains(copy)
+                        && after.remote.contains(copy)
+                        && after.synced.contains(copy),
+                    "two_way: the conflict copy {copy} did not reach all three trees\ncells {cells:?}"
+                );
+            }
+        }
     }
 
     /// **Data preservation** (all directions).
@@ -524,8 +553,18 @@ proptest! {
 
         // Deletion case: a path present at t0 only in tree_synced (deleted on both sides) must end
         // in none of the three.
+        let copies_written: BTreeSet<String> = after
+            .conflicts
+            .iter()
+            .filter_map(|c| c.conflict_copy_path.clone())
+            .collect();
         for path in before.synced.paths() {
             if before.local.contains(path) || before.remote.contains(path) {
+                continue;
+            }
+            if copies_written.contains(path) {
+                // The run wrote a NEW conflict copy at this name. A path re-created by a
+                // legitimate new copy is not the deleted row surviving.
                 continue;
             }
             prop_assert!(
@@ -861,4 +900,258 @@ fn an_illegal_name_is_reported_not_renamed() {
         "an unsendable name is not sent: {:?}",
         p.ops
     );
+}
+
+// ------------------------------------------- regressions from independent verification
+
+/// Build a world from explicit (path, local, remote, synced) triples.
+fn world_of(rows: &[(&str, Option<&str>, Option<&str>, Option<&str>)]) -> World {
+    let mut w = World::new();
+    for (i, (path, local, remote, synced)) in rows.iter().enumerate() {
+        if let Some(h) = local {
+            w.local.insert(
+                (*path).to_string(),
+                LocalNode {
+                    path_nfc: (*path).to_string(),
+                    is_dir: false,
+                    size: Some(1),
+                    mtime_ns: Some(1),
+                    volume_id: Some("vol-local".to_string()),
+                    file_id: Some(format!("inode-{i}")),
+                    content_hash: Some((*h).to_string()),
+                    scanned_at: None,
+                },
+            );
+        }
+        if let Some(c) = remote {
+            w.remote.insert(
+                (*path).to_string(),
+                RemoteNode {
+                    path_nfc: (*path).to_string(),
+                    is_dir: false,
+                    size: Some(1),
+                    remote_file_id: Some(format!("file-{i}")),
+                    remote_folder_id: None,
+                    remote_version: Some(1),
+                    checksum: Some((*c).to_string()),
+                    client_modified_at: None,
+                    origin_device_id: None,
+                    deleted_at: None,
+                    seen_at: None,
+                },
+            );
+        }
+        if let Some(h) = synced {
+            w.synced.insert(
+                (*path).to_string(),
+                SyncedNode {
+                    path_nfc: (*path).to_string(),
+                    is_dir: false,
+                    size: Some(1),
+                    mtime_ns: Some(1),
+                    volume_id: Some("vol-local".to_string()),
+                    file_id: Some(format!("inode-{i}")),
+                    content_hash: Some((*h).to_string()),
+                    remote_file_id: format!("file-{i}"),
+                    remote_version: 1,
+                    checksum: Some((*h).to_string()),
+                    local_edit_flagged: false,
+                    synced_at: "t".to_string(),
+                },
+            );
+        }
+    }
+    w.next_id = 500;
+    w
+}
+
+fn drive(world: &mut World, direction: Direction, knobs: &Knobs, rounds: usize) {
+    for _ in 0..rounds {
+        let ctx = PlanContext {
+            device_name: "device-a".to_string(),
+            today: "2026-09-13".to_string(),
+            open_conflicts: world.open_conflicts(),
+        };
+        let p = plan(
+            &world.local,
+            &world.remote,
+            &world.synced,
+            direction,
+            knobs,
+            &ctx,
+        );
+        if p.is_empty() || p.suspended.is_some() {
+            return;
+        }
+        world.apply(&p);
+    }
+}
+
+/// F1, from independent verification — **data loss**. The verifier's exact case: a conflict copy
+/// from earlier today already holds `c9`, and `x.txt` goes into conflict again. Without a
+/// uniquifier the new copy rendered the same name, overwrote `c9`, and then pushed the overwrite
+/// to the cloud with a valid precondition. `before = {c1, c2, c9}` became `after = {c1, c2}`.
+#[test]
+fn a_second_conflict_the_same_day_does_not_destroy_the_first_copy() {
+    let copy = "x (conflicted copy from device-a 2026-09-13).txt";
+    let mut w = world_of(&[
+        ("x.txt", Some("c1"), Some("c2"), None),
+        (copy, Some("c9"), Some("c9"), Some("c9")),
+    ]);
+    let before = w.live_content();
+    assert!(before.contains("c9"));
+
+    drive(&mut w, Direction::TwoWay, &Knobs::default(), 16);
+
+    let after = w.reachable_content();
+    for c in ["c1", "c2", "c9"] {
+        assert!(
+            after.contains(c),
+            "{c} was destroyed by the second conflict; reachable = {after:?}"
+        );
+    }
+    assert!(
+        w.local.contains(copy) && w.local.get(copy).expect("row").content_hash.as_deref() == Some("c9"),
+        "the earlier copy must still hold its own bytes"
+    );
+}
+
+/// F5, from independent verification. NFC/NFD twins are one filesystem entry on APFS and NTFS;
+/// I8 requires a `unicode_collision`, "never a silent rename".
+#[test]
+fn nfc_and_nfd_twins_become_a_unicode_collision_not_a_silent_clobber() {
+    let mut w = world_of(&[
+        ("cafe\u{301}.txt", Some("c1"), None, None),
+        ("caf\u{e9}.txt", None, Some("c2"), None),
+    ]);
+    let ctx = PlanContext {
+        device_name: "device-a".to_string(),
+        today: "2026-09-13".to_string(),
+        open_conflicts: BTreeSet::new(),
+    };
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &Knobs::default(),
+        &ctx,
+    );
+    let kinds: Vec<_> = p
+        .ops
+        .iter()
+        .filter_map(|o| match o {
+            matrx_sync::PlanOp::RecordConflict { kind, .. } => Some(*kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            matrx_sync::model::ConflictKind::UnicodeCollision,
+            matrx_sync::model::ConflictKind::UnicodeCollision
+        ],
+        "both spellings must be reported, as the spec's named kind: {:?}",
+        p.ops
+    );
+    assert!(
+        !p.ops
+            .iter()
+            .any(|o| matches!(o, matrx_sync::PlanOp::Upload { .. } | matrx_sync::PlanOp::Download { .. })),
+        "neither spelling may be transferred while they collide: {:?}",
+        p.ops
+    );
+    drive(&mut w, Direction::TwoWay, &Knobs::default(), 16);
+    assert!(w.reachable_content().contains("c1") && w.reachable_content().contains("c2"));
+}
+
+/// F6, from independent verification. An `upload_only` directory gone from both sides must drop
+/// its bookkeeping, not emit a tombstone with no target — an op no real executor can address,
+/// which would sit `failed` on the mapping's queue forever.
+#[test]
+fn an_upload_only_directory_gone_from_both_sides_forgets_rather_than_tombstoning() {
+    let mut w = World::new();
+    w.synced.insert(
+        "d".to_string(),
+        SyncedNode {
+            path_nfc: "d".to_string(),
+            is_dir: true,
+            size: None,
+            mtime_ns: None,
+            volume_id: Some("vol-local".to_string()),
+            file_id: Some("inode-1".to_string()),
+            content_hash: None,
+            remote_file_id: "folder-1".to_string(),
+            remote_version: 1,
+            checksum: None,
+            local_edit_flagged: false,
+            synced_at: "t".to_string(),
+        },
+    );
+    for direction in [Direction::UploadOnly, Direction::TwoWay] {
+        let p = plan(
+            &w.local,
+            &w.remote,
+            &w.synced,
+            direction,
+            &Knobs::default(),
+            &PlanContext::default(),
+        );
+        assert_eq!(
+            p.ops,
+            vec![matrx_sync::PlanOp::ForgetSynced {
+                path: "d".to_string()
+            }],
+            "{direction:?} must forget, not tombstone: {:?}",
+            p.ops
+        );
+    }
+}
+
+/// F8, from independent verification. A case-only rename is one of the most common things a Mac
+/// user does to a filename, and Dropbox performs it. Identity decides: a path whose
+/// `(volume, inode)` matches the synced row, with unchanged content, is a move — not a permanent
+/// conflict between the two spellings of one name.
+#[test]
+fn a_case_only_rename_is_a_rename_not_a_permanent_conflict() {
+    let mut w = world_of(&[("a.txt", None, Some("c1"), Some("c1"))]);
+    // The same inode now appears under the new spelling; the old spelling is gone from disk.
+    w.local.insert(
+        "A.txt".to_string(),
+        LocalNode {
+            path_nfc: "A.txt".to_string(),
+            is_dir: false,
+            size: Some(1),
+            mtime_ns: Some(2),
+            volume_id: Some("vol-local".to_string()),
+            file_id: Some("inode-0".to_string()),
+            content_hash: Some("c1".to_string()),
+            scanned_at: None,
+        },
+    );
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &Knobs::default(),
+        &PlanContext::default(),
+    );
+    assert!(
+        p.ops.iter().any(|o| matches!(
+            o,
+            matrx_sync::PlanOp::Rename { from, to, .. } if from == "a.txt" && to == "A.txt"
+        )),
+        "a case-only move must be a rename: {:?}",
+        p.ops
+    );
+    assert!(
+        !p.ops
+            .iter()
+            .any(|o| matches!(o, matrx_sync::PlanOp::RecordConflict { .. })),
+        "and not a conflict the user has to resolve by hand: {:?}",
+        p.ops
+    );
+    drive(&mut w, Direction::TwoWay, &Knobs::default(), 16);
+    assert!(w.reachable_content().contains("c1"));
 }

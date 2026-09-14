@@ -198,6 +198,68 @@ failed outright with *"current package believes it's in a workspace when it's no
 which would have failed the `native-vault-core` CI job.
 
 
+### 17. A clean checkout can build the app — red, then green (2026-09-13, fix round)
+
+The first cut of this spike wired `scripts/build-syncd.sh` into `release.yml` only, while
+`bundle.externalBin` declared `sidecar/matrx-syncd` on every platform and
+`desktop/.gitignore` ignores `src-tauri/sidecar/`. The independent verifier proved that a
+clean checkout could not build the app at all. Reproduced and then fixed here:
+
+**RED** — artifact deleted, built with the pre-fix `beforeBuildCommand`:
+
+```
+$ rm -f desktop/src-tauri/sidecar/matrx-syncd-aarch64-apple-darwin
+$ cd desktop && pnpm tauri build --debug --bundles app \
+    --config '{"build":{"beforeBuildCommand":"pnpm build"},"bundle":{"createUpdaterArtifacts":false}}'
+  resource path `sidecar/matrx-syncd-aarch64-apple-darwin` doesn't exist
+       Error failed to build app: failed to build app
+exit 1
+```
+
+**GREEN** — same absent artifact, committed config:
+
+```
+$ ls desktop/src-tauri/sidecar/ | grep syncd     # (nothing)
+$ cd desktop && pnpm tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+    Finished 1 bundle at:
+        .../target/debug/bundle/macos/AI Matrx.app
+$ ls -la desktop/src-tauri/sidecar/ | grep syncd
+-rwxr-xr-x  427504 Sep 13 17:08 matrx-syncd-aarch64-apple-darwin
+$ ls -la ".../AI Matrx.app/Contents/MacOS/" | grep syncd
+-rwxr-xr-x  427504 Sep 13 17:08 matrx-syncd
+```
+
+The fix is at the one place every Tauri path shares — `tauri.conf.json`'s
+`beforeBuildCommand` **and** `beforeDevCommand` now run `pnpm ensure:syncd` first (a new
+`desktop/package.json` script calling this repo's `scripts/build-syncd.sh`). Two more
+consumers got the same treatment so no path depends on a hand-built artifact:
+`scripts/release.sh` gained the "ensure present" block its sibling sidecars
+(`cloudflared`, `llama-server`) already had, and `scripts/smoke.sh` calls the script
+straight after `build-sidecar.sh`. Repeat cost is cargo's no-op plus a `cmp`; the script
+now skips the copy when the bytes already match.
+
+### 18. `./scripts/smoke.sh packaged` after the fix
+
+<!-- SMOKE_RESULT_2 -->
+
+---
+
+## Known, accepted, and owned elsewhere
+
+- **`[workspace.dependencies]` coupling (verifier Finding 4, MINOR — accepted).** The
+  desktop crate inherits `tokio`, `reqwest` and `rusqlite` from the root manifest. The
+  values are byte-identical to what it pinned before, and neither sync crate uses any of
+  the three yet, so the indirection buys nothing today and creates a path by which a
+  future bump for the sync crates re-specs the shipped app. Kept deliberately: the whole
+  point of D1 is that the daemon and the app never diverge on the stack they share, and
+  the table is where that is enforced once the sync crates start using it. Anyone bumping
+  a version here is changing the desktop app too — that is the intended, visible cost.
+- **The inert 427 KB daemon ships to users (verifier Finding 5)** — owned by FS-L2a, not
+  by this spike. It announces itself honestly when run and must not survive to go-live
+  unimplemented.
+- **NSIS does not stop a registered daemon (verifier Finding 6)** — correct today
+  (nothing spawns it); owned by FS-L2c, the register item that ships the daemon at login.
+
 ### What could NOT be proven here, and remains for CI
 
 Signing and notarization need Apple secrets that exist only in the Release

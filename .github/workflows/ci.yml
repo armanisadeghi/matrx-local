@@ -152,3 +152,74 @@ jobs:
 
       - name: Native Vault core provenance and protocol gate
         run: desktop/scripts/check-native-vault-core.sh
+
+  # The workspace added by folder-sync spike FS-C1 (crates/matrx-sync,
+  # crates/matrx-syncd, desktop/src-tauri). Before this job, ci.yml compiled no
+  # Rust at all: the only workflow that built the workspace was release.yml, so
+  # a Rust regression could sit on main until someone cut a release.
+  #
+  # This is where FS-C3's property tests will run — the pure planner's
+  # termination / no-panic / convergence / data-preservation proofs are
+  # `cargo test` in crates/matrx-sync, and `--workspace` picks them up with no
+  # further wiring.
+  #
+  # ubuntu-22.04 because every other job in this file uses it and it is the
+  # same runner the release's Linux leg builds on. It is the cheapest runner
+  # that compiles the whole workspace; the macOS-only paths (Helper-app
+  # bundling, signing, notarization) are release.yml's job, not a CI gate.
+  #
+  # --locked so a Cargo.lock that does not match the manifests fails here
+  # rather than in a release.
+  rust-workspace:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # .cargo/config.toml pins the target dir out of the workspace root.
+          workspaces: ". -> desktop/src-tauri/target"
+
+      # aimatrx-desktop is a workspace member, so --workspace compiles the
+      # whole Tauri app: it needs the same system libraries the release's
+      # Linux leg installs, and cmake for whisper-cpp-plus-sys.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libasound2-dev cmake libgcc-12-dev
+
+      # whisper-cpp-plus-sys downloads whisper.cpp at compile time with a
+      # single HTTP call and no retry — a transient CDN error would fail this
+      # job for a reason unrelated to the code. Pre-download with retries and
+      # point the build script at the local copy, exactly as release.yml does.
+      # WHISPER_COMMIT must match WHISPER_CPP_VERSION in
+      # whisper-cpp-plus-sys/build.rs (keep in sync with release.yml).
+      - name: Pre-download whisper.cpp source
+        run: |
+          set -euo pipefail
+          WHISPER_COMMIT="02de44819ba4f9cf3f3d2a4adcfc2c5130d7140a"
+          URL="https://github.com/rmorse/whisper.cpp/archive/${WHISPER_COMMIT}.tar.gz"
+          dest="$GITHUB_WORKSPACE/whisper-cpp-src"
+          mkdir -p "$dest"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 2 -o whisper.tar.gz "$URL"; then break; fi
+            echo "attempt $attempt/5 failed"
+            [ "$attempt" -eq 5 ] && exit 1
+            sleep $((10 * attempt))
+          done
+          tar -xzf whisper.tar.gz -C "$GITHUB_WORKSPACE"
+          mv "$GITHUB_WORKSPACE/whisper.cpp-${WHISPER_COMMIT}"/* "$dest"/
+          rm -rf "$GITHUB_WORKSPACE/whisper.cpp-${WHISPER_COMMIT}" whisper.tar.gz
+          echo "WHISPER_CPP_SOURCE_DIR=$dest" >> "$GITHUB_ENV"
+
+      - name: cargo build --workspace --locked
+        run: cargo build --workspace --locked
+
+      - name: cargo test --workspace --locked
+        run: cargo test --workspace --locked

@@ -188,8 +188,15 @@ impl Journal {
 
     /// Borrow the connection for reads the typed API does not cover.
     ///
-    /// Deliberately **not** `&mut`: a caller cannot open a transaction through it, so no write path
-    /// can smuggle a `tree_synced` upsert past [`Journal::confirm_op`] (I1).
+    /// A write to `tree_synced` through this handle **fails** — migration `002` puts
+    /// `BEFORE INSERT / UPDATE / DELETE` triggers on the table that abort unless the
+    /// `synced_write_guard` flag is raised, and only the three confirmation methods raise it,
+    /// inside the very transaction that performs the write they authorise. I1 is therefore
+    /// enforced by the database, not by convention in this crate.
+    ///
+    /// The earlier version of this comment claimed `&self` was enough because no transaction could
+    /// be opened through it. That was false — `rusqlite::Connection::execute` takes `&self` — and
+    /// independent verification fabricated a row to prove it (F3).
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
@@ -538,20 +545,27 @@ impl Journal {
                 "op {id} confirms a file with no server checksum (I2)"
             )));
         }
+        // The flag is NOT an exemption here. Independent verification (F2) showed that treating
+        // it as one turned it into a skeleton key: any caller that set `local_edit_flagged: true`
+        // on an ordinary op walked straight past the check below. The two doors are disjoint —
+        // a flagged row is written ONLY by [`Journal::preserve_local_edit`], which SPEC-ENGINE
+        // amendment 1 (2026-09-13, `6c226529`) gives its own `ops.kind` value.
+        if local.local_edit_flagged {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} carries local_edit_flagged; a flagged row is written only by \
+                 preserve_local_edit, on an op of kind preserve_local_edit (I1, amendment 1)"
+            )));
+        }
         // I1, sharpened: a synced row records ONE state both sides confirmed, so for a file the
         // hash this daemon computed and the checksum the server returned are the SAME bytes'
-        // SHA-256. They may differ only on a `local_edit_flagged` row, which is D6's deliberately
-        // preserved local edit and is written through `preserve_local_edit`.
+        // SHA-256. The one exception is the flagged row above, which has its own door.
         //
         // Without this, an executor that read the local hash and the server checksum at two
         // DIFFERENT moments — which is what happens whenever another device writes in between —
         // records a row that was never true, and the next plan reads it as "local unchanged,
         // remote changed" and downloads over the user's file. The FS-C4 harness found exactly
         // that; see TESTING.md.
-        if !local.is_dir
-            && !local.local_edit_flagged
-            && local.content_hash != remote.checksum
-        {
+        if !local.is_dir && local.content_hash != remote.checksum {
             return Err(SyncError::SyncedWriteRefused(format!(
                 "op {id} confirms {:?} locally and {:?} remotely; a synced row records one state \
                  both sides confirmed, never two observations taken at different moments (I1)",
@@ -580,6 +594,7 @@ impl Journal {
                 "op {id} is leased by {lease_owner:?}, not by {owner:?}"
             )));
         }
+        raise_guard(&tx, "confirm_op")?;
         tx.execute(
             "INSERT OR REPLACE INTO tree_synced
                (mapping_id, path_nfc, is_dir, size, mtime_ns, volume_id, file_id, content_hash,
@@ -597,10 +612,11 @@ impl Journal {
                 remote.remote_file_id,
                 remote.remote_version,
                 remote.checksum,
-                local.local_edit_flagged as i64,
+                0_i64, // never flagged here — the flagged row has its own door
                 synced_at,
             ],
         )?;
+        lower_guard(&tx)?;
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",
@@ -646,10 +662,12 @@ impl Journal {
                 "op {id} is not leased by {owner:?} (state '{state}')"
             )));
         }
+        raise_guard(&tx, "confirm_delete_op")?;
         tx.execute(
             "DELETE FROM tree_synced WHERE mapping_id = ?1 AND path_nfc = ?2",
             params![mapping_id, path_nfc],
         )?;
+        lower_guard(&tx)?;
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",
@@ -659,19 +677,22 @@ impl Journal {
         Ok(())
     }
 
-    /// D6's preserve-and-flag, written under the same double-confirmation discipline as
-    /// [`Journal::confirm_op`].
+    /// D6's preserve-and-flag — the `preserve_local_edit` op (SPEC-ENGINE amendment 1,
+    /// 2026-09-13, `6c226529`).
     ///
-    /// **Spec gap, escalated.** `ops.kind` in SPEC-ENGINE §4 has no value that means "a local edit
-    /// was preserved and flagged", so there is no op for this transition to complete — yet D6 and
-    /// the `download_only` convergence clause both require the row. This method therefore takes
-    /// the two confirmations directly and writes the row in one transaction: the local hash THIS
-    /// daemon computed and the server checksum the feed returned (I2 holds), with
-    /// `local_edit_flagged = 1`. It refuses anything less.
+    /// It is the **one** door through which a `tree_synced` row may carry
+    /// `content_hash != checksum`, and it is under the same double-confirmation discipline as
+    /// every other terminal op (I1): the op must exist, be `leased` by `owner`, and be of kind
+    /// `preserve_local_edit`; the local hash must be one this daemon computed and the checksum one
+    /// the server returned; and the row and the `done` transition happen in ONE transaction.
+    ///
+    /// The kind is checked rather than a boolean trusted, because a boolean was a skeleton key
+    /// (F3's sibling finding, F2): anything that could set a flag could write a row that was never
+    /// true.
     pub fn preserve_local_edit(
         &mut self,
-        mapping_id: &str,
-        path_nfc: &str,
+        id: i64,
+        owner: &str,
         local: &LocalConfirmation,
         remote: &RemoteConfirmation,
         at: &str,
@@ -688,11 +709,34 @@ impl Journal {
         }
         if local.content_hash.is_none() || remote.checksum.is_none() {
             return Err(SyncError::SyncedWriteRefused(format!(
-                "preserving the local edit at {path_nfc} needs both the local hash and the server \
+                "op {id} preserves a local edit without both the local hash and the server \
                  checksum (I2)"
             )));
         }
-        self.conn.execute(
+        let tx = self.conn.transaction()?;
+        let found: Option<(String, String, String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT mapping_id, path_nfc, kind, state, lease_owner FROM ops WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?;
+        let Some((mapping_id, path_nfc, kind, state, lease_owner)) = found else {
+            return Err(SyncError::SyncedWriteRefused(format!("op {id} does not exist")));
+        };
+        if kind != OpKind::PreserveLocalEdit.as_str() {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} is of kind '{kind}'; a flagged row is written only on an op of kind \
+                 'preserve_local_edit' (amendment 1)"
+            )));
+        }
+        if state != OpState::Leased.as_str() || lease_owner.as_deref() != Some(owner) {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} is not leased by {owner:?} (state '{state}')"
+            )));
+        }
+        raise_guard(&tx, "preserve_local_edit")?;
+        tx.execute(
             "INSERT OR REPLACE INTO tree_synced
                (mapping_id, path_nfc, is_dir, size, mtime_ns, volume_id, file_id, content_hash,
                 remote_file_id, remote_version, checksum, local_edit_flagged, synced_at)
@@ -711,6 +755,13 @@ impl Journal {
                 at,
             ],
         )?;
+        lower_guard(&tx)?;
+        tx.execute(
+            "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
+             WHERE id = ?1",
+            params![id, at],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -784,6 +835,24 @@ impl Journal {
             )
             .optional()?)
     }
+}
+
+/// Raise the `tree_synced` write guard for the rest of this transaction (migration `002`).
+fn raise_guard(tx: &rusqlite::Transaction<'_>, door: &str) -> Result<()> {
+    tx.execute(
+        "UPDATE synced_write_guard SET active = 1, door = ?1 WHERE id = 1",
+        params![door],
+    )?;
+    Ok(())
+}
+
+/// Lower it again, so nothing later in the same transaction writes unauthorised.
+fn lower_guard(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    tx.execute(
+        "UPDATE synced_write_guard SET active = 0, door = NULL WHERE id = 1",
+        [],
+    )?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------ row decoding

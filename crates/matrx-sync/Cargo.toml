@@ -11,11 +11,9 @@ missing_docs = "warn"
 
 [dependencies]
 # Inherited, never pinned here: the Tauri app also depends on rusqlite, and two versions of
-# `libsqlite3-sys` (`links = "sqlite3"`) cannot coexist in one workspace. SPEC-ENGINE §5 names
-# rusqlite 0.40.2; moving the workspace pin there is a separate lane's commit, and this crate
-# is written against APIs stable across both (Connection, params!, execute_batch, prepared
-# statements, pragma_update, transactions). The `bundled` feature comes from the workspace
-# declaration — no system sqlite3 on a user's machine may be assumed.
+# `libsqlite3-sys` (`links = "sqlite3"`) cannot coexist in one workspace. The workspace declares
+# SPEC-ENGINE §5's rusqlite 0.40.2 with `bundled` — no system sqlite3 on a user's machine may be
+# assumed.
 rusqlite = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

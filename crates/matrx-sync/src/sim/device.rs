@@ -688,9 +688,21 @@ impl Device {
                 if checksum.is_none() {
                     return Ok(StepOutcome::Idle);
                 }
-                self.journal.preserve_local_edit(
-                    &self.mapping_id.clone(),
+                // Amendment 1 gives this transition its own op kind, so it goes through the
+                // queue like every other terminal op rather than being a bare journal write.
+                let op_id = self.enqueue_and_lease(
+                    OpKind::PreserveLocalEdit,
                     &path,
+                    None,
+                    remote.remote_version,
+                    remote.checksum.clone(),
+                    local.content_hash.clone(),
+                    now,
+                )?;
+                let owner = self.name.clone();
+                self.journal.preserve_local_edit(
+                    op_id,
+                    &owner,
                     &LocalConfirmation {
                         is_dir: false,
                         size: local.size,

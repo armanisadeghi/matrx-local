@@ -22,11 +22,18 @@ pub struct Migration {
 }
 
 /// Every migration this binary carries, in ascending version order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "001_initial",
-    sql: include_str!("../../migrations/001_initial.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "001_initial",
+        sql: include_str!("../../migrations/001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "002_synced_write_guard",
+        sql: include_str!("../../migrations/002_synced_write_guard.sql"),
+    },
+];
 
 /// The highest schema version this binary can read.
 pub fn max_version() -> i64 {

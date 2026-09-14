@@ -372,6 +372,22 @@ fn local_and_remote_rows_round_trip_through_their_typed_structs() {
     assert!(back.get("notes/a.md").expect("row").is_live());
 }
 
+/// Enqueue and lease one `preserve_local_edit` op, returning its id.
+fn leased_preserve_op(j: &mut Journal, key: &str) -> i64 {
+    let mut op = upload_op();
+    op.kind = OpKind::PreserveLocalEdit;
+    op.seq = 9;
+    op.idempotency_key = key.to_string();
+    let id = j.enqueue_op(&op).expect("enqueue");
+    j.connection()
+        .execute(
+            "UPDATE ops SET state='leased', lease_owner='x' WHERE id = ?1",
+            [id],
+        )
+        .expect("lease");
+    id
+}
+
 #[test]
 fn a_synced_row_may_not_be_assembled_from_two_different_moments() {
     // The guard that closed the FS-C4 harness's second data-loss finding: an executor that read
@@ -394,10 +410,11 @@ fn a_synced_row_may_not_be_assembled_from_two_different_moments() {
     assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
 
     // The same two hashes ARE allowed on a preserved local edit — that is exactly what D6's flag
-    // means — and that path is `preserve_local_edit`, never `confirm_op`.
+    // means — and that path is an op of kind `preserve_local_edit`, never `confirm_op`.
+    let preserve = leased_preserve_op(&mut j, "key-preserve");
     let mut local = local_confirmation();
     local.local_edit_flagged = true;
-    j.preserve_local_edit(MAPPING, "notes/a.md", &local, &remote, "2026-09-13T00:00:06Z")
+    j.preserve_local_edit(preserve, "x", &local, &remote, "2026-09-13T00:00:06Z")
         .expect("a preserved local edit may differ from the cloud");
     let row = j
         .synced_tree(MAPPING)
@@ -409,22 +426,130 @@ fn a_synced_row_may_not_be_assembled_from_two_different_moments() {
     assert_ne!(row.content_hash, row.checksum);
 }
 
+/// F2, from independent verification: the flag was a skeleton key. Setting
+/// `local_edit_flagged: true` on an ORDINARY op walked past the hash-≠-checksum refusal and wrote
+/// a row that was never true. `confirm_op` now refuses the flag outright; the two doors are
+/// disjoint.
+#[test]
+fn the_local_edit_flag_is_not_a_skeleton_key_through_confirm_op() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let id = j.enqueue_op(&upload_op()).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+
+    let mut local = local_confirmation();
+    local.local_edit_flagged = true;
+    let mut remote = remote_confirmation();
+    remote.checksum = Some("b".repeat(64));
+
+    let err = j
+        .confirm_op(id, "x", &local, &remote, "2026-09-13T00:00:05Z")
+        .expect_err("the flag must not open confirm_op's door");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+    assert!(
+        j.synced_tree(MAPPING).expect("tree").is_empty(),
+        "no row may be written through the flag"
+    );
+
+    // Even with matching hashes, the flag is refused here: a flagged row has ONE door.
+    let err = j
+        .confirm_op(id, "x", &local, &remote_confirmation(), "2026-09-13T00:00:05Z")
+        .expect_err("still refused");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+}
+
+/// A flagged row is written only on an op that declares itself one (amendment 1).
+#[test]
+fn preserve_local_edit_requires_its_own_op_kind() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let wrong = j.enqueue_op(&upload_op()).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+    let mut local = local_confirmation();
+    local.local_edit_flagged = true;
+    let mut remote = remote_confirmation();
+    remote.checksum = Some("b".repeat(64));
+    let err = j
+        .preserve_local_edit(wrong, "x", &local, &remote, "t")
+        .expect_err("an upload op may not become a flagged row");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+    assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
+}
+
+/// F3, from independent verification: raw SQL through `connection()` fabricated a `tree_synced`
+/// row — no op, no lease, no hash anybody computed. I1 is now enforced by the database.
+#[test]
+fn raw_sql_cannot_fabricate_a_synced_row() {
+    let j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let fabricate = j.connection().execute(
+        "INSERT INTO tree_synced (mapping_id, path_nfc, is_dir, content_hash, remote_file_id,
+                                  remote_version, checksum, synced_at)
+         VALUES (?1, 'fabricated.txt', 0, 'INVENTED', 'file-x', 7, 'ALSO_INVENTED', 't')",
+        [MAPPING],
+    );
+    assert!(
+        fabricate.is_err(),
+        "the trigger must refuse a row no confirmation authorised"
+    );
+    assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
+
+    // Updates and deletes are guarded too, so a fabricated row cannot be smuggled in by editing
+    // or removing a legitimate one either. (A trigger fires per row, so the table needs a real
+    // row first — an empty table would make these pass vacuously.)
+    let mut j = j;
+    let id = j.enqueue_op(&upload_op()).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_op(
+        id,
+        "x",
+        &local_confirmation(),
+        &remote_confirmation(),
+        "2026-09-13T00:00:05Z",
+    )
+    .expect("a legitimate row");
+    assert_eq!(j.synced_tree(MAPPING).expect("tree").len(), 1);
+
+    assert!(j
+        .connection()
+        .execute("UPDATE tree_synced SET content_hash = 'X'", [])
+        .is_err());
+    assert!(j
+        .connection()
+        .execute("DELETE FROM tree_synced", [])
+        .is_err());
+    let row = j
+        .synced_tree(MAPPING)
+        .expect("tree")
+        .get("notes/a.md")
+        .cloned()
+        .expect("still there, untouched");
+    assert_eq!(row.content_hash.as_deref(), Some("a".repeat(64).as_str()));
+}
+
 #[test]
 fn preserve_local_edit_refuses_anything_less_than_both_sides() {
     let mut j = Journal::open_in_memory().expect("open");
     j.put_mapping(&mapping_row()).expect("mapping");
+    let id = leased_preserve_op(&mut j, "key-preserve-2");
     let mut local = local_confirmation();
     local.local_edit_flagged = true;
     let mut remote = remote_confirmation();
     remote.checksum = None;
     assert!(j
-        .preserve_local_edit(MAPPING, "p", &local, &remote, "2026-09-13T00:00:00Z")
+        .preserve_local_edit(id, "x", &local, &remote, "2026-09-13T00:00:00Z")
         .is_err());
 
     let mut unflagged = local_confirmation();
     unflagged.local_edit_flagged = false;
     assert!(j
-        .preserve_local_edit(MAPPING, "p", &unflagged, &remote_confirmation(), "t")
+        .preserve_local_edit(id, "x", &unflagged, &remote_confirmation(), "t")
         .is_err());
     assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
 }

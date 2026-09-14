@@ -230,6 +230,10 @@ pub enum OpKind {
     DeleteLocal,
     DeleteRemote,
     WriteConflictCopy,
+    /// D6's preserve-and-flag, added by SPEC-ENGINE amendment 1 (2026-09-13, `6c226529`): the op a
+    /// `download_only` mapping emits when the local file diverged. A journal write, not a
+    /// transfer, but under the same double-confirmation discipline as every other terminal op.
+    PreserveLocalEdit,
     IndexEnqueue,
     Unindex,
 }
@@ -250,6 +254,7 @@ impl OpKind {
             OpKind::DeleteLocal => "delete_local",
             OpKind::DeleteRemote => "delete_remote",
             OpKind::WriteConflictCopy => "write_conflict_copy",
+            OpKind::PreserveLocalEdit => "preserve_local_edit",
             OpKind::IndexEnqueue => "index_enqueue",
             OpKind::Unindex => "unindex",
         }
@@ -270,6 +275,7 @@ impl OpKind {
             "delete_local" => OpKind::DeleteLocal,
             "delete_remote" => OpKind::DeleteRemote,
             "write_conflict_copy" => OpKind::WriteConflictCopy,
+            "preserve_local_edit" => OpKind::PreserveLocalEdit,
             "index_enqueue" => OpKind::IndexEnqueue,
             "unindex" => OpKind::Unindex,
             _ => return None,

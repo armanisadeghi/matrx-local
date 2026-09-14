@@ -273,6 +273,16 @@ workflow. Verified **by reading** `.github/workflows/release.yml`, not by runnin
 - The `Verify macOS artifact signing` step's `BUNDLE_DIR` still resolves, because
   the target directory did not move.
 
+**CI now compiles Rust on every push.** `.github/workflows/ci.yml` gained a
+`rust-workspace` job (ubuntu-22.04, `Swatinem/rust-cache`) running
+`cargo build`/`cargo test` `--workspace --exclude aimatrx-desktop --locked`. This is
+where FS-C3's property tests will run. The app itself is excluded for a reason proven in
+CI run **34791870514**, which tried a plain `--workspace` and failed with
+`resource path 'sidecar/matrx-engine-x86_64-unknown-linux-gnu' doesn't exist`:
+`tauri-build` validates every `externalBin` entry at compile time, so compiling the app
+in CI would mean first producing all four sidecars, including the 363 MB PyInstaller
+engine. `release.yml` already compiles the app on all four targets.
+
 Still to be proven on the next CI release (run by the deploy agent — never by this
 spike):
 

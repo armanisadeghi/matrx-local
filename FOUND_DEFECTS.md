@@ -64,6 +64,29 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Updater / packaged runtime
 
+### MXL-D-090 — packaged app: `POST /auth/token` 500s because the macOS Keychain helper is SIGTERMed (exit status -15)
+
+- **Area:** `app/common/keychain_helper.py:90` ← `app/services/local_db/secret_store.py:89`
+  ← `POST /auth/token` (`app/main.py:2332` request middleware).
+- **Symptom:** In a packaged smoke run the engine answers `/health` and reports no
+  failed service, then `POST /auth/token` returns 500 after ~8 s with
+  `RuntimeError: macOS Keychain helper failed: exit status -15`. `-15` is SIGTERM —
+  the helper subprocess is being killed by something, not failing on its own. The
+  run's only smoke failure is "packaged app log: fatal lines in the log".
+- **Evidence:** `.smoke/runs/20260913-171109-48700/app.log:775-830` (5 occurrences),
+  and `.smoke/runs/20260913-163530-26968/app.log` — the second run is from a tree
+  that predates the folder-sync FS-C1 workspace entirely, so this is not spike
+  fallout. Two other packaged runs the same afternoon
+  (`20260913-164402-55287`, `20260913-165413-89707`) were CLEAN, so it is
+  intermittent.
+- **Why it matters:** the desktop cannot persist its Supabase session when this
+  fires, and the engine reports itself healthy while it happens — a screen that
+  does not lie is the requirement (Law 4). Who sends the SIGTERM is unidentified;
+  it smells like the same unattributed-kill class as MXL-D-039.
+- **Status:** open. **Analysis stamp:** Analyzed 2026-09-13 — verified in the smoke
+  logs and traced to the two source lines above; the killer was not identified.
+- **Owner hint:** whoever owns the local secret store / lifecycle attribution.
+
 ### MXL-D-089 — `smoke.sh packaged` always records "could not read /image-gen/install/status" (harness check, not the app)
 - **Area:** `scripts/smoke.sh:436-477`
 - **Symptom:** Every packaged run ends with ❌ "could not read

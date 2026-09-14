@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm ensure:syncd && pnpm dev",
+    "beforeBuildCommand": "pnpm ensure:syncd && pnpm build",
     "beforeBundleCommand": "node scripts/build-native-vault-provider-hook.cjs"
   },
   "app": {

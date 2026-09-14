@@ -286,6 +286,19 @@ run_packaged() {
     fi
     ok "sidecar built"
 
+    # The Rust folder-sync daemon is an externalBin on every platform, so the
+    # -$TARGET_TRIPLE file must exist before `tauri build`. tauri.conf.json's
+    # beforeBuildCommand already ensures it; doing it here too keeps the
+    # harness independent of a hand-built, gitignored artifact and costs
+    # ~0.5s when cargo has nothing to do.
+    info "Ensuring the matrx-syncd sidecar is present…"
+    if ! ./scripts/build-syncd.sh >> "$build_log" 2>&1; then
+      record_fail "packaged: matrx-syncd sidecar build failed" "$(tail -30 "$build_log")"
+      echo "Full build log: \`$build_log\`" >> "$SUMMARY"
+      return 1
+    fi
+    ok "matrx-syncd sidecar ready"
+
     # --bundles app: build ONLY the runnable app, nothing else.
     #   * No DMG. `bundle_dmg.sh` MOUNTS the disk image and pops a real Finder
     #     window ("drag the app to Applications") in the middle of the run —

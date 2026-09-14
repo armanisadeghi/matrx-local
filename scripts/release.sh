@@ -767,6 +767,16 @@ else
     warn "scripts/download-llama-server.sh not found — skipping llama-server download."
 fi
 
+# ── Ensure the matrx-syncd sidecar binary exists for current platform ────────
+info "Ensuring matrx-syncd sidecar binary is present..."
+if [[ -f "scripts/build-syncd.sh" ]]; then
+    chmod +x scripts/build-syncd.sh
+    ./scripts/build-syncd.sh
+    ok "matrx-syncd sidecar ready."
+else
+    fail "scripts/build-syncd.sh not found — the Tauri build declares sidecar/matrx-syncd on every platform and cannot bundle without it."
+fi
+
 # ── pnpm lockfile freshness check ────────────────────────────────────────────
 # CI runs `pnpm install --frozen-lockfile` and will fail if pnpm-lock.yaml is
 # out of sync with package.json. Catch this locally before pushing.

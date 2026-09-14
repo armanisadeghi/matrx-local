@@ -77,8 +77,14 @@ SRC="$ARTIFACT_DIR/matrx-syncd$EXE_SUFFIX"
 
 mkdir -p "$SIDECAR_DIR"
 DEST="$SIDECAR_DIR/matrx-syncd-$TARGET_TRIPLE$EXE_SUFFIX"
-cp -f "$SRC" "$DEST"
-chmod +x "$DEST"
+# Idempotent: cargo already no-ops when nothing changed; skip the copy too so
+# repeated build/dev runs do not rewrite a 400 KB file for nothing.
+if cmp -s "$SRC" "$DEST"; then
+    echo "Up to date: $DEST"
+else
+    cp -f "$SRC" "$DEST"
+    chmod +x "$DEST"
+fi
 
 echo "OK: $DEST"
 "$DEST" --version

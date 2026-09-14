@@ -1,0 +1,412 @@
+//! The authorization server seam (§3.1, §5).
+//!
+//! The token endpoint supports exactly two grants — `authorization_code` and `refresh_token` —
+//! and no client secret (public client). The response **may** carry a new refresh token, and the
+//! documentation is explicit: *always update your stored refresh token when a new one is
+//! provided.* S8's write-ahead rule is what honours it.
+//!
+//! Everything here is behind [`OAuthProvider`] so `FakeAuthServer` (§13) can drive every branch of
+//! §5 without a network. **`FakeAuthServer` is a mock and is never cited as product evidence.**
+
+use super::error::{CustodyError, Result};
+use async_trait::async_trait;
+use serde::Deserialize;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::time::Duration;
+
+/// What a successful grant returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenResponse {
+    /// The short-lived Supabase JWT. Never written to disk (§4).
+    pub access_token: String,
+    /// The refresh token to store, when the server rotated it. `None` means "keep the one you
+    /// have" — the OAuth-server path is documented as *may* rotate.
+    pub refresh_token: Option<String>,
+    /// Seconds of life the server declared. Scheduling uses this relative value, never a wall
+    /// clock (S9, S10).
+    pub expires_in: i64,
+}
+
+/// The claims custody reads out of the access token. Only these two, and only for display and for
+/// the keychain account name — never for scheduling (S9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenIdentity {
+    /// `sub` — the Supabase user id (uuid).
+    pub user_id: String,
+    /// `email`, when the token carries one.
+    pub email: String,
+}
+
+/// Read `sub` and `email` out of a JWT payload without verifying the signature.
+///
+/// The daemon is not the verifier — the server is, on every call the token is used for. This
+/// decode exists only to name the keychain account and to say "Sign back in as …".
+pub fn identity_from_jwt(access_token: &str) -> Result<TokenIdentity> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+
+    let payload = access_token.split('.').nth(1).ok_or_else(|| {
+        CustodyError::AmbiguousResponse {
+            status: 200,
+            detail: "the access token is not a JWT (no payload segment)".into(),
+        }
+    })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|e| CustodyError::AmbiguousResponse {
+            status: 200,
+            detail: format!("the access token's payload is not base64url: {e}"),
+        })?;
+    #[derive(Deserialize)]
+    struct Claims {
+        sub: Option<String>,
+        email: Option<String>,
+    }
+    let claims: Claims =
+        serde_json::from_slice(&bytes).map_err(|e| CustodyError::AmbiguousResponse {
+            status: 200,
+            detail: format!("the access token's payload is not JSON: {e}"),
+        })?;
+    Ok(TokenIdentity {
+        user_id: claims.sub.ok_or_else(|| CustodyError::AmbiguousResponse {
+            status: 200,
+            detail: "the access token carries no `sub` claim".into(),
+        })?,
+        email: claims.email.unwrap_or_default(),
+    })
+}
+
+/// The two grants, and nothing else.
+#[async_trait]
+pub trait OAuthProvider: Send + Sync + std::fmt::Debug {
+    /// `grant_type=authorization_code` — `code`, `code_verifier`, `client_id`, `redirect_uri`.
+    async fn exchange_code(
+        &self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<TokenResponse>;
+
+    /// `grant_type=refresh_token` — `refresh_token`, `client_id`. No client secret.
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse>;
+}
+
+/// The real Supabase OAuth 2.1 server.
+#[derive(Debug)]
+pub struct SupabaseOAuth {
+    token_url: String,
+    client_id: String,
+    http: reqwest::Client,
+}
+
+impl SupabaseOAuth {
+    /// Build a provider against `supabase_url` for the registered public client `client_id`.
+    pub fn new(supabase_url: &str, client_id: &str) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| CustodyError::Configuration {
+                setting: "http client",
+                detail: e.to_string(),
+            })?;
+        Ok(SupabaseOAuth {
+            token_url: format!("{}/auth/v1/oauth/token", supabase_url.trim_end_matches('/')),
+            client_id: client_id.to_string(),
+            http,
+        })
+    }
+
+    async fn post(&self, form: Vec<(&str, String)>) -> Result<TokenResponse> {
+        let response = self
+            .http
+            .post(&self.token_url)
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| CustodyError::Transport {
+                endpoint: "the AI Matrx sign-in service",
+                cause: e.to_string(),
+            })?;
+
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = response.text().await.map_err(|e| CustodyError::Transport {
+            endpoint: "the AI Matrx sign-in service",
+            cause: e.to_string(),
+        })?;
+
+        // A captive-portal 200 carrying HTML, or a proxy 407, is ambiguous — retryable, never a
+        // revocation (§5). Content type is checked before the status so an HTML 200 cannot be
+        // mistaken for a token.
+        if !content_type.contains("json") {
+            return Err(CustodyError::AmbiguousResponse {
+                status: status.as_u16(),
+                detail: format!(
+                    "the response content type was {}, not JSON — this is usually a captive \
+                     portal or a proxy, not a sign-in failure",
+                    if content_type.is_empty() {
+                        "absent"
+                    } else {
+                        &content_type
+                    }
+                ),
+            });
+        }
+
+        if status.is_success() {
+            #[derive(Deserialize)]
+            struct Ok_ {
+                access_token: String,
+                refresh_token: Option<String>,
+                expires_in: Option<i64>,
+            }
+            let ok: Ok_ =
+                serde_json::from_str(&body).map_err(|e| CustodyError::AmbiguousResponse {
+                    status: status.as_u16(),
+                    detail: format!("the token response could not be read: {e}"),
+                })?;
+            if ok.access_token.is_empty() {
+                return Err(CustodyError::AmbiguousResponse {
+                    status: status.as_u16(),
+                    detail: "the token response carried an empty access token".into(),
+                });
+            }
+            return Ok(TokenResponse {
+                access_token: ok.access_token,
+                refresh_token: ok.refresh_token.filter(|t| !t.is_empty()),
+                // Supabase's documented default is 3600 s; a response without the field is still
+                // usable, and a conservative floor is safer than assuming an hour.
+                expires_in: ok.expires_in.unwrap_or(3600),
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct Err_ {
+            error: Option<String>,
+            error_description: Option<String>,
+        }
+        let parsed: Err_ = serde_json::from_str(&body).unwrap_or(Err_ {
+            error: None,
+            error_description: None,
+        });
+        let code = parsed.error.unwrap_or_else(|| status.as_u16().to_string());
+
+        // 400/401 `invalid_grant` is terminal: revoked, reused, or the user revoked the grant from
+        // the web. Everything else — 5xx, 429, anything unrecognised — is retryable (§5).
+        let terminal = (status.as_u16() == 400 || status.as_u16() == 401)
+            && matches!(code.as_str(), "invalid_grant" | "invalid_request" | "unauthorized_client");
+        if terminal {
+            Err(CustodyError::GrantRefused {
+                error: code,
+                description: parsed.error_description,
+            })
+        } else {
+            Err(CustodyError::AmbiguousResponse {
+                status: status.as_u16(),
+                detail: parsed
+                    .error_description
+                    .unwrap_or_else(|| format!("the sign-in service answered {code}")),
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthProvider for SupabaseOAuth {
+    async fn exchange_code(
+        &self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<TokenResponse> {
+        self.post(vec![
+            ("grant_type", "authorization_code".into()),
+            ("client_id", self.client_id.clone()),
+            ("code", code.to_string()),
+            ("code_verifier", code_verifier.to_string()),
+            ("redirect_uri", redirect_uri.to_string()),
+        ])
+        .await
+    }
+
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse> {
+        self.post(vec![
+            ("grant_type", "refresh_token".into()),
+            ("client_id", self.client_id.clone()),
+            ("refresh_token", refresh_token.to_string()),
+        ])
+        .await
+    }
+}
+
+/// `FakeAuthServer` (§13): a scripted stand-in for `/auth/v1/oauth/{authorize,token}`.
+///
+/// **It is a mock. It proves the state machine only** and is never cited as product evidence
+/// (SCOPE §6 attestation rule).
+#[derive(Debug)]
+pub struct FakeAuthServer {
+    /// Scripted answers, consumed in order. When the queue empties the last answer repeats.
+    script: Mutex<VecDeque<std::result::Result<TokenResponse, FakeFailure>>>,
+    last: Mutex<Option<std::result::Result<TokenResponse, FakeFailure>>>,
+    /// Every refresh token this fake was ever presented, in order — the reuse assertion.
+    presented: Mutex<Vec<String>>,
+}
+
+/// A scripted failure shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FakeFailure {
+    /// The terminal path.
+    InvalidGrant,
+    /// A 5xx or a 429 — retryable.
+    ServerError(u16),
+    /// A captive-portal 200 carrying HTML.
+    CaptivePortal,
+    /// The network was unreachable.
+    Offline,
+}
+
+impl FakeFailure {
+    fn into_error(self) -> CustodyError {
+        match self {
+            FakeFailure::InvalidGrant => CustodyError::GrantRefused {
+                error: "invalid_grant".into(),
+                description: Some("the refresh token has been revoked".into()),
+            },
+            FakeFailure::ServerError(status) => CustodyError::AmbiguousResponse {
+                status,
+                detail: "the sign-in service is unavailable".into(),
+            },
+            FakeFailure::CaptivePortal => CustodyError::AmbiguousResponse {
+                status: 200,
+                detail: "the response content type was text/html, not JSON".into(),
+            },
+            FakeFailure::Offline => CustodyError::Transport {
+                endpoint: "the AI Matrx sign-in service",
+                cause: "no route to host".into(),
+            },
+        }
+    }
+}
+
+impl FakeAuthServer {
+    /// A fake with an empty script; every call fails until one is pushed.
+    pub fn new() -> Self {
+        FakeAuthServer {
+            script: Mutex::new(VecDeque::new()),
+            last: Mutex::new(None),
+            presented: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Queue one successful answer.
+    pub fn push_ok(&self, access_token: &str, refresh_token: Option<&str>, expires_in: i64) {
+        self.script
+            .lock()
+            .expect("fake auth script")
+            .push_back(Ok(TokenResponse {
+                access_token: access_token.to_string(),
+                refresh_token: refresh_token.map(str::to_string),
+                expires_in,
+            }));
+    }
+
+    /// Queue one failure.
+    pub fn push_err(&self, failure: FakeFailure) {
+        self.script
+            .lock()
+            .expect("fake auth script")
+            .push_back(Err(failure));
+    }
+
+    /// Every refresh token presented so far, in order. A value appearing twice is the reuse
+    /// Supabase's session path treats as session termination (§5).
+    pub fn presented_refresh_tokens(&self) -> Vec<String> {
+        self.presented.lock().expect("fake auth script").clone()
+    }
+
+    fn next(&self) -> Result<TokenResponse> {
+        let mut script = self.script.lock().expect("fake auth script");
+        let answer = script.pop_front().or_else(|| {
+            self.last
+                .lock()
+                .expect("fake auth script")
+                .clone()
+        });
+        drop(script);
+        match answer {
+            Some(a) => {
+                *self.last.lock().expect("fake auth script") = Some(a.clone());
+                a.map_err(FakeFailure::into_error)
+            }
+            None => Err(CustodyError::AmbiguousResponse {
+                status: 500,
+                detail: "FakeAuthServer has no scripted answer left".into(),
+            }),
+        }
+    }
+}
+
+impl Default for FakeAuthServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl OAuthProvider for FakeAuthServer {
+    async fn exchange_code(
+        &self,
+        _code: &str,
+        _code_verifier: &str,
+        _redirect_uri: &str,
+    ) -> Result<TokenResponse> {
+        self.next()
+    }
+
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse> {
+        self.presented
+            .lock()
+            .expect("fake auth script")
+            .push(refresh_token.to_string());
+        self.next()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+
+    fn jwt(payload: &str) -> String {
+        format!("header.{}.sig", URL_SAFE_NO_PAD.encode(payload))
+    }
+
+    #[test]
+    fn identity_reads_sub_and_email() {
+        let t = jwt(r#"{"sub":"11111111-2222-3333-4444-555555555555","email":"a@b.c"}"#);
+        let id = identity_from_jwt(&t).expect("identity");
+        assert_eq!(id.user_id, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(id.email, "a@b.c");
+    }
+
+    #[test]
+    fn a_token_without_a_sub_is_refused_rather_than_guessed() {
+        let t = jwt(r#"{"email":"a@b.c"}"#);
+        assert!(matches!(
+            identity_from_jwt(&t),
+            Err(CustodyError::AmbiguousResponse { .. })
+        ));
+    }
+
+    #[test]
+    fn a_token_that_is_not_a_jwt_is_refused() {
+        assert!(identity_from_jwt("not-a-jwt").is_err());
+    }
+}

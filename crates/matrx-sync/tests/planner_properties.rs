@@ -904,8 +904,11 @@ fn an_illegal_name_is_reported_not_renamed() {
 
 // ------------------------------------------- regressions from independent verification
 
-/// Build a world from explicit (path, local, remote, synced) triples.
-fn world_of(rows: &[(&str, Option<&str>, Option<&str>, Option<&str>)]) -> World {
+/// One row of a hand-written world: the path, and its content id on each of the three trees.
+type Row<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+/// Build a world from explicit (path, local, remote, synced) rows.
+fn world_of(rows: &[Row<'_>]) -> World {
     let mut w = World::new();
     for (i, (path, local, remote, synced)) in rows.iter().enumerate() {
         if let Some(h) = local {

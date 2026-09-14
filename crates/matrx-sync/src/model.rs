@@ -129,9 +129,19 @@ pub struct SyncedNode {
 }
 
 /// A tree keyed by `path_nfc`, ordered so every traversal is deterministic.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tree<N> {
     nodes: BTreeMap<String, N>,
+}
+
+// Derived `Default` would demand `N: Default`, which no node type satisfies (there is no
+// meaningful empty `SyncedNode`). An empty tree needs nothing of its element type.
+impl<N> Default for Tree<N> {
+    fn default() -> Self {
+        Tree {
+            nodes: BTreeMap::new(),
+        }
+    }
 }
 
 impl<N> Tree<N> {

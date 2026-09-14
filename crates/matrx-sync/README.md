@@ -22,6 +22,9 @@ A builder who finds a contract wrong reports it. Nobody edits a frozen spec in p
 | `model` | — | The typed rows and trees every other module speaks in: `LocalNode`, `RemoteNode`, `SyncedNode`, `Tree<N>`, `Direction`, `OpKind`, `ConflictKind`, `OpState`, `OpRow`, `ConflictRow`, `MappingRow`. |
 | `states` | FS-C2 | The ONE honest-state enum (ruling C3) with its scopes, and `artifact_json()`, which renders `contracts/honest_states.json` (ruling E16). |
 | `knobs` | FS-C2 | The knob registry as a `Knobs` struct the caller passes in, with the frozen §2 defaults and range validation. No limit is ever a constant inside a decision. |
+| `naming` | FS-C3 | Conflict-copy naming (D7, the Dropbox convention) and client-side name safety. Pure: the device name and the date are arguments. |
+| `planner` | FS-C3 | `plan()` — a pure function of the three trees, a direction, resolved knobs and an injected context. |
+| `sim` | FS-C4 | The deterministic simulation harness. **A mock — never product evidence.** |
 | `journal` | FS-C2 | The SQLite journal: migrations, the three trees, the per-mapping op queues, conflicts — and the synced-tree write guard. |
 | `error` | — | `SyncError` / `Result`. |
 
@@ -76,6 +79,22 @@ renders. Regenerate with:
 ```bash
 UPDATE_CONTRACTS=1 cargo test -p matrx-sync --test honest_states_artifact
 ```
+
+## The planner
+
+`planner::plan(local, remote, synced, direction, knobs, ctx)` is a **function**: no IO, no clock,
+no randomness. The device name and today's date — the only two values a conflict name needs —
+arrive in `PlanContext`, together with the set of paths carrying an unresolved conflict, which the
+planner skips (that is what `needs_conflict_resolution` means, and it is what makes a fixed point
+reachable).
+
+Every decision is **described**, never performed: a name that cannot exist on Windows, a deletion
+large enough to trip the circuit breaker, a collision, a conflict — each comes back as a typed
+`PlanOp` for the executor or the user to act on. A tripped circuit breaker returns the
+`SuspendReason` **and nothing else**, so no destructive op can execute alongside a suspension.
+
+Its guarantees are proven by the property harness — see `TESTING.md`, which also records the two
+real defects the harness found and the two spec gaps escalated.
 
 ## Building and testing
 

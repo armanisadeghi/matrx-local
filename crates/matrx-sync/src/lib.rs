@@ -9,6 +9,9 @@
 //!
 //! | Module | What it owns |
 //! |---|---|
+//! | [`naming`] | Conflict-copy naming (D7) and client-side name safety — pure, values injected. |
+//! | [`sim`] | FS-C4. The deterministic simulation harness. **A mock — never product evidence.** |
+//! | [`planner`] | FS-C3. `plan()` — a pure function of three trees, a direction and knobs. No IO, no clock, no randomness. |
 //! | [`journal`] | FS-C2. The SQLite journal: the three trees, the per-mapping op queues, conflicts, migrations, and the synced-tree write guard (invariant I1). |
 //! | [`model`] | The typed rows and trees every other module speaks in. |
 //! | [`states`] | The ONE honest-state enum (C3) and the `contracts/honest_states.json` artifact (E16). |
@@ -28,11 +31,15 @@ pub mod error;
 pub mod journal;
 pub mod knobs;
 pub mod model;
+pub mod naming;
+pub mod planner;
+pub mod sim;
 pub mod states;
 
 pub use error::{Result, SyncError};
 pub use knobs::Knobs;
 pub use model::{Direction, LocalTree, RemoteTree, SyncedTree};
+pub use planner::{plan, Plan, PlanContext, PlanOp};
 pub use states::{HonestState, Scope, HONEST_STATES};
 
 /// This crate's version, as compiled.

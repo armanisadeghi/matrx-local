@@ -96,6 +96,18 @@ large enough to trip the circuit breaker, a collision, a conflict — each comes
 Its guarantees are proven by the property harness — see `TESTING.md`, which also records the two
 real defects the harness found and the two spec gaps escalated.
 
+## The simulation harness
+
+`sim` is a **mock**: an in-memory filesystem, an in-memory cloud (feed cursor, 412 preconditions,
+tombstones, stability lag) and a deterministic scheduler that interleaves two devices, reorders
+their requests, injects failures and crashes, and fast-forwards time. The journals are real,
+though — one SQLite file per simulated device in a tempdir — so a crash is a genuine drop-and-reopen
+and a device really does resume from what it committed.
+
+Green here proves the **planner** and the executor's shape. It is never evidence that the product
+works (SCOPE §6, D2); that is FS-V2's job, on real machines. Every failure prints its seed, and
+re-running with that seed replays the run exactly.
+
 ## Building and testing
 
 ```bash

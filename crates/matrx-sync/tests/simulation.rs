@@ -1,0 +1,311 @@
+//! FS-C4 — the simulation harness's own tests.
+//!
+//! **Everything here runs against a MOCK.** The filesystem is in memory, the server is in memory,
+//! and the clock is an integer. Green here proves the planner and the executor's shape. It is
+//! never evidence that the product works on a real machine (SCOPE §6, D2); that is FS-V2's job.
+//!
+//! The journals, though, are real: each simulated device keeps a genuine SQLite journal in a
+//! tempdir, so "the device crashes and resumes from its journal" means exactly that.
+//!
+//! Every failure prints the seed. Re-run with the same seed to replay the run exactly.
+
+use matrx_sync::model::Direction;
+use matrx_sync::sim::{Hazards, Simulation};
+use matrx_sync::Knobs;
+
+fn seeds() -> Vec<u64> {
+    // A fixed, checked-in set: a test whose inputs change per run cannot be replayed by a
+    // colleague reading the failure. `SIM_SEEDS=n` adds n more for a local soak.
+    let mut out: Vec<u64> = vec![1, 2, 3, 7, 11, 42, 101, 1_009, 65_537, 999_331];
+    if let Ok(extra) = std::env::var("SIM_SEEDS") {
+        if let Ok(n) = extra.parse::<u64>() {
+            out.extend(1_000_000..1_000_000 + n);
+        }
+    }
+    out
+}
+
+/// Seed one cloud file and one file on each device, then let the scheduler interleave everything.
+fn seed_content(sim: &mut Simulation) {
+    sim.devices[0].fs.write("shared.txt", "c-a0", 1);
+    sim.devices[0].fs.write("only-a.txt", "c-a1", 1);
+    sim.devices[0].fs.mkdir("folder", 1);
+    sim.devices[0].fs.write("folder/deep.txt", "c-a2", 1);
+    sim.devices[1].fs.write("only-b.txt", "c-b0", 1);
+    // Both devices independently create the SAME path with DIFFERENT content — the first-run
+    // collision every real fleet hits, and the one that produces a conflict copy.
+    sim.devices[0].fs.write("both.txt", "c-a3", 1);
+    sim.devices[1].fs.write("both.txt", "c-b1", 1);
+}
+
+#[test]
+fn two_devices_converge_with_the_cloud_under_interleaving_failures_and_crashes() {
+    for seed in seeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim = Simulation::new(seed, dir.path(), Direction::TwoWay, Knobs::default(), 2)
+            .expect("build the simulation");
+        seed_content(&mut sim);
+        let before = sim.reachable_contents();
+
+        let report = sim.run_and_settle(400, 24).expect("run");
+        assert!(
+            report.settled,
+            "seed {seed}: the fleet never reached quiet — {report:?}"
+        );
+
+        let disagreements = sim.disagreements().expect("read state");
+        assert!(
+            disagreements.is_empty(),
+            "seed {seed}: devices and cloud disagree: {disagreements:#?}\nreport {report:?}"
+        );
+
+        let after = sim.reachable_contents();
+        for content in &before {
+            assert!(
+                after.contains(content),
+                "seed {seed}: content {content} was lost\nreport {report:?}"
+            );
+        }
+    }
+}
+
+/// The named delete-versus-modify race: one device deletes a path while the other changes it.
+///
+/// The requirement is not that a particular side wins — it is that **neither byte stream is
+/// destroyed** and the user is told.
+#[test]
+fn the_delete_vs_modify_race_never_destroys_either_version() {
+    for seed in seeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim = Simulation::new(seed, dir.path(), Direction::TwoWay, Knobs::default(), 2)
+            .expect("build");
+        // Both devices start from one agreed file.
+        sim.devices[0].fs.write("race.txt", "c-original", 1);
+        sim.run_and_settle(80, 16).expect("initial sync");
+        assert_eq!(
+            sim.devices[1].fs.content("race.txt"),
+            Some("c-original"),
+            "seed {seed}: the file never reached the second device"
+        );
+
+        // Now the race: A deletes, B edits, and the scheduler interleaves the two.
+        sim.devices[0].fs.remove("race.txt", true);
+        sim.devices[1].fs.write("race.txt", "c-edited", sim.clock + 1);
+
+        let report = sim.run_and_settle(200, 24).expect("race");
+        assert!(report.settled, "seed {seed}: never settled — {report:?}");
+
+        let reachable = sim.reachable_contents();
+        assert!(
+            reachable.contains("c-edited"),
+            "seed {seed}: the edit was destroyed by the delete — {report:?}"
+        );
+        // The version that was deleted is still recoverable from the OS trash, which is what
+        // `sync.trash_local_deletes` is for. Deleting is allowed to remove it from the sync set;
+        // it is not allowed to shred it.
+        assert!(
+            reachable.contains("c-original")
+                || sim.devices.iter().any(|d| !d.fs.trash.is_empty()),
+            "seed {seed}: the deleted version left no recoverable trace — {report:?}"
+        );
+        let disagreements = sim.disagreements().expect("read state");
+        assert!(
+            disagreements.is_empty(),
+            "seed {seed}: after the race the fleet disagrees: {disagreements:#?}"
+        );
+    }
+}
+
+/// The named rename storm: a burst of moves on both devices at once.
+///
+/// The point is that a move is carried as a rename — identity preserved — and that a storm of them
+/// still converges without losing a byte.
+#[test]
+fn a_rename_storm_converges_without_losing_content() {
+    for seed in seeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim = Simulation::new(seed, dir.path(), Direction::TwoWay, Knobs::default(), 1)
+            .expect("build");
+        for i in 0..6 {
+            sim.devices[0]
+                .fs
+                .write(&format!("n{i}.txt"), &format!("c{i}"), 1);
+        }
+        sim.run_and_settle(120, 16).expect("initial sync");
+        let before = sim.reachable_contents();
+
+        // The storm: every path moves, on alternating devices, with no pause between moves.
+        for i in 0..6 {
+            let d = i % sim.devices.len();
+            sim.devices[d]
+                .fs
+                .rename(&format!("n{i}.txt"), &format!("moved-{i}.txt"));
+        }
+
+        let report = sim.run_and_settle(300, 32).expect("storm");
+        assert!(report.settled, "seed {seed}: never settled — {report:?}");
+
+        let after = sim.reachable_contents();
+        for content in &before {
+            assert!(
+                after.contains(content),
+                "seed {seed}: content {content} lost in the rename storm — {report:?}"
+            );
+        }
+        let disagreements = sim.disagreements().expect("read state");
+        assert!(
+            disagreements.is_empty(),
+            "seed {seed}: after the storm the fleet disagrees: {disagreements:#?}"
+        );
+    }
+}
+
+/// A device that crashes mid-run resumes from its journal rather than starting over — and the
+/// replay is idempotent (I5).
+#[test]
+fn a_crashing_device_resumes_from_its_journal() {
+    for seed in [5u64, 13, 77, 2_027] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim = Simulation::new(seed, dir.path(), Direction::TwoWay, Knobs::default(), 2)
+            .expect("build");
+        sim.hazards = Hazards {
+            transient_per_mille: 150,
+            crash_per_mille: 200, // one step in five
+            time_jump_per_mille: 200,
+        };
+        seed_content(&mut sim);
+        let before = sim.reachable_contents();
+
+        let report = sim.run_and_settle(400, 32).expect("run");
+        assert!(
+            report.crashes > 0,
+            "seed {seed}: the crash hazard never fired, so this test proved nothing"
+        );
+        assert!(report.settled, "seed {seed}: never settled — {report:?}");
+
+        let after = sim.reachable_contents();
+        for content in &before {
+            assert!(
+                after.contains(content),
+                "seed {seed}: content {content} lost across a crash — {report:?}"
+            );
+        }
+        assert!(
+            sim.disagreements().expect("read state").is_empty(),
+            "seed {seed}: divergence after crashes — {report:?}"
+        );
+    }
+}
+
+/// The stability lag is real: a device that writes and immediately polls does not see its own
+/// write echoed back. An engine that depended on that echo would converge here and diverge in
+/// production, so the harness refuses to hide it.
+#[test]
+fn the_feed_withholds_events_until_they_are_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sim =
+        Simulation::new(1, dir.path(), Direction::TwoWay, Knobs::default(), 5).expect("build");
+    sim.devices[0].fs.write("lagged.txt", "c0", 1);
+    sim.devices[0].scan(1).expect("scan");
+    sim.devices[0]
+        .execute_one(&mut sim.server, 1, None)
+        .expect("upload");
+
+    let immediate = sim.devices[1].poll_feed(&sim.server, 2).expect("poll");
+    assert_eq!(immediate, 0, "the feed must withhold an event inside the lag");
+
+    let later = sim.devices[1].poll_feed(&sim.server, 20).expect("poll");
+    assert!(later > 0, "the event must appear once the lag has passed");
+}
+
+/// Tombstones are never purged: a deletion stays readable in the feed (D23's retention floor is
+/// 90 days, so nothing here may drop one).
+#[test]
+fn a_deletion_leaves_a_tombstone_in_the_feed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sim =
+        Simulation::new(1, dir.path(), Direction::TwoWay, Knobs::default(), 0).expect("build");
+    sim.devices[0].fs.write("doomed.txt", "c0", 1);
+    sim.run_and_settle(80, 16).expect("sync");
+    let before = sim.server.feed_len();
+
+    sim.devices[0].fs.remove("doomed.txt", true);
+    sim.run_and_settle(120, 16).expect("delete");
+
+    assert!(
+        sim.server.feed_len() > before,
+        "the delete must append a tombstone event"
+    );
+    assert!(
+        sim.server.live("doomed.txt").is_none(),
+        "the row must be tombstoned, not live"
+    );
+    assert!(
+        sim.server.full_tree().get("doomed.txt").is_some(),
+        "the tombstone row itself must survive — a delete is never a missing row"
+    );
+}
+
+/// `upload_only` and `download_only` runs converge to their own contracts, not to `two_way`'s.
+#[test]
+fn one_way_directions_converge_to_their_own_contract() {
+    for (direction, seed) in [(Direction::UploadOnly, 3u64), (Direction::DownloadOnly, 4)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim =
+            Simulation::new(seed, dir.path(), direction, Knobs::default(), 1).expect("build");
+        sim.devices[0].fs.write("a.txt", "c0", 1);
+        let before = sim.reachable_contents();
+        let report = sim.run_and_settle(200, 24).expect("run");
+        assert!(
+            report.settled,
+            "{direction:?} seed {seed}: never settled — {report:?}"
+        );
+        let after = sim.reachable_contents();
+        for c in &before {
+            assert!(
+                after.contains(c),
+                "{direction:?} seed {seed}: content {c} lost — {report:?}"
+            );
+        }
+    }
+}
+
+/// A 412 is survived, not clobbered: two devices write the same path in the same tick, one of them
+/// loses the precondition, and neither version is destroyed.
+#[test]
+fn a_precondition_failure_is_survived_and_neither_version_is_lost() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sim =
+        Simulation::new(9, dir.path(), Direction::TwoWay, Knobs::default(), 0).expect("build");
+
+    // Both devices believe the path is free and both try to create it, with no feed poll between
+    // them. Exactly one can win.
+    sim.devices[0].fs.write("contested.txt", "c-a", 1);
+    sim.devices[1].fs.write("contested.txt", "c-b", 1);
+    sim.devices[0].scan(1).expect("scan a");
+    sim.devices[1].scan(1).expect("scan b");
+    let first = sim.devices[0]
+        .execute_one(&mut sim.server, 1, None)
+        .expect("a writes");
+    let second = sim.devices[1]
+        .execute_one(&mut sim.server, 1, None)
+        .expect("b writes");
+    assert_eq!(first, matrx_sync::sim::StepOutcome::Done);
+    assert_eq!(
+        second,
+        matrx_sync::sim::StepOutcome::Raced,
+        "the second writer must be refused on the precondition, not allowed to clobber"
+    );
+
+    let report = sim.run_and_settle(200, 24).expect("settle");
+    assert!(report.settled, "never settled — {report:?}");
+    let reachable = sim.reachable_contents();
+    assert!(
+        reachable.contains("c-a") && reachable.contains("c-b"),
+        "both versions must survive the race — {report:?}, reachable {reachable:?}"
+    );
+    assert!(
+        sim.disagreements().expect("read state").is_empty(),
+        "the fleet must still agree afterwards — {report:?}"
+    );
+}

@@ -843,18 +843,28 @@ fn conflict_copy(
         kind: ConflictKind::BothModified,
         local_hash: l.content_hash.clone(),
     }];
-    // D7: both copies reach the cloud. The loser goes up under its conflict name; the winner
-    // (the cloud's version) comes down to the original path.
-    if let Some(local_hash) = l.content_hash.clone() {
-        ops.push(PlanOp::Upload {
-            path: copy_path,
-            change: Change::Create,
-            expected_version: None,
-            expected_checksum: None,
-            local_hash,
+    // D7: both copies reach the cloud — but the copy's upload is NOT bolted onto this plan. Once
+    // the copy exists on disk it is an ordinary local-only path, and the next round's normal
+    // per-path logic uploads it with a real precondition taken from the remote tree. Emitting it
+    // here with `expected_version: None` livelocked whenever the copy already existed in the
+    // cloud (a crash between the upload and its confirmation, or the other device having written
+    // it): every attempt drew a 412, the plan was thrown away, and the identical plan came back.
+    // The FS-C4 harness found that; see TESTING.md.
+    let _ = &copy_path;
+    // The winner replaces the local file, whose bytes are now safe in the copy. I3 still applies:
+    // the replacement carries the pre-image it expects to find, so if the file changed again
+    // between planning and execution the executor aborts instead of overwriting something it
+    // never saw.
+    if let Some(checksum) = r.checksum.clone() {
+        ops.push(PlanOp::Download {
+            path: path.to_string(),
+            change: Change::Update,
+            remote_file_id: r.remote_file_id.clone(),
+            remote_version: r.remote_version,
+            checksum,
+            expected_local_hash: l.content_hash.clone(),
         });
     }
-    ops.extend(download(path, r, None, Change::Update, knobs));
     ops
 }
 

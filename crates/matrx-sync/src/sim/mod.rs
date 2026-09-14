@@ -10,8 +10,23 @@
 //!
 //! | Submodule | What it is |
 //! |---|---|
-//! | [`world`] | One mapping's three trees plus the executor model that applies a [`crate::Plan`] to them. |
+//! | [`rng`] | A hand-rolled deterministic PRNG, so a seed replays forever. |
+//! | [`fs`] | An in-memory filesystem with real inode identity and an OS-trash stand-in. |
+//! | [`server`] | The mock cloud: feed cursor, 412 preconditions, tombstones, stability lag. |
+//! | [`device`] | One simulated device — mock disk, **real** journal on a tempdir file, executor. |
+//! | [`scheduler`] | The deterministic scheduler: two devices interleaved, requests reordered, failures and crashes injected, time fast-forwarded. |
+//! | [`world`] | One mapping's three trees plus the executor model the FS-C3 property tests use. |
 
+pub mod device;
+pub mod fs;
+pub mod rng;
+pub mod scheduler;
+pub mod server;
 pub mod world;
 
+pub use device::{Device, StepOutcome};
+pub use fs::MemFs;
+pub use rng::Rng;
+pub use scheduler::{Hazards, Simulation, SimulationReport};
+pub use server::{MockServer, ServerError};
 pub use world::{RecordedConflict, World};

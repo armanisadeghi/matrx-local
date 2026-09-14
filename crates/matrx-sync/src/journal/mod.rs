@@ -538,6 +538,26 @@ impl Journal {
                 "op {id} confirms a file with no server checksum (I2)"
             )));
         }
+        // I1, sharpened: a synced row records ONE state both sides confirmed, so for a file the
+        // hash this daemon computed and the checksum the server returned are the SAME bytes'
+        // SHA-256. They may differ only on a `local_edit_flagged` row, which is D6's deliberately
+        // preserved local edit and is written through `preserve_local_edit`.
+        //
+        // Without this, an executor that read the local hash and the server checksum at two
+        // DIFFERENT moments — which is what happens whenever another device writes in between —
+        // records a row that was never true, and the next plan reads it as "local unchanged,
+        // remote changed" and downloads over the user's file. The FS-C4 harness found exactly
+        // that; see TESTING.md.
+        if !local.is_dir
+            && !local.local_edit_flagged
+            && local.content_hash != remote.checksum
+        {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} confirms {:?} locally and {:?} remotely; a synced row records one state \
+                 both sides confirmed, never two observations taken at different moments (I1)",
+                local.content_hash, remote.checksum
+            )));
+        }
         let tx = self.conn.transaction()?;
         let found: Option<(String, String, String, Option<String>)> = tx
             .query_row(
@@ -636,6 +656,61 @@ impl Journal {
             params![id, now],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// D6's preserve-and-flag, written under the same double-confirmation discipline as
+    /// [`Journal::confirm_op`].
+    ///
+    /// **Spec gap, escalated.** `ops.kind` in SPEC-ENGINE §4 has no value that means "a local edit
+    /// was preserved and flagged", so there is no op for this transition to complete — yet D6 and
+    /// the `download_only` convergence clause both require the row. This method therefore takes
+    /// the two confirmations directly and writes the row in one transaction: the local hash THIS
+    /// daemon computed and the server checksum the feed returned (I2 holds), with
+    /// `local_edit_flagged = 1`. It refuses anything less.
+    pub fn preserve_local_edit(
+        &mut self,
+        mapping_id: &str,
+        path_nfc: &str,
+        local: &LocalConfirmation,
+        remote: &RemoteConfirmation,
+        at: &str,
+    ) -> Result<()> {
+        if local.is_dir {
+            return Err(SyncError::SyncedWriteRefused(
+                "a directory cannot carry a preserved local edit".to_string(),
+            ));
+        }
+        if !local.local_edit_flagged {
+            return Err(SyncError::SyncedWriteRefused(
+                "preserve_local_edit was called without the flag set".to_string(),
+            ));
+        }
+        if local.content_hash.is_none() || remote.checksum.is_none() {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "preserving the local edit at {path_nfc} needs both the local hash and the server \
+                 checksum (I2)"
+            )));
+        }
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tree_synced
+               (mapping_id, path_nfc, is_dir, size, mtime_ns, volume_id, file_id, content_hash,
+                remote_file_id, remote_version, checksum, local_edit_flagged, synced_at)
+             VALUES (?1,?2,0,?3,?4,?5,?6,?7,?8,?9,?10,1,?11)",
+            params![
+                mapping_id,
+                path_nfc,
+                local.size,
+                local.mtime_ns,
+                local.volume_id,
+                local.file_id,
+                local.content_hash,
+                remote.remote_file_id,
+                remote.remote_version,
+                remote.checksum,
+                at,
+            ],
+        )?;
         Ok(())
     }
 

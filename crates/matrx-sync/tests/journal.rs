@@ -371,3 +371,60 @@ fn local_and_remote_rows_round_trip_through_their_typed_structs() {
     assert_eq!(back.get("notes/a.md"), Some(&remote));
     assert!(back.get("notes/a.md").expect("row").is_live());
 }
+
+#[test]
+fn a_synced_row_may_not_be_assembled_from_two_different_moments() {
+    // The guard that closed the FS-C4 harness's second data-loss finding: an executor that read
+    // the local hash and the server checksum at two different moments recorded a row that was
+    // never true, and the next plan read it as "local unchanged, remote changed" and downloaded
+    // over the user's file.
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let id = j.enqueue_op(&upload_op()).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+
+    let mut remote = remote_confirmation();
+    remote.checksum = Some("b".repeat(64)); // a different file than the local confirmation's
+    let err = j
+        .confirm_op(id, "x", &local_confirmation(), &remote, "2026-09-13T00:00:05Z")
+        .expect_err("two moments are not one confirmation");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+    assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
+
+    // The same two hashes ARE allowed on a preserved local edit — that is exactly what D6's flag
+    // means — and that path is `preserve_local_edit`, never `confirm_op`.
+    let mut local = local_confirmation();
+    local.local_edit_flagged = true;
+    j.preserve_local_edit(MAPPING, "notes/a.md", &local, &remote, "2026-09-13T00:00:06Z")
+        .expect("a preserved local edit may differ from the cloud");
+    let row = j
+        .synced_tree(MAPPING)
+        .expect("tree")
+        .get("notes/a.md")
+        .cloned()
+        .expect("row");
+    assert!(row.local_edit_flagged);
+    assert_ne!(row.content_hash, row.checksum);
+}
+
+#[test]
+fn preserve_local_edit_refuses_anything_less_than_both_sides() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let mut local = local_confirmation();
+    local.local_edit_flagged = true;
+    let mut remote = remote_confirmation();
+    remote.checksum = None;
+    assert!(j
+        .preserve_local_edit(MAPPING, "p", &local, &remote, "2026-09-13T00:00:00Z")
+        .is_err());
+
+    let mut unflagged = local_confirmation();
+    unflagged.local_edit_flagged = false;
+    assert!(j
+        .preserve_local_edit(MAPPING, "p", &unflagged, &remote_confirmation(), "t")
+        .is_err());
+    assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
+}

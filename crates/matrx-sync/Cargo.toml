@@ -3,5 +3,23 @@ name = "matrx-sync"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "AI Matrx folder-sync engine (scaffold — no sync logic yet)"
+description = "AI Matrx folder-sync engine: journal, pure planner, simulation harness"
 publish = false
+
+[lints.rust]
+missing_docs = "warn"
+
+[dependencies]
+# Inherited, never pinned here: the Tauri app also depends on rusqlite, and two versions of
+# `libsqlite3-sys` (`links = "sqlite3"`) cannot coexist in one workspace. SPEC-ENGINE §5 names
+# rusqlite 0.40.2; moving the workspace pin there is a separate lane's commit, and this crate
+# is written against APIs stable across both (Connection, params!, execute_batch, prepared
+# statements, pragma_update, transactions). The `bundled` feature comes from the workspace
+# declaration — no system sqlite3 on a user's machine may be assumed.
+rusqlite = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+proptest = "1.11.0"
+tempfile = "3"

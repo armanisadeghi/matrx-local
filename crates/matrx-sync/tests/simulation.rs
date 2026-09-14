@@ -309,3 +309,107 @@ fn a_precondition_failure_is_survived_and_neither_version_is_lost() {
         "the fleet must still agree afterwards — {report:?}"
     );
 }
+
+// --------------------------------- dedicated regressions for TESTING.md defects 3 and 5
+//
+// Independent verification noted that both rested only on the general interleaving test at fixed
+// seeds, which is weaker evidence than a case that can be reverted in isolation. These two can.
+
+/// Defect 3 — **data loss**. A device that polls the change feed before it walks the disk plans
+/// `Download{Create}` for a path it believes is empty. If the user already has a *different* file
+/// there, the write destroyed it: no conflict copy, no conflict row, nothing on screen.
+///
+/// The pre-image for a create is **absence**, and I3 applies to it like any other destructive
+/// write.
+#[test]
+fn a_download_create_never_overwrites_a_file_the_scanner_has_not_seen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sim =
+        Simulation::new(21, dir.path(), Direction::TwoWay, Knobs::default(), 0).expect("build");
+
+    // Device A publishes `contested.txt` = c-a.
+    sim.devices[0].fs.write("contested.txt", "c-a", 1);
+    sim.devices[0].scan(1).expect("scan a");
+    sim.devices[0]
+        .execute_one(&mut sim.server, 1, None)
+        .expect("upload");
+
+    // Device B already has a DIFFERENT file at that path — and polls the feed before scanning,
+    // so its `tree_local` is empty and the plan believes the path is free.
+    sim.devices[1].fs.write("contested.txt", "c-b", 2);
+    sim.devices[1].poll_feed(&sim.server, 10).expect("poll");
+    let plan = sim.devices[1].current_plan().expect("plan");
+    assert!(
+        plan.ops.iter().any(|o| matches!(
+            o,
+            matrx_sync::PlanOp::Download { change: matrx_sync::planner::Change::Create, .. }
+        )),
+        "the setup must actually produce a Download{{Create}}, or this proves nothing: {:?}",
+        plan.ops
+    );
+
+    let outcome = sim.devices[1]
+        .execute_one(&mut sim.server, 10, None)
+        .expect("execute");
+    assert_eq!(
+        outcome,
+        matrx_sync::sim::StepOutcome::Raced,
+        "the create must abort on finding something there, not write over it"
+    );
+    assert_eq!(
+        sim.devices[1].fs.content("contested.txt"),
+        Some("c-b"),
+        "the user's file must be untouched"
+    );
+
+    // And the fleet still converges, with both versions kept.
+    let report = sim.run_and_settle(200, 24).expect("settle");
+    assert!(report.settled, "never settled — {report:?}");
+    let reachable = sim.reachable_contents();
+    assert!(
+        reachable.contains("c-a") && reachable.contains("c-b"),
+        "both versions must survive — reachable {reachable:?}"
+    );
+}
+
+/// Defect 5 — **silent stall**. Conflict resolution livelocked when the losing copy already
+/// existed in the cloud (a crash between its upload and its confirmation, or the other device
+/// having written it): the bolted-on upload carried no precondition, drew a 412 every time, the
+/// plan was discarded, and the identical plan came back.
+///
+/// The copy is now an ordinary local-only path that the next round uploads with a real
+/// precondition, so the run reaches quiet.
+#[test]
+fn a_conflict_whose_copy_already_exists_in_the_cloud_still_settles() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sim =
+        Simulation::new(22, dir.path(), Direction::TwoWay, Knobs::default(), 0).expect("build");
+
+    // Put the conflict copy's exact name in the cloud first, from the device that will lose.
+    let copy = "c (conflicted copy from device-a 2026-09-13).txt";
+    sim.devices[0].fs.write(copy, "c-old", 1);
+    sim.run_and_settle(80, 16).expect("publish the copy");
+    assert!(
+        sim.server.live(copy).is_some(),
+        "the copy name must already be taken in the cloud"
+    );
+
+    // Now force a conflict on `c.txt` from that same device, on the same day.
+    sim.devices[0].fs.write("c.txt", "c-a", sim.clock + 1);
+    sim.devices[1].fs.write("c.txt", "c-b", sim.clock + 1);
+    let before = sim.reachable_contents();
+
+    let report = sim.run_and_settle(200, 24).expect("run");
+    assert!(
+        report.settled,
+        "the conflict livelocked instead of settling — {report:?}"
+    );
+    let after = sim.reachable_contents();
+    for c in &before {
+        assert!(after.contains(c), "content {c} lost — {report:?}");
+    }
+    assert!(
+        sim.disagreements().expect("read state").is_empty(),
+        "the fleet must agree afterwards — {report:?}"
+    );
+}

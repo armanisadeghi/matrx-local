@@ -51,7 +51,25 @@ Two further exemptions are structural, not textual:
   pure.
 * **Directory rows** are excluded from every content clause, as §4.3 states.
 
-### The one clause that could not be asserted as literally written — ESCALATED
+### The two escalated gaps were ruled — SPEC-ENGINE amendment 1
+
+**Both escalations were accepted and landed as a dated amendment to the frozen spec**
+(`common-docs` `6c226529`, 2026-09-13, "SPEC-ENGINE amendment 1"):
+
+* **§4.3 data preservation** is restated as *"no content is lost that the direction did not
+  authorise losing"*, asserted per `(path, side)` occurrence against the **live** sides only, with
+  `tree_synced` never counted as a content holder and the contradictory "Deletion case" sentence
+  deleted. That is what this harness already asserted.
+* **§2** states that the mass-delete breaker's two knobs combine with **AND**, with the
+  one-file-of-two example as the reason. That is what `planner::plan` already implements.
+* **§4** additionally gains an `ops.kind` value `preserve_local_edit` for D6's flagged row, and
+  I6 now names `PlanContext.open_conflicts` as a planner input with the reason no fixed point
+  exists without it. Both match the existing code; the op kind is now carried as a kind rather
+  than a boolean (see finding F2 below).
+
+The reasoning that produced them is kept below, because it is the evidence behind the amendment.
+
+### The clause as originally frozen, and why it could not be asserted literally
 
 §4.3's data-preservation row says *"every content hash present in any tree at t0 is reachable at
 the end"*. Read literally, with `tree_synced` counted as a tree, **no ordinary update can satisfy
@@ -71,12 +89,38 @@ still required to survive. Authorised losses are exactly:
 | `upload_only` | the cloud's divergent bytes (local is authority, D6; the cloud keeps its own trash, outside these three trees) and a propagated deletion when the knob allows it. |
 | `download_only` | the local bytes **only** when they were unchanged since the last sync. A local edit is flagged and preserved, never authorised. |
 
-This reading is recorded as a **spec gap for amendment**, not as a licence taken quietly.
+This reading was escalated rather than taken quietly, and **amendment 1 landed it**.
 
-A second gap: SPEC-ENGINE §2 gives the mass-delete breaker two knobs,
-`sync.mass_delete_percent` (50) and `sync.mass_delete_count` (1000), and never says how they
-combine. They are combined with **AND** — see `planner::plan`'s documentation for why that is the
-only combinator under which both defaults are individually coherent. Also escalated.
+A second gap: SPEC-ENGINE §2 originally gave the mass-delete breaker two knobs,
+`sync.mass_delete_percent` (50) and `sync.mass_delete_count` (1000), and never said how they
+combine. They are combined with **AND** — see `planner::plan`'s documentation. **Amendment 1
+states this in §2.**
+
+## Findings from independent verification (2026-09-13)
+
+An adversarial re-verify by a seat with **zero authorship** — `common-docs`
+`projects/folder-sync/verification/FS-C2-C4-verify.md`, verdict **PASS_WITH_FINDINGS** at
+`8d71e4b22` — confirmed the DDL byte-for-byte, the planner's purity by grep, the honest-state
+artifact's staleness test proven red, and two of the five claimed defect fixes proven
+failing-then-passing by reverting them. It also found **nine** things this lane had missed. Every
+one is fixed below as a class, and every fix carries a test **proven red before it went green**.
+
+| # | Severity | What it was | Fix |
+|---|---|---|---|
+| **F1** | HIGH, **data loss** | Two conflicts on one path, on one day, from one device rendered the **same** copy name, and the second overwrote the first — destroying the very thing a conflict copy exists to protect. The verifier reproduced it: `{c1, c2, c9}` became `{c1, c2}`. | `naming::unique_conflict_copy_path` keeps D7's shape and appends ` (2)`, ` (3)` … while the name is taken in any of the three trees or already claimed by this plan. Pure: the planner already holds every path as an input. **The property generator could not reach the class** — its path pool contained no copy-shaped name — so the pool now carries one, and the verifier's exact case is `a_second_conflict_the_same_day_does_not_destroy_the_first_copy`. |
+| **F2** | MEDIUM, guard bypass | `local_edit_flagged: true` was an **exemption** from `confirm_op`'s hash-≠-checksum refusal, which made the boolean a skeleton key: anything that could set it could record a row that was never true. | The two doors are disjoint. `confirm_op` refuses the flag outright; `preserve_local_edit` takes an **op id** and refuses any op whose kind is not `preserve_local_edit` — the value amendment 1 added to `ops.kind` — under the same lease and double-confirmation discipline. |
+| **F3** | MEDIUM, a false claim | `connection()`'s doc comment said no write could smuggle a `tree_synced` row past `confirm_op` because the handle is `&self`. False — `Connection::execute` takes `&self` — and the verifier fabricated a row to prove it. | Migration `002` puts `BEFORE INSERT / UPDATE / DELETE` triggers on `tree_synced` that abort unless a one-row `synced_write_guard` flag is raised, and only the three confirmation methods raise it, inside the very transaction as the write they authorise. A crash rolls the flag back with everything else. I1 is now enforced by the **database**. |
+| **F4** | MEDIUM, weakened assertion | `reachable_content` counted `tree_synced` as a content holder while `live_content` correctly did not, so content surviving only as a journal row passed as preserved — the rule applied to one side of the comparison and not the other. | `tree_synced` is no longer read there. Amendment 1 states the rule outright. All scenarios and the soaks were re-run after. |
+| **F5** | MEDIUM, unreachable spec state | `unicode_collision` was defined, in the spec's `conflicts.kind` enum, and **emitted by nothing**: `collision_key` case-folded but never normalised. NFC/NFD twins are one filesystem entry on APFS and NTFS, so the executor would have clobbered one with the other in silence — exactly what I8 says must never happen. | `unicode-normalization` (SPEC-ENGINE §5) added; `collision_key` NFC-normalises, and a group whose members differ only after normalisation is named `UnicodeCollision`. The twin pair is now in the property pool. |
+| **F6** | LOW | An `upload_only` directory gone from **both** sides emitted a tombstone with no `remote_file_id` and no precondition — an op no real executor can address, which would sit `failed` on that mapping's queue forever. A wildcard arm matched before the specific one. | Arms reordered; `two_way` and `upload_only` now agree on `ForgetSynced`. |
+| **F7** | LOW, coverage hole | D7's "both copies reach the cloud" held in practice but was asserted nowhere: the convergence clause exempts conflict-copy paths. | The property now asserts every conflict copy ends present in all three trees for `two_way`. |
+| **F8** | LOW, below the champion bar | A case-only rename (`a.txt` → `A.txt`) became a permanent conflict on both spellings — safe, and one of the most common things a Mac user does to a filename. Dropbox performs it. | Renames are detected **before** the collision pass, so identity decides: a path whose `(volume, inode)` matches the synced row with unchanged content is a move, and a colliding group that is exactly one rename's two spellings is not a dispute. |
+| **F9** | TRIVIAL | A stale comment in `Cargo.toml` about a workspace bump that had already landed. | Deleted. |
+
+The verifier also recorded two things this lane should not paper over: **the tombstone-retention
+scenario is inexpressible here** (the mock never purges tombstones, by design), so a device absent
+longer than the 90-day floor is unverified anywhere — that belongs to FS-C6/FS-V2 — and the soak
+timings quoted below are this Mac's, on this day, and should not be read as a benchmark.
 
 ## Defects the harness found
 
@@ -163,7 +207,8 @@ uploads it with a real precondition read from the remote tree.
 
 ### Not found
 
-Nothing else. The 100,000-case soak (`PROPTEST_CASES=100000`, release, all four properties, three
+Nothing else, by the harnesses. Independent verification found nine more; they are the table above,
+and finding them is what the verifier seat is for. The 100,000-case soak (`PROPTEST_CASES=100000`, release, all four properties, three
 directions) passed with no failures after those two fixes — run on this Mac on 2026-09-13, 24.8 s
 wall. That is a statement about the **planner**, and about the model of an executor in
 `src/sim/`. It is not product evidence: the harness is a mock and says so (SCOPE §6, D2).
@@ -202,8 +247,21 @@ loss:
 Every failure prints the seed; re-running with that seed replays the run exactly, because the PRNG
 is hand-rolled (`src/sim/rng.rs`) rather than taken from a crate whose algorithm could change.
 
-Soak run on this Mac, 2026-09-13: `SIM_SEEDS=200 cargo test -p matrx-sync --release --test
-simulation` — 8 tests, 210 seeds, green, 53.9 s.
+Two of the harness's five defects (3 and 5) originally rested only on the general interleaving test
+at fixed seeds. Independent verification called that weaker evidence than a case that can be
+reverted in isolation, and it was right: both now have dedicated regression tests
+(`a_download_create_never_overwrites_a_file_the_scanner_has_not_seen`,
+`a_conflict_whose_copy_already_exists_in_the_cloud_still_settles`), each proven red by reverting
+its fix.
+
+Soak runs on this Mac, 2026-09-13, after the whole fix round:
+
+| Run | Result |
+|---|---|
+| `cargo test -p matrx-sync` | **59 passing, 0 failing** |
+| `PROPTEST_CASES=200000 … --release --test planner_properties` | 12/12 green, 13.3 s |
+| `PROPTEST_CASES=1000000 … --release --test planner_properties` | 12/12 green, 62.7 s |
+| `SIM_SEEDS=200 … --release --test simulation` | 10/10 green, 210 seeds, 59.4 s |
 
 **The harness is a mock and its README says so.** It proves the planner and the executor's shape.
 Product evidence is FS-V2, on real machines with real files.

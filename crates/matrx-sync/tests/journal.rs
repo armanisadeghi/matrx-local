@@ -553,3 +553,168 @@ fn preserve_local_edit_refuses_anything_less_than_both_sides() {
         .is_err());
     assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
 }
+
+/// G3, from hostile re-verification — guard bypass. F2 closed the `local_edit_flagged` door and
+/// left `is_dir` open: a `download_update` op confirmed with `is_dir: true` wrote a row assembled
+/// from two different moments, plus a type mismatch the next plan reads as a directory where a
+/// file is. `is_dir` was a caller-supplied boolean — the exact shape F2's own reasoning condemned.
+#[test]
+fn is_dir_cannot_be_used_to_walk_past_the_hash_checksum_refusal() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let mut op = upload_op();
+    op.kind = OpKind::DownloadUpdate;
+    let id = j.enqueue_op(&op).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+
+    let mut local = local_confirmation();
+    local.is_dir = true;
+    local.content_hash = Some("LOCAL_ONE_MOMENT".to_string());
+    let mut remote = remote_confirmation();
+    remote.checksum = Some("REMOTE_ANOTHER_MOMENT".to_string());
+
+    let err = j
+        .confirm_op(id, "x", &local, &remote, "2026-09-13T00:00:05Z")
+        .expect_err("a download op is not a directory, whatever the caller says");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+    assert!(j.synced_tree(MAPPING).expect("tree").is_empty());
+}
+
+/// The row type comes from the op, so a directory op confirmed as a file is refused too — and a
+/// directory confirmation that carries content is refused, because a directory row has none.
+#[test]
+fn the_row_type_comes_from_the_op_kind_not_from_the_caller() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+
+    let mut mkdir = upload_op();
+    mkdir.kind = OpKind::MkdirRemote;
+    mkdir.path_nfc = "folder".to_string();
+    mkdir.idempotency_key = "key-mkdir".to_string();
+    let id = j.enqueue_op(&mkdir).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+
+    // Claiming it is a file is refused …
+    let err = j
+        .confirm_op(
+            id,
+            "x",
+            &local_confirmation(),
+            &remote_confirmation(),
+            "2026-09-13T00:00:05Z",
+        )
+        .expect_err("a mkdir op is not a file");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+
+    // … and so is a directory confirmation carrying content.
+    let mut with_content = local_confirmation();
+    with_content.is_dir = true;
+    let err = j
+        .confirm_op(id, "x", &with_content, &remote_confirmation(), "t")
+        .expect_err("a directory row carries no content");
+    assert!(matches!(err, SyncError::SyncedWriteRefused(_)), "got {err:?}");
+
+    // The honest confirmation succeeds.
+    let dir = LocalConfirmation {
+        is_dir: true,
+        size: None,
+        mtime_ns: Some(1),
+        volume_id: Some("vol-1".to_string()),
+        file_id: Some("inode-dir".to_string()),
+        content_hash: None,
+        local_edit_flagged: false,
+    };
+    let remote = RemoteConfirmation {
+        remote_file_id: "folder-1".to_string(),
+        remote_version: 1,
+        checksum: None,
+    };
+    j.confirm_op(id, "x", &dir, &remote, "2026-09-13T00:00:06Z")
+        .expect("an honest directory confirmation");
+    let row = j
+        .synced_tree(MAPPING)
+        .expect("tree")
+        .get("folder")
+        .cloned()
+        .expect("row");
+    assert!(row.is_dir && row.content_hash.is_none() && row.checksum.is_none());
+}
+
+/// G4, from hostile re-verification. Migration 002's claim that "only the three confirmation
+/// methods raise the flag" was itself a convention claim — the kind F3 was raised for. This test
+/// is the enforcement: the flag may be named only inside its own allowlist, so a fourth site
+/// cannot appear without CI saying so.
+///
+/// The allowlist is exactly three files, named here and nowhere else:
+/// `src/journal/confirm.rs`, `migrations/002_i1_write_guard.sql`, and this test file.
+#[test]
+fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
+    use std::path::{Path, PathBuf};
+
+    const ALLOWED: &[&str] = &[
+        "src/journal/confirm.rs",
+        "migrations/002_i1_write_guard.sql",
+        "tests/journal.rs",
+    ];
+
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|e| e == "rs" || e == "sql" || e == "md")
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for sub in ["src", "migrations", "tests"] {
+        walk(&root.join(sub), &mut files);
+    }
+    assert!(files.len() > 5, "the walk found almost nothing; it is broken");
+
+    let mut offenders = Vec::new();
+    let mut found_in_allowlist = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        if !text.contains("synced_write_guard") {
+            continue;
+        }
+        let relative = file
+            .strip_prefix(&root)
+            .expect("under the crate root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if ALLOWED.contains(&relative.as_str()) {
+            found_in_allowlist += 1;
+        } else {
+            offenders.push(relative);
+        }
+    }
+
+    assert_eq!(
+        found_in_allowlist,
+        ALLOWED.len(),
+        "the allowlist names a file that no longer mentions the guard; the test has gone stale"
+    );
+    assert!(
+        offenders.is_empty(),
+        "`synced_write_guard` is referenced outside its allowlist ({ALLOWED:?}): {offenders:?}. \
+         The flag is the whole of invariant I1's enforcement — a new site raising it is a new door \
+         into tree_synced, and it must be argued, not added."
+    );
+}

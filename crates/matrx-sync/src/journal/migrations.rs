@@ -30,8 +30,8 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 2,
-        name: "002_synced_write_guard",
-        sql: include_str!("../../migrations/002_synced_write_guard.sql"),
+        name: "002_i1_write_guard",
+        sql: include_str!("../../migrations/002_i1_write_guard.sql"),
     },
 ];
 

@@ -271,6 +271,29 @@ The last fully clean packaged runs of this spike are
 `.smoke/runs/20260913-164402-55287/` (builder) and `20260913-165413-89707/` (independent
 verifier), both **CLEAN, exit 0**, on the code before the fix round.
 
+### 19. rusqlite collision resolved, and the smoke run that was blocked by it is now CLEAN
+
+`libsqlite3-sys` declares `links = "sqlite3"`, so the engine crate's `rusqlite 0.40.2`
+and the app's `0.31` could not coexist in one binary — and D1 links `matrx-sync` INTO the
+app. Ruled by the coordinator under the no-legacy law: the workspace moves to the latest
+published rusqlite (**0.40.2**, `features = ["bundled"]`) and every member inherits it.
+No call sites changed — `desktop/src-tauri/src/downloads/manager.rs` is the app's only
+rusqlite consumer and uses `params!`, `Connection` and `rusqlite::Result`, all unchanged
+across the bump.
+
+```
+$ grep -A1 '^name = "rusqlite"' Cargo.lock        → 0.40.2   (one copy)
+$ grep -A1 '^name = "libsqlite3-sys"' Cargo.lock  → 0.38.2   (one copy)
+$ cargo build -p aimatrx-desktop                  Finished — 8 pre-existing warnings, 0 errors
+$ cargo build --workspace --exclude aimatrx-desktop --locked   Finished
+$ cd desktop && pnpm typecheck                    clean
+$ ./scripts/smoke.sh packaged                     SMOKE_EXIT=0
+```
+
+Smoke run `.smoke/runs/20260913-173302-86516/` — **CLEAN**: sidecar + app built, engine
+`/health` in 42 s, no failed service, clean quit in 4 s, no orphans, no fatal log lines,
+the pre-existing live engine untouched and PID-stable. MXL-D-090 did not fire in this run.
+
 ---
 
 ## Known, accepted, and owned elsewhere

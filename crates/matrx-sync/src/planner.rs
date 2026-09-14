@@ -355,11 +355,13 @@ pub fn plan(
     paths.extend(remote.paths().map(String::as_str));
     paths.extend(synced.paths().map(String::as_str));
 
-    // Every name any tree already holds. A conflict copy must not land on one of them (F1).
+    // Every name any tree already holds, keyed by the crate's collision fold: a conflict copy must
+    // not land on one of them, and "one of them" means what it means everywhere else — case- and
+    // normalisation-insensitive, because that is what a real volume does (F1, G2).
     let mut occupied: BTreeSet<String> = BTreeSet::new();
-    occupied.extend(local.paths().cloned());
-    occupied.extend(remote.paths().cloned());
-    occupied.extend(synced.paths().cloned());
+    occupied.extend(local.paths().map(|p| naming::collision_key(p)));
+    occupied.extend(remote.paths().map(|p| naming::collision_key(p)));
+    occupied.extend(synced.paths().map(|p| naming::collision_key(p)));
 
     for path in paths {
         if ctx.open_conflicts.contains(path)
@@ -858,16 +860,37 @@ fn conflict_copy(
     ctx: &PlanContext,
     occupied: &mut BTreeSet<String>,
 ) -> Vec<PlanOp> {
-    // F1: the copy must land on a free name. Two conflicts on one path, on one day, from one
-    // device rendered the SAME name, and the second destroyed the first.
-    let copy_path = naming::unique_conflict_copy_path(
+    // The copy must land on a name that is FREE (F1), free by the crate's own fold rather than by
+    // bytes (G2), and CREATABLE (G1). If no such name exists, the losing bytes cannot be set
+    // aside — so the replacement must not be planned either, or the user simply loses them.
+    let copy_path = match naming::unique_conflict_copy_path(
         path,
         &ctx.device_name,
         &ctx.today,
         knobs,
-        |candidate| occupied.contains(candidate),
-    );
-    occupied.insert(copy_path.clone());
+        |candidate| occupied.contains(&naming::collision_key(candidate)),
+    ) {
+        naming::CopyName::Ok(name) => name,
+        naming::CopyName::Unrepresentable(verdict) => {
+            // A named state for the path, in the spec's own `conflicts.kind` vocabulary — no new
+            // honest-state value is invented here, because `contracts/honest_states.json` is a
+            // contract SPEC-SERVER generates its CHECK from. The path is quarantined, so the
+            // download that would have overwritten the local bytes is never planned.
+            let kind = match verdict {
+                naming::NameVerdict::TooLong(k) => k,
+                _ => ConflictKind::IllegalName,
+            };
+            return vec![PlanOp::RecordConflict {
+                path: path.to_string(),
+                kind,
+                detail: format!(
+                    "“{path}” differs here and in the cloud, but no conflict copy can be named for \
+                     it on this system — rename or shorten it, then sync again"
+                ),
+            }];
+        }
+    };
+    occupied.insert(naming::collision_key(&copy_path));
     let mut ops = vec![PlanOp::ConflictCopy {
         path: path.to_string(),
         copy_path: copy_path.clone(),

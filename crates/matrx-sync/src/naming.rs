@@ -7,70 +7,119 @@
 use crate::knobs::Knobs;
 use crate::model::ConflictKind;
 
-/// Render a conflict-copy name from `sync.conflict_copy_template` (D7), **uniquified**.
+/// A conflict copy's name, or the reason no legal one exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyName {
+    /// A legal, free name for the losing bytes.
+    Ok(String),
+    /// No legal name exists — the parent path, the device name or the template itself makes every
+    /// candidate unrepresentable. The planner turns this into a conflict row for the path and
+    /// **does not** plan the download that would replace the original.
+    Unrepresentable(NameVerdict),
+}
+
+/// Render a conflict-copy name from `sync.conflict_copy_template` (D7), **uniquified and
+/// name-guarded**.
 ///
-/// The template alone renders the same name for two conflicts on one path, on one day, from one
-/// device — and the second copy then overwrites the first, destroying the very thing a conflict
-/// copy exists to protect. Independent verification reproduced that data loss (F1). So the
-/// rendered name is tried first, and if it is `taken` a ` (2)`, ` (3)` … suffix is inserted before
-/// the extension until a free one is found — which is what Dropbox and OneDrive do.
+/// Three things have to be true of the returned name, and each one was a defect before it was
+/// checked here:
 ///
-/// `taken` is a pure predicate the caller supplies over every name it knows about: all three
-/// trees, plus any copy the same plan has already claimed.
+/// 1. **It must be free.** Two conflicts on one path, on one day, from one device rendered the
+///    same name and the second overwrote the first (F1). A ` (2)`, ` (3)` … suffix is inserted
+///    before the extension until a free one is found — what Dropbox and OneDrive do.
+/// 2. **"Free" must mean what it means everywhere else in this crate.** `taken` is asked about the
+///    candidate's [`collision_key`], not its bytes: on a case-insensitive volume
+///    `X (Conflicted Copy …).txt` and `x (conflicted copy …).txt` are one file, and an exact-match
+///    check walked straight onto the existing copy (G2). Mixed-case copy names are ordinary —
+///    `sync.conflict_copy_template` is an org knob, and copies migrated in from Dropbox or
+///    OneDrive carry their own capitalisation.
+/// 3. **It must be creatable.** The template adds forty-odd characters to the stem, so a file whose
+///    own name is legal can render a copy name that is not. The copy write then fails on a real
+///    volume while the download that replaces the original succeeds — the F1 outcome again, and
+///    invisible to a mock filesystem with no name limits (G1). The stem is shortened to fit, as
+///    Dropbox does; if no length of stem can be made legal, the answer is
+///    [`CopyName::Unrepresentable`] and the caller must not plan the replacement.
+///
+/// `taken` is a pure predicate the caller supplies over every name it knows about: all three trees,
+/// plus any copy the same plan has already claimed.
 pub fn unique_conflict_copy_path(
     path_nfc: &str,
     device: &str,
     date: &str,
     knobs: &Knobs,
     taken: impl Fn(&str) -> bool,
-) -> String {
-    let base = conflict_copy_path(path_nfc, device, date, knobs);
-    if !taken(&base) {
-        return base;
-    }
-    let (parent, file) = split_parent(&base);
+) -> CopyName {
+    let (parent, file) = split_parent(path_nfc);
     let (stem, ext) = split_stem_ext(file);
-    // Bounded so a pathological tree cannot spin: past the bound the name is made unique by the
-    // counter itself, which cannot collide with any earlier candidate.
-    for n in 2..10_000u32 {
-        let candidate = match parent {
-            "" => format!("{stem} ({n}){ext}"),
-            p => format!("{p}/{stem} ({n}){ext}"),
-        };
-        if !taken(&candidate) {
-            return candidate;
+    let stem_chars: Vec<char> = stem.chars().collect();
+
+    // `None` is the plain rendered name; `Some(n)` adds the ` (n)` uniquifier.
+    let suffixes = std::iter::once(None).chain((2..10_000u32).map(Some));
+    let mut last_verdict = NameVerdict::Ok;
+    for suffix in suffixes {
+        // Shorten the stem until the whole rendered path is legal. Longest first, so a name that
+        // already fits is never truncated.
+        let mut fitted: Option<String> = None;
+        for keep in (1..=stem_chars.len()).rev() {
+            let short: String = stem_chars[..keep].iter().collect();
+            let candidate = render(parent, &short, ext, device, date, suffix, knobs);
+            match check_name(&candidate, knobs) {
+                NameVerdict::Ok => {
+                    fitted = Some(candidate);
+                    break;
+                }
+                // Truncating the stem cannot fix an illegal character or a reserved word coming
+                // from the parent, the device name or the template.
+                v @ NameVerdict::Illegal => {
+                    last_verdict = v;
+                    break;
+                }
+                v @ NameVerdict::TooLong(_) => last_verdict = v,
+            }
+        }
+        match fitted {
+            Some(candidate) if !taken(&candidate) => return CopyName::Ok(candidate),
+            Some(_) => continue, // legal but occupied: try the next suffix
+            None => return CopyName::Unrepresentable(last_verdict),
         }
     }
+    CopyName::Unrepresentable(last_verdict)
+}
+
+fn render(
+    parent: &str,
+    stem: &str,
+    ext: &str,
+    device: &str,
+    date: &str,
+    suffix: Option<u32>,
+    knobs: &Knobs,
+) -> String {
+    let base = knobs
+        .conflict_copy_template
+        .replace("{stem}", stem)
+        .replace("{ext}", "")
+        .replace("{device}", device)
+        .replace("{YYYY-MM-DD}", date);
+    let name = match suffix {
+        None => format!("{base}{ext}"),
+        Some(n) => format!("{base} ({n}){ext}"),
+    };
     match parent {
-        "" => format!("{stem} (10000){ext}"),
-        p => format!("{p}/{stem} (10000){ext}"),
+        "" => name,
+        p => format!("{p}/{name}"),
     }
 }
 
-/// Render a conflict-copy name from `sync.conflict_copy_template` (D7), without uniquifying.
+/// Render a conflict-copy name from `sync.conflict_copy_template` (D7) — the raw template only.
 ///
-/// Prefer [`unique_conflict_copy_path`]: this one can collide with an existing copy.
-///
-/// The default template is the Dropbox convention,
-/// `{stem} (conflicted copy from {device} {YYYY-MM-DD}){ext}`, which is what users of every
-/// champion already recognise. Supported placeholders: `{stem}`, `{ext}`, `{device}`,
-/// `{YYYY-MM-DD}`.
-///
-/// `path_nfc` is a mapping-relative path; the returned name keeps the same parent directory, so a
-/// conflict copy never escapes the folder its original lives in.
+/// **Never plan with this.** It neither uniquifies nor name-guards, which is two of the three
+/// defects [`unique_conflict_copy_path`] exists to prevent. It is public so the template itself can
+/// be tested and so a surface can show a user what a copy would be called.
 pub fn conflict_copy_path(path_nfc: &str, device: &str, date: &str, knobs: &Knobs) -> String {
     let (parent, file) = split_parent(path_nfc);
     let (stem, ext) = split_stem_ext(file);
-    let rendered = knobs
-        .conflict_copy_template
-        .replace("{stem}", stem)
-        .replace("{ext}", ext)
-        .replace("{device}", device)
-        .replace("{YYYY-MM-DD}", date);
-    match parent {
-        "" => rendered,
-        p => format!("{p}/{rendered}"),
-    }
+    render(parent, stem, ext, device, date, None, knobs)
 }
 
 /// Split a mapping-relative path into `(parent, file name)`. The parent is `""` at the root.
@@ -176,12 +225,25 @@ pub fn nfc(s: &str) -> String {
 
 /// Which collision class two colliding paths are in.
 pub fn collision_kind(a: &str, b: &str) -> ConflictKind {
-    if nfc(a) == nfc(b) {
-        // Same characters, different Unicode spelling: NFC against NFD (I8).
-        ConflictKind::UnicodeCollision
-    } else if nfc(a).to_lowercase() == nfc(b).to_lowercase() {
-        // Case-folding alone makes them identical: they differ only in case.
-        ConflictKind::CaseCollision
+    // Precedence rule: **normalisation outranks case.** Fold case out of both sides first, then
+    // ask whether normalisation is what reconciles them. If the case-folded forms still differ but
+    // their NFC forms agree, the pair differs in Unicode spelling — `unicode_collision` — whether
+    // or not it ALSO differs in case. Only when case folding alone makes them identical is it a
+    // `case_collision`.
+    //
+    // Testing raw NFC equality first reported a twin that is also a case twin
+    // (`cafe\u{301}.txt` against `CAFÉ.txt`) as a mere `case_collision`: safe, but it tells the
+    // user the wrong reason to rename, and `unicode_collision` exists precisely so the real reason
+    // can be shown (G6).
+    let (la, lb) = (a.to_lowercase(), b.to_lowercase());
+    if nfc(&la) == nfc(&lb) {
+        if la != lb {
+            ConflictKind::UnicodeCollision
+        } else if a != b {
+            ConflictKind::CaseCollision
+        } else {
+            ConflictKind::WhitespaceCollision
+        }
     } else {
         // They collide only after whitespace is trimmed too.
         ConflictKind::WhitespaceCollision
@@ -235,20 +297,86 @@ mod tests {
         assert_eq!(check_name("ok/name.txt", &k), NameVerdict::Ok);
     }
 
+    fn free(_: &str) -> bool {
+        false
+    }
+
+    #[test]
+    fn a_conflict_copy_that_cannot_be_named_is_reported_not_guessed() {
+        // G1, from hostile re-verification — data loss. The template adds forty-odd characters, so
+        // a file whose own name is legal renders a copy name that is not. The copy write then
+        // fails on a real volume while the download replacing the original succeeds.
+        let k = Knobs::default();
+        let long = format!("{}.txt", "s".repeat(240));
+        let name = unique_conflict_copy_path(&long, "device-a", "2026-09-13", &k, free);
+        let CopyName::Ok(copy) = name else {
+            panic!("a 240-character stem can be shortened to fit: {name:?}");
+        };
+        assert_eq!(
+            check_name(&copy, &k),
+            NameVerdict::Ok,
+            "the planned copy name must itself be creatable: {copy}"
+        );
+        assert!(
+            copy.contains("conflicted copy from device-a"),
+            "and still recognisable: {copy}"
+        );
+
+        // When no stem length can be made legal, say so rather than inventing a name.
+        let hostile = Knobs {
+            max_segment_chars: 8,
+            ..Knobs::default()
+        };
+        assert!(matches!(
+            unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &hostile, free),
+            CopyName::Unrepresentable(_)
+        ));
+    }
+
+    #[test]
+    fn copy_names_are_free_by_the_crates_own_fold_not_by_bytes() {
+        // G2, from hostile re-verification — data loss. On a case-insensitive volume
+        // `X (Conflicted Copy …)` and `x (conflicted copy …)` are ONE file, so an exact-match
+        // `taken` walked straight onto the existing copy.
+        let k = Knobs::default();
+        let existing = "x (Conflicted Copy From device-a 2026-09-13).txt";
+        let name = unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |c| {
+            collision_key(c) == collision_key(existing)
+        });
+        let CopyName::Ok(copy) = name else {
+            panic!("a free name exists: {name:?}");
+        };
+        assert_ne!(
+            collision_key(&copy),
+            collision_key(existing),
+            "the copy must not fold onto the existing one: {copy}"
+        );
+        assert!(copy.ends_with(" (2).txt"), "{copy}");
+    }
+
     #[test]
     fn a_conflict_copy_never_overwrites_an_earlier_one() {
         // F1, from independent verification: without a uniquifier, the second conflict on one
         // path on one day from one device destroyed the first copy.
         let k = Knobs::default();
-        let first = unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |_| false);
+        let CopyName::Ok(first) = unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, free)
+        else {
+            panic!("a free name exists")
+        };
         assert_eq!(first, "x (conflicted copy from device-a 2026-09-13).txt");
-        let second = unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |c| {
-            c == first
-        });
+        let CopyName::Ok(second) =
+            unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |c| c == first)
+        else {
+            panic!("a free name exists")
+        };
         assert_eq!(second, "x (conflicted copy from device-a 2026-09-13) (2).txt");
-        let third = unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |c| {
-            c == first || c == second
-        });
+        let CopyName::Ok(third) =
+            unique_conflict_copy_path("x.txt", "device-a", "2026-09-13", &k, |c| {
+                c == first || c == second
+            })
+        else {
+            panic!("a free name exists")
+        };
         assert_eq!(third, "x (conflicted copy from device-a 2026-09-13) (3).txt");
         assert_ne!(first, second);
         assert_ne!(second, third);
@@ -268,6 +396,12 @@ mod tests {
         );
         assert_eq!(
             collision_kind(nfd, nfc_name),
+            ConflictKind::UnicodeCollision
+        );
+        // G6: a twin that is ALSO a case twin is still a unicode collision — normalisation
+        // outranks case, because that is the reason the user has to act on.
+        assert_eq!(
+            collision_kind("cafe\u{301}.txt", "CAF\u{c9}.txt"),
             ConflictKind::UnicodeCollision
         );
     }

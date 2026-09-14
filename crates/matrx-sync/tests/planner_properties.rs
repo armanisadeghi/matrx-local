@@ -203,6 +203,12 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
                 suspended: true,
             });
         }
+        // G1, as a property over EVERY plan of every run: the losing bytes must be set aside
+        // before they are replaced, under a name a filesystem can actually create. A plan that
+        // downloads over a locally-changed file without a validly-named conflict copy in the same
+        // plan is data loss the moment it executes on a real volume — and a mock filesystem with
+        // no name limits can never notice.
+        no_unprotected_overwrite(&local, &remote, &synced, &p, knobs)?;
         if p.is_empty() {
             return Ok(RunOutcome {
                 world,
@@ -222,6 +228,57 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         world.apply(&p);
         rounds += 1;
     }
+}
+
+/// Every `Download` that replaces locally-changed bytes must be accompanied, in the SAME plan, by
+/// a `ConflictCopy` for that path whose name passes the crate's own name guard.
+fn no_unprotected_overwrite(
+    local: &matrx_sync::LocalTree,
+    remote: &matrx_sync::RemoteTree,
+    synced: &matrx_sync::SyncedTree,
+    p: &matrx_sync::Plan,
+    knobs: &Knobs,
+) -> Result<(), String> {
+    for op in &p.ops {
+        let matrx_sync::PlanOp::Download { path, .. } = op else {
+            continue;
+        };
+        let l = local.get(path);
+        let locally_changed = match (l, synced.get(path), remote.get(path)) {
+            (Some(l), Some(s), _) => l.content_hash != s.content_hash,
+            (Some(l), None, Some(r)) => l.content_hash != r.checksum,
+            _ => false,
+        };
+        if !locally_changed {
+            continue;
+        }
+        let copy = p.ops.iter().find_map(|o| match o {
+            matrx_sync::PlanOp::ConflictCopy {
+                path: cp,
+                copy_path,
+                ..
+            } if cp == path => Some(copy_path),
+            _ => None,
+        });
+        match copy {
+            None => {
+                return Err(format!(
+                    "{path}: the plan downloads over locally-changed bytes with no conflict copy"
+                ))
+            }
+            Some(copy_path) => {
+                if matrx_sync::naming::check_name(copy_path, knobs)
+                    != matrx_sync::naming::NameVerdict::Ok
+                {
+                    return Err(format!(
+                        "{path}: the conflict copy is planned at a name no filesystem can create: \
+                         {copy_path}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The contents the direction's own rules authorise losing, computed per **occurrence**.
@@ -1157,4 +1214,128 @@ fn a_case_only_rename_is_a_rename_not_a_permanent_conflict() {
     );
     drive(&mut w, Direction::TwoWay, &Knobs::default(), 16);
     assert!(w.reachable_content().contains("c1"));
+}
+
+// ------------------------------- regressions from hostile re-verification (round 2)
+
+/// G1, from hostile re-verification — **data loss**. The re-verifier's exact input: a 244-character
+/// legal path in conflict. The template adds forty-odd characters, so the copy name overran
+/// `sync.max_segment_chars` — and the plan carried the `Download` that replaces the local bytes
+/// anyway. On a real volume the copy write fails and the replacement succeeds; the mock filesystem,
+/// having no name limits, saw nothing.
+#[test]
+fn a_conflict_copy_is_never_planned_at_a_name_no_filesystem_can_create() {
+    let knobs = Knobs::default();
+    let long = format!("{}.txt", "s".repeat(240));
+    let mut w = world_of(&[(long.as_str(), Some("c1"), Some("c2"), None)]);
+
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            device_name: "device-a".to_string(),
+            today: "2026-09-13".to_string(),
+            open_conflicts: BTreeSet::new(),
+        },
+    );
+
+    for op in &p.ops {
+        if let matrx_sync::PlanOp::ConflictCopy { copy_path, .. } = op {
+            assert_eq!(
+                matrx_sync::naming::check_name(copy_path, &knobs),
+                matrx_sync::naming::NameVerdict::Ok,
+                "the copy is planned at an uncreatable name: {copy_path}"
+            );
+        }
+    }
+    assert!(
+        no_unprotected_overwrite(&w.local, &w.remote, &w.synced, &p, &knobs).is_ok(),
+        "the local bytes must not be replaced without a validly-named copy: {:?}",
+        p.ops
+    );
+
+    drive(&mut w, Direction::TwoWay, &knobs, 16);
+    let after = w.reachable_content();
+    assert!(
+        after.contains("c1") && after.contains("c2"),
+        "both versions must survive; reachable = {after:?}"
+    );
+}
+
+/// G1's other half: when NO length of stem can be named, the path is quarantined with a named
+/// conflict and the replacement is not planned at all.
+#[test]
+fn an_unnameable_conflict_copy_blocks_the_download_instead_of_accompanying_it() {
+    // A knob tight enough that the template cannot fit at any stem length. Knobs are knobs.
+    let knobs = Knobs {
+        max_segment_chars: 12,
+        ..Knobs::default()
+    };
+    let w = world_of(&[("x.txt", Some("c1"), Some("c2"), None)]);
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext::default(),
+    );
+    assert!(
+        !p.ops
+            .iter()
+            .any(|o| matches!(o, matrx_sync::PlanOp::Download { .. })),
+        "nothing may replace the local bytes while they cannot be set aside: {:?}",
+        p.ops
+    );
+    assert!(
+        p.ops
+            .iter()
+            .any(|o| matches!(o, matrx_sync::PlanOp::RecordConflict { .. })),
+        "and the user must be told why: {:?}",
+        p.ops
+    );
+}
+
+/// G2, from hostile re-verification — **data loss**. An earlier copy differing only in CASE. The
+/// uniquifier's `taken` was byte-exact while every other name comparison in the crate folds, so
+/// the new copy landed on the old one on any case-insensitive volume.
+#[test]
+fn a_conflict_copy_does_not_land_on_an_earlier_one_that_differs_only_in_case() {
+    let knobs = Knobs::default();
+    let existing = "x (Conflicted Copy From device-a 2026-09-13).txt";
+    let mut w = world_of(&[
+        ("x.txt", Some("c1"), Some("c2"), None),
+        (existing, Some("c9"), Some("c9"), Some("c9")),
+    ]);
+
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            device_name: "device-a".to_string(),
+            today: "2026-09-13".to_string(),
+            open_conflicts: BTreeSet::new(),
+        },
+    );
+    for op in &p.ops {
+        if let matrx_sync::PlanOp::ConflictCopy { copy_path, .. } = op {
+            assert_ne!(
+                matrx_sync::naming::collision_key(copy_path),
+                matrx_sync::naming::collision_key(existing),
+                "the new copy folds onto the existing one: {copy_path}"
+            );
+        }
+    }
+
+    drive(&mut w, Direction::TwoWay, &knobs, 16);
+    let after = w.reachable_content();
+    for c in ["c1", "c2", "c9"] {
+        assert!(after.contains(c), "{c} was lost; reachable = {after:?}");
+    }
 }

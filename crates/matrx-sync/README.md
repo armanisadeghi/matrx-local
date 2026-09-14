@@ -58,12 +58,38 @@ There is **no public upsert into `tree_synced`.** The only ways in are:
   `remote_version` + `checksum`); it writes the synced row and marks the op `done` in ONE
   transaction.
 * `Journal::confirm_delete_op` — the deletion half, requiring both sides to confirm absence.
+* `Journal::preserve_local_edit` — D6's flagged row, on an op of kind `preserve_local_edit`
+  (SPEC-ENGINE amendment 1, 2026-09-13). It is the one door through which a row may carry
+  `content_hash != checksum`, and it checks the op's **kind** rather than trusting a boolean.
 
-`confirm_op` refuses a file confirmation with no locally computed hash or no server checksum (I2),
-and the table's own `CHECK (is_dir = 1 OR (content_hash IS NOT NULL AND checksum IS NOT NULL))`
-refuses it a second time, so even a future code path reaching for `connection()` cannot express an
-optimistic write. `connection()` is deliberately `&self`, not `&mut self`: no transaction can be
-opened through it.
+All three live in `src/journal/confirm.rs`, which is the whole allowlist.
+
+`confirm_op` refuses a file confirmation with no locally computed hash, no server checksum, a
+`local_edit_flagged` flag (that row has its own door), or a local hash and server checksum that
+disagree — a synced row records one state both sides confirmed, never two observations taken at
+different moments. It does not trust `is_dir` either: the row type is **derived from the op's
+kind**, the caller's boolean must agree with it, and a directory confirmation carrying content is
+refused. A boolean the caller supplies is a skeleton key, and `is_dir` was the second one found.
+
+And `tree_synced` is guarded **by the database**: migration `002` puts
+`BEFORE INSERT / UPDATE / DELETE` triggers on it that abort unless a one-row flag is raised, which
+only `src/journal/confirm.rs` raises, inside the very transaction as the write it authorises. A raw
+statement through `connection()` therefore fails. The allowlist is itself enforced: a test greps
+every `.rs`, `.sql` and `.md` in the crate and fails if the flag is named outside
+`src/journal/confirm.rs`, `migrations/002_i1_write_guard.sql` and `tests/journal.rs`.
+
+#### What the guard does not defend against
+
+It defends the invariant against **mistake**, on every accidental and cross-process route: a plain
+`INSERT`, an `UPDATE` or `DELETE` of a legitimately confirmed row, a second `rusqlite::Connection`
+on the same file, and an `ATTACH` from an unrelated connection are all refused by `RAISE(ABORT)`.
+
+It does **not** defend against a caller that means it. Code in this process can raise the flag or
+`DROP TRIGGER` through `connection()` and then write whatever it likes — the DDL change even
+persists — and a co-located process holding the journal file open can do the same. **That is out of
+the threat model**, stated rather than papered over: this is enforcement against error, not against
+intent. The grep test is what keeps intent from arriving by accident, and the journal is a per-user
+file inside the user's own home, not a trust boundary between principals.
 
 This is the notes-engine lesson as code — a `last_synced_hash` that lands NULL produced 14
 "conflicts" against nothing (`SPEC-ENGINE.md` §4.1).

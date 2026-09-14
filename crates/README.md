@@ -240,7 +240,36 @@ now skips the copy when the bytes already match.
 
 ### 18. `./scripts/smoke.sh packaged` after the fix
 
-<!-- SMOKE_RESULT_2 -->
+**Not green, and not for a reason this change controls.** Two attempts:
+
+1. `.smoke/runs/20260913-171109-48700/` — `SMOKE_EXIT=1`. Everything the fix is about
+   passed: `✅ sidecar + app built` from a state where
+   `desktop/src-tauri/sidecar/matrx-syncd-aarch64-apple-darwin` had been deleted first,
+   `✅ engine answered /health in 50s`, `✅ exited cleanly`, `✅ no orphaned children`.
+   The single ❌ was `packaged app log: fatal lines in the log` — the engine's
+   `POST /auth/token` 500ing with `macOS Keychain helper failed: exit status -15`.
+   That failure also appears in `.smoke/runs/20260913-163530-26968/`, a run from a tree
+   that predates this workspace entirely, so it is not spike fallout. Filed as
+   **MXL-D-090** in `FOUND_DEFECTS.md`.
+2. `.smoke/runs/20260913-172048-73516/` — `SMOKE_EXIT=1` at the new
+   `matrx-syncd sidecar build` step, because a concurrent session's **uncommitted**
+   work on `crates/matrx-sync` (FS-C2) had added `rusqlite = "0.40.2"` while the
+   desktop app pins `rusqlite ^0.31`. Both pull `libsqlite3-sys`, which declares
+   `links = "sqlite3"`, and cargo refuses:
+
+   ```
+   error: failed to select a version for `libsqlite3-sys`.
+   package `libsqlite3-sys` links to the native library `sqlite3`, but it conflicts
+   with a previous package which links to `sqlite3` as well
+   ```
+
+   Nothing in the workspace resolves while both pins coexist. Not touched here — it is
+   another lane's uncommitted file and a cross-lane ruling: D1 links `matrx-sync` INTO
+   the app, so exactly one of the two rusqlite versions can survive.
+
+The last fully clean packaged runs of this spike are
+`.smoke/runs/20260913-164402-55287/` (builder) and `20260913-165413-89707/` (independent
+verifier), both **CLEAN, exit 0**, on the code before the fix round.
 
 ---
 
@@ -272,6 +301,12 @@ workflow. Verified **by reading** `.github/workflows/release.yml`, not by runnin
   `--target` uses.
 - The `Verify macOS artifact signing` step's `BUNDLE_DIR` still resolves, because
   the target directory did not move.
+
+**CI now compiles Rust on every push — and it is green.** First run of the new job:
+GitHub Actions run **34792209226** (`0fc78ba0b`) — `rust-workspace: success`,
+`python: success`, `frontend: success`. (`native-vault-core: failure` in the same run is
+pre-existing: it also failed on run 34791417756 at `e3cbb1512`, which predates every
+commit of this spike.)
 
 **CI now compiles Rust on every push.** `.github/workflows/ci.yml` gained a
 `rust-workspace` job (ubuntu-22.04, `Swatinem/rust-cache`) running

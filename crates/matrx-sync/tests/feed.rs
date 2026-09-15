@@ -409,3 +409,149 @@ async fn the_live_service_requires_the_organization_header() {
     );
     assert!(!error.retryable(), "retrying without the header fails forever");
 }
+
+// ------------------------------------ the Realtime trigger, and the polling fallback
+
+use matrx_sync::feed::{
+    heartbeat_frame, interpret, join_frame, LiveState, LiveTracker, PhoenixFrame, Signal,
+    WatchedTable,
+};
+
+#[test]
+fn the_join_frame_subscribes_to_the_table_and_carries_the_token() {
+    let frame = join_frame(WatchedTable::Files, "tok-123", "1");
+    assert_eq!(frame.topic, "realtime:files:files");
+    assert_eq!(frame.event, "phx_join");
+    assert_eq!(frame.payload["access_token"], "tok-123");
+    let changes = &frame.payload["config"]["postgres_changes"][0];
+    assert_eq!(changes["schema"], "files");
+    assert_eq!(changes["table"], "files");
+    assert_eq!(changes["event"], "*");
+    assert_eq!(
+        frame.payload["config"]["broadcast"]["self"], false,
+        "we never want our own writes echoed back over the socket"
+    );
+
+    // The folder channel is the same shape on the other table.
+    assert_eq!(
+        join_frame(WatchedTable::Folders, "t", "2").topic,
+        "realtime:files:folders"
+    );
+
+    // The frame serialises with Phoenix's field names, including `ref` (not `message_ref`).
+    let json = serde_json::to_value(&frame).expect("serialise");
+    assert!(json.get("ref").is_some() && json.get("topic").is_some());
+}
+
+#[test]
+fn a_change_is_a_trigger_and_its_payload_is_deliberately_discarded() {
+    // Realtime cannot carry a delete: Postgres replica identity does not put the old row on the
+    // wire. An engine that read rows from here would resurrect every deleted file on reconnect.
+    let frame = PhoenixFrame {
+        join_ref: None,
+        message_ref: None,
+        topic: "realtime:files:files".to_string(),
+        event: "postgres_changes".to_string(),
+        payload: serde_json::json!({"data": {"record": {"file_path": "Docs/a.txt"}}}),
+    };
+    assert_eq!(
+        interpret(&frame),
+        Signal::ChangedGoRead,
+        "the only thing a change means is: read the feed now"
+    );
+}
+
+#[test]
+fn replies_errors_and_heartbeats_are_told_apart() {
+    let ok = PhoenixFrame {
+        join_ref: Some("1".into()),
+        message_ref: Some("1".into()),
+        topic: "realtime:files:files".into(),
+        event: "phx_reply".into(),
+        payload: serde_json::json!({"status": "ok", "response": {}}),
+    };
+    assert_eq!(interpret(&ok), Signal::Joined);
+
+    let refused = PhoenixFrame {
+        payload: serde_json::json!({"status": "error", "response": {"reason": "expired token"}}),
+        ..ok.clone()
+    };
+    assert!(matches!(interpret(&refused), Signal::JoinRefused(_)));
+
+    let closed = PhoenixFrame {
+        event: "phx_close".into(),
+        ..ok.clone()
+    };
+    assert!(matches!(interpret(&closed), Signal::JoinRefused(_)));
+
+    let beat = PhoenixFrame {
+        topic: "phoenix".into(),
+        ..ok.clone()
+    };
+    assert_eq!(interpret(&beat), Signal::HeartbeatAck);
+    assert_eq!(heartbeat_frame("9").topic, "phoenix");
+}
+
+#[test]
+fn one_dropped_socket_is_not_news_but_a_pattern_is_announced() {
+    let mut tracker = LiveTracker::new();
+    assert_eq!(tracker.state(), LiveState::Connecting);
+    assert_eq!(
+        tracker.state().honest_state(),
+        None,
+        "a state that flickers on every reconnect is noise, and the poll already covers it"
+    );
+
+    tracker.note_joined(100);
+    assert_eq!(tracker.state(), LiveState::Live);
+
+    // A laptop lid-close drops one socket. That is ordinary.
+    tracker.note_failure(200);
+    assert_eq!(tracker.state(), LiveState::Live);
+
+    // Twice is a pattern, and the user is told.
+    tracker.note_failure(210);
+    assert_eq!(tracker.state(), LiveState::PollingFallback);
+    assert_eq!(tracker.state().honest_state(), Some("polling_fallback"));
+
+    // Reconnecting clears it.
+    tracker.note_joined(300);
+    assert_eq!(tracker.state(), LiveState::Live);
+    assert_eq!(tracker.state().honest_state(), None);
+}
+
+#[test]
+fn a_socket_that_is_open_but_dead_is_caught_by_silence() {
+    // The failure mode a plain "is it connected?" check never sees: the TCP connection is up, the
+    // server has forgotten us, and nothing ever arrives again.
+    let mut tracker = LiveTracker::with_tolerance(1);
+    tracker.note_joined(1_000);
+    tracker.note_tick(1_030, 60);
+    assert_eq!(tracker.state(), LiveState::Live, "half a minute of quiet is quiet");
+
+    tracker.note_tick(1_100, 60);
+    assert_eq!(
+        tracker.state(),
+        LiveState::PollingFallback,
+        "past the silence limit the socket is not believed, however open it looks"
+    );
+}
+
+#[test]
+fn the_fallback_says_what_is_happening_and_that_syncing_continues() {
+    // SCOPE §3.1 item 8 requires this be "announced on screen". A sync engine that silently
+    // degrades to a one-minute poll is one users describe as "sometimes slow for no reason".
+    let message = LiveState::PollingFallback
+        .message(60)
+        .expect("the fallback must have something to say");
+    assert!(
+        message.contains("Live updates are unavailable"),
+        "almost the spec's own words: {message}"
+    );
+    assert!(message.contains("minute"), "and the cadence: {message}");
+    assert!(
+        message.contains("still syncs"),
+        "and that nothing is broken — a state that is only a complaint is not a state: {message}"
+    );
+    assert_eq!(LiveState::Live.message(60), None);
+}

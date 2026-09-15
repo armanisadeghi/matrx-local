@@ -166,10 +166,19 @@ def test_a_retry_that_succeeds_clears_the_state_completely(runtime, monkeypatch)
     assert runtime.browser_action_needed() is None
 
 
-def test_a_half_downloaded_browser_directory_is_not_an_installed_browser(runtime, tmp_path):
+def test_a_half_downloaded_browser_directory_is_not_an_installed_browser(
+    runtime, tmp_path, monkeypatch
+):
     """The versioned directory appears when the download STARTS; only Playwright's
     INSTALLATION_COMPLETE marker proves the executable is there. Without this,
-    first boot said "starting" about an empty folder and would never re-download."""
+    first boot said "starting" about an empty folder and would never re-download.
+
+    The pin is stated explicitly so this test keeps testing the MARKER rule:
+    presence is also judged against the build this engine resolves
+    (test_browser_build_mismatch.py owns that rule), which would otherwise make
+    the outcome depend on whatever revision the local Playwright happens to pin.
+    """
+    monkeypatch.setattr(runtime, "expected_browser_revision", lambda *_a, **_k: 1234)
     browsers = tmp_path / "playwright-browsers"
     partial = browsers / "chromium_headless_shell-1234"
     partial.mkdir(parents=True)

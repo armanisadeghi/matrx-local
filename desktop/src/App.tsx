@@ -30,7 +30,6 @@ import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
 import { CodingSessions } from "@/pages/CodingSessions";
-import { CodexUsage } from "@/pages/CodexUsage";
 import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
 import {
@@ -479,7 +478,12 @@ function AppInner() {
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
       { path: "/coding-sessions", element: <CodingSessions /> },
-      { path: "/codex-usage", element: <CodexUsage /> },
+      {
+        // Usage was a second top-level nav item until 2026-09-14. The old link
+        // keeps working and lands on the tab that replaced it.
+        path: "/codex-usage",
+        element: <Navigate to="/coding-sessions?tab=usage" replace />,
+      },
       {
         path: "/bridge-test",
         element: (

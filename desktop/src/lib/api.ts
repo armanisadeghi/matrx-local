@@ -764,6 +764,14 @@ export type ClaudeSessionState =
 
 export interface ClaudeConversation {
   session_id: string;
+  /** Which coding agent this row came from. Optional: engines before 1.4.112 omit it. */
+  provider?: CodingSessionProvider;
+  /**
+   * How to continue this session locally — the engine's own command and the
+   * caveat that binds it (`app/services/coding_sessions/continuation.py`).
+   * Optional: engines before 1.4.112 omit it.
+   */
+  continuation?: { command: string; note: string } | null;
   title: string;
   title_source: string | null;
   project: string | null;
@@ -805,6 +813,13 @@ export interface ClaudeCloudCheck {
 export interface ClaudeOverview {
   schema_version: 2;
   account_id: string | null;
+  /**
+   * The providers this payload actually LISTS sessions for. The screen reads
+   * this instead of assuming Claude Code, so the day the engine lists Codex or
+   * Cursor transcripts the filter grows on its own. Optional: engines before
+   * 1.4.112 omit it.
+   */
+  listed_providers?: CodingSessionProvider[];
   accounts: ClaudeAccount[];
   cloud: ClaudeCloudCheck;
   conversations: ClaudeConversation[];

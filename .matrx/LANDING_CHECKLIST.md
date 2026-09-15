@@ -39,3 +39,24 @@ production regression, not a hypothetical.
    and nobody is sent to a Settings pane where the app is not listed yet.
    The Dashboard once showed "6/18" then "10/19" and a Location "Request
    access" that did nothing.
+
+10. **Any app-exit, relaunch, or updater path in `lib.rs`?** → on Unix EVERY
+    path must end in `libc::_exit(0)` (GGML's atexit destructors call
+    `ggml_abort()` → a real SIGABRT crash report), and a relaunch must spawn
+    its own successor after releasing the single-instance socket, because
+    `_exit(0)` also skips tauri's relaunch. Gating the bypass on the exit code
+    is what crashed the app on every single release (17 in 72 h).
+    Guards: `shutdown_exit_tests`, `successor_spawn_tests`,
+    `relaunch_target_tests` in `desktop/src-tauri/src/lib.rs`.
+11. **Any engine spawn/exit handling, or a surface that reports the engine
+    down?** → a dead engine must come back on its own (bounded, backed off,
+    `supervise_engine_exit`), and the user must SEE it with the engine's own
+    cause — never a silent dead engine, never a spinner, never a bare
+    "something went wrong". Guards: `engine_supervisor_tests` (Rust) +
+    `desktop/src/components/recovery/EngineSupervisorBanner.test.tsx`.
+12. **Anything that decides whether a browser/model/binary is "installed"?** →
+    presence means the exact build THIS process resolves, not "a directory
+    exists": a complete install of the wrong revision is unlaunchable, and
+    calling it present made the one-click repair skip the only download that
+    could fix it (18.6+ hours of silently dead browser scraping).
+    Guard: `tests/unit/test_browser_build_mismatch.py`.

@@ -139,6 +139,25 @@ starting", `available=False`, and **no ActionNeeded**, because a transient state
 is never an ask. Only when the retry also fails does `browser_launch_failed`
 stand. Pinned in `tests/unit/test_browser_runtime_state.py`.
 
+**An installed browser this engine cannot launch is not an installed browser.**
+Playwright resolves a browser by EXACT build id (`chromium_headless_shell-<rev>`),
+pinned inside the Playwright package the running engine imported. When an install
+into a world was performed by a different Playwright version the directory on
+disk carries a different revision, every launch fails at a path that does not
+exist, and no launch retry can ever clear it — live on 2026-09-14 for 18.6+ hours
+(pinned 1208 vs. 1234 on disk). So presence is judged against the build THIS
+engine resolves: `browser_install_report()` reconciles
+`expected_browser_revision()` with a newest-first scan of the path
+(`installed_browser_builds()`, `resolve_browser_executable()`), and
+`browser_binary_present()` means *launchable*. An unreadable pin falls back to
+the old any-complete-build rule, so it can never call a working install broken.
+The mismatch is its own honest state (`browser_build_mismatch`, naming both
+builds and promising no restart) with the usual one-click ask, and
+`self_heal_browser_build()` repairs it IN the running engine — one bounded
+attempt per process, then `ensure_browser_pool()`, no app restart and no click
+(`schedule_browser_build_repair()` in `engine.py`, from Phase 3). Pinned in
+`tests/unit/test_browser_build_mismatch.py`.
+
 **"Repair browser" repairs.** `POST /browser-runtime/install` used to re-download
 ~90 MB of Chromium the machine already had. It now looks first: pool live → say
 so; binary present, no pool → start the pool (no download); only a genuinely

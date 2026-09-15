@@ -1,6 +1,6 @@
 [package]
 name = "aimatrx-desktop"
-version = "1.4.111"
+version = "1.4.113"
 description = "AI Matrx Desktop — Local companion for the AI Matrx platform"
 authors = ["AI Matrx"]
 edition = "2021"
@@ -50,6 +50,10 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# Reads the app bundle's own Info.plist during a relaunch, so an update that
+# renamed CFBundleExecutable still comes back up (see spawn_successor_process).
+# Already in the tree as a tauri dependency — no new download.
+plist = "1"
 objc2-foundation = { version = "0.3.2", features = ["NSFileManager", "NSString", "NSURL", "NSError"] }
 # Privacy (TCC) permissions the APP process must request itself — Contacts,
 # Calendars, Reminders, Photos, Location, Speech Recognition, Bluetooth. The

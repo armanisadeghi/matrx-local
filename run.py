@@ -97,7 +97,7 @@ if _sys.platform == "win32":
 # The packaged sidecar (PyInstaller sets sys.frozen) is the ONLY engine that
 # may occupy the live position by default: ~/.matrx, port range 22140-22159.
 # Every source-run engine (`uv run python run.py` — Arman or any agent) is a
-# DEV engine and is fully isolated unless explicitly told otherwise:
+# DEV engine defaults to separate local roots unless explicitly told otherwise:
 #
 #   home       ~/.matrx-dev        (own discovery file, matrx.db, settings)
 #   ports      22240-22259         (OUTSIDE the live scan range — the packaged
@@ -127,31 +127,31 @@ if IS_DEV_ENGINE:
     if "MATRX_HOME_DIR" not in _os.environ:
         _dev_home = _Path.home() / ".matrx-dev"
         _os.environ["MATRX_HOME_DIR"] = str(_dev_home)
-        # Share the live home's huge, immutable-ish asset caches (~166GB of
-        # models on Arman's machine) via symlink so a dev engine never
-        # re-downloads them. Mutable state (matrx.db, settings.json,
-        # local.json, instance.json, data/, mirror/, media/) is NEVER shared —
-        # that separation is the whole point. Symlink failure (e.g. Windows
-        # without developer mode) is fine: the engine just downloads into the
-        # dev home. Custom MATRX_HOME_DIR values (tests, --fresh) skip this
-        # so they stay fully hermetic.
-        _live_home = _Path.home() / ".matrx"
-        try:
-            _dev_home.mkdir(parents=True, exist_ok=True)
-            for _cache in (
-                "image-models",
-                "video-models",
-                "playwright-browsers",
-                "tts",
-                "models",
-                "oww_models",
-            ):
-                _src = _live_home / _cache
-                _dst = _dev_home / _cache
-                if _src.is_dir() and not _dst.exists():
-                    _dst.symlink_to(_src, target_is_directory=True)
-        except OSError:
-            pass
+
+    # Source runs must not inherit writable model/runtime caches from another
+    # world. Preserve any ordinary existing directories, but stop before
+    # startup if a formerly-created cache symlink resolves outside this source
+    # home's boundary. Do not unlink or migrate it: use a fresh private home.
+    _selected_home = _Path(_os.environ["MATRX_HOME_DIR"]).resolve(strict=False)
+    for _cache in (
+        "image-models",
+        "video-models",
+        "playwright-browsers",
+        "tts",
+        "models",
+        "oww_models",
+    ):
+        _cache_path = _selected_home / _cache
+        if _cache_path.is_symlink():
+            _target = _cache_path.resolve(strict=False)
+            try:
+                _target.relative_to(_selected_home)
+            except ValueError:
+                raise SystemExit(
+                    "Refusing source startup: "
+                    f"{_cache_path} is a symlink outside MATRX_HOME_DIR. "
+                    "Choose a new private MATRX_HOME_DIR; no files were changed."
+                )
     if "MATRX_PORT" not in _os.environ:
         _os.environ.setdefault("MATRX_PORT_BASE", "22240")
     _os.environ.setdefault("MATRX_SKIP_ORPHAN_SCAN", "1")
@@ -170,11 +170,13 @@ if IS_DEV_ENGINE:
     _os.environ.setdefault("MATRX_CLOUD_PARTICIPATION", "0")
     print(
         "[phase:isolation] DEV ENGINE (source run, not the packaged sidecar) — "
-        f"isolated from the installed app: home={_os.environ['MATRX_HOME_DIR']}, "
+        f"separate default home/ports: home={_os.environ['MATRX_HOME_DIR']}, "
         f"ports={_os.environ.get('MATRX_PORT') or _os.environ.get('MATRX_PORT_BASE', '22140') + '+'}, "
         "orphan scan off, instance id salted, cloud coordination "
         f"{'ON (override)' if _os.environ.get('MATRX_CLOUD_PARTICIPATION') == '1' else 'OFF'}. "
-        "Set MATRX_LIVE_ENGINE=1 to run in the live position on purpose.",
+        "This is not a full isolation certificate; the outer wrapper must constrain "
+        "overrides, .env, keychain, and cloud access. Set MATRX_LIVE_ENGINE=1 to "
+        "run in the live position on purpose.",
         flush=True,
     )
 

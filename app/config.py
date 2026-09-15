@@ -195,8 +195,9 @@ SUPABASE_PROFILE_HEADERS = {
 # Platform-aware storage roots
 #
 # Development (running from source):
-#   All paths fall back to  <project_root>/system/...  so nothing changes for
-#   your local workflow — the "system" folder keeps working exactly as before.
+#   Ordinary source runs default to MATRX_HOME_DIR (~/.matrx-dev), including
+#   runtime data, temporary files, logs, and user-visible content. Explicit
+#   MATRX_LIVE_ENGINE=1 preserves the legacy <project_root>/system roots.
 #
 # Installed / frozen app (PyInstaller, Tauri sidecar):
 #   Paths follow OS conventions so the app behaves like a proper desktop app
@@ -215,6 +216,16 @@ SUPABASE_PROFILE_HEADERS = {
 
 _is_frozen = getattr(sys, "frozen", False)  # True when running as PyInstaller bundle
 _system = _PLATFORM_CTX["system"]
+_is_source_dev = not _is_frozen and os.getenv("MATRX_LIVE_ENGINE") != "1"
+
+# Source defaults must be private even when app.config is imported directly,
+# without run.py's bootstrap. Explicit live source runs preserve ~/.matrx.
+MATRX_HOME_DIR = Path(
+    os.getenv(
+        "MATRX_HOME_DIR",
+        str(Path.home() / (".matrx-dev" if _is_source_dev else ".matrx")),
+    )
+)
 
 
 def _platform_data_dir() -> Path:
@@ -251,15 +262,16 @@ def _platform_log_dir() -> Path:
     return Path(xdg) / APP_NAME_SLUG / "logs"
 
 
-# In development (not frozen) keep everything inside the repo so nothing moves.
-# In a frozen/installed build use the OS-appropriate locations.
-_dev_system = BASE_DIR / "system"
-
 if _is_frozen:
     _data_root = _platform_data_dir()
     _cache_root = _platform_cache_dir()
     _log_root = _platform_log_dir()
+elif _is_source_dev:
+    _data_root = MATRX_HOME_DIR / "data"
+    _cache_root = MATRX_HOME_DIR / "temp"
+    _log_root = MATRX_HOME_DIR / "logs"
 else:
+    _dev_system = BASE_DIR / "system"
     _data_root = _dev_system / "data"
     _cache_root = _dev_system / "temp"
     _log_root = _dev_system / "logs"
@@ -272,14 +284,12 @@ LOCAL_LOG_DIR = Path(os.getenv("MATRX_LOG_DIR", str(_log_root)))
 CODE_SAVES_DIR = TEMP_DIR / "code_saves"
 
 # ---------------------------------------------------------------------------
-# ~/.matrx  — discovery file, settings, instance ID, engine internals
+# MATRX_HOME_DIR — discovery file, settings, instance ID, engine internals
 #
-# This is intentionally always in the user's home regardless of platform.
-# It is a small, well-known location that lets multiple tools (web, mobile,
+# This is a small, well-known location that lets multiple tools (web, mobile,
 # CLI) discover the running engine without platform-specific logic on their end.
+# Frozen and explicit-live source use ~/.matrx; ordinary source uses ~/.matrx-dev.
 # ---------------------------------------------------------------------------
-MATRX_HOME_DIR = Path(os.getenv("MATRX_HOME_DIR", str(Path.home() / ".matrx")))
-
 # ---------------------------------------------------------------------------
 # User-visible storage — lives inside the OS-native Documents folder
 #
@@ -308,8 +318,14 @@ def _os_documents_dir() -> Path:
     return Path.home() / "Documents"
 
 
-# Root of all user-visible Matrx content
-MATRX_USER_DIR = Path(os.getenv("MATRX_USER_DIR", str(_os_documents_dir() / "Matrx")))
+# Root of all user-visible Matrx content. Source defaults stay under the
+# selected private home; frozen and explicit-live source keep OS Documents.
+_default_user_dir = (
+    MATRX_HOME_DIR / "Documents" / "Matrx"
+    if _is_source_dev
+    else _os_documents_dir() / "Matrx"
+)
+MATRX_USER_DIR = Path(os.getenv("MATRX_USER_DIR", str(_default_user_dir)))
 
 # Notes: .md and .txt files — local replica of cloud `workbench.notes`; bidirectional
 # automatic sync (docs/SYNC_CONTRACT.md). The cloud is the durable source of truth.

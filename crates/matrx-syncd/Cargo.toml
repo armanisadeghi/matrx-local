@@ -47,3 +47,7 @@ sha1 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+# The control-API battery drives a REAL daemon over HTTP; a blocking client keeps those tests
+# free of an async runtime they would otherwise only need for the request.
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = "1.0.151"

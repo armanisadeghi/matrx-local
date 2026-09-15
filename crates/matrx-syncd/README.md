@@ -34,7 +34,16 @@ only because Supabase matches redirect URIs exactly.
 **Scopes (S17).** `syncd.token` is one file, two lines: line 1 `control`, line 2 `read`. `control`
 authorises everything and never enters JavaScript; `read` authorises `GET /v1/token`,
 `/v1/session`, `/v1/status`, `/v1/version` and `/v1/events` and is rejected elsewhere with
-`403 forbidden_scope`. Both are minted fresh at every start.
+`403 forbidden_scope`.
+
+**The token file's lifetime is the daemon's.** Both tokens are minted fresh at every start and the
+file is **deleted on a graceful shutdown**, alongside `syncd.json` and the socket. A file that
+outlives the process that minted it authorises nothing — the next daemon mints different tokens —
+so leaving it behind only puts a live-looking credential on disk for no one. The rule this places
+on every consumer: **re-read `syncd.json` AND `syncd.token` together on each reconnect**, never
+cache either across a daemon restart. The port, the socket path and both tokens all change.
+`desktop/src/lib/custodian.ts` does this through `resetCustodianConfig()`, and
+`app/services/sync_client` reads both files per request.
 
 ## Windows and Linux: written, reasoned, not run
 

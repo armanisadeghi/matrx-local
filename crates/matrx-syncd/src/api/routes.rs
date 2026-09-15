@@ -299,12 +299,11 @@ async fn route(
 
         // ---- SPEC-ENGINE's own verbs that FS-C5 needs.
         (&Method::POST, "/v1/shutdown") => {
-            // `notify_one` and NOT `notify_waiters`: the latter wakes only waiters that already
-            // exist, so a shutdown arriving before the run loop reaches its `select!` — which is
-            // exactly what happens while the daemon is still adopting its session at start — was
-            // answered 202 "accepted" and then silently dropped. `notify_one` stores a permit for
-            // the next waiter, so the answer stays true. Observed live on 2026-09-15.
-            state.shutdown.notify_one();
+            // The request is RECORDED, not signalled: whoever reads the channel next sees it,
+            // whether the run loop is already waiting or is still binding listeners and adopting a
+            // session. Answering 202 and then dropping the request was defect 6, observed live on
+            // 2026-09-15 — and a notification, of any flavour, has to find a waiter.
+            let _ = state.shutdown.send(true);
             Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header(header::CONTENT_TYPE, "application/json")
@@ -379,50 +378,11 @@ async fn read_json<T: for<'de> Deserialize<'de>>(request: Request<Incoming>) -> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn only_the_five_read_routes_accept_the_read_token() {
-        // The scope split is what makes §12's sentence true: a compromised webview can obtain
-        // short-lived access tokens, and cannot sign the device out or stop the daemon.
-        let read_routes = [
-            (Method::GET, "/v1/token"),
-            (Method::GET, "/v1/session"),
-            (Method::GET, "/v1/status"),
-            (Method::GET, "/v1/version"),
-            (Method::GET, "/v1/events"),
-        ];
-        let control_routes = [
-            (Method::POST, "/v1/sign-in"),
-            (Method::POST, "/v1/sign-in/callback"),
-            (Method::POST, "/v1/sign-out"),
-            (Method::POST, "/v1/shutdown"),
-        ];
-        for (m, p) in read_routes {
-            assert!(
-                matches!(
-                    (&m, p),
-                    (&Method::GET, "/v1/token")
-                        | (&Method::GET, "/v1/session")
-                        | (&Method::GET, "/v1/status")
-                        | (&Method::GET, "/v1/version")
-                        | (&Method::GET, "/v1/events")
-                ),
-                "{m} {p}"
-            );
-        }
-        for (m, p) in control_routes {
-            assert!(
-                !matches!(
-                    (&m, p),
-                    (&Method::GET, "/v1/token")
-                        | (&Method::GET, "/v1/session")
-                        | (&Method::GET, "/v1/status")
-                        | (&Method::GET, "/v1/version")
-                        | (&Method::GET, "/v1/events")
-                ),
-                "{m} {p} must not be read-scoped"
-            );
-        }
-    }
+    // The scope split, the 404 envelope, the Host/Origin guards and the shutdown window are
+    // proven end to end against a REAL daemon in `tests/control_api.rs`. They cannot be proven
+    // here: `hyper::body::Incoming` cannot be constructed outside hyper, so a unit test of
+    // `route()` could only re-state the match arms it is supposed to be checking — which is what
+    // the test that used to sit here did.
 
     #[test]
     fn the_error_envelope_always_carries_a_remedy() {

@@ -258,6 +258,10 @@ async fn run(options: Options) -> std::process::ExitCode {
         }
     };
 
+    // Armed before ANYTHING can accept a request, so a shutdown that arrives during start is
+    // recorded rather than lost (defect 6).
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
     // Bind before building the state: the `Host` allow-list and `syncd.json` both need the port
     // the C7 allocator actually took, and no request may arrive before the state carries it.
     let bound = match api::bind(world, endpoint).await {
@@ -281,7 +285,7 @@ async fn run(options: Options) -> std::process::ExitCode {
         daemon_version: VERSION.to_string(),
         executable_path,
         tcp_port,
-        shutdown: tokio::sync::Notify::new(),
+        shutdown: shutdown_tx,
         shutdown_budget_s: DEFAULT_SHUTDOWN_BUDGET_S,
     });
     let handles = api::serve(Arc::clone(&state), bound);
@@ -335,8 +339,16 @@ async fn run(options: Options) -> std::process::ExitCode {
     let interrupt = async {
         let _ = tokio::signal::ctrl_c().await;
     };
+    let stop_requested = async {
+        // `borrow()` first: the request may already be waiting from before this point.
+        while !*shutdown_rx.borrow() {
+            if shutdown_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
     tokio::select! {
-        _ = state.shutdown.notified() => eprintln!("[syncd] shutdown requested"),
+        _ = stop_requested => eprintln!("[syncd] shutdown requested"),
         _ = interrupt => eprintln!("[syncd] interrupted"),
     }
 
@@ -360,6 +372,20 @@ async fn run(options: Options) -> std::process::ExitCode {
     if let Err(e) = Discovery::remove_if_ours(&paths.discovery) {
         eprintln!("[syncd] could not remove the discovery file: {e}");
     }
+    // The two scoped tokens are minted fresh at every start (S17), so a file that outlives the
+    // process that minted them authorises nothing and is only a live-looking credential sitting on
+    // disk. It goes with the socket and the discovery file: after a graceful stop a consumer finds
+    // NOTHING — and re-reads `syncd.json` plus the token file when it reconnects, which is the
+    // only order that works when both change on every start.
+    if let Err(e) = paths::remove_quietly(&paths.tokens) {
+        eprintln!("[syncd] could not remove the token file: {e}");
+    }
+    // The two scoped tokens are minted fresh at every start (S17), so a file that outlives the
+    // process that minted them authorises nothing and is only a live-looking credential sitting on
+    // disk. It goes with the socket and the discovery file: after a graceful stop, a consumer
+    // finds NOTHING — and re-reads `syncd.json` plus the token file when it reconnects, which is
+    // the only order that works when both change on every start.
+
     eprintln!("[syncd] stopped cleanly");
     std::process::ExitCode::SUCCESS
 }

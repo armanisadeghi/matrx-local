@@ -287,15 +287,81 @@ window in which the daemon is adopting its session and most likely to be stuck. 
 now leaves a permit for the next waiter, and adoption runs as a task so the daemon is controllable
 from its first moment.
 
+### The keychain dialog, as a state rather than a hang
+
+Starting a **rebuilt** binary against an item an older build created is the S15 situation. It now
+answers in three seconds instead of never:
+
+```
+[syncd] session state on start: credential_store_unavailable (macOS is asking permission for AI
+  Matrx Sync to use your keychain, and a background service has no window to ask in. Open AI Matrx
+  and sign in again — the prompt appears while the app is in front, and allowing it once is enough.)
+
+GET /v1/session → {"state":"credential_store_unavailable","signed_in":false,
+                   "user_id":"87a6e699-…","email":"admin@admin.com", …}
+GET /v1/token   → 409, the same state and the same sentence
+```
+
+The remedy names **this** machine's situation. Telling a Mac user to install gnome-keyring was the
+first version of this sentence, and it was a remedy that helped nobody.
+
+### Sign-out (§9, S20)
+
+```
+GET  /v1/session   → signed_in, admin@admin.com
+security find-generic-password -s com.aimatrx.syncd.dev
+  "svce"="com.aimatrx.syncd.dev"  "acct"="87a6e699-3622-4869-8843-d0867456c0dd"
+
+POST /v1/sign-out  → {"ok":true}
+
+security find-generic-password -s com.aimatrx.syncd.dev
+  security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.
+
+GET  /v1/session   → {"state":"signed_out",
+                      "state_reason":"Signed out on this device — sign in again to resume syncing."}
+GET  /v1/token     → 409, the same state and the same sentence
+sqlite3 syncd.db   → signed_out | Signed out on this device — … | cloud_state_write_pending = 1
+```
+
+**The keychain item is gone**, and no revocation was attempted — S20 is explicit that the only
+revocation on this path is per *grant*, which would sign the account out of every Matrx device the
+user owns. `cloud_state_write_pending = 1` is honest rather than cosmetic: this device has no
+`app_instances` row yet (that is FS-L2a's), so it owns no `files.sync_mappings` rows to write
+`signed_out` into. The journal says the write is outstanding instead of pretending it happened.
+
+### Headless rotation — the proof MXL-D-046 never had
+
+No app, no browser, no human. The daemon is the only thing of ours alive in the dev world:
+
+```
+$ pgrep -fl matrx-syncd
+72850 desktop/src-tauri/target/debug/matrx-syncd
+
+served token iat                    = 1789486920
+POST /v1/shutdown                   → 202, "stopped cleanly"
+(start the binary again — nothing else)
+[syncd] session state on start: signed_in (Signed in and syncing.)
+served token iat after restart      = 1789486928     ← a NEW access token
+sqlite3 syncd.db → signed_in | last_refresh_at 2026-09-15T15:42:08Z
+```
+
+The daemon signed itself in **from the OS keychain** and minted a fresh access token by presenting
+the refresh token to the live authorization server, with no UI anywhere on the machine. That is the
+capability the React-pushed token path never had, and the reason D17 exists.
+
+What this does *not* yet prove is the **timer-driven** rotation at `0.6 × lifetime`, because this
+project's access tokens live 604 800 s: the schedule lands ~4.2 days out. The rotation *mechanism*
+— present the stored refresh token, take the new one, write it ahead of use — is the same code path
+in both cases and is exercised here against the real server.
+
 ### Still to prove
 
-* **The timer-driven rotation** (§13 proof 1's shape) — not observable in an afternoon on this
-  project, for the reason recorded above.
-* **Sign-out wiping the keychain item on this machine** — proven in the battery against
-  `FakeKeychain`; the live-machine repeat is recorded below when it runs.
+* **The timer-driven rotation** at `0.6 × lifetime` — ~4.2 days out on this project, for the reason
+  recorded above. The mechanism is proven; the timer is not.
 * **Windows and Linux** — written and reasoned, never run; see the section above.
-* **The webview and the engine actually consuming the token** — `desktop/src/lib/supabase.ts` still
+* **The webview and the engine actually consuming the token.** `desktop/src/lib/supabase.ts` still
   constructs its client with its own session, and `TokenRepo` still reads the local `auth_tokens`
-  row. SPEC-CUSTODY §10 makes that switch one atomic release across 43 `supabase.auth.*` call
-  sites in 21 files; it is **not** landed here, and until it is, this daemon is an additional
-  holder rather than the only one. Nothing in this file claims otherwise.
+  row. SPEC-CUSTODY §10 makes that switch **one atomic release** across 43 `supabase.auth.*` call
+  sites in 21 files — setting the `accessToken` option makes `supabase.auth` throw on every access,
+  so a half-switch cannot ship. It is **not** landed here. Until it is, this daemon is an
+  *additional* session holder rather than the only one, and nothing in this file claims otherwise.

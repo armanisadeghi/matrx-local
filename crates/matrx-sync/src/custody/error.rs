@@ -99,9 +99,22 @@ impl CustodyError {
     /// The one-click remedy sentence that travels with the message.
     pub fn remedy(&self) -> &'static str {
         match self {
+            // The remedy must name THIS machine's situation. Telling a Mac user to install
+            // gnome-keyring is a sentence that helps nobody, and law 4 asks for a remedy, not a
+            // paragraph that happens to contain one. Observed live: a macOS keychain prompt
+            // answered with the Linux keyring sentence.
             CustodyError::CredentialStore { .. } => {
-                "Install and unlock a system keyring — on Linux gnome-keyring or kwallet — or this \
-                 device will need to sign in again after every restart."
+                if cfg!(target_os = "macos") {
+                    "macOS is asking permission for AI Matrx Sync to use your keychain, and a \
+                     background service has no window to ask in. Open AI Matrx and sign in again — \
+                     the prompt appears while the app is in front, and allowing it once is enough."
+                } else if cfg!(target_os = "windows") {
+                    "Windows Credential Manager refused. Sign in to Windows as the account that \
+                     installed AI Matrx, then open AI Matrx and sign in again."
+                } else {
+                    "Install and unlock a system keyring — gnome-keyring or kwallet — or this \
+                     device will need to sign in again after every restart."
+                }
             }
             CustodyError::Transport { .. } | CustodyError::AmbiguousResponse { .. } => {
                 "Check this computer's internet connection; sync retries on its own."

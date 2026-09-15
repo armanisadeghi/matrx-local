@@ -1310,10 +1310,13 @@ fn default_reason(state: SessionState) -> &'static str {
         SessionState::SignedIn => "Signed in and syncing.",
         SessionState::SignInNeeded => "Sign in again on this computer to resume syncing.",
         SessionState::SignedOut => "Sign in on this computer to start syncing your folders.",
-        SessionState::CredentialStoreUnavailable => {
-            "Install and unlock a system keyring — on Linux gnome-keyring or kwallet — or this \
-             device will need to sign in again after every restart."
+        // Same sentence as CustodyError's remedy, from the same place, so a surface reading the
+        // state and a surface reading the error never disagree.
+        SessionState::CredentialStoreUnavailable => CustodyError::CredentialStore {
+            operation: "open the credential store",
+            cause: String::new(),
         }
+        .remedy(),
         SessionState::Offline => "Not connected — retrying.",
     }
 }

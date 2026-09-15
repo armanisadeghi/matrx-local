@@ -21,6 +21,11 @@ serde_json = "1.0.151"
 # rename" — which needs real normalisation, not a case fold. Independent verification found the
 # class unreachable without it (F5).
 unicode-normalization = "0.1"
+# FS-L1 unit 2. SPEC-ENGINE §5 names these two versions and says explicitly "notify **8.2.0** (not
+# the 9.0.0 rc)". The latest published today are 9.0.0-rc.5 and 0.8.0-rc.2; "always latest" is not
+# "adopt a release candidate", and the frozen spec picked the stable line deliberately.
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
 
 # ---- FS-C5 custody (SPEC-CUSTODY). The planner, the journal and the harness stay pure; `custody`
 # is the one module in this crate that speaks HTTP, reads a clock and touches the OS keychain, and

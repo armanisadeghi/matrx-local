@@ -315,7 +315,15 @@ async def refresh_vault_keys(
         if not _user_keys_loaded:
             await load_user_keys_into_env()
         wanted = None if include_local else set(VALID_PROVIDERS) - set(_user_keys)
+        from app.services.sync_client import get_sync_client
+
+        owner = await get_sync_client().user_id()
         snapshot = await fetch_provider_snapshot(resolve_providers=wanted)
+        if owner != await get_sync_client().user_id():
+            # A response belonging to the previous account cannot populate the
+            # process-wide provider environment after an account switch.
+            _clear_vault_tier()
+            return snapshot
 
         if not snapshot.ok:
             if _vault_keys:

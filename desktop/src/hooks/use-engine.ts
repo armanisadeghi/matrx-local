@@ -108,8 +108,8 @@ export function useEngine() {
       const sameConfiguration = configured?.subject === current.user.id && configured.generation === context.engineGeneration && configured.origin === context.engineOrigin;
       // A previous configure can be valid even when its socket failed. Keep
       // that configuration and retry only the missing WebSocket connection.
-      if (!sameConfiguration) await engine.configureCloudSync(token, current.user.id, context);
-      else if (configured.revision !== context.revision) await engine.reconfigureCloudSync(token, current.user.id, context);
+      if (!sameConfiguration) await engine.configureCloudSync(current.user.id, context);
+      else if (configured.revision !== context.revision) await engine.reconfigureCloudSync(current.user.id, context);
       if (!context.isCurrent()) return;
       configuredAccountRef.current = { subject: current.user.id, generation: context.engineGeneration, origin: context.engineOrigin, revision: context.revision };
       lastCloudConfigureRef.current = Date.now();

@@ -5,17 +5,18 @@
 
 ## The one sentence
 
-The Python engine is a **token consumer, never a token holder**. It asks `matrx-syncd` for a
-short-lived access token and keeps it in memory only. There is no refresh token anywhere in
-Python, which is what makes the MXL-D-046 class — a UI-pushed token nothing headless can renew —
-structurally impossible rather than merely fixed.
+The Python engine is a **token consumer, never a token holder**. It asks `matrx-syncd` for the
+current token-owner grant at each operation boundary; the daemon alone caches or refreshes it.
+There is no refresh token or durable access-token cache anywhere in Python, which makes the
+MXL-D-046 class — a UI-pushed token nothing headless can renew — structurally impossible.
 
 ## What it is
 
 | | |
 |---|---|
 | Entry point | `get_sync_client()` → `SyncDaemonClient` |
-| Token | `await client.access_token()` → a JWT, or `None` |
+| Grant | `await client.access_grant()` → `(JWT, user_id)`, or `None` |
+| Token | `await client.access_token()` → current JWT, or `None` |
 | State | `await client.session()` → a `SessionSnapshot`, always |
 | Transport | the per-user Unix socket on macOS/Linux; the loopback TCP listener on Windows (C7) |
 | Credential | line 1 of `<home>/syncd.token` — the **control** scope (S17) |
@@ -28,12 +29,11 @@ structurally impossible rather than merely fixed.
    keychain unavailable, the daemon not running — each is a `SessionSnapshot` with a state and a
    remedy sentence. A local model, the local tools and the file browser are not gated on a token
    (S13), so a missing session must never propagate as an exception.
-2. **It never refreshes and never stores** (S12). A 401 is answered by asking again with
-   `force=True`, at most once a minute; the daemon decides whether that becomes a rotation.
-3. **It caches until 30 s before expiry and no longer** (S11), in memory, never on disk.
-4. **An expiry it cannot read means "do not cache"** — never "cache forever". MXL-D-046 was
-   exactly the opposite mistake.
-5. **The five session states are the ONE honest-state enum's session slice** (C3). Nothing here
+2. **It never refreshes or stores** (S12). `force=True` remains source-compatible for callers
+   answering a 401 but does not rotate anything; only the daemon can do that.
+3. **Each operation gets the daemon's current atomic token-owner pair.** Concurrent callers share
+   one local daemon read; a later operation observes an account switch.
+4. **The five session states are the ONE honest-state enum's session slice** (C3). Nothing here
    invents a sixth. `daemon_not_running` is SPEC-ENGINE's device state and is the only value this
    module adds, because "the daemon is not there" is not a session condition.
 
@@ -44,8 +44,8 @@ conversation, so the transport selection, the httpx UDS transport, the header co
 parsing are exercised for real; only the daemon's decision is scripted. The daemon's own evidence
 is a live run recorded in `crates/matrx-syncd/README.md` § "FS-C5 proof".
 
-## Not yet wired
+## Consumers
 
-`TokenRepo` still reads the local `auth_tokens` row. Repointing it here is SPEC-CUSTODY §10 step 4,
-and §10 is explicit that it happens **after** the webview stops holding a session — one release, no
-moment with two rotating holders. Until that lands, this module is the seam and nothing consumes it.
+`TokenRepo` is an adapter over `access_grant()`, preserving its legacy row shape without a local
+token table. Security-sensitive callers that need both identity and bearer use `access_grant()`
+directly so the pair cannot be mixed across daemon account switches.

@@ -5,9 +5,8 @@ which C7 added precisely so a client that cannot open a named pipe still has one
 SPEC-ENGINE E7's "health+events only" listener). Both serve the identical ``/v1`` API with the
 identical bearer auth, so nothing above this module knows which one was used.
 
-Caching: S11/S12 — hold the access token in memory until 30 seconds before it expires, never
-persist it, and never refresh. A consumer that receives 401 asks again (which may trigger the
-daemon's one forced rotation per minute) and retries once.
+Custody: the daemon is the sole session cache and refresh owner. Each consumer operation reads its
+current token-owner grant from the daemon; concurrent engine callers share that local request.
 """
 
 from __future__ import annotations
@@ -16,23 +15,16 @@ import asyncio
 import json
 import logging
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, AsyncIterator, Final
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-#: S11 — a consumer caches until the remaining life minus this, and never persists.
-_CACHE_MARGIN_SECONDS: Final[int] = 30
-
 #: The daemon answers in milliseconds over a local socket; anything longer is a fault, not slowness.
 _REQUEST_TIMEOUT_SECONDS: Final[float] = 6.0
-
-#: S10 — a consumer's 401 may force ONE rotation, and the daemon rate-limits it to one a minute.
-_FORCED_RETRY_INTERVAL_SECONDS: Final[int] = 60
 
 #: The five session values of the ONE honest-state enum (C3). A consumer's switch over these is
 #: exhaustive; nothing here invents a sixth.
@@ -75,15 +67,13 @@ def _matrx_home() -> Path:
 
 
 class SyncDaemonClient:
-    """One client per process. Cheap to construct; holds only an in-memory token."""
+    """One client per process; the daemon remains the sole token cache owner."""
 
     def __init__(self, home: Path | None = None) -> None:
         self._home = home or _matrx_home()
         self._lock = asyncio.Lock()
-        self._token: str | None = None
-        self._token_expires_at: float = 0.0
-        self._last_forced: float = 0.0
         self._last_state: SessionSnapshot | None = None
+        self._grant_task: asyncio.Task[tuple[str, str] | None] | None = None
 
     # ---------------------------------------------------------------- discovery
 
@@ -110,7 +100,9 @@ class SyncDaemonClient:
             return None
         return lines[0].strip() if lines and lines[0].strip() else None
 
-    def _client_for(self, discovery: dict[str, Any]) -> tuple[httpx.AsyncClient, str] | None:
+    def _client_for(
+        self, discovery: dict[str, Any]
+    ) -> tuple[httpx.AsyncClient, str] | None:
         """Build a client for whichever transport this OS uses, and the base URL to use with it."""
         if sys.platform == "win32":
             # C7: the loopback listener exists so a client that cannot open a named pipe still has
@@ -142,7 +134,9 @@ class SyncDaemonClient:
             ),
         )
 
-    async def _request(self, method: str, path: str) -> tuple[int, dict[str, Any]] | None:
+    async def _request(
+        self, method: str, path: str
+    ) -> tuple[int, dict[str, Any]] | None:
         discovery = self._discovery()
         if not discovery:
             return None
@@ -166,7 +160,9 @@ class SyncDaemonClient:
                     },
                 )
         except httpx.HTTPError as exc:
-            logger.debug("[sync_client] %s %s did not reach the daemon: %s", method, path, exc)
+            logger.debug(
+                "[sync_client] %s %s did not reach the daemon: %s", method, path, exc
+            )
             return None
         try:
             body = response.json()
@@ -201,65 +197,106 @@ class SyncDaemonClient:
         self._last_state = snapshot
         return snapshot
 
+    async def session_events(self) -> AsyncIterator[dict[str, Any]]:
+        """Yield custody ``session.changed`` SSE payloads; callers reconnect."""
+        discovery = self._discovery()
+        token = self._control_token()
+        built = self._client_for(discovery) if discovery and token else None
+        if not built or not token:
+            return
+        client, base = built
+        try:
+            async with client.stream(
+                "GET",
+                f"{base}/v1/events",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Matrx-Client": "engine",
+                },
+            ) as response:
+                if response.status_code != 200:
+                    return
+                # Subscribe first, then read current state: a transition between
+                # the pre-connect snapshot and subscription must not be missed.
+                yield {"connected": True}
+                async for line in response.aiter_lines():
+                    if line.startswith("data:"):
+                        try:
+                            payload = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        if isinstance(payload, dict):
+                            yield payload
+        except httpx.HTTPError:
+            return
+        finally:
+            await client.aclose()
+
     # -------------------------------------------------------------------- token
 
     async def access_token(self, *, force: bool = False) -> str | None:
-        """A short-lived JWT, or ``None`` when there is no usable session.
+        """The daemon's current token, or ``None`` when no session is usable.
 
-        ``force=True`` is a consumer answering its own 401 (S10). The daemon rate-limits the
-        rotation it triggers; this client additionally refuses to ask more than once a minute so a
-        looping consumer cannot turn one 401 into a storm.
+        ``force`` remains source-compatible for 401 retry callers. It does
+        not request rotation: only the daemon owns refresh and rotation.
         """
-        async with self._lock:
-            now = time.monotonic()
-            if force:
-                if now - self._last_forced < _FORCED_RETRY_INTERVAL_SECONDS:
-                    force = False
-                else:
-                    self._last_forced = now
-                    self._token = None
-            if not force and self._token and now < self._token_expires_at:
-                return self._token
-
-            result = await self._request("GET", "/v1/token")
-            if result is None:
-                self._token = None
-                self._last_state = self._daemon_down()
-                return None
-
-            status, body = result
-            if status == 200 and body.get("access_token"):
-                self._token = str(body["access_token"])
-                self._token_expires_at = now + max(
-                    0.0, _remaining_seconds(body.get("expires_at")) - _CACHE_MARGIN_SECONDS
-                )
-                self._last_state = SessionSnapshot(
-                    state=STATE_SIGNED_IN,
-                    state_reason="Signed in and syncing.",
-                    signed_in=True,
-                    user_id=body.get("user_id"),
-                )
-                return self._token
-
-            # 409 is the documented refusal shape and carries the state verbatim. It is a STATE,
-            # never an exception: a local model, the local tools and the file browser must keep
-            # working with no session at all (S13).
-            self._token = None
-            if status == 409:
-                self._last_state = SessionSnapshot(
-                    state=str(body.get("state") or STATE_SIGNED_OUT),
-                    state_reason=str(body.get("state_reason") or ""),
-                    email=body.get("email"),
-                    since=body.get("since"),
-                )
-            else:
-                self._last_state = self._daemon_down()
-            return None
+        _ = force
+        grant = await self.access_grant()
+        return grant[0] if grant is not None else None
 
     async def user_id(self) -> str | None:
-        """The signed-in user's id, without handing anybody a token to get it."""
-        snapshot = self._last_state or await self.session()
-        return snapshot.user_id if snapshot.signed_in else None
+        """The daemon's current owner, without exposing a durable credential."""
+        grant = await self.access_grant()
+        return grant[1] if grant is not None else None
+
+    async def access_grant(self) -> tuple[str, str] | None:
+        """Read the daemon's current token-owner pair once for concurrent callers.
+
+        This deliberately bypasses the consumer cache without asking the
+        daemon to refresh. An account switch therefore becomes visible at an
+        operation boundary, while simultaneous local callers share one GET.
+        """
+        async with self._lock:
+            task = self._grant_task
+            if task is None or task.done():
+                task = asyncio.create_task(self._read_current_grant())
+                self._grant_task = task
+        return await asyncio.shield(task)
+
+    async def _read_current_grant(self) -> tuple[str, str] | None:
+        result = await self._request("GET", "/v1/token")
+        if result is None:
+            self._last_state = self._daemon_down()
+            return None
+
+        status, body = result
+        token = body.get("access_token") if status == 200 else None
+        user_id = body.get("user_id") if status == 200 else None
+        if (
+            isinstance(token, str)
+            and token
+            and isinstance(user_id, str)
+            and user_id
+            and _jwt_subject(token) == user_id
+        ):
+            self._last_state = SessionSnapshot(
+                state=STATE_SIGNED_IN,
+                state_reason="Signed in and syncing.",
+                signed_in=True,
+                user_id=user_id,
+            )
+            return token, user_id
+
+        if status == 409:
+            self._last_state = SessionSnapshot(
+                state=str(body.get("state") or STATE_SIGNED_OUT),
+                state_reason=str(body.get("state_reason") or ""),
+                email=body.get("email"),
+                since=body.get("since"),
+            )
+        else:
+            self._last_state = self._daemon_down()
+        return None
 
     @property
     def last_state(self) -> SessionSnapshot | None:
@@ -267,21 +304,18 @@ class SyncDaemonClient:
         return self._last_state
 
 
-def _remaining_seconds(expires_at: Any) -> float:
-    """Seconds of life left in an RFC3339 expiry, or 0 when it cannot be read.
-
-    Zero is the safe answer: it means "do not cache", never "cache forever". MXL-D-046 was the
-    opposite mistake.
-    """
-    if not isinstance(expires_at, str) or not expires_at:
-        return 0.0
-    from datetime import datetime, timezone
+def _jwt_subject(token: str) -> str | None:
+    """Read the daemon-returned JWT subject to bind it to its owner field."""
+    import base64
 
     try:
-        parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
-    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+    except (IndexError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None
+    subject = claims.get("sub") if isinstance(claims, dict) else None
+    return subject if isinstance(subject, str) and subject else None
 
 
 _CLIENT: SyncDaemonClient | None = None
@@ -299,4 +333,3 @@ def reset_sync_client() -> None:
     """Drop the process-wide client. For tests, and for a world change during a test run."""
     global _CLIENT
     _CLIENT = None
-

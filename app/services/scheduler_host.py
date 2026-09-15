@@ -50,6 +50,8 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
+import httpx
+
 from app.common.system_logger import get_logger
 
 
@@ -81,6 +83,48 @@ DESKTOP_SURFACE = "desktop"
 # slower / faster poll than the server host.
 _SCAN_INTERVAL_SECONDS = 5.0
 _LEASE_SECONDS = 600
+
+
+async def _apply_current_daemon_grant(
+    request: httpx.Request, *, publishable_key: str
+) -> None:
+    """Resolve the scheduler's bearer token from matrx-syncd per HTTP request."""
+
+    from app.services.sync_client import get_sync_client
+
+    grant = await get_sync_client().access_grant()
+    # A signed-out daemon must actively replace any previous bearer value
+    # with the publishable key. It must never reuse an earlier user's JWT.
+    access_token = grant[0] if grant is not None else publishable_key
+    request.headers["Authorization"] = f"Bearer {access_token}"
+
+
+def scheduler_client_options(
+    publishable_key: str, *, transport: httpx.AsyncBaseTransport | None = None
+):
+    """Supabase options whose PostgREST requests use the daemon's current grant.
+
+    supabase-py accepts an injected ``httpx.AsyncClient`` through
+    ``AsyncClientOptions.httpx_client``. HTTPX calls request hooks after
+    PostgREST has constructed each request, so scheduler polling cannot
+    retain a startup user's bearer.
+    """
+    from supabase import AsyncClientOptions
+
+    return AsyncClientOptions(
+        auto_refresh_token=False,
+        persist_session=False,
+        httpx_client=httpx.AsyncClient(
+            event_hooks={
+                "request": [
+                    lambda request: _apply_current_daemon_grant(
+                        request, publishable_key=publishable_key
+                    )
+                ]
+            },
+            transport=transport,
+        ),
+    )
 
 
 def is_scheduler_enabled() -> bool:

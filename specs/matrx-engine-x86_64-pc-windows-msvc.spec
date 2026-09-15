@@ -160,7 +160,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
         (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
-    hiddenimports=_matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
+    hiddenimports=["app.services.daemon_session_reconciler"] + _matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
     + _matrx_scraper_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',

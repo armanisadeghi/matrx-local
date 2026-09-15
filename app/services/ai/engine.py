@@ -93,36 +93,11 @@ _client_mode_active = False
 _queue_guard_installed = False
 
 
-# ------------------------------------------------------------------
-# In-memory JWT cache — the single synchronous read point for matrx-ai
-# ------------------------------------------------------------------
-# matrx-ai calls get_jwt() synchronously (no await), so we maintain a
-# module-level string cache that is:
-#   1. Pre-loaded from SQLite during the async startup phase (warm_jwt_cache)
-#   2. Updated instantly whenever React pushes a new token via POST /auth/token
-#      (set_jwt_cache is called from the authenticated-request path in ai_routes.py)
-#   3. Cleared on logout (call clear_jwt_cache)
-#
-# This means matrx-ai always gets the latest known token with a simple
-# dict lookup, no event-loop juggling required.
+async def _get_jwt() -> str | None:
+    """Ask the session daemon at each cloud operation; never retain a bearer."""
+    from app.services.sync_client import get_sync_client
 
-_jwt_cache: str | None = None
-
-
-def set_jwt_cache(token: str | None) -> None:
-    """Update the in-memory JWT so matrx-ai picks it up on next call."""
-    global _jwt_cache
-    _jwt_cache = token
-
-
-def clear_jwt_cache() -> None:
-    global _jwt_cache
-    _jwt_cache = None
-
-
-def _get_jwt() -> str | None:
-    """Synchronous getter passed to matrx_ai.configure(get_jwt=...)."""
-    return _jwt_cache
+    return await get_sync_client().access_token()
 
 
 def install_client_host_queue_guard() -> None:
@@ -261,24 +236,6 @@ def install_client_host_queue_guard() -> None:
     logger.info("[engine] matrx-ai client-host queue guard installed ✓")
 
 
-async def warm_jwt_cache() -> None:
-    """Load the persisted JWT from SQLite into the in-memory cache.
-
-    Call once during the async startup phase so matrx-ai has a token
-    immediately if the user was previously logged in.
-    """
-    try:
-        from app.services.local_db.repositories import TokenRepo
-        row = await TokenRepo().get()
-        if row and row.get("access_token"):
-            set_jwt_cache(row["access_token"])
-            logger.info("[engine] JWT cache warmed from SQLite (user_id=%s)", row.get("user_id"))
-        else:
-            logger.debug("[engine] No stored JWT — cache stays empty")
-    except Exception as exc:
-        logger.warning("[engine] Could not warm JWT cache: %s", exc)
-
-
 def initialize_matrx_ai() -> None:
     """Configure the matrx_ai library once at startup (synchronous phase).
 
@@ -415,7 +372,7 @@ def initialize_matrx_ai() -> None:
         "[engine] matrx-ai: configured as client host ✓  "
         "(keys → SQLite resolver, conversations → SQLite store, "
         "models → SQLite catalog%s)",
-        ", identity → JWT cache" if server_url else "; NO server identity",
+        ", identity → current daemon grant" if server_url else "; NO server identity",
     )
 
 
@@ -506,7 +463,7 @@ async def load_tools_and_register() -> int:
     import contextlib
     import io
 
-    if _get_jwt():
+    if await _get_jwt():
         _tool_init_out = io.StringIO()
         try:
             from matrx_ai.tools.handle_tool_calls import initialize_tool_system
@@ -611,11 +568,11 @@ async def load_tools_and_register() -> int:
 
 
 async def refresh_server_tool_definitions() -> int:
-    """Refresh server definitions after a verified desktop token hand-off.
+    """Refresh server definitions after the daemon restores a usable session.
 
     Local tool executors are registered at process boot and remain usable
     offline.  The server rows, however, cannot be fetched safely until the
-    desktop has handed over a JWT *and* its organization can be resolved.  Do
+    daemon supplies a current JWT and its organization can be resolved.  Do
     not let an anonymous boot latch the remote registry into an empty state.
     """
     if not _ai_initialized:
@@ -631,10 +588,10 @@ async def refresh_server_tool_definitions() -> int:
     except Exception:
         logger.warning(
             "[engine] matrx-ai: authenticated server tool refresh failed; "
-            "local tools remain available and the next token hand-off will retry",
+            "local tools remain available and the session listener will retry",
             exc_info=True,
         )
-        return 0
+        raise
 
 
 def is_initialized() -> bool:

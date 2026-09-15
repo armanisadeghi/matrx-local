@@ -190,8 +190,7 @@ class SettingsSync:
         self._local_updated_at: Optional[str] = None
         self._supabase_url: str = ""
         self._supabase_key: str = ""
-        self._jwt: Optional[str] = None
-        self._user_id: Optional[str] = None
+        self._expected_user_id: Optional[str] = None
         self._instance_id: Optional[str] = None
         self._configured = False
 
@@ -221,17 +220,19 @@ class SettingsSync:
         self,
         supabase_url: str,
         supabase_key: str,
-        jwt: str,
         user_id: str,
         instance_id: str,
     ) -> None:
-        """Configure cloud connection parameters."""
+        """Configure the non-secret cloud endpoint parameters.
+
+        Access tokens and owners are supplied by ``matrx-syncd`` at every
+        outgoing request; this engine never accepts or retains a JWT.
+        """
         self._supabase_url = supabase_url.rstrip("/")
         self._supabase_key = supabase_key
-        self._jwt = jwt
-        self._user_id = user_id
+        self._expected_user_id = user_id
         self._instance_id = instance_id
-        self._configured = bool(supabase_url and supabase_key and jwt and user_id)
+        self._configured = bool(supabase_url and supabase_key and user_id and instance_id)
         self._configure_called_at = datetime.now(timezone.utc).isoformat()
         if self._configured:
             logger.info(
@@ -243,20 +244,27 @@ class SettingsSync:
         else:
             logger.warning(
                 "Cloud sync configure() called but missing required fields: "
-                "url=%r key=%r jwt_present=%s user_id=%r",
+                "url=%r key=%r user_id=%r instance_id=%r",
                 bool(supabase_url),
                 bool(supabase_key),
-                bool(jwt),
                 bool(user_id),
+                bool(instance_id),
             )
 
     def clear_credentials(self) -> None:
         """Synchronously fence actor-derived cloud state without erasing settings."""
-        self._jwt = None; self._user_id = None; self._instance_id = None
-        self._configured = False; self._is_orphan = False; self._known_metadata = None
-        self._last_provenance_written = None; self._pending_provenance = None
-        self._last_error = None; self._last_registration_at = None; self._last_registration_result = None
-        self._heartbeat_failures = 0; self._configure_called_at = None
+        self._expected_user_id = None
+        self._instance_id = None
+        self._configured = False
+        self._is_orphan = False
+        self._known_metadata = None
+        self._last_provenance_written = None
+        self._pending_provenance = None
+        self._last_error = None
+        self._last_registration_at = None
+        self._last_registration_result = None
+        self._heartbeat_failures = 0
+        self._configure_called_at = None
 
     @property
     def is_configured(self) -> bool:
@@ -271,7 +279,7 @@ class SettingsSync:
         return {
             "is_configured": self._configured,
             "is_orphan": self._is_orphan,
-            "user_id": self._user_id,
+            "user_id": self._expected_user_id,
             "instance_id": self._instance_id,
             "supabase_url": self._supabase_url or None,
             "configure_called_at": self._configure_called_at,
@@ -385,12 +393,14 @@ class SettingsSync:
         if not self._configured:
             return {"status": "skipped", "reason": "not_configured"}
 
+        owner: str | None = None
         try:
-            cloud = await self._fetch_cloud_settings()
+            owner, _ = await self._request_context()
+            cloud = await self._fetch_cloud_settings(expected_owner=owner)
 
             if cloud is None:
-                await self._push_to_cloud()
-                await self._update_sync_status("push", "success")
+                await self._push_to_cloud(expected_owner=owner)
+                await self._update_sync_status("push", "success", expected_owner=owner)
                 return {"status": "pushed", "reason": "no_cloud_record"}
 
             cloud_settings = cloud.get("settings_json", {})
@@ -398,35 +408,39 @@ class SettingsSync:
             local_updated = self._local_updated_at or ""
 
             if cloud_updated > local_updated:
+                await self._request_context(expected_owner=owner)
                 self._settings = {**DEFAULT_SETTINGS, **cloud_settings}
                 self._save_local(updated_at=cloud_updated)
-                await self._update_sync_status("pull", "success")
+                await self._update_sync_status("pull", "success", expected_owner=owner)
                 return {"status": "pulled", "reason": "cloud_newer"}
             elif local_updated > cloud_updated:
-                await self._push_to_cloud()
-                await self._update_sync_status("push", "success")
+                await self._push_to_cloud(expected_owner=owner)
+                await self._update_sync_status("push", "success", expected_owner=owner)
                 return {"status": "pushed", "reason": "local_newer"}
             else:
-                await self._update_sync_status("full", "success")
+                await self._update_sync_status("full", "success", expected_owner=owner)
                 return {"status": "in_sync", "reason": "timestamps_match"}
 
         except Exception as exc:
             msg = str(exc)
             self._last_error = msg
             logger.warning("Cloud sync failed: %s", msg)
-            try:
-                await self._update_sync_status("full", "error", msg)
-            except Exception:
-                pass
+            if owner is not None:
+                try:
+                    await self._update_sync_status("full", "error", msg, expected_owner=owner)
+                except Exception:
+                    pass
             return {"status": "error", "reason": msg}
 
     async def push_to_cloud(self) -> dict:
         """Force push local settings to cloud."""
         if not self._configured:
             return {"status": "error", "reason": "not_configured"}
+        owner: str | None = None
         try:
-            await self._push_to_cloud()
-            await self._update_sync_status("push", "success")
+            owner, _ = await self._request_context()
+            await self._push_to_cloud(expected_owner=owner)
+            await self._update_sync_status("push", "success", expected_owner=owner)
             return {"status": "pushed"}
         except Exception as exc:
             msg = str(exc)
@@ -437,13 +451,16 @@ class SettingsSync:
         """Force pull cloud settings to local."""
         if not self._configured:
             return {"status": "error", "reason": "not_configured"}
+        owner: str | None = None
         try:
-            cloud = await self._fetch_cloud_settings()
+            owner, _ = await self._request_context()
+            cloud = await self._fetch_cloud_settings(expected_owner=owner)
             if cloud is None:
                 return {"status": "error", "reason": "no_cloud_record"}
+            await self._request_context(expected_owner=owner)
             self._settings = {**DEFAULT_SETTINGS, **cloud.get("settings_json", {})}
             self._save_local(updated_at=cloud.get("updated_at") or None)
-            await self._update_sync_status("pull", "success")
+            await self._update_sync_status("pull", "success", expected_owner=owner)
             return {"status": "pulled", "settings": self.get_all()}
         except Exception as exc:
             msg = str(exc)
@@ -452,13 +469,13 @@ class SettingsSync:
 
     # ── Supabase REST helpers ───────────────────────────────────────────
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, access_token: str) -> dict[str, str]:
         from app.config import SUPABASE_PROFILE_HEADERS
 
         return {
             "apikey": self._supabase_key,
             **SUPABASE_PROFILE_HEADERS,
-            "Authorization": f"Bearer {self._jwt}",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
             # Explicitly target the public schema — required when the Supabase
@@ -484,6 +501,21 @@ class SettingsSync:
             "x-matrx-actor-system": "matrx-local:sync",
         }
 
+    async def _request_context(
+        self, *, expected_owner: str | None = None
+    ) -> tuple[str, dict[str, str]]:
+        """Return the daemon's current owner and a fresh request header set."""
+        from app.services.sync_client import get_sync_client
+
+        grant = await get_sync_client().access_grant()
+        if grant is None:
+            raise RuntimeError("sync_daemon_session_unavailable")
+        access_token, user_id = grant
+        expected_owner = expected_owner or self._expected_user_id
+        if expected_owner is not None and user_id != expected_owner:
+            raise RuntimeError("sync_daemon_owner_changed")
+        return user_id, self._headers(access_token)
+
     def _log_http_error(self, operation: str, resp: Any) -> str:
         """Log and return a descriptive error string from a non-2xx response."""
         try:
@@ -495,29 +527,33 @@ class SettingsSync:
         logger.warning(msg)
         return msg
 
-    async def _fetch_cloud_settings(self) -> Optional[dict]:
+    async def _fetch_cloud_settings(
+        self, *, expected_owner: str | None = None
+    ) -> Optional[dict]:
         """Fetch this instance's settings from Supabase."""
         import httpx
 
+        user_id, headers = await self._request_context(expected_owner=expected_owner)
         url = (
             f"{self._supabase_url}/rest/v1/app_settings"
-            f"?user_id=eq.{self._user_id}"
+            f"?user_id=eq.{user_id}"
             f"&instance_id=eq.{self._instance_id}"
             f"&select=*"
         )
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=self._headers())
+            resp = await client.get(url, headers=headers)
             if not resp.is_success:
                 raise RuntimeError(self._log_http_error("fetch_cloud_settings", resp))
             rows = resp.json()
             return rows[0] if rows else None
 
-    async def _push_to_cloud(self) -> None:
+    async def _push_to_cloud(self, *, expected_owner: str | None = None) -> None:
         """Upsert local settings to Supabase."""
         import httpx
 
+        user_id, headers = await self._request_context(expected_owner=expected_owner)
         payload = {
-            "user_id": self._user_id,
+            "user_id": user_id,
             "instance_id": self._instance_id,
             "settings_json": self.get_all(),
         }
@@ -525,7 +561,7 @@ class SettingsSync:
         # 409 errors on the second and subsequent pushes from the same instance.
         url = f"{self._supabase_url}/rest/v1/app_settings?on_conflict=user_id,instance_id"
         headers = {
-            **self._headers(),
+            **headers,
             "Prefer": "resolution=merge-duplicates,return=representation",
         }
         async with httpx.AsyncClient(timeout=10) as client:
@@ -534,13 +570,19 @@ class SettingsSync:
                 raise RuntimeError(self._log_http_error("push_to_cloud", resp))
 
     async def _update_sync_status(
-        self, direction: str, result: str, error: str = ""
+        self,
+        direction: str,
+        result: str,
+        error: str = "",
+        *,
+        expected_owner: str | None = None,
     ) -> None:
         """Update the sync_status record in Supabase."""
         import httpx
 
+        user_id, headers = await self._request_context(expected_owner=expected_owner)
         payload = {
-            "user_id": self._user_id,
+            "user_id": user_id,
             "instance_id": self._instance_id,
             "last_sync_at": datetime.now(timezone.utc).isoformat(),
             "last_sync_direction": direction,
@@ -549,7 +591,7 @@ class SettingsSync:
         }
         url = f"{self._supabase_url}/rest/v1/app_sync_status"
         headers = {
-            **self._headers(),
+            **headers,
             "Prefer": "resolution=merge-duplicates,return=representation",
         }
         try:
@@ -584,23 +626,28 @@ class SettingsSync:
 
         import httpx
 
-        payload = {
-            "user_id": self._user_id,
-            **registration,
-            "is_active": True,
-            "last_seen": datetime.now(timezone.utc).isoformat(),
-        }
-        # on_conflict tells PostgREST exactly which unique constraint to use for
-        # the merge, preventing the 409 that occurs when it can't infer it.
-        url = f"{self._supabase_url}/rest/v1/app_instances?on_conflict=user_id,instance_id"
-        headers = {
-            **self._headers(),
-            "Prefer": "resolution=merge-duplicates,return=representation",
-        }
-        self._last_registration_at = datetime.now(timezone.utc).isoformat()
+        owner: str | None = None
         try:
+            user_id, headers = await self._request_context()
+            owner = user_id
+            payload = {
+                "user_id": user_id,
+                **registration,
+                "is_active": True,
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+            }
+            # on_conflict tells PostgREST exactly which unique constraint to use for
+            # the merge, preventing the 409 that occurs when it can't infer it.
+            url = f"{self._supabase_url}/rest/v1/app_instances?on_conflict=user_id,instance_id"
+            headers = {
+                **headers,
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            }
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json=payload, headers=headers)
+                # A daemon account switch during the HTTP request must not
+                # change this engine's A-owned registration state.
+                await self._request_context(expected_owner=owner)
                 if not resp.is_success:
                     err = self._log_http_error("register_instance", resp)
                     self._last_registration_result = f"error:{err}"
@@ -616,6 +663,7 @@ class SettingsSync:
                 rows = resp.json()
                 row = rows[0] if rows else None
                 if row:
+                    self._last_registration_at = datetime.now(timezone.utc).isoformat()
                     self._is_orphan = False
                     self._last_registration_result = "ok"
                     # Capture server-side metadata so the provenance merge on
@@ -628,7 +676,7 @@ class SettingsSync:
                     logger.info(
                         "Instance registered successfully: instance_id=%s user_id=%s",
                         self._instance_id,
-                        self._user_id,
+                        user_id,
                     )
                 else:
                     # Supabase returned 2xx but empty body — should not happen with upsert
@@ -639,10 +687,15 @@ class SettingsSync:
                         "This usually means an RLS policy is blocking the upsert. "
                         "instance_id=%s user_id=%s",
                         self._instance_id,
-                        self._user_id,
+                        user_id,
                     )
                 return row
         except Exception as exc:
+            if owner is not None:
+                try:
+                    await self._request_context(expected_owner=owner)
+                except Exception:
+                    return None
             msg = str(exc)
             self._last_error = msg
             self._last_registration_result = f"error:{msg}"
@@ -652,7 +705,7 @@ class SettingsSync:
                 "instance_id=%s user_id=%s",
                 msg,
                 self._instance_id,
-                self._user_id,
+                locals().get("user_id"),
             )
             return None
 
@@ -663,16 +716,20 @@ class SettingsSync:
 
         import httpx
 
-        url = (
-            f"{self._supabase_url}/rest/v1/app_instances"
-            f"?user_id=eq.{self._user_id}"
-            f"&is_active=eq.true"
-            f"&select=*"
-            f"&order=last_seen.desc"
-        )
+        owner: str | None = None
         try:
+            user_id, headers = await self._request_context()
+            owner = user_id
+            url = (
+                f"{self._supabase_url}/rest/v1/app_instances"
+                f"?user_id=eq.{user_id}"
+                f"&is_active=eq.true"
+                f"&select=*"
+                f"&order=last_seen.desc"
+            )
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(url, headers=self._headers())
+                resp = await client.get(url, headers=headers)
+                await self._request_context(expected_owner=owner)
                 if not resp.is_success:
                     self._log_http_error("list_instances", resp)
                     return []
@@ -687,13 +744,18 @@ class SettingsSync:
                         "for user_id=%s. %d other instance(s) found. "
                         "Cloud sync and remote control unavailable until re-registration succeeds.",
                         self._instance_id,
-                        self._user_id,
+                        user_id,
                         len(instances),
                     )
                 elif self._instance_id:
                     self._is_orphan = False
                 return instances
         except Exception as exc:
+            if owner is not None:
+                try:
+                    await self._request_context(expected_owner=owner)
+                except Exception:
+                    return []
             msg = str(exc)
             self._last_error = msg
             logger.warning("list_instances failed: %s", msg)
@@ -726,32 +788,40 @@ class SettingsSync:
             # Bump tunnel_updated_at only when the URL actually changes
             # (tunnel restart → new trycloudflare address) so the timestamp
             # means "when this URL appeared", not "last heartbeat".
-            if tunnel_payload["tunnel_url"] != getattr(
+            tunnel_url_changed = tunnel_payload["tunnel_url"] != getattr(
                 self, "_last_tunnel_url_written", object()
-            ):
+            )
+            if tunnel_url_changed:
                 tunnel_payload["tunnel_updated_at"] = datetime.now(
                     timezone.utc
                 ).isoformat()
-            self._last_tunnel_url_written = tunnel_payload["tunnel_url"]
         except Exception:
             tunnel_payload = {}
+            tunnel_url_changed = False
 
-        url = (
-            f"{self._supabase_url}/rest/v1/app_instances"
-            f"?user_id=eq.{self._user_id}"
-            f"&instance_id=eq.{self._instance_id}"
-        )
-        headers = {**self._headers(), "Prefer": "return=minimal"}
-        payload = {
-            "last_seen": datetime.now(timezone.utc).isoformat(),
-            **tunnel_payload,
-            **self._provenance_payload(),
-        }
+        owner: str | None = None
+        pending_before = self._pending_provenance
         try:
+            user_id, headers = await self._request_context()
+            owner = user_id
+            url = (
+                f"{self._supabase_url}/rest/v1/app_instances"
+                f"?user_id=eq.{user_id}"
+                f"&instance_id=eq.{self._instance_id}"
+            )
+            headers = {**headers, "Prefer": "return=minimal"}
+            payload = {
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+                **tunnel_payload,
+                **self._provenance_payload(),
+            }
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.patch(url, json=payload, headers=headers)
+                await self._request_context(expected_owner=owner)
                 if resp.is_success:
                     self._heartbeat_failures = 0
+                    if tunnel_url_changed:
+                        self._last_tunnel_url_written = tunnel_payload.get("tunnel_url")
                     self._commit_provenance()
                 else:
                     # Heartbeat failure may indicate orphan state
@@ -767,6 +837,12 @@ class SettingsSync:
                     else:
                         self._note_heartbeat_failure(f"HTTP {resp.status_code}")
         except Exception as exc:
+            if owner is not None:
+                try:
+                    await self._request_context(expected_owner=owner)
+                except Exception:
+                    self._pending_provenance = pending_before
+                    return
             # Network failure (offline, DNS, timeout). A single blip is
             # expected; a sustained run means the instance is unreachable from
             # the cloud even though it's running — surface that, don't bury it.

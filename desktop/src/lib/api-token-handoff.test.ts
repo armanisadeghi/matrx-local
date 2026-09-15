@@ -13,19 +13,20 @@ beforeEach(() => {
 });
 for (const method of ["configureCloudSync", "reconfigureCloudSync"] as const) {
   it(`${method} refuses another account without network I/O`, async () => {
-    await expect(engine[method]("current-access", "actor-b", context)).rejects.toThrow("no longer current");
+    await expect(engine[method]("actor-b", context)).rejects.toThrow("no longer current");
     expect(fetch).not.toHaveBeenCalled();
   });
   it(`${method} rechecks authority after resolving the daemon token`, async () => {
     let current = true;
     engine.setTokenProvider(async () => { current = false; return "current-access"; });
-    await expect(engine[method]("current-access", "actor-a", { ...context, isCurrent: () => current })).rejects.toThrow("no longer current");
+    await expect(engine[method]("actor-a", { ...context, isCurrent: () => current })).rejects.toThrow("no longer current");
     expect(fetch).not.toHaveBeenCalled();
   });
   it(`${method} sends the current access token without installing a session`, async () => {
-    await engine[method]("current-access", "actor-a", context);
+    await engine[method]("actor-a", context);
     expect(fetch).toHaveBeenCalledOnce();
     const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(JSON.parse(init?.body as string)).toEqual({ user_id: "actor-a" });
     expect(String(url)).toMatch(/\/cloud\/(re)?configure$/);
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer current-access");
   });

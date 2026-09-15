@@ -35,12 +35,11 @@ const supabase = createClient(supabaseUrl ?? '', supabaseKey ?? '', {
     accessToken: async () => await getToken(),
 });
 
-subscribeSession((_snapshot, rotated) => {
-    if (!rotated) return;
-    void getToken().then((token) => {
-        // `setAuth()` with no argument re-reads the callback; passing the token we just took
-        // avoids a second round trip and keeps the socket and the REST calls on one value.
-        void supabase.realtime.setAuth(token ?? undefined);
+subscribeSession(() => {
+    // An account change or sign-out need not be a token-rotation event. Let
+    // realtime-js re-read the callback and fence overlapping auth updates.
+    void supabase.realtime.setAuth().catch(() => {
+        console.warn("Realtime account update failed; reconnect to retry.");
     });
 });
 

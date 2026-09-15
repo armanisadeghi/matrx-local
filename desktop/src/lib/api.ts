@@ -2710,7 +2710,6 @@ class EngineAPI {
 
   // ---- Cloud Sync API ----
   async configureCloudSync(
-    jwt: string,
     userId: string,
     context: NativeVaultTransitionContext,
   ): Promise<CloudConfigResult> {
@@ -2723,15 +2722,15 @@ class EngineAPI {
     const resp = await fetch(`${origin}/cloud/configure`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ jwt, user_id: userId }),
+      body: JSON.stringify({ user_id: userId }),
     });
     if (!resp.ok) throw new Error(`Cloud configure failed: ${resp.status}`);
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     return resp.json();
   }
 
-  /** Reconfigure cloud sync with fresh JWT. */
-  async reconfigureCloudSync(jwt: string, userId: string, context: NativeVaultTransitionContext): Promise<void> {
+  /** Reconcile cloud sync against the daemon-owned session. */
+  async reconfigureCloudSync(userId: string, context: NativeVaultTransitionContext): Promise<void> {
     const origin = context.engineOrigin ?? this.baseUrl;
     if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
@@ -2743,7 +2742,7 @@ class EngineAPI {
     const response = await fetch(`${origin}/cloud/reconfigure`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ jwt, user_id: userId }),
+      body: JSON.stringify({ user_id: userId }),
     });
     if (!response.ok) throw new Error(`Cloud reconfigure failed: ${response.status}`);
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");

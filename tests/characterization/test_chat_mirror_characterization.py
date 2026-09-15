@@ -929,43 +929,8 @@ def test_continuation_reservation_uses_durable_positions_after_history_compactio
     _run(tmp_path, scenario)
 
 
-def test_authenticated_ai_request_refreshes_expired_engine_token(
-    tmp_path: Path,
-) -> None:
-    async def scenario(db: LocalDatabase) -> None:
-        import time
-
-        import jwt
-
-        from app.api.ai_routes import _adopt_request_jwt
-        from app.services.local_db.repositories import TokenRepo
-
-        repo = TokenRepo()
-        await repo.save(
-            access_token="expired-token",
-            user_id="u1",
-            refresh_token="keep-refresh-token",
-            expires_at=1,
-        )
-        token = jwt.encode(
-            {"sub": "u1", "exp": int(time.time()) + 3600},
-            "test-secret-that-is-at-least-32-bytes-long",
-            algorithm="HS256",
-        )
-
-        await _adopt_request_jwt(token, "u1")
-
-        stored = await repo.get()
-        assert stored is not None
-        assert stored["access_token"] == token
-        assert stored["refresh_token"] == "keep-refresh-token"
-        assert repo.is_expired(stored) is False
-
-    _run(tmp_path, scenario)
-
-
-def test_ai_request_cannot_replace_a_different_persisted_owner(
-    tmp_path: Path,
+def test_ai_request_cannot_replace_a_different_daemon_owner(
+    tmp_path: Path, monkeypatch,
 ) -> None:
     async def scenario(db: LocalDatabase) -> None:
         import time
@@ -977,12 +942,10 @@ def test_ai_request_cannot_replace_a_different_persisted_owner(
         from app.services.local_db.repositories import TokenRepo
 
         repo = TokenRepo()
-        await repo.save(
-            access_token="owner-a-token",
-            user_id="owner-a",
-            refresh_token="owner-a-refresh",
-            expires_at=int(time.time()) + 3600,
-        )
+        async def current_grant(self):
+            return {"access_token": "owner-a-token", "user_id": "owner-a"}
+
+        monkeypatch.setattr(TokenRepo, "get", current_grant)
         owner_b_token = jwt.encode(
             {"sub": "owner-b", "exp": int(time.time()) + 3600},
             "test-secret-that-is-at-least-32-bytes-long",
@@ -1013,7 +976,7 @@ def test_ai_request_cannot_replace_a_different_persisted_owner(
         assert stored is not None
         assert stored["user_id"] == "owner-a"
         assert stored["access_token"] == "owner-a-token"
-        assert stored["refresh_token"] == "owner-a-refresh"
+        assert "refresh_token" not in stored
 
     _run(tmp_path, scenario)
 

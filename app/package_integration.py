@@ -85,6 +85,14 @@ def configure_matrx_packages() -> MatrxLocalSettings:
     matrx_* consumer fails later, somewhere else, for a reason that looks
     nothing like this.
     """
+    import os
+    import sys
+
+    # This executable knows its host role; users never configure these values.
+    # Shared packages must not infer that a desktop is the cloud app server.
+    os.environ["MATRX_STAGE"] = "production" if getattr(sys, "frozen", False) else "local"
+    os.environ["MATRX_ROLE"] = "desktop"
+
     from matrx_utils.conf import configure_settings
 
     from app.config import MATRX_HOME_DIR

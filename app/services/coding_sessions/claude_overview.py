@@ -49,7 +49,7 @@ from app.services.coding_sessions.identity_client import (
     fetch_complete_identity_inventory,
 )
 from app.services.session_freshness import (
-    request_ui_session_refresh,
+    request_session_grant,
     session_blocker,
 )
 from app.services.local_db.database import get_db
@@ -409,7 +409,7 @@ async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, A
         # the owner for a fresh copy instead of waiting for the next hour — and
         # ask BEFORE describing the gap, so one the desktop is already filling
         # is reported as a refresh in progress and not as a signed-out Mac.
-        await request_ui_session_refresh(
+        await request_session_grant(
             lane="claude_overview", reason="stored access token missing or expired"
         )
         state = session_blocker(lane="claude_overview")

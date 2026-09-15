@@ -74,6 +74,14 @@ async def _lane(tmp_path: Path, *, client: _FakeFilesClient, tokens: _Tokens, cl
 
 
 async def test_capture_keeps_deliverables_and_skips_working_copies(tmp_path: Path, monkeypatch) -> None:
+    from app.services import sync_client, session_freshness
+    from app.services.sync_client.client import SessionSnapshot
+    class Daemon:
+        last_state = SessionSnapshot(state="signed_out", state_reason="", signed_in=False)
+        async def access_grant(self):
+            return None
+    monkeypatch.setattr(sync_client, "get_sync_client", Daemon)
+    session_freshness.session_restored()
     pad = _scratchpad(tmp_path)
     client = _FakeFilesClient()
     db, lane = await _lane(tmp_path, client=client, tokens=_Tokens(None))
@@ -121,7 +129,7 @@ async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_pat
     async def _no_refresh(**_: Any) -> bool:
         return False
 
-    monkeypatch.setattr(mod, "request_ui_session_refresh", _no_refresh)
+    monkeypatch.setattr(mod, "request_session_grant", _no_refresh)
     try:
         tick = await lane.run_once()
         assert tick["uploaded"] == 6 and tick["failed"] == 0

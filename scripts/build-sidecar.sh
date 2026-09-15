@@ -319,6 +319,7 @@ args = [
     "--exclude-module", "ipykernel",
     "--exclude-module", "jupyter",
     "--exclude-module", "ipywidgets",
+    "--hidden-import", "app.services.daemon_session_reconciler",
     "--hidden-import", "uvicorn",
     "--hidden-import", "uvicorn.logging",
     "--hidden-import", "uvicorn.loops",

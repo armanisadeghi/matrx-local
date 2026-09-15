@@ -139,6 +139,7 @@ async def connect_broadcast(user_id: str) -> None:
             )
             return
 
+        client = None
         try:
             # Defer the supabase import so module load stays cheap and
             # the import graph remains tsx-friendly (per matrx-extend
@@ -146,7 +147,13 @@ async def connect_broadcast(user_id: str) -> None:
             # supabase package is declared in pyproject.toml.
             from supabase import create_async_client  # type: ignore[import-not-found]
 
+            from app.services.sync_client import get_sync_client
+
+            grant = await get_sync_client().access_grant()
+            if grant is None or grant[1] != user_id:
+                raise RuntimeError("Current daemon session is unavailable for broadcast")
             client = await create_async_client(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+            await client.realtime.set_auth(grant[0])
             channel = client.channel(_channel_name(user_id))
 
             def _on_broadcast(payload: Dict[str, Any]) -> None:
@@ -182,12 +189,18 @@ async def connect_broadcast(user_id: str) -> None:
                 _channel_name(user_id),
             )
         except Exception as exc:
+            if client is not None:
+                try:
+                    await client.realtime.disconnect()
+                except Exception:
+                    logger.debug("[extension_broadcast] failed client cleanup", exc_info=True)
             logger.warning(
                 "[extension_broadcast] connect failed user=%s err=%s",
                 user_id,
                 exc,
                 exc_info=True,
             )
+            raise
 
 
 async def disconnect_broadcast(user_id: str) -> None:

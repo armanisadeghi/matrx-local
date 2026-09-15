@@ -71,3 +71,43 @@ async def test_tool_source_names_the_organization_on_its_server_request(
     assert await source.list_tools() == []
     assert seen[0].headers["Authorization"] == "Bearer jwt-a"
     assert seen[0].headers["X-Organization-Id"] == "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.mark.anyio
+async def test_async_daemon_provider_is_read_for_every_discovery() -> None:
+    client = FakeClient("https://aidream.test")
+    tokens = iter(["first-grant", "rotated-grant", None])
+
+    async def current_token() -> str | None:
+        return next(tokens)
+
+    source = OrganizationAwareToolSource(
+        server_url="https://aidream.test",
+        source_app="matrx_local",
+        get_jwt=current_token,
+        client_factory=lambda _url: client,
+    )
+    await source.list_tools()
+    await source.list_tools()
+    assert await source.list_tools() == []
+    assert [token for _, token in client.calls] == ["first-grant", "rotated-grant"]
+
+
+@pytest.mark.anyio
+async def test_engine_provider_reads_daemon_after_rotation_and_signout(monkeypatch) -> None:
+    from app.services.ai.engine import _get_jwt
+    from app.services import sync_client
+
+    class Daemon:
+        token = "first-grant"
+
+        async def access_token(self):
+            return self.token
+
+    daemon = Daemon()
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: daemon)
+    assert await _get_jwt() == "first-grant"
+    daemon.token = "rotated-grant"
+    assert await _get_jwt() == "rotated-grant"
+    daemon.token = None
+    assert await _get_jwt() is None

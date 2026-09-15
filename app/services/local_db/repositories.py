@@ -896,15 +896,14 @@ class TokenRepo:
         """
         from app.services.sync_client import get_sync_client
 
-        client = get_sync_client()
-        token = await client.access_token()
-        if not token:
+        grant = await get_sync_client().access_grant()
+        if grant is None:
             return None
-        snapshot = client.last_state
+        token, user_id = grant
         return {
             "key": _TOKEN_KEY,
             "access_token": token,
-            "user_id": (snapshot.user_id if snapshot else None),
+            "user_id": user_id,
             # The daemon schedules rotation off the token's own ``exp``; a caller that wants the
             # expiry reads the claim, which :meth:`is_expired` already does.
             "expires_at": None,

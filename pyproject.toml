@@ -88,7 +88,7 @@ dependencies = [
     # `middleware` and nothing here imports that submodule yet — the first
     # auth-middleware import would have killed the AI streaming surface. Fixed
     # upstream in matrx-connect 0.1.25; do not lower these floors.
-    "matrx-utils>=2.0.7",
+    "matrx-utils>=2.0.42",
     # 3.1.141 is LOAD-BEARING, not cosmetic — same defect class as MXL-D-075.
     # matrx-scraper's `db/__init__.py` imports PLATFORM_DB_ENV_PREFIX /
     # platform_connection_url / register_platform_db (the ONE-database
@@ -104,7 +104,7 @@ dependencies = [
     # an older ORM that predates that server-side refusal boundary.
     # Do not lower this.
     "matrx-orm>=3.1.141",
-    "matrx-ai>=0.4.18",
+    "matrx-ai>=0.5.319",
     "matrx-connect>=0.1.25",
     "matrx-graph>=0.1.5",
     "matrx-runtime>=0.0.6",

@@ -14,17 +14,16 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.anyio
-
 from app.services.sync_client.client import (
     STATE_DAEMON_NOT_RUNNING,
     STATE_OFFLINE,
     STATE_SIGN_IN_NEEDED,
     STATE_SIGNED_IN,
     SyncDaemonClient,
-    _remaining_seconds,
 )
 
+
+pytestmark = pytest.mark.anyio
 
 class FakeDaemon:
     """A real HTTP/1.1 server on a real Unix socket, scripted per path.
@@ -55,7 +54,9 @@ class FakeDaemon:
                 }
             )
         )
-        (self.home / "syncd.token").write_text("control-token-line-1\nread-token-line-2\n")
+        (self.home / "syncd.token").write_text(
+            "control-token-line-1\nread-token-line-2\n"
+        )
         self._server = await asyncio.start_unix_server(
             self._handle, path=str(self.socket_path)
         )
@@ -65,7 +66,9 @@ class FakeDaemon:
             self._server.close()
             await self._server.wait_closed()
 
-    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         request = await reader.readuntil(b"\r\n\r\n")
         head = request.decode("latin-1").split("\r\n")
         path = head[0].split(" ")[1]
@@ -77,11 +80,15 @@ class FakeDaemon:
         self.seen_headers.append(headers)
 
         status, body = self.responses.get(path, (404, {"error": {"code": "not_found"}}))
-        payload = json.dumps(body).encode()
+        if path == "/v1/events":
+            payload = (
+                "event: session.changed\ndata: " + json.dumps(body) + "\n\n"
+            ).encode()
+        else:
+            payload = json.dumps(body).encode()
         writer.write(
             b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
-            b"Connection: close\r\n\r\n" % (status, len(payload))
-            + payload
+            b"Connection: close\r\n\r\n" % (status, len(payload)) + payload
         )
         await writer.drain()
         writer.close()
@@ -114,16 +121,18 @@ async def daemon(short_home: Path):
     await fake.stop()
 
 
-def _jwt(exp: int) -> str:
+def _jwt(exp: int, *, subject: str = "u-1") -> str:
     import base64
 
     def seg(obj) -> str:
         return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
 
-    return f"{seg({'alg': 'ES256'})}.{seg({'sub': 'u-1', 'exp': exp})}.sig"
+    return f"{seg({'alg': 'ES256'})}.{seg({'sub': subject, 'exp': exp})}.sig"
 
 
-async def test_a_token_is_fetched_over_the_real_unix_socket(daemon: FakeDaemon, short_home: Path):
+async def test_a_token_is_fetched_over_the_real_unix_socket(
+    daemon: FakeDaemon, short_home: Path
+):
     daemon.responses["/v1/token"] = (
         200,
         {
@@ -134,7 +143,9 @@ async def test_a_token_is_fetched_over_the_real_unix_socket(daemon: FakeDaemon, 
         },
     )
     client = SyncDaemonClient(home=short_home)
-    assert await client.access_token() == daemon.responses["/v1/token"][1]["access_token"]
+    assert (
+        await client.access_token() == daemon.responses["/v1/token"][1]["access_token"]
+    )
 
     # The contract SPEC-ENGINE §3 requires on every route, sent for real.
     headers = daemon.seen_headers[-1]
@@ -142,7 +153,9 @@ async def test_a_token_is_fetched_over_the_real_unix_socket(daemon: FakeDaemon, 
     assert headers["x-matrx-client"] == "engine"
 
 
-async def test_the_token_is_cached_and_not_refetched(daemon: FakeDaemon, short_home: Path):
+async def test_public_token_and_owner_calls_observe_a_daemon_account_switch(
+    daemon: FakeDaemon, short_home: Path
+):
     daemon.responses["/v1/token"] = (
         200,
         {
@@ -153,11 +166,55 @@ async def test_the_token_is_cached_and_not_refetched(daemon: FakeDaemon, short_h
         },
     )
     client = SyncDaemonClient(home=short_home)
-    await client.access_token()
-    calls = len(daemon.seen_headers)
-    await client.access_token()
-    await client.access_token()
-    assert len(daemon.seen_headers) == calls, "S11: a live token is served from memory"
+    first_token = await client.access_token()
+    assert await client.user_id() == "u-1"
+
+    daemon.responses["/v1/token"] = (
+        200,
+        {
+            "access_token": _jwt(4102444800, subject="u-2"),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "user_id": "u-2",
+            "token_type": "Bearer",
+        },
+    )
+
+    assert await client.access_token() != first_token
+    assert await client.user_id() == "u-2"
+    assert len(daemon.seen_headers) == 4
+
+
+async def test_current_grant_reads_the_daemon_once_for_concurrent_callers(
+    daemon: FakeDaemon, short_home: Path
+):
+    daemon.responses["/v1/token"] = (
+        200,
+        {
+            "access_token": _jwt(4102444800),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "user_id": "u-1",
+        },
+    )
+    client = SyncDaemonClient(home=short_home)
+
+    grants = await asyncio.gather(*(client.access_grant() for _ in range(8)))
+
+    assert grants == [(daemon.responses["/v1/token"][1]["access_token"], "u-1")] * 8
+    assert len(daemon.seen_headers) == 1
+
+
+async def test_current_grant_refuses_a_daemon_user_id_that_disagrees_with_its_jwt(
+    daemon: FakeDaemon, short_home: Path
+):
+    daemon.responses["/v1/token"] = (
+        200,
+        {
+            "access_token": _jwt(4102444800),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "user_id": "other-user",
+        },
+    )
+    assert await SyncDaemonClient(home=short_home).access_grant() is None
 
 
 async def test_a_409_is_a_state_with_its_remedy_never_an_exception(
@@ -186,7 +243,11 @@ async def test_offline_is_a_state_that_does_not_ask_the_user_to_do_anything(
 ):
     daemon.responses["/v1/token"] = (
         409,
-        {"state": STATE_OFFLINE, "state_reason": "Not connected — retrying.", "since": "t"},
+        {
+            "state": STATE_OFFLINE,
+            "state_reason": "Not connected — retrying.",
+            "since": "t",
+        },
     )
     client = SyncDaemonClient(home=short_home)
     assert await client.access_token() is None
@@ -205,7 +266,9 @@ async def test_no_daemon_is_a_named_state_not_a_crash(short_home: Path):
     assert snapshot.signed_in is False
 
 
-async def test_a_stale_discovery_file_whose_socket_is_gone_is_the_same_state(short_home: Path):
+async def test_a_stale_discovery_file_whose_socket_is_gone_is_the_same_state(
+    short_home: Path,
+):
     (short_home / "run").mkdir(parents=True)
     (short_home / "syncd.json").write_text(
         json.dumps({"version": 1, "socket_path": str(short_home / "run" / "gone.sock")})
@@ -230,6 +293,14 @@ async def test_the_session_snapshot_round_trips(daemon: FakeDaemon, short_home: 
             "cloud_state_write_pending": False,
         },
     )
+    daemon.responses["/v1/token"] = (
+        200,
+        {
+            "access_token": _jwt(4102444800),
+            "expires_at": "2100-01-01T00:00:00Z",
+            "user_id": "u-1",
+        },
+    )
     client = SyncDaemonClient(home=short_home)
     snapshot = await client.session()
     assert snapshot.signed_in is True
@@ -238,10 +309,14 @@ async def test_the_session_snapshot_round_trips(daemon: FakeDaemon, short_home: 
     assert await client.user_id() == "u-1"
 
 
-@pytest.mark.anyio
-async def test_an_unreadable_expiry_means_do_not_cache_never_cache_forever():
-    # MXL-D-046 was the opposite mistake: an expiry that could not be trusted was trusted anyway.
-    assert _remaining_seconds(None) == 0.0
-    assert _remaining_seconds("") == 0.0
-    assert _remaining_seconds("not a date") == 0.0
-    assert _remaining_seconds("2100-01-01T00:00:00Z") > 0.0
+async def test_event_subscription_yields_connected_before_session_change(
+    daemon, short_home
+):
+    daemon.responses["/v1/events"] = (
+        200,
+        {"session": {"state": "signed_in", "user_id": "u-1"}, "rotated": True},
+    )
+    events = [event async for event in SyncDaemonClient(short_home).session_events()]
+    assert events[0] == {"connected": True}
+    assert events[1]["rotated"] is True
+    assert daemon.seen_headers[-1]["x-matrx-client"] == "engine"

@@ -19,10 +19,7 @@ router = APIRouter(prefix="/cloud", tags=["cloud-sync"])
 
 
 class ConfigureRequest(BaseModel):
-    # FS-C5b: `expected_generation` / `expected_credential_revision` are gone with the engine-side
-    # credential store they fenced. The engine holds no credential to be superseded, so there is
-    # nothing for a caller to assert about it (SPEC-CUSTODY §10 step 4, D17).
-    jwt: str
+    """Identity assertion checked against the local sync daemon."""
     user_id: str
 
 
@@ -66,24 +63,31 @@ class InstanceInfo(BaseModel):
 
 # ── Configuration ───────────────────────────────────────────────────────
 
+async def _require_daemon_owner(user_id: str) -> None:
+    """Refuse a caller assertion that does not match the daemon's owner."""
+    from app.services.sync_client import get_sync_client
+
+    grant = await get_sync_client().access_grant()
+    if grant is None:
+        raise HTTPException(status_code=409, detail="sync_daemon_session_unavailable")
+    _, daemon_user_id = grant
+    if user_id != daemon_user_id:
+        raise HTTPException(status_code=403, detail="desktop_owner_mismatch")
+
+
 @router.post("/configure")
 async def configure_sync(req: ConfigureRequest) -> dict:
-    """Configure the sync engine with user credentials.
+    """Configure cloud sync after binding to the daemon's current owner.
 
     Called by the frontend after user authentication.
     """
-    # FS-C5b: the generation/credential fence is gone with the thing it fenced. It existed because
-    # the React UI pushed a session into this engine and two windows could race to install
-    # different ones. Nothing is pushed now — every token comes from the one sync daemon — so
-    # there is no rival credential to compare against, and a fence over a single source would only
-    # be able to refuse the truth.
+    await _require_daemon_owner(req.user_id)
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
     sync.configure(
         supabase_url=SUPABASE_URL,
         supabase_key=SUPABASE_PUBLISHABLE_KEY,
-        jwt=req.jwt,
         user_id=req.user_id,
         instance_id=mgr.instance_id,
     )
@@ -106,19 +110,14 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 
 @router.post("/reconfigure")
 async def reconfigure_sync(req: ConfigureRequest) -> dict:
-    """Re-configure with a fresh JWT (e.g. after token refresh)."""
-    # FS-C5b: the generation/credential fence is gone with the thing it fenced. It existed because
-    # the React UI pushed a session into this engine and two windows could race to install
-    # different ones. Nothing is pushed now — every token comes from the one sync daemon — so
-    # there is no rival credential to compare against, and a fence over a single source would only
-    # be able to refuse the truth.
+    """Reconfigure after confirming the daemon still owns this user."""
+    await _require_daemon_owner(req.user_id)
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
     sync.configure(
         supabase_url=SUPABASE_URL,
         supabase_key=SUPABASE_PUBLISHABLE_KEY,
-        jwt=req.jwt,
         user_id=req.user_id,
         instance_id=mgr.instance_id,
     )

@@ -20,6 +20,7 @@ import types
 import pytest
 
 from app.services.cloud_sync.instance_manager import (
+    InstanceManager,
     PROVENANCE_CONTENT_KEYS,
     build_config_provenance,
     current_app_version,
@@ -59,11 +60,11 @@ class _Client:
         return False
 
     async def post(self, url, json=None, headers=None):
-        self._calls.append(("POST", url, json))
+        self._calls.append(("POST", url, json, headers))
         return self._resp
 
     async def patch(self, url, json=None, headers=None):
-        self._calls.append(("PATCH", url, json))
+        self._calls.append(("PATCH", url, json, headers))
         return self._resp
 
 
@@ -78,7 +79,15 @@ class _Http:
         self.resp = resp
 
     def bodies(self, method: str) -> list[dict]:
-        return [b for m, _u, b in self.calls if m == method and b is not None]
+        return [b for m, _u, b, _headers in self.calls if m == method and b is not None]
+
+    def headers(self, method: str) -> list[dict]:
+        return [headers for m, _u, _body, headers in self.calls if m == method]
+
+
+class _DaemonClient:
+    async def access_grant(self) -> tuple[str, str]:
+        return "daemon-access-token", "user-1"
 
 
 @pytest.fixture
@@ -89,17 +98,20 @@ def http(monkeypatch):
     fake = types.ModuleType("httpx")
     fake.AsyncClient = lambda *a, **kw: _Client(rec.calls, rec.resp)  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "httpx", fake)
+    import app.services.sync_client as sync_client
+
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: _DaemonClient())
     return rec
 
 
 def _configured_sync() -> SettingsSync:
     sync = SettingsSync()
-    sync._supabase_url = "https://db.example.test"
-    sync._supabase_key = "pk_test"
-    sync._jwt = "jwt_test"
-    sync._user_id = "user-1"
-    sync._instance_id = "inst_test"
-    sync._configured = True
+    sync.configure(
+        supabase_url="https://db.example.test",
+        supabase_key="pk_test",
+        user_id="user-1",
+        instance_id="inst_test",
+    )
     return sync
 
 
@@ -130,6 +142,75 @@ def test_register_instance_sends_app_version(http):
 
     body = http.bodies("POST")[0]
     assert body["app_version"] == current_app_version()
+    assert body["user_id"] == "user-1"
+    assert http.headers("POST")[0]["Authorization"] == "Bearer daemon-access-token"
+
+
+def test_registration_discards_response_when_daemon_owner_changes_in_flight(http, monkeypatch):
+    """An A response cannot mutate registration state after daemon switches to B."""
+    http.set_response(_Resp(200, [{"instance_id": "inst_test", "metadata": {"a": 1}}]))
+    sync = _configured_sync()
+    calls = 0
+
+    async def context(*, expected_owner=None):
+        nonlocal calls
+        calls += 1
+        owner = "user-1" if calls == 1 else "user-2"
+        if expected_owner is not None and owner != expected_owner:
+            raise RuntimeError("sync_daemon_owner_changed")
+        return owner, {"Authorization": "Bearer daemon-access-token"}
+
+    monkeypatch.setattr(sync, "_request_context", context)
+
+    assert asyncio.run(sync.register_instance({"instance_id": "inst_test"})) is None
+    assert sync._known_metadata is None
+    assert sync._last_registration_result is None
+
+
+def test_tunnel_writer_uses_current_daemon_grant_headers(http, monkeypatch):
+    import app.services.cloud_sync.settings_sync as settings_sync
+
+    sync = _configured_sync()
+
+    async def context(*, expected_owner=None):
+        assert expected_owner is None
+        return "user-1", {"Authorization": "Bearer daemon-access-token"}
+
+    monkeypatch.setattr(sync, "_request_context", context)
+    monkeypatch.setattr(settings_sync, "get_settings_sync", lambda: sync)
+    manager = InstanceManager()
+
+    assert asyncio.run(manager.update_tunnel_url("https://tunnel.example", True)) is True
+    assert http.headers("PATCH")[0]["Authorization"] == "Bearer daemon-access-token"
+
+
+def test_hardware_writer_uses_current_daemon_grant_headers(http, monkeypatch):
+    import app.services.cloud_sync.settings_sync as settings_sync
+    from app.api import hardware_routes
+
+    sync = _configured_sync()
+
+    async def context(*, expected_owner=None):
+        assert expected_owner is None
+        return "user-1", {"Authorization": "Bearer daemon-access-token"}
+
+    monkeypatch.setattr(sync, "_request_context", context)
+    monkeypatch.setattr(settings_sync, "get_settings_sync", lambda: sync)
+    asyncio.run(hardware_routes._push_hardware_to_cloud({"cpu": "test"}))
+    assert http.headers("PATCH")[0]["Authorization"] == "Bearer daemon-access-token"
+
+
+@pytest.mark.anyio
+async def test_cloud_configure_refuses_a_user_other_than_the_daemon_owner(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import cloud_sync_routes
+    import app.services.sync_client as sync_client
+
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: _DaemonClient())
+    with pytest.raises(HTTPException) as excinfo:
+        await cloud_sync_routes._require_daemon_owner("other-user")
+    assert excinfo.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

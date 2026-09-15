@@ -430,7 +430,7 @@ branch deferred the head row and said nothing (`publisher.blocker` was null whil
   refresh grant: Supabase rotates refresh tokens on use and detects reuse, so an
   engine-side refresh would consume the token the desktop still holds and sign the
   person out on the desktop's next refresh.
-- **The engine asks.** `app/services/session_freshness.py::request_ui_session_refresh`
+- **The engine asks.** `app/services/session_freshness.py::request_session_grant`
   sends `session_refresh_requested` to every UI socket, at most once a minute per
   lane. The desktop (`use-engine.ts::pushFreshSessionToEngine`) answers with
   `getSession()`, refreshing first when the copy it holds is within 60 s of expiry —

@@ -21,7 +21,7 @@ export const cloudSettingsSync: BackgroundTask = {
   async fn() {
     const adopted = await adoptedSession();
     if (!adopted || !remainsAdopted(adopted)) return;
-    await engine.configureCloudSync(adopted.session.access_token, adopted.session.user.id, adopted.context);
+    await engine.configureCloudSync(adopted.session.user.id, adopted.context);
   },
 };
 

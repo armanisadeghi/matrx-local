@@ -322,12 +322,18 @@ run_packaged() {
     # build only, via Tauri's inline config merge; the committed config (and
     # thus the real release) is untouched.
     local no_updater_cfg='{"bundle":{"createUpdaterArtifacts":false}}'
+    local provider_config=()
+    if [ "$OS" = "macos" ] && [ "${MATRX_NATIVE_VAULT_PROVIDER:-}" = "absent" ]; then
+      # Match release.yml's explicit host-only profile when the optional signed
+      # credential provider is not part of this artifact.
+      provider_config=(--config src-tauri/tauri.release.macos.host-only.conf.json)
+    fi
 
     info "Packaging the desktop app (tauri build — several minutes)…"
     if ! ( cd desktop && \
       VITE_MATRX_ISOLATED_SMOKE=1 \
       VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
-      pnpm tauri build $bundle_flag --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
+      pnpm tauri build $bundle_flag "${provider_config[@]}" --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
       record_fail "packaged: tauri build failed" "$(tail -30 "$build_log")"
       echo "Full build log: \`$build_log\`" >> "$SUMMARY"
       return 1

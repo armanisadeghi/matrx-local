@@ -1326,15 +1326,21 @@ def _open_listen_socket() -> socket.socket:
 
 
 def _try_bind(port: int) -> socket.socket | None:
-    """Bind and KEEP localhost:port, or None if someone else has it."""
+    """Bind, LISTEN, and KEEP localhost:port, or None if someone else has it.
+
+    A bound-but-not-listening socket with ``SO_REUSEADDR`` does not exclusively
+    reserve the address on Linux. Listening here makes the claim atomic on every
+    supported platform; uvicorn can adopt an already-listening socket.
+    """
     sock = _open_listen_socket()
     try:
         sock.bind(("127.0.0.1", port))
+        sock.listen(socket.SOMAXCONN)
     except OSError:
         sock.close()
         return None
-    # uvicorn hands this socket to asyncio's create_server, which calls
-    # listen() itself; the bind above is already what reserves the address.
+    # uvicorn hands this socket to asyncio's create_server. Already listening is
+    # the portable contract required to reserve the address on Linux too.
     sock.set_inheritable(True)
     return sock
 

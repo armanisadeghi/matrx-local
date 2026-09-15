@@ -5,6 +5,8 @@
 //! `detect_renames` reads exactly this pair out of `tree_local` and `tree_synced`; without it a
 //! move becomes a delete plus a full re-upload of the bytes.
 
+// Only the unix reader takes a `Metadata`; Windows identity comes from the path (below).
+#[cfg(unix)]
 use std::fs::Metadata;
 
 /// What the filesystem calls this file, independently of where it currently sits.
@@ -70,11 +72,10 @@ pub(crate) fn identity_of_path(path: &std::path::Path) -> FileIdentity {
     }
 }
 
-#[cfg(windows)]
-pub(crate) fn identity_of(_metadata: &Metadata) -> FileIdentity {
-    // The Windows walker calls `identity_of_path`, because file identity requires opening the path.
-    FileIdentity {
-        volume_id: None,
-        file_id: None,
-    }
-}
+// There is deliberately NO `identity_of(&Metadata)` on Windows. `std::fs::Metadata` carries no
+// volume serial or file index there, so the only honest answer would be `(None, None)` — and a
+// stub that always says "this platform cannot tell us" would make the planner fall back to
+// delete-plus-reupload on every Windows rename while looking like a real implementation. The
+// Windows walker calls `identity_of_path` instead (see `scan::walk::file_identity`), because file
+// identity requires opening the path. A missing function is a compile error at the call site; a
+// lying stub is a silent 100% re-transfer.

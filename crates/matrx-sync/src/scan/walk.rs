@@ -365,7 +365,9 @@ fn file_identity(path: &Path, _meta: &std::fs::Metadata) -> crate::scan::FileIde
     identity::identity_of_path(path)
 }
 
-#[cfg(not(windows))]
+// `cfg(unix)`, not `cfg(not(windows))`: the metadata reader it calls exists only on unix, so a
+// third platform must add its own arm rather than silently inherit the unix one.
+#[cfg(unix)]
 fn file_identity(_path: &Path, meta: &std::fs::Metadata) -> crate::scan::FileIdentity {
     identity::identity_of(meta)
 }

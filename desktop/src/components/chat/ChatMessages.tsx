@@ -450,12 +450,15 @@ export function ChatMessages({
 
   return (
     <div className="py-2">
-      {messages.map((msg) =>
-        msg.role === "user" ? (
-          <UserMessage key={msg.id} message={msg} />
+      {messages.map((msg) => (
+        // One stable hook per rendered message so a test can assert that a
+        // conversation actually RENDERED (the coding-sessions row-to-
+        // conversation path, e2e/coding-sessions-tabs.spec.ts).
+        <div key={msg.id} data-testid="chat-message" data-role={msg.role}>
+        {msg.role === "user" ? (
+          <UserMessage message={msg} />
         ) : (
           <AssistantMessage
-            key={msg.id}
             message={msg}
             {...(ttsReadAloudEnabled !== undefined
               ? { ttsEnabled: ttsReadAloudEnabled }
@@ -465,8 +468,9 @@ export function ChatMessages({
             {...(onStopReadAloud !== undefined ? { onStopReadAloud } : {})}
             {...(onReferencePaths ? { onReferencePaths } : {})}
           />
-        ),
-      )}
+        )}
+        </div>
+      ))}
       <div ref={bottomRef} />
     </div>
   );

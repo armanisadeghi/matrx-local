@@ -43,6 +43,7 @@ from app.services.coding_sessions.claude_session_index import (
     default_sessions_root,
     read_session_index,
 )
+from app.services.coding_sessions.continuation import continuation_hint
 from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
     fetch_complete_identity_inventory,
@@ -638,6 +639,8 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         conversations.append(
             {
                 "session_id": session_id,
+                "provider": "claude_code",
+                "continuation": continuation_hint(session_id),
                 "title": entry.title or "Untitled",
                 "title_source": entry.title_source,
                 "project": entry.workspace_name,
@@ -684,6 +687,8 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         conversations.append(
             {
                 "session_id": session_id,
+                "provider": "claude_code",
+                "continuation": continuation_hint(session_id),
                 "title": row["title"],
                 "title_source": None,
                 "project": row["project"],
@@ -716,6 +721,10 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     return {
         "schema_version": 2,
         "account_id": current,
+        # Which providers this payload actually LISTS sessions for. The screen
+        # reads this instead of assuming Claude Code, so the day the engine
+        # lists Codex or Cursor transcripts the filter grows on its own.
+        "listed_providers": ["claude_code"],
         "accounts": list_accounts(),
         "cloud": cloud_meta,
         "conversations": conversations[:limit],

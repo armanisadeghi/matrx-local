@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
+  ArrowLeft,
   Cloud,
   Cpu,
   Loader2,
@@ -102,6 +104,7 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
     refreshLocalLlmStatus,
     runControls,
     runControlActions,
+    openConversationById,
     selectConversation,
     sendMessage,
     setExecutionTarget,
@@ -115,6 +118,27 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
     loadingAgentId: executionLoadingAgentId,
   } = agentExecution;
   const selectedAgentName = useAgentName(selectedAgentId);
+
+  /**
+   * A conversation this surface was SENT to, by id — today from a coding
+   * session row (`/cloud-chat?conversation=<id>&from=coding-sessions`). The
+   * id is opened once per value: re-rendering must not yank a person back to
+   * it after they pick something else.
+   */
+  const [searchParams] = useSearchParams();
+  const requestedConversationId = searchParams.get("conversation");
+  const cameFrom = searchParams.get("from");
+  const [openedRequest, setOpenedRequest] = useState<string | null>(null);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestedConversationId || openedRequest === requestedConversationId) return;
+    setOpenedRequest(requestedConversationId);
+    setDeepLinkError(null);
+    void openConversationById(requestedConversationId).then((reason) => {
+      if (reason) setDeepLinkError(reason);
+    });
+  }, [openConversationById, openedRequest, requestedConversationId]);
 
   const activeConversation = cloudChat.activeConversation;
   const messages = activeConversation?.messages ?? [];
@@ -261,6 +285,7 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
             "Local model is not registered with the engine.")
         : null;
   const cloudError =
+    deepLinkError ??
     executionError ??
     cloudChat.modelError ??
     cloudChat.requestError ??
@@ -321,6 +346,17 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {cameFrom === "coding-sessions" && (
+          <div className="border-b border-border/60 px-4 py-2">
+            <Link
+              to="/coding-sessions"
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to coding sessions
+            </Link>
+          </div>
+        )}
         {cloudError && (
           <div className="border-b border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs text-amber-500">
             {cloudError}

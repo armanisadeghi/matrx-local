@@ -206,3 +206,44 @@ jobs:
 
       - name: cargo test --workspace --locked (app excluded — see above)
         run: cargo test --workspace --exclude aimatrx-desktop --locked
+
+  # WHY a second Rust job on Windows, proven not assumed: release run 35014823815
+  # failed the `windows-latest` leg with `cannot find module or crate windows_sys`
+  # plus two `usage of an unsafe block` errors in `matrx-sync` — Windows-only
+  # `cfg(windows)` code that the Linux `rust-workspace` job above never compiles.
+  # Every macOS release from v1.4.121 on was stuck as an unpublishable draft
+  # because of it, since release.yml publishes only when ALL legs pass. A
+  # `cfg(windows)` break is therefore invisible to CI and lands as a release
+  # outage; this job moves it back to the PR.
+  #
+  # `cargo check`, not `build`: it typechecks every `cfg(windows)` branch —
+  # which is the entire failure class — without the link step or the ~10 minute
+  # codegen the release already pays for.
+  #
+  # `--exclude aimatrx-desktop` for the same reason as the job above: tauri-build
+  # validates every `bundle.externalBin` at COMPILE time, so checking the app
+  # would first require producing all four sidecars. The app's own Windows code
+  # uses only `std::os::windows` (no external Windows crate) and release.yml
+  # compiles it on windows-latest; this job covers the crates that grew the
+  # Windows-only dependency surface.
+  #
+  # windows-latest rather than cross-compiling from ubuntu: `libsqlite3-sys`
+  # builds bundled sqlite3.c with `cc`, which needs real MSVC headers — a
+  # cross `--target x86_64-pc-windows-msvc` cannot get past the build script.
+  rust-workspace-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # .cargo/config.toml pins the target dir out of the workspace root.
+          workspaces: ". -> desktop/src-tauri/target"
+
+      - name: cargo check --workspace --locked (Windows cfg branches)
+        run: cargo check --workspace --exclude aimatrx-desktop --all-targets --locked

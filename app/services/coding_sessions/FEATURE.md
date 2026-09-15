@@ -352,11 +352,43 @@ held 1,671 of those conversations:
   `raw_session_id()` reduces either to the UUID before any cloud or queue lookup.
 - **Every number opens into its evidence.** Status cards filter the list; the
   per-app "Waiting to send" / "Refused, preserved" counts open
-  `DeliveryEvidenceDialog` (retry/discard per delivery); every row opens
-  `GET /coding-session/claude/sessions/{id}/diagnosis` — a plain verdict + remedy,
-  then the server binding, the transcript, Claude's sidebar record (pinned, rank,
-  category, accounts), every queued/preserved delivery with its error and attempts,
-  the capture reconciler's attempts, and the label ledgers. Pinned is a column.
+  `DeliveryEvidenceDialog` (retry/discard per delivery); every row's **Delivery**
+  action opens `GET /coding-session/claude/sessions/{id}/diagnosis` — a plain verdict
+  + remedy, then the server binding, the transcript, Claude's sidebar record (pinned,
+  rank, category, accounts), every queued/preserved delivery with its error and
+  attempts, the capture reconciler's attempts, and the label ledgers. Pinned is a
+  column.
+- **A row's NAME opens its conversation (2026-09-14).** Arman: *"It shows names, but
+  if you click on them, it doesn't actually bring up the conversations."* The row
+  click resolves `cloud.conversation_id` — the binding the overview already carried —
+  and opens THAT conversation in the desktop's own chat surface
+  (`/cloud-chat?conversation=<id>&from=coding-sessions`; `openConversationById` in
+  `use-cloud-chat.ts` loads a conversation outside the chat-route history list
+  through the same table, columns and hydration). A row with no binding says which
+  state it is in and keeps the diagnosis one click away — never a dead click, and
+  never a diagnosis dialog pretending to be the conversation.
+- **Per-row `provider` and `continuation`, payload-level `listed_providers`
+  (2026-09-14).** `continuation` is the copyable `claude --resume <id>` plus the
+  caveat that binds it, from the ONE owner `continuation.py` (the history import's
+  `continuation` sentence reads the same function, so the command and the caveat
+  cannot drift). `listed_providers` is what lets the screen build its provider filter
+  from this answer instead of a hard-coded "Claude Code": the day the engine lists
+  Codex or Cursor transcripts the chips grow with no UI edit.
+- **ONE feature, three tabs (2026-09-14).** Arman: *"coding sessions is one feature
+  and everything needs to live inside of it."* `Sessions` (the list + provider chips),
+  `Usage` (the former standalone `/codex-usage` page as a panel; a provider with no
+  local usage ledger says so in words), `Settings & diagnostics` (readiness, bridge
+  queue, publisher ticks, artifacts lane, accounts, agent runtime). The tab is in the
+  URL (`/coding-sessions?tab=…`) and `/codex-usage` redirects to the usage tab.
+- **Refresh announces itself and never blanks the list (2026-09-14).** Arman: *"The
+  refresh button, when you click it, does nothing. It just stares at you."* The
+  overview read is slow by nature (36s cold, ~4.3s warm on this Mac), so the rules
+  live in `desktop/src/lib/coding-sessions/overview-store.ts`: the refreshing state is
+  emitted BEFORE anything is awaited, the fast endpoints paint while the list read
+  runs, the previous rows stay on screen labelled with their age, and the last list is
+  cached on the Mac so a revisit paints immediately. Guards:
+  `overview-store.test.ts` + `desktop/src/pages/CodingSessions.test.tsx` (both fail if
+  the pre-await announcement is removed).
 - **A pause is a banner with a button, never a count.** `publisher.blocker` on
   `GET /coding-session/status` names the one thing stopping ALL delivery
   (`cloud_credentials_rejected`, or `organization_not_chosen` — see below) with its

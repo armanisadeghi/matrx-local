@@ -45,6 +45,8 @@ from app.services.file_sync.index import (
     LOCAL_ID_PREFIX,
     FileSyncIndex,
     new_local_id,
+    record_to_feed_entry,
+    report_unmirrorable_entry,
 )
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
@@ -222,7 +224,7 @@ class FileSyncEngine:
 
     async def _pull_changes(self) -> dict[str, Any]:
         cursor = await self._load_cursor()
-        applied = tombstones = conflicts = pages = 0
+        applied = tombstones = conflicts = skipped = pages = 0
         try:
             while pages < _MAX_PAGES_PER_CYCLE:
                 payload = await self._client.sync_changes(
@@ -236,6 +238,8 @@ class FileSyncEngine:
                         tombstones += 1
                     elif kind == "conflict":
                         conflicts += 1
+                    elif kind == "skipped":
+                        skipped += 1
                     else:
                         applied += 1
                 await get_db().commit()
@@ -256,6 +260,7 @@ class FileSyncEngine:
             "applied": applied,
             "tombstones": tombstones,
             "conflicts": conflicts,
+            "skipped": skipped,
             "pages": pages,
         }
 
@@ -264,8 +269,11 @@ class FileSyncEngine:
         'applied' | 'tombstone' | 'conflict'."""
         file_id = str(entry.get("file_id") or "")
         if not file_id:
-            logger.error("[file_sync] feed entry missing file_id — skipped: %r", entry)
-            return "applied"
+            # Named once, counted after that — and reported as the skip it is,
+            # never folded into `applied` where it would inflate the count of
+            # rows this replica actually holds.
+            report_unmirrorable_entry("files", entry, reason="carries no file_id")
+            return "skipped"
         await self._index.upsert_remote_file(entry)
 
         state = await self._index.get_state(file_id)
@@ -804,21 +812,10 @@ class FileSyncEngine:
         # our own push as a foreign change.
         try:
             record = await self._client.get_record(cloud_id)
+            # A record names its id `id`, not `file_id` — one converter owns
+            # that translation (see index.record_to_feed_entry).
             await self._index.upsert_remote_file(
-                {
-                    "file_id": record.get("file_id"),
-                    "file_path": record.get("file_path"),
-                    "file_name": record.get("file_name"),
-                    "mime_type": record.get("mime_type"),
-                    "size_bytes": record.get("size_bytes"),
-                    "checksum": checksum,
-                    "visibility": record.get("visibility"),
-                    "version": record.get("version"),
-                    "folder_id": record.get("folder_id"),
-                    "created_at": record.get("created_at"),
-                    "updated_at": record.get("updated_at"),
-                    "deleted_at": record.get("deleted_at"),
-                }
+                record_to_feed_entry(record, checksum=checksum)
             )
         except FileSyncHTTPError as exc:
             logger.warning("[file_sync] post-upload record fetch failed (%s) — the next pull realigns", exc)
@@ -878,9 +875,7 @@ class FileSyncEngine:
         # Refresh the mirror row (path/updated_at changed cloud-side).
         try:
             record = await self._client.get_record(state["file_id"])
-            await self._index.upsert_remote_file(
-                {**record, "version": record.get("version"), "folder_id": record.get("folder_id")}
-            )
+            await self._index.upsert_remote_file(record_to_feed_entry(record))
         except FileSyncHTTPError:
             pass  # next pull realigns
 

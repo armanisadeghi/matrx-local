@@ -785,6 +785,38 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Testing infrastructure
 
+### MXL-D-092 — `test_managed_runtime_bundle` fails as a 30 s timeout on a busy machine, so the frozen-bundle guard is red for reasons that have nothing to do with the bundle
+- **Area:** `tests/unit/test_managed_runtime_bundle.py:131`
+  (`test_collection_reaches_submodules_static_analysis_misses`),
+  `specs/_managed_runtime_bundle.py:149` (`collect_managed_runtime_modules`),
+  `tests/pytest.ini:3` (`timeout = 30`, global)
+- **Symptom:** the test calls PyInstaller's `collect_submodules`, which forks an
+  isolated child interpreter and imports torch/transformers/huggingface_hub in
+  it. On a loaded machine that exceeds the global 30 s pytest timeout and the
+  test fails as
+  `Failed: Timeout (>30.0s) from pytest-timeout`, with
+  `PyInstaller.isolated._parent: Timed out while waiting for the child process
+  to exit!` — never on an assertion. The guard it is supposed to be (the
+  bundle really does reach `huggingface_hub.dataclasses`, `jinja2.meta`,
+  `tqdm.contrib.logging`) is neither proven nor disproven by that run.
+- **Evidence:** 2026-09-15 on this Mac. Green at 23:36 (`1028 passed, 1 skipped`)
+  and red at 00:05 in the same worktree with no change to `specs/` between the
+  two runs; red again with my own engine stopped, while 16 other `run.py`
+  processes from concurrent agent lanes were on the box. Run alone it is
+  `1 failed, 10 passed in 37.89s` — the other 10 cases in the file pass. Not
+  caused by the lane that observed it (CS-13 touched no file under `specs/`).
+- **Status:** open — a real test-infrastructure defect (a flaky guard is a
+  guard nobody can trust), not a bundle defect.
+- **Analysis stamp:** Analyzed 2026-09-15 — verified in code: the failure is
+  inside `collect_submodules`'s isolated child, and the cap is the global
+  `timeout = 30` in `tests/pytest.ini`, which the rest of the suite needs.
+- **Owner hint:** the frozen-bundle / Hard-Rule-6 owner. The obvious shape is
+  `@pytest.mark.timeout(<generous>)` on this one case (the mark overrides the
+  global cap per test) so the genuinely slow collection is allowed to finish —
+  a deliberate exception, recorded, rather than a global loosening. Whoever
+  takes it should also decide whether a second case in the file needs the same.
+
+
 ### MXL-D-076 — `Scrape` tool's `get_links` / `get_overview` flags are inert; every scrape always returns the full payload
 - **Area:** `app/services/scraper/engine.py:372` (`ScraperEngine.scrape_one`),
   `app/tools/tools/network.py:415` (`tool_scrape` building `LocalScrapeOptions`)

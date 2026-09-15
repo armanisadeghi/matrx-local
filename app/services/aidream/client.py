@@ -14,7 +14,9 @@ The SyncEngine catches this and skips the sync cycle gracefully, logging a warni
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import ssl
 from typing import Any, Optional
 
@@ -53,6 +55,57 @@ class AIDreamError(Exception):
 # envelopes for nine days (2026-08-30 → 2026-09-08) behind a header the server
 # would not have read. A caller-supplied header still wins; this only stops the
 # transport from REFUSING to send when it has nothing to say.
+# ── One immediate retry for a transport that failed on the wire (SR-09) ──────
+#
+# Measured over the 72h to 2026-09-14 on this transport: 394 deliveries of
+# /api/coding-sessions/bridge failed with
+#
+#     [SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac
+#
+# plus 232 plain "Cannot reach". What the numbers say about the cause matters,
+# because three plausible explanations are wrong:
+#
+#   * NOT a shared client under concurrency, and NOT keep-alive reuse across a
+#     suspend — this client opens a FRESH httpx.AsyncClient per request (one
+#     construction site, in _send, inside `async with`), so no connection is
+#     ever reused between requests and there is nothing to share. The outbox
+#     DOES deliver in parallel waves (its window grows toward
+#     delivery_concurrency), so the handshakes are concurrent even though the
+#     connections are not shared — which is the whole reason the retry below
+#     waits a jittered moment instead of re-handshaking in the same
+#     millisecond as its siblings.
+#   * NOT proxy or tunnel interference configured by this app — it sets no
+#     HTTP_PROXY/HTTPS_PROXY anywhere.
+#   * NOT a storm: 370 DISTINCT outbox rows, never more than 5 in any minute,
+#     spread evenly across three days and every hour of them.
+#
+# It is a genuine, roughly-one-in-two-hundred failure of an individual brand
+# new TLS connection, on the network path between this Mac and
+# server.app.matrxserver.com. The client cannot prevent it. What it CAN stop
+# doing is treating it as "the server is unreachable": 326 of those 370 rows
+# failed exactly once and were delivered on their very next attempt, having
+# been pushed through an outbox backoff (2s → 64s) and a WARNING line each.
+#
+# So a wire-level failure gets ONE immediate retry on a new connection before
+# it is called offline. Every GET is safe to repeat. A POST is only repeated on
+# a path whose handler is replay-safe, because a record-mac failure cannot
+# prove the request never landed — the bridge is exactly that (the server
+# dedupes a replayed envelope by receipt id and answers 409), and the outbox
+# would have re-sent the row regardless; this only makes it sooner and quieter.
+_REPLAY_SAFE_POST_PATHS: tuple[str, ...] = ("/coding-sessions/bridge",)
+
+# Wire failures are counted and summarised rather than logged per occurrence:
+# retrying silently would hide a network problem, and 394 WARNINGs hid it just
+# as well by drowning the log.
+_RETRY_SUMMARY_EVERY = 25
+_wire_retry_counts: dict[str, int] = {"retried": 0, "recovered": 0}
+
+
+def wire_retry_stats() -> dict[str, int]:
+    """Transport-level retries and how many of them recovered the request."""
+    return dict(_wire_retry_counts)
+
+
 _ORGANIZATION_SELF_RESOLVED_PATHS: tuple[str, ...] = (
     "/coding-sessions/bridge",
     "/coding-sessions/sessions",
@@ -152,6 +205,90 @@ class AIDreamClient:
             ) from exc
         return merged
 
+    # ── The one place a request meets the wire ───────────────────────────
+    _WIRE_FAILURES = (
+        httpx.ConnectError,
+        httpx.NetworkError,
+        httpx.RemoteProtocolError,
+        ssl.SSLError,
+        OSError,
+    )
+
+    @staticmethod
+    def _is_replay_safe(method: str, path: str) -> bool:
+        if method == "GET":
+            return True
+        return any(path.startswith(safe) for safe in _REPLAY_SAFE_POST_PATHS)
+
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        path: str,
+        headers: dict[str, str],
+        timeout: float,
+        json: Any = None,
+    ) -> httpx.Response:
+        """Send once; on a wire-level failure, retry once on a NEW connection.
+
+        See _REPLAY_SAFE_POST_PATHS for why this exists and what it will and
+        will not repeat. Anything else — a timeout (remote outcome unknown), an
+        HTTP status, a non-replay-safe POST — is raised on the first failure,
+        exactly as before.
+        """
+        attempts = 2 if self._is_replay_safe(method, path) else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=timeout, transport=self._transport
+                ) as http:
+                    response = await http.request(
+                        method, url, headers=headers, json=json
+                    )
+            except httpx.TimeoutException as exc:
+                raise AIDreamTimeoutError(
+                    f"[aidream_client] Timeout reaching {url}"
+                ) from exc
+            except self._WIRE_FAILURES as exc:
+                if attempt >= attempts:
+                    # Same words as before for each class, so callers and the
+                    # log lines that match on them are unchanged.
+                    if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
+                        raise AIDreamOfflineError(
+                            f"[aidream_client] Cannot reach {url}: {exc}"
+                        ) from exc
+                    raise AIDreamOfflineError(
+                        f"[aidream_client] Transport failure reaching {url}: {exc}"
+                    ) from exc
+                _wire_retry_counts["retried"] += 1
+                logger.debug(
+                    "[aidream_client] wire failure on %s %s (%s) — retrying once "
+                    "on a new connection",
+                    method, path, exc,
+                )
+                # A short jittered pause: simultaneous deliveries must not all
+                # re-handshake in the same millisecond.
+                await asyncio.sleep(0.2 + random.random() * 0.3)
+                continue
+            except httpx.HTTPError as exc:
+                raise AIDreamOfflineError(
+                    f"[aidream_client] HTTP error reaching {url}: {exc}"
+                ) from exc
+            if attempt > 1:
+                _wire_retry_counts["recovered"] += 1
+                if _wire_retry_counts["recovered"] % _RETRY_SUMMARY_EVERY == 0:
+                    logger.info(
+                        "[aidream_client] %s wire-level retries so far, %s of them "
+                        "recovered the request on a new connection (the network "
+                        "path to this server drops individual TLS connections; "
+                        "nothing is lost, deliveries are not delayed by it)",
+                        _wire_retry_counts["retried"],
+                        _wire_retry_counts["recovered"],
+                    )
+            return response
+        raise AssertionError("unreachable")  # pragma: no cover
+
     async def get(
         self,
         path: str,
@@ -172,33 +309,15 @@ class AIDreamClient:
             {"Accept": "application/json"}, jwt, headers, path=path
         )
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=_REQUEST_TIMEOUT, transport=self._transport
-            ) as http:
-                resp = await http.get(url, headers=headers)
-        except httpx.TimeoutException as exc:
-            raise AIDreamTimeoutError(
-                f"[aidream_client] Timeout reaching {url}"
-            ) from exc
-        except (httpx.ConnectError, httpx.NetworkError) as exc:
-            raise AIDreamOfflineError(
-                f"[aidream_client] Cannot reach {url}: {exc}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise AIDreamOfflineError(
-                f"[aidream_client] HTTP error reaching {url}: {exc}"
-            ) from exc
-        except (ssl.SSLError, OSError) as exc:
-            # httpx does not wrap every transport failure. A TLS alert raised
-            # mid-stream (SSLV3_ALERT_BAD_RECORD_MAC, seen live 2026-08-19 on
-            # the coding-session publisher) reaches callers RAW, escapes their
-            # `except AIDreamOfflineError` and kills the caller's loop. At this
-            # boundary an OSError means exactly one thing — the server was not
-            # reached — which is this client's definition of offline.
-            raise AIDreamOfflineError(
-                f"[aidream_client] Transport failure reaching {url}: {exc}"
-            ) from exc
+        # httpx does not wrap every transport failure: a TLS alert raised
+        # mid-stream (SSLV3_ALERT_BAD_RECORD_MAC, live since 2026-08-19 on the
+        # coding-session publisher) reaches callers RAW, escapes their
+        # `except AIDreamOfflineError` and kills the caller's loop. _send maps
+        # every wire failure onto this client's offline contract, and retries
+        # the replay-safe ones once first.
+        resp = await self._send(
+            "GET", url, path=path, headers=headers, timeout=_REQUEST_TIMEOUT
+        )
 
         if not resp.is_success:
             raise AIDreamError(
@@ -231,33 +350,9 @@ class AIDreamClient:
             path=path,
         )
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=timeout, transport=self._transport
-            ) as http:
-                resp = await http.post(url, headers=headers, json=payload)
-        except httpx.TimeoutException as exc:
-            raise AIDreamTimeoutError(
-                f"[aidream_client] Timeout reaching {url}"
-            ) from exc
-        except (httpx.ConnectError, httpx.NetworkError) as exc:
-            raise AIDreamOfflineError(
-                f"[aidream_client] Cannot reach {url}: {exc}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise AIDreamOfflineError(
-                f"[aidream_client] HTTP error reaching {url}: {exc}"
-            ) from exc
-        except (ssl.SSLError, OSError) as exc:
-            # httpx does not wrap every transport failure. A TLS alert raised
-            # mid-stream (SSLV3_ALERT_BAD_RECORD_MAC, seen live 2026-08-19 on
-            # the coding-session publisher) reaches callers RAW, escapes their
-            # `except AIDreamOfflineError` and kills the caller's loop. At this
-            # boundary an OSError means exactly one thing — the server was not
-            # reached — which is this client's definition of offline.
-            raise AIDreamOfflineError(
-                f"[aidream_client] Transport failure reaching {url}: {exc}"
-            ) from exc
+        resp = await self._send(
+            "POST", url, path=path, headers=headers, timeout=timeout, json=payload
+        )
 
         if not resp.is_success:
             detail = resp.text[:1000]

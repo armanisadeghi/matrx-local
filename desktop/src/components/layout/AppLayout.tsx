@@ -5,6 +5,7 @@ import { StatusBar } from "./StatusBar";
 import { QuickActionBar } from "./QuickActionBar";
 import { AppActionBanner } from "./AppActionBanner";
 import { EngineDownBanner } from "@/components/EngineDownBanner";
+import { EngineSupervisorBanner } from "@/components/recovery/EngineSupervisorBanner";
 import { AppConfigBanner } from "@/components/AppConfigBanner";
 import { useAppConfigStatus } from "@/hooks/use-app-config-status";
 import { useDevTerminalHeight } from "@/components/DevTerminalPanel";
@@ -145,6 +146,9 @@ export function AppLayout({
           onRestartEngine={onRestartEngine}
           onOpenMonitor={onOpenMonitor ?? NOOP}
         />
+        {/* "The engine is failing to START" — a different sentence and a
+            different remedy from EngineDownBanner's "it is not running". */}
+        <EngineSupervisorBanner onOpenMonitor={onOpenMonitor ?? NOOP} />
         <AppConfigBanner
           appConfig={appConfig}
           updateState={updateState}

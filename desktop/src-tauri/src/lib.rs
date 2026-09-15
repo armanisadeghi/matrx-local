@@ -3356,10 +3356,9 @@ fn spawn_successor_process() {
         return;
     };
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    match std::process::Command::new(&executable).args(&args).spawn() {
-        Ok(child) => lifecycle_log::log(&format!(
-            "[graceful-shutdown] successor spawned: pid {} ({})",
-            child.id(),
+    match spawn_successor(&executable, &args) {
+        Ok(pid) => lifecycle_log::log(&format!(
+            "[graceful-shutdown] successor spawned: pid {pid} ({})",
             executable.display()
         )),
         Err(error) => lifecycle_log::log(&format!(
@@ -3368,6 +3367,20 @@ fn spawn_successor_process() {
             executable.display()
         )),
     }
+}
+
+/// Start the successor process. Separated from the resolution and the logging
+/// so a test can prove a process really starts — the half of the relaunch that
+/// either works or leaves the user with no app at all.
+#[cfg(unix)]
+fn spawn_successor(
+    executable: &std::path::Path,
+    args: &[std::ffi::OsString],
+) -> std::io::Result<u32> {
+    std::process::Command::new(executable)
+        .args(args)
+        .spawn()
+        .map(|child| child.id())
 }
 
 #[cfg(test)]
@@ -3634,6 +3647,59 @@ mod shutdown_exit_tests {
             post_cleanup_exit(Some(tauri::RESTART_EXIT_CODE)),
             PostCleanupExit::RelaunchThenBypassAtexit
         );
+    }
+}
+
+/// The successor must be a process that ACTUALLY STARTS. `_exit(0)` skips
+/// tauri's own relaunch on `RunEvent::Exit`, so if this spawn does not happen
+/// the user's app is simply gone after an update — the worst possible outcome
+/// of the SR-01 fix, and the one thing worth a real process to prove.
+#[cfg(all(test, unix))]
+mod successor_spawn_tests {
+    use super::spawn_successor;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_successor_is_really_started_and_receives_our_arguments() {
+        let dir = std::env::temp_dir().join(format!("matrx-successor-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        let marker = dir.join("started");
+        let script = dir.join("successor.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s' \"$1\" > {}\n", marker.display()),
+        )
+        .expect("fixture script");
+        std::process::Command::new("chmod")
+            .args(["+x", script.to_str().expect("utf-8 path")])
+            .status()
+            .expect("chmod");
+
+        let pid = spawn_successor(&script, &[std::ffi::OsString::from("--relaunched")])
+            .expect("the successor must start");
+        assert!(pid > 1);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            marker.exists(),
+            "the successor process never ran — an update would leave the user with no app"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("marker"),
+            "--relaunched",
+            "the successor must inherit our command line, not a bare launch"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A relaunch that cannot spawn must report it, never pretend.
+    #[test]
+    fn a_missing_successor_is_an_error_not_a_silent_success() {
+        let missing = std::env::temp_dir().join("matrx-successor-guard-does-not-exist");
+        assert!(spawn_successor(&missing, &[]).is_err());
     }
 }
 

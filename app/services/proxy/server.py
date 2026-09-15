@@ -103,23 +103,63 @@ class ProxyServer:
             )
             return self._port
 
-        chosen_port = port or self._find_available_port()
-        logger.info(
-            "[app/services/proxy/server.py] Binding HTTP proxy to 127.0.0.1:%d...", chosen_port
-        )
-        try:
-            self._server = await asyncio.start_server(
-                self._handle_client,
-                host="127.0.0.1",
-                port=chosen_port,
+        # 🚨 THE ONLY PORT THIS REPORTS IS ONE IT ACTUALLY BOUND.
+        # A requested port can be taken between the caller deciding on it and
+        # this bind — two engines racing the same engine port derive the same
+        # proxy port, and a stale TIME_WAIT or a foreign listener does it too.
+        # Before 2026-09-15 that was a hard failure and the engine simply ran
+        # without a proxy for the session. A bind refusal is retried forward
+        # through the same scan range as the unrequested case, loudly; only
+        # exhausting the range is fatal.
+        first_choice = port or self._find_available_port()
+        chosen_port = 0
+        last_exc: OSError | None = None
+        for offset in range(MAX_PORT_SCAN):
+            candidate = first_choice + offset
+            if candidate > 65535:
+                break
+            logger.info(
+                "[app/services/proxy/server.py] Binding HTTP proxy to 127.0.0.1:%d...",
+                candidate,
             )
-        except OSError as exc:
+            try:
+                self._server = await asyncio.start_server(
+                    self._handle_client,
+                    host="127.0.0.1",
+                    port=candidate,
+                )
+            except OSError as exc:
+                last_exc = exc
+                logger.warning(
+                    "[app/services/proxy/server.py] Port %d is taken (%s) — trying "
+                    "%d. Whoever holds it: lsof -ti:%d",
+                    candidate, exc, candidate + 1, candidate,
+                )
+                continue
+            chosen_port = candidate
+            if candidate != first_choice:
+                logger.warning(
+                    "[app/services/proxy/server.py] HTTP proxy moved to port %d "
+                    "because %d was already taken — anything configured to reach "
+                    "this proxy must use %d (the engine reports the bound port in "
+                    "/admin/status and /proxy/status)",
+                    candidate, first_choice, candidate,
+                )
+            break
+        else:
+            chosen_port = 0
+
+        if not chosen_port:
             logger.error(
-                "[app/services/proxy/server.py] Failed to bind proxy to port %d — %s. "
-                "Kill the process holding this port: lsof -ti:%d | xargs kill -9",
-                chosen_port, exc, chosen_port,
+                "[app/services/proxy/server.py] Failed to bind the HTTP proxy "
+                "anywhere in %d-%d — last error: %s. Free one of those ports "
+                "(lsof -ti:%d) or set a different proxy port in Settings.",
+                first_choice, first_choice + MAX_PORT_SCAN - 1, last_exc,
+                first_choice,
             )
-            raise
+            raise last_exc if last_exc is not None else OSError(
+                f"no free proxy port in {first_choice}-{first_choice + MAX_PORT_SCAN - 1}"
+            )
         self._port = chosen_port
         self._running = True
         self._started_at = time.time()

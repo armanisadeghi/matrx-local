@@ -1,8 +1,12 @@
-"""Process boundary for the Claude Code session-index scan.
+"""Process boundary for the Claude Code session-index refresh.
 
-Reading Claude's session index is ~63,000 small JSON files (rglob + lstat +
-``json.loads`` each, 56 s warm on this Mac, measured 2026-09-13). It ran in the
-engine's own process via ``asyncio.to_thread``, and on 2026-09-13 the engine
+Claude's session index is 67,224 record files and 3.1 GB on this Mac (measured
+2026-09-15). The refresh this helper runs is incremental — it stats the tree
+and re-reads only the files whose stamp moved, writing the reduced rows into
+the persisted store (:mod:`app.services.coding_sessions.claude_index_store`) —
+but the FIRST build still reads all of it, and that is the read this process
+boundary exists for. It ran in the engine's own process via
+``asyncio.to_thread``, and on 2026-09-13 the engine
 declared a healthy Chromium dead during exactly that window: the browser pool's
 30 s launch bound expired 47 s after Phase 3 began, at the same millisecond as
 "Phase 2h.2: Claude session index warmed ✓", while the same browser launched in
@@ -26,10 +30,9 @@ helper never boots an engine, never binds a port, and never touches runtime
 state (Hard Rule 9 — a dev engine's world is inherited through the environment,
 and nothing here creates a home directory).
 
-The result crosses back as pickle on stdout. That is our own signed executable
-talking to itself over a private pipe — the entries are frozen dataclasses
-(:class:`~app.services.coding_sessions.claude_session_index.ClaudeSessionIndexEntry`)
-carrying ``Path`` objects, which JSON cannot round-trip. The payload is framed
+The refresh RESULT crosses back as pickle on stdout — a small dict of counts,
+now that the index itself lands in the store rather than in this pipe. That is
+our own signed executable talking to itself over a private pipe. It is framed
 with a magic prefix and an explicit length so a stray line on the child's stdout
 (a third-party import banner, a warning) can never be mistaken for data.
 """
@@ -46,12 +49,14 @@ from typing import Any
 
 HELPER_ARGUMENT = "--matrx-claude-index-helper-v1"
 
-# Measured 2026-09-13 on this Mac: 63,419 records, 1,917 conversations, 56 s
-# warm. A cold cache is slower, so the bound is generous on purpose — it exists
-# only so a wedged child (a stalled network home, a paused disk) can never hold
-# a caller forever. It is not a performance expectation, and exceeding it costs
-# correctness nothing: the caller falls back to the in-process scan.
-HELPER_TIMEOUT_SECONDS = 240.0
+# Measured 2026-09-15 on this Mac: the FIRST build reads 67,224 records / 3.1 GB
+# in 44-84 s; every refresh after it re-reads only what changed (1 file, ~2 s).
+# The bound is generous on purpose — it exists only so a wedged child (a stalled
+# network home, a paused disk) can never hold a caller forever. Exceeding it
+# costs neither correctness nor progress: the store is committed chunk by chunk,
+# so a killed helper keeps everything it had read and the next refresh resumes
+# from there; the caller meanwhile falls back to the in-engine chunked refresh.
+HELPER_TIMEOUT_SECONDS = 600.0
 
 # Framing: magic, then an 8-byte big-endian payload length, then the pickle.
 PAYLOAD_MAGIC = b"\x00MATRX-CLAUDE-INDEX-1\x00"
@@ -60,25 +65,25 @@ _LENGTH_STRUCT = struct.Struct(">Q")
 # ceiling that refuses a corrupt length header instead of allocating on it.
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
-_INDEX_MODULE_NAME = "app.services.coding_sessions.claude_session_index"
+_STORE_MODULE_NAME = "app.services.coding_sessions.claude_index_store"
 _INDEX_PACKAGE_NAME = "app.services.coding_sessions"
 
 
-def helper_command(root: Path) -> list[str]:
+def helper_command(root: Path, store_path: Path) -> list[str]:
     """The argv that runs this helper as a short-lived copy of the engine."""
     if getattr(sys, "frozen", False):
-        return [sys.executable, HELPER_ARGUMENT, str(root)]
+        return [sys.executable, HELPER_ARGUMENT, str(root), str(store_path)]
     run_py = Path(__file__).resolve().parents[2] / "run.py"
-    return [sys.executable, str(run_py), HELPER_ARGUMENT, str(root)]
+    return [sys.executable, str(run_py), HELPER_ARGUMENT, str(root), str(store_path)]
 
 
-def encode_payload(result: tuple[dict[str, Any], dict[str, int]]) -> bytes:
-    """Frame one ``(entries, totals)`` result for the pipe."""
+def encode_payload(result: dict[str, Any]) -> bytes:
+    """Frame one refresh result for the pipe."""
     blob = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
     return PAYLOAD_MAGIC + _LENGTH_STRUCT.pack(len(blob)) + blob
 
 
-def decode_payload(stream: bytes) -> tuple[dict[str, Any], dict[str, int]]:
+def decode_payload(stream: bytes) -> dict[str, Any]:
     """Recover the result from the child's stdout, ignoring anything around it.
 
     Raises ``ValueError`` when no intact payload is present — callers treat that
@@ -97,27 +102,23 @@ def decode_payload(stream: bytes) -> tuple[dict[str, Any], dict[str, int]]:
     if len(body) != length:
         raise ValueError("session-index helper payload is truncated")
     result = pickle.loads(body)
-    if (
-        not isinstance(result, tuple)
-        or len(result) != 2
-        or not isinstance(result[0], dict)
-        or not isinstance(result[1], dict)
-    ):
+    if not isinstance(result, dict) or "files" not in result:
         raise ValueError("session-index helper payload has the wrong shape")
     return result
 
 
 def _load_index_module() -> types.ModuleType:
-    """Import the index reader WITHOUT executing its package initializer.
+    """Import the index store WITHOUT executing its package initializer.
 
     ``app.services.coding_sessions.__init__`` eagerly imports the bridge outbox
     and the capture reconciler, which pull in ``app.config``, the local database
     and the HTTP clients — engine machinery this short-lived process must never
     touch. Standing in a bare parent module keeps the helper at ~100 imported
-    modules and ~0.06 s, and leaves the class's ``__module__`` at its canonical
-    name so the parent unpickles the real dataclass.
+    modules and ~0.06 s. The store module's only non-stdlib import is the record
+    reader beside it, and its one ``app.config`` use is lazy — this process is
+    always given an explicit store path, so it never reads config at all.
     """
-    existing = sys.modules.get(_INDEX_MODULE_NAME)
+    existing = sys.modules.get(_STORE_MODULE_NAME)
     if existing is not None:
         return existing
     if _INDEX_PACKAGE_NAME not in sys.modules:
@@ -127,26 +128,28 @@ def _load_index_module() -> types.ModuleType:
         stub.__path__ = [str(Path(__file__).resolve().parents[1] / "services" / "coding_sessions")]
         sys.modules[_INDEX_PACKAGE_NAME] = stub
     try:
-        return importlib.import_module(_INDEX_MODULE_NAME)
+        return importlib.import_module(_STORE_MODULE_NAME)
     except Exception:
         # Never let the isolation trick be the reason a scan fails: drop the
         # stand-in and take the ordinary (heavier) import path.
         sys.modules.pop(_INDEX_PACKAGE_NAME, None)
-        return importlib.import_module(_INDEX_MODULE_NAME)
+        return importlib.import_module(_STORE_MODULE_NAME)
 
 
 def run_claude_index_helper() -> int:
-    """Scan one session-index root and write the result to stdout. Exit code."""
+    """Refresh the persisted index for one root; write the totals to stdout."""
     try:
         arguments = sys.argv[1:]
         position = arguments.index(HELPER_ARGUMENT)
         remainder = [value for value in arguments[position + 1 :] if value]
-        if not remainder:
-            raise ValueError("no session-index root was given")
+        if len(remainder) < 2:
+            raise ValueError("the helper needs a session-index root and a store path")
         root = Path(remainder[0]).expanduser()
+        store_path = Path(remainder[1]).expanduser()
 
-        index_module = _load_index_module()
-        result = index_module.read_session_index(root)
+        store_module = _load_index_module()
+        store = store_module.ClaudeIndexStore(store_path)
+        result = store_module.refresh_store_sync(root, store)
 
         stdout = sys.stdout.buffer
         stdout.write(encode_payload(result))

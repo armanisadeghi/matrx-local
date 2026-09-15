@@ -324,8 +324,11 @@ held 1,671 of those conversations:
 
 - **State is the server's, not this Mac's.** The engine asks AI Matrx for its own
   inventory of bound Claude sessions (`identity_client.fetch_complete_identity_inventory`,
-  the same read the title reconciler uses; cached 45s) and judges each local
-  conversation against it. Local ledgers (`claude_session_synced`, the outbox, the
+  the same read the title reconciler uses; cached 45s and refreshed in the BACKGROUND —
+  a request is answered from the cached inventory with `cloud.age_seconds` and
+  `cloud.refreshing` on it, never by waiting for the server; with nothing cached at all
+  the first caller waits 0.75s and otherwise gets `cloud.reason:
+  "cloud_check_in_flight"`) and judges each local conversation against it. Local ledgers (`claude_session_synced`, the outbox, the
   quarantine) explain HOW a session got there or why it has not — they never decide
   whether it is in the cloud, because most sessions arrive through the Claude Code
   plugin hook and never pass through this engine at all.
@@ -343,10 +346,28 @@ held 1,671 of those conversations:
   human message (the shared summary reader's fallback, so the import agrees), and open
   a full diagnosis like any other row. `totals.transcript_only` / `transcripts_on_disk`
   count them; guard: `tests/unit/test_claude_overview_nothing_hidden.py`.
-- **The index is warmed at engine start** (`warm_index_cache`, app/main.py Phase 2h.2)
-  so the first open is not a ~25s spinner; the reader cap is 250,000 records (this Mac
-  holds 55,000+ across eight accounts) and `totals.index_limit_reached` makes the screen
-  say so rather than showing a silently short list.
+- **The index is PERSISTED and INCREMENTAL, and the request never walks the disk
+  (2026-09-15).** `claude_index_store.py` keeps the reduced form of every sidebar record
+  in its own WAL SQLite database in the engine home, one row per record FILE keyed by
+  that file's `(mtime_ns, size)`, plus the transcript sizes and the CLI-only titles. A
+  refresh stats the tree and re-reads only what moved; `GET /coding-session/claude/overview`
+  loads ~3,600 finished rows and answers, then kicks the refresh behind the response.
+  The payload's `index` block says which it is: `state` (`fresh` | `refreshing` |
+  `cold`), `files_read`, `updated_at`, `changed_files`, `duration_seconds`,
+  `limit_reached`, `unreadable`, `error`. Measured on this Mac's 67,224 records / 3.1 GB:
+  the read was **31.76 s and 58.96 s against the client's hard 60 s ceiling**, 1,209 s on
+  a fresh engine, and /health answered nothing while it ran (lane V-ML, 2026-09-15);
+  it is now **18-108 ms warm, 184 ms for the first open of a restarted engine**, with
+  /health at 0.3-8 ms throughout — including during the one-time 44-84 s first build,
+  which runs in the helper PROCESS (`app/common/claude_index_helper.py`; the announced
+  fallback is a chunked in-engine refresh that awaits between 256-record chunks).
+  `warm_index_cache` (app/main.py Phase 2h.2) runs that refresh at engine start, which
+  after the first build re-reads ~0 files. The walk cap is 250,000 records and
+  `totals.index_limit_reached` makes the screen say so rather than showing a silently
+  short list. Guards: `tests/unit/test_claude_overview_latency.py` (no walk on the
+  request path, event loop under 200 ms during a full walk, no inline server call) and
+  `tests/unit/test_claude_index_helper.py` (helper parity with the full scan, zero
+  re-reads on an unchanged tree).
 - **Both spellings of a session are one session.** A hook mirror binds the raw
   Claude UUID; a history import binds `claude-sdk:<sha256(project)>:<b64(uuid)>`.
   `raw_session_id()` reduces either to the UUID before any cloud or queue lookup.

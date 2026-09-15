@@ -69,9 +69,10 @@ def test_an_unanswered_server_is_unknown_never_not_in_cloud() -> None:
 # ── The startup warm-up ─────────────────────────────────────────────────────
 #
 # Until 2026-09-11 the first open of the Coding Sessions screen after an engine
-# start paid the whole cold read (~47,000 index records, ~25s here) while a
-# person watched a spinner, because the index is only cached once something
-# asks for it. The engine now asks for it itself at startup.
+# start paid the whole cold read while a person watched a spinner, because the
+# index was only built when something asked for it. The engine now refreshes
+# the PERSISTED index at startup — and after the first ever build that refresh
+# re-reads nothing, so the screen is instant on a cold engine too.
 
 
 def _write_index_record(root: Path, *, session_id: str, title: str) -> None:
@@ -91,28 +92,64 @@ def _write_index_record(root: Path, *, session_id: str, title: str) -> None:
     )
 
 
-def test_warm_index_cache_fills_the_cache_so_the_first_screen_open_is_free(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.fixture()
+def isolated_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A throwaway persisted index, and no transcript phase to worry about."""
+    from app.services.coding_sessions.claude_index_store import ClaudeIndexStore
+
+    store = ClaudeIndexStore(tmp_path / "store" / "index.sqlite3")
+    claude_overview._reset_index_state_for_tests(store)
+    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(tmp_path / "absent-ledger.json"))
+
+    async def _no_transcripts(_store):
+        return {}
+
+    monkeypatch.setattr(claude_overview, "_refresh_transcripts", _no_transcripts)
+    yield store
+    claude_overview._reset_index_state_for_tests(None)
+
+
+def test_warm_index_cache_persists_the_index_so_the_first_open_is_free(
+    tmp_path: Path, isolated_index
 ) -> None:
     root = tmp_path / "claude-code-sessions"
     _write_index_record(root, session_id="11111111-1111-4111-8111-111111111111", title="One")
     _write_index_record(root, session_id="22222222-2222-4222-8222-222222222222", title="Two")
-    monkeypatch.setattr(claude_overview, "_INDEX_CACHE", None)
-    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(tmp_path / "absent-ledger.json"))
 
     asyncio.run(claude_overview.warm_index_cache(root))
 
-    cached = claude_overview._INDEX_CACHE
-    assert cached is not None, "warm_index_cache left the cache cold"
-    fingerprint, entries, totals = cached
-    assert fingerprint[0] == 2
-    assert totals["files"] == 2
-    assert not totals.get("truncated")
-    assert {entry.title for entry in entries.values()} == {"One", "Two"}
+    snapshot = asyncio.run(claude_overview.index_snapshot())
+    assert snapshot.complete is True, "warm_index_cache left the index cold"
+    assert snapshot.totals["files"] == 2
+    assert not snapshot.totals.get("truncated")
+    assert {entry.title for entry in snapshot.entries.values()} == {"One", "Two"}
+    assert claude_overview.index_report(snapshot)["state"] == "fresh"
 
-    # And that warmed cache is what the screen's own read now returns: the very
-    # same objects, so the open does no parsing at all. (Re-parsing would build
-    # new dicts — identity is the proof, not equality.)
-    screen_entries, screen_totals = claude_overview._session_index(root)
-    assert screen_entries is entries
-    assert screen_totals is totals
+
+def test_a_restarted_engine_answers_from_the_persisted_index_without_reading_a_file(
+    tmp_path: Path, isolated_index, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE fix for the 31.76 s / 58.96 s / 1,209 s reads: a cold engine that
+    has an index on disk must answer from it, having opened no record file."""
+    root = tmp_path / "claude-code-sessions"
+    _write_index_record(root, session_id="11111111-1111-4111-8111-111111111111", title="One")
+    asyncio.run(claude_overview.warm_index_cache(root))
+
+    # The engine restarts: in-memory state is gone, the store is not.
+    claude_overview._reset_index_state_for_tests(isolated_index)
+
+    def _must_not_read(_stamps):
+        raise AssertionError(
+            "a record file was parsed while answering — the cold read is back"
+        )
+
+    monkeypatch.setattr(claude_overview, "read_record_rows", _must_not_read)
+    monkeypatch.setattr(
+        claude_overview.claude_index_helper,
+        "helper_command",
+        lambda *_a, **_k: ["/nonexistent/helper"],
+    )
+
+    snapshot = asyncio.run(claude_overview.index_snapshot())
+    assert {entry.title for entry in snapshot.entries.values()} == {"One"}
+    assert snapshot.complete is True

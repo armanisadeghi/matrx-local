@@ -1,22 +1,24 @@
-"""The session-index scan must cross a process boundary, intact and inert.
+"""The session-index refresh must cross a process boundary, intact and inert.
 
-Reading Claude's index is ~63,000 ``json.loads`` calls — about a minute of work
-that used to run inside the engine on a thread. On 2026-09-13 the browser pool's
-30s launch bound expired in exactly that window, at the same millisecond as the
-warm-up finished, and the Dashboard told the user "Chromium is installed but
-would not start" while the very same browser launched in 3.7s from a terminal.
-A helper process takes that minute of GIL, allocator and disk pressure out of
-the engine entirely.
+Claude's index is 67,224 record files and 3.1 GB on this Mac (2026-09-15). The
+refresh is incremental — it re-reads only what changed — but the first build
+still reads all of it, and that read used to run inside the engine on a thread.
+On 2026-09-13 the browser pool's 30 s launch bound expired in exactly that
+window, at the same millisecond as the warm-up finished, and the Dashboard told
+the user "Chromium is installed but would not start" while the very same
+browser launched in 3.7 s from a terminal. A helper process takes that GIL,
+allocator and disk pressure out of the engine entirely.
 
-The fix is a short-lived helper process. These pin what makes it a fix:
+These pin what makes it a fix:
 
   1. The helper really is spawned the way production spawns it (the dev-mode
-     ``run.py`` bootstrap), and its result is EQUAL to the in-process read —
-     entries, titles, paths, totals. A faster scan that loses a conversation
-     would be a worse bug than the one it replaces.
+     ``run.py`` bootstrap), and the index it writes is EQUAL to the in-process
+     full scan — entries, titles, paths, totals. A faster refresh that loses a
+     conversation would be a worse bug than the one it replaces.
   2. It stays inert: no engine, no port, no discovery file, no home directory
      written into the world it was pointed at (Hard Rule 9).
   3. A framed payload survives unrelated chatter on the child's stdout.
+  4. A broken helper falls back loudly, and the index still arrives.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from app.common.claude_index_helper import (
     encode_payload,
     helper_command,
 )
+from app.services.coding_sessions.claude_index_store import ClaudeIndexStore
 from app.services.coding_sessions.claude_session_index import read_session_index
 
 
@@ -93,9 +96,11 @@ def sessions_root(tmp_path, monkeypatch) -> Path:
     return root
 
 
-def _run_helper(root: Path, home: Path) -> subprocess.CompletedProcess[bytes]:
+def _run_helper(
+    root: Path, home: Path, store_path: Path
+) -> subprocess.CompletedProcess[bytes]:
     """Spawn the helper EXACTLY as the engine does in a source run."""
-    command = helper_command(root)
+    command = helper_command(root, store_path)
     assert command[1].endswith("run.py"), command
     assert command[2] == HELPER_ARGUMENT
     env = os.environ.copy()
@@ -103,21 +108,25 @@ def _run_helper(root: Path, home: Path) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(command, capture_output=True, env=env, timeout=120)
 
 
-def test_helper_round_trips_the_real_index(sessions_root, tmp_path):
+def test_helper_writes_an_index_equal_to_the_full_scan(sessions_root, tmp_path):
     home = tmp_path / "matrx-home"
-    completed = _run_helper(sessions_root, home)
+    store_path = tmp_path / "store" / "index.sqlite3"
+    completed = _run_helper(sessions_root, home, store_path)
 
     assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
-    entries, totals = decode_payload(completed.stdout)
-    expected_entries, expected_totals = read_session_index(sessions_root)
+    result = decode_payload(completed.stdout)
+    assert result["files"] == 3
+    assert result["conversations"] == 2
+    assert result["changed"] == 3
 
-    assert totals == expected_totals
-    assert totals["records"] == 2
-    assert totals["files"] == 3
-    assert entries == expected_entries
+    snapshot = ClaudeIndexStore(store_path).load(record_paths=True)
+    expected_entries, expected_totals = read_session_index(sessions_root)
+    assert snapshot.entries == expected_entries
+    assert snapshot.totals == expected_totals
+    assert snapshot.complete is True
     # Not just equal dicts: the real frozen dataclass, with its local-only
-    # fields, arrived — the freshest record won and its paths came with it.
-    winner = entries["11111111-1111-4111-8111-111111111111"]
+    # fields — the freshest record won and its paths came with it.
+    winner = snapshot.entries["11111111-1111-4111-8111-111111111111"]
     assert winner.title == "Fix the browser pool"
     assert winner.workspace_name == "matrx-local"
     assert winner.local_cwd == Path("/Users/someone/code/matrx-local")
@@ -125,10 +134,55 @@ def test_helper_round_trips_the_real_index(sessions_root, tmp_path):
     assert all(isinstance(path, Path) for path in winner.record_paths)
 
 
-def test_helper_boots_no_engine_and_writes_nothing(sessions_root, tmp_path):
-    """A scan is a scan: no second engine, no port, no home directory."""
+def test_a_second_run_rereads_only_what_changed(sessions_root, tmp_path):
+    """The whole point: 67,224 files stay unread when nothing moved."""
     home = tmp_path / "matrx-home"
-    completed = _run_helper(sessions_root, home)
+    store_path = tmp_path / "store" / "index.sqlite3"
+    assert decode_payload(_run_helper(sessions_root, home, store_path).stdout)["changed"] == 3
+
+    again = decode_payload(_run_helper(sessions_root, home, store_path).stdout)
+    assert again["changed"] == 0, "an unchanged tree must cost zero record reads"
+    assert again["files"] == 3
+    assert again["conversations"] == 2
+
+    _write_record(
+        sessions_root,
+        "account-a",
+        "org-1",
+        {
+            "cliSessionId": "33333333-3333-4333-8333-333333333333",
+            "title": "A new conversation",
+            "cwd": "/Users/someone/code/aidream",
+            "lastActivityAt": 1_757_800_000_000,
+        },
+    )
+    third = decode_payload(_run_helper(sessions_root, home, store_path).stdout)
+    assert third["changed"] == 1, "only the new record may be read"
+    assert third["conversations"] == 3
+
+
+def test_a_deleted_record_leaves_the_index(sessions_root, tmp_path):
+    home = tmp_path / "matrx-home"
+    store_path = tmp_path / "store" / "index.sqlite3"
+    _run_helper(sessions_root, home, store_path)
+    (
+        sessions_root
+        / "account-b"
+        / "org-2"
+        / "local_22222222-2222-4222-8222-222222222222.json"
+    ).unlink()
+
+    result = decode_payload(_run_helper(sessions_root, home, store_path).stdout)
+    assert result["removed"] == 1
+    assert result["conversations"] == 1
+    snapshot = ClaudeIndexStore(store_path).load()
+    assert "22222222-2222-4222-8222-222222222222" not in snapshot.entries
+
+
+def test_helper_boots_no_engine_and_writes_nothing(sessions_root, tmp_path):
+    """A refresh is a refresh: no second engine, no port, no home directory."""
+    home = tmp_path / "matrx-home"
+    completed = _run_helper(sessions_root, home, tmp_path / "store" / "index.sqlite3")
 
     assert completed.returncode == 0
     assert not home.exists(), sorted(p.name for p in home.iterdir())
@@ -137,17 +191,17 @@ def test_helper_boots_no_engine_and_writes_nothing(sessions_root, tmp_path):
 
 def test_missing_root_is_an_empty_result_not_a_crash(tmp_path):
     home = tmp_path / "matrx-home"
-    completed = _run_helper(tmp_path / "nothing-here", home)
+    store_path = tmp_path / "store" / "index.sqlite3"
+    completed = _run_helper(tmp_path / "nothing-here", home, store_path)
 
     assert completed.returncode == 0
-    entries, totals = decode_payload(completed.stdout)
-    assert entries == {}
-    assert totals["records"] == 0
+    assert decode_payload(completed.stdout)["files"] == 0
+    assert ClaudeIndexStore(store_path).load().entries == {}
 
 
-def test_helper_without_a_root_fails_loudly(tmp_path):
+def test_helper_without_a_store_path_fails_loudly(tmp_path):
     completed = subprocess.run(
-        helper_command(tmp_path)[:-1],  # every argument except the root
+        helper_command(tmp_path, tmp_path / "store.sqlite3")[:-1],  # no store path
         capture_output=True,
         timeout=120,
     )
@@ -157,14 +211,14 @@ def test_helper_without_a_root_fails_loudly(tmp_path):
 
 def test_framed_payload_survives_chatter_on_the_pipe():
     """A warning printed by some import must never corrupt the result."""
-    payload = encode_payload(({"a": 1}, {"records": 1}))
+    payload = encode_payload({"files": 1, "changed": 1})
     noisy = b"WARNING: something printed to stdout\n" + payload + b"\ntrailing\n"
 
-    assert decode_payload(noisy) == ({"a": 1}, {"records": 1})
+    assert decode_payload(noisy) == {"files": 1, "changed": 1}
 
 
 def test_a_truncated_payload_is_refused_rather_than_half_read():
-    payload = encode_payload(({"a": 1}, {"records": 1}))
+    payload = encode_payload({"files": 1})
 
     with pytest.raises(ValueError):
         decode_payload(payload[:-5])
@@ -177,43 +231,56 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-@pytest.mark.anyio
-async def test_the_engine_path_uses_the_subprocess_and_caches_it(
-    sessions_root, monkeypatch
-):
-    """The production async read must spawn the helper, not fall back to a thread."""
+@pytest.fixture
+def isolated_store(tmp_path, monkeypatch) -> ClaudeIndexStore:
+    """Point the overview module at a throwaway store for this test."""
     from app.services.coding_sessions import claude_overview
 
-    def _must_not_run(_root):
+    store = ClaudeIndexStore(tmp_path / "store" / "index.sqlite3")
+    claude_overview._reset_index_state_for_tests(store)
+    monkeypatch.setattr(
+        claude_overview, "_refresh_transcripts", _no_transcript_refresh
+    )
+    yield store
+    claude_overview._reset_index_state_for_tests(None)
+
+
+async def _no_transcript_refresh(_store):
+    return {}
+
+
+@pytest.mark.anyio
+async def test_the_engine_refreshes_in_the_subprocess_not_in_itself(
+    sessions_root, isolated_store, monkeypatch
+):
+    """The production refresh must spawn the helper, not fall back to threads."""
+    from app.services.coding_sessions import claude_overview
+
+    async def _must_not_run(*_args, **_kwargs):
         raise AssertionError(
-            "the in-process scan ran — the helper path was skipped, and this is the "
-            "GIL-holding read that starved the event loop"
+            "the in-engine refresh ran — the helper path was skipped, and that is "
+            "the GIL-holding read that starved the event loop"
         )
 
-    monkeypatch.setattr(claude_overview, "_session_index", _must_not_run)
-    monkeypatch.setattr(claude_overview, "_INDEX_CACHE", None, raising=False)
+    monkeypatch.setattr(claude_overview, "_refresh_in_threads", _must_not_run)
 
-    entries, totals = await claude_overview._session_index_async(sessions_root)
+    await claude_overview.refresh_index(sessions_root)
+    full = await claude_overview.index_snapshot(record_paths=True)
 
     expected_entries, expected_totals = read_session_index(sessions_root)
-    assert entries == expected_entries
-    assert totals == expected_totals
+    assert full.entries == expected_entries
+    assert full.totals == expected_totals
 
-    # Second read is the cache, not a second process.
-    def _no_second_spawn(_root):
-        raise AssertionError("the helper was spawned again for an unchanged tree")
-
-    monkeypatch.setattr(claude_overview, "helper_command", _no_second_spawn, raising=False)
-    monkeypatch.setattr(
-        claude_overview.claude_index_helper, "helper_command", _no_second_spawn
-    )
-    again_entries, _ = await claude_overview._session_index_async(sessions_root)
-    assert again_entries is entries
+    # A second load of an unchanged store is the in-memory snapshot, not a
+    # second read of every row.
+    snapshot = await claude_overview.index_snapshot()
+    again = await claude_overview.index_snapshot()
+    assert again is snapshot
 
 
 @pytest.mark.anyio
 async def test_a_broken_helper_falls_back_loudly_instead_of_losing_the_index(
-    sessions_root, monkeypatch
+    sessions_root, isolated_store, monkeypatch
 ):
     """Nothing fails silently: the fallback still answers, and it says why."""
     import io
@@ -224,33 +291,33 @@ async def test_a_broken_helper_falls_back_loudly_instead_of_losing_the_index(
     monkeypatch.setattr(
         claude_overview.claude_index_helper,
         "helper_command",
-        lambda root: ["/nonexistent/matrx-helper", str(root)],
+        lambda root, store_path: ["/nonexistent/matrx-helper", str(root)],
     )
-    monkeypatch.setattr(claude_overview, "_INDEX_CACHE", None, raising=False)
 
     captured = io.StringIO()
     handler = logging.StreamHandler(captured)
     claude_overview.logger.logger.addHandler(handler)
     try:
-        entries, totals = await claude_overview._session_index_async(sessions_root)
+        await claude_overview.refresh_index(sessions_root)
     finally:
         claude_overview.logger.logger.removeHandler(handler)
 
+    snapshot = await claude_overview.index_snapshot(record_paths=True)
     expected_entries, expected_totals = read_session_index(sessions_root)
-    assert entries == expected_entries
-    assert totals == expected_totals
+    assert snapshot.entries == expected_entries
+    assert snapshot.totals == expected_totals
     logged = captured.getvalue()
     assert "Session-index helper process unavailable" in logged
     # A stand-in that does not name its remedy is a silent failure with extra
     # words (CLAUDE.md § nothing fails silently).
-    assert "Remedy" in logged
+    assert "remedy" in logged.lower()
 
 
 @pytest.mark.anyio
-async def test_cancelled_helper_scan_reaps_its_child(
-    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+async def test_cancelled_refresh_reaps_its_child(
+    sessions_root: Path, isolated_store: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stopping the reconciler must not leave a Claude index helper behind."""
+    """Stopping the engine must not leave a Claude index helper behind."""
     from app.services.coding_sessions import claude_overview
 
     entered = asyncio.Event()
@@ -279,7 +346,9 @@ async def test_cancelled_helper_scan_reaps_its_child(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    task = asyncio.create_task(claude_overview._read_index_in_helper(sessions_root))
+    task = asyncio.create_task(
+        claude_overview._refresh_in_helper(sessions_root, isolated_store)
+    )
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

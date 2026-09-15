@@ -15,13 +15,20 @@ server which sessions it actually holds (the same identity inventory the
 title reconciler already uses) and reports against that; local delivery
 ledgers only explain HOW a session got there or why it has not.
 
-Nothing is hidden and nothing is sampled: it reads every account's records, so
-a conversation that exists anywhere on this Mac appears. Claude keeps one index
-record per account, so eight accounts means eight copies of every conversation
-— 46,034 files for 1,806 conversations here, about 21s to parse. Reading only
-the signed-in account would take 1.5s but lose 380 conversations, so instead the
-result is cached against a stat-only fingerprint of the tree: repeat opens are
-~0.2s, and a new or changed session invalidates it on its own.
+Nothing is hidden and nothing is sampled: every account's records are indexed,
+so a conversation that exists anywhere on this Mac appears. Claude keeps one
+index record per account, so eight accounts means eight copies of every
+conversation — 67,224 files and 3.1 GB here.
+
+THE REQUEST NEVER DOES THAT READ. Until 2026-09-15 it did, and lane V-ML
+measured the consequences on the installed app: 31.76 s and 58.96 s for this
+one call against a hard 60 s client ceiling, 1,209 s on a fresh engine, and
+/health answering nothing at all while it ran. Now the reduced records are
+persisted incrementally
+(:mod:`app.services.coding_sessions.claude_index_store`), the response is built
+from the last completed refresh, and the refresh — like the cloud check —
+happens behind it. ``index`` and ``cloud`` in the payload say how current each
+half is, so a fast answer is never a silent one.
 """
 
 from __future__ import annotations
@@ -38,10 +45,18 @@ from typing import Any
 
 from app.common import claude_index_helper
 from app.common.system_logger import get_logger
+from app.services.coding_sessions.claude_index_store import (
+    DEFAULT_CHUNK_SIZE,
+    ClaudeIndexStore,
+    IndexSnapshot,
+    finalize_refresh,
+    plan_refresh,
+    read_record_rows,
+    refresh_transcripts_sync,
+)
 from app.services.coding_sessions.claude_session_index import (
     ClaudeSessionIndexEntry,
     default_sessions_root,
-    read_session_index,
 )
 from app.services.coding_sessions.continuation import continuation_hint
 from app.services.coding_sessions.identity_client import (
@@ -141,17 +156,27 @@ def _account_names() -> dict[str, str]:
     return {k: v for k, v in names.items() if isinstance(v, str)}
 
 
-def list_accounts() -> list[dict[str, Any]]:
+def list_accounts(record_counts: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """One row per Claude account on this Mac.
+
+    ``record_counts`` comes from the persisted index. It is not optional for
+    performance reasons — it IS the fix: counting with ``rglob`` here walked
+    all 67,224 record files ON THE EVENT LOOP inside every overview response,
+    which is why /health answered nothing for the whole read (measured by lane
+    V-ML, 2026-09-15: 2,182 of 2,261 samples of the asyncio thread inside
+    ``os_open``). This function now stats only the eight account directories.
+    """
     root = default_sessions_root()
     names = _account_names()
     current = active_account()
+    counts = record_counts or {}
     accounts: list[dict[str, Any]] = []
     if not root.is_dir():
         return accounts
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
-        records = sum(1 for _ in child.rglob("local_*.json"))
+        records = int(counts.get(child.name, 0))
         try:
             stat = child.stat()
             born = getattr(stat, "st_birthtime", None) or stat.st_mtime
@@ -170,75 +195,93 @@ def list_accounts() -> list[dict[str, Any]]:
     return accounts
 
 
-def _transcripts() -> dict[str, tuple[int, int]]:
-    """session id -> (bytes, mtime_ns) for every transcript on disk."""
-    found: dict[str, tuple[int, int]] = {}
-    root = _claude_config_dir() / "projects"
-    if not root.is_dir():
-        return found
-    for path in root.glob("*/*.jsonl"):
-        try:
-            info = path.stat()
-        except OSError:
-            continue
-        found[path.stem] = (info.st_size, info.st_mtime_ns)
-    return found
+# ── The index: persisted, incremental, never on the request path ────────────
+#
+# Reading every account's copy of every conversation is 67,224 files and 3.1 GB
+# on this Mac (measured 2026-09-15). Reading only the active account would be
+# ~1.5 s but LOSES 380 conversations, and the screen's whole purpose is that
+# nothing is hidden. So the reduced form of every record FILE is persisted in
+# its own SQLite database, keyed by that file's (mtime_ns, size), and a refresh
+# re-reads only what changed:
+#
+#   * the request loads rows and answers — it never walks the disk;
+#   * a cold engine start after the first run re-reads ~0 of 67,224 files;
+#   * the walk and the reads happen in a background refresh nobody waits for.
+#
+# Before this, the request itself did the scan: 31.76 s and 58.96 s measured on
+# the installed app against a hard 60 s client ceiling, 1,209 s on a fresh
+# engine, and the engine answered nothing else while it ran.
+
+# How long a loaded snapshot is served before a background refresh is kicked.
+# It is not a staleness ceiling on the data — the answer is always the last
+# completed refresh; this only rate-limits how often a refresh may start.
+_INDEX_REFRESH_INTERVAL_SECONDS = 20.0
+
+# The in-memory snapshot, keyed by the store revision it was built from, so a
+# completed refresh invalidates it with one tiny query instead of a walk.
+_SNAPSHOT: tuple[int, IndexSnapshot] | None = None
+_SNAPSHOT_LOCK = asyncio.Lock()
+
+# One refresh at a time, for the whole engine. The startup warm-up, a screen
+# open and the title reconciler all ask for one, and two concurrent refreshes
+# would read the same 3.1 GB twice.
+_REFRESH_LOCK = asyncio.Lock()
+_REFRESH_TASK: asyncio.Task[Any] | None = None
+# When a refresh last ran (set at its start AND at its end, so the rate limit
+# below measures from completion — a 44 s first build must not be followed by
+# another walk the moment it lands).
+_LAST_REFRESH_AT: float = 0.0
+_LAST_REFRESH_ERROR: str | None = None
+
+_STORE: ClaudeIndexStore | None = None
 
 
-# Reading every account's copy of every conversation costs ~10s here (46,034
-# files). Reading only the active account is ~1.5s but LOSES 380 conversations,
-# because a scope is only as complete as the last cross-account sync — and the
-# screen's whole purpose is that nothing is hidden. So: read everything, then
-# cache it against a cheap fingerprint of the tree (file count + newest mtime,
-# a stat-only walk) so repeat opens are instant and a new session still lands.
-_INDEX_CACHE: tuple[tuple[int, int], dict[str, Any], dict[str, int]] | None = None
+def index_store() -> ClaudeIndexStore:
+    global _STORE
+    if _STORE is None:
+        _STORE = ClaudeIndexStore()
+    return _STORE
 
 
-def _tree_fingerprint(root: Path) -> tuple[int, int]:
-    count = 0
-    newest = 0
-    for path in root.rglob("local_*.json"):
-        try:
-            mtime = path.stat().st_mtime_ns
-        except OSError:
-            continue
-        count += 1
-        if mtime > newest:
-            newest = mtime
-    return count, newest
+def _reset_index_state_for_tests(store: ClaudeIndexStore | None = None) -> None:
+    """Point the module at a different store and forget what it loaded."""
+    global _STORE, _SNAPSHOT, _REFRESH_TASK, _LAST_REFRESH_AT, _LAST_REFRESH_ERROR
+    _STORE = store
+    _SNAPSHOT = None
+    _REFRESH_TASK = None
+    _LAST_REFRESH_AT = 0.0
+    _LAST_REFRESH_ERROR = None
 
 
-def _session_index(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
-    global _INDEX_CACHE
-    fingerprint = _tree_fingerprint(root)
-    if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
-        return _INDEX_CACHE[1], _INDEX_CACHE[2]
-    entries, totals = read_session_index(root)
-    _INDEX_CACHE = (fingerprint, entries, totals)
-    return entries, totals
+async def index_snapshot(*, record_paths: bool = False) -> IndexSnapshot:
+    """The persisted index, loaded from SQLite. No filesystem walk, ever.
+
+    ``record_paths=True`` also loads every account's copy of each conversation
+    — the RETURN direction (writing a rename back into Claude's own records)
+    and one session's diagnosis need it; the screen never does, and it is the
+    difference between a ~60 ms load and a ~700 ms one. It is not cached: both
+    callers are background or single-row paths.
+    """
+    global _SNAPSHOT
+    store = index_store()
+    if record_paths:
+        return await asyncio.to_thread(store.load, record_paths=True)
+    revision = await asyncio.to_thread(store.revision)
+    cached = _SNAPSHOT
+    if cached is not None and cached[0] == revision:
+        return cached[1]
+    async with _SNAPSHOT_LOCK:
+        cached = _SNAPSHOT
+        if cached is not None and cached[0] == revision:
+            return cached[1]
+        snapshot = await asyncio.to_thread(store.load)
+        _SNAPSHOT = (snapshot.revision, snapshot)
+        return snapshot
 
 
-# One scan at a time. The startup warm-up and a screen open commonly overlap,
-# and two concurrent readers would mean two ~60s child processes doing identical
-# work — the second caller waits for the first and then finds the cache warm.
-_INDEX_READ_LOCK = asyncio.Lock()
-
-
-async def _reap_index_helper(process: asyncio.subprocess.Process) -> None:
-    """Stop a helper that cannot return its index result to its owner."""
-    if process.returncode is not None:
-        return
-    process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=3)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
-
-
-async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
-    """Run the scan in a short-lived helper process. Raises on any failure."""
-    command = claude_index_helper.helper_command(root)
+async def _refresh_in_helper(root: Path, store: ClaudeIndexStore) -> dict[str, Any]:
+    """Run the refresh in a short-lived helper PROCESS. Raises on any failure."""
+    command = claude_index_helper.helper_command(root, store.path)
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
@@ -255,7 +298,7 @@ async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, i
             f"{claude_index_helper.HELPER_TIMEOUT_SECONDS:.0f}s"
         ) from exc
     except BaseException:
-        # Cancellation during reconciler shutdown must not orphan a scanner.
+        # Cancellation during shutdown must not orphan a scanner.
         await _reap_index_helper(process)
         raise
     if process.returncode != 0:
@@ -264,72 +307,199 @@ async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, i
     return claude_index_helper.decode_payload(stdout)
 
 
-async def _session_index_async(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
-    """The cached index, read in a helper PROCESS, never inside this engine.
+async def _reap_index_helper(process: asyncio.subprocess.Process) -> None:
+    """Stop a helper that cannot finish its refresh."""
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=3)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
 
-    The scan is ~63,000 ``json.loads`` calls and about a minute of work. Running
-    it here — even on a thread — put a minute of GIL, allocator, thread-pool and
-    disk pressure inside the engine during startup, which is when the browser
-    pool's launch bound was being measured (the 2026-09-13 false "Chromium would
-    not start" report; see :mod:`app.common.claude_index_helper` for exactly
-    what was measured and what was not). A separate process removes that
-    pressure from the engine entirely.
 
-    The fingerprint walk stays in a thread on purpose: it is a stat-only rglob
-    and it must run in THIS process, because its whole job is to decide whether
-    a scan is needed at all.
+async def _refresh_in_threads(
+    root: Path, store: ClaudeIndexStore, *, chunk_size: int = DEFAULT_CHUNK_SIZE
+) -> dict[str, Any]:
+    """The same refresh, chunk by chunk, in worker threads.
+
+    The stat walk releases the GIL; each chunk is 256 records (~12 MB) and the
+    loop awaits between chunks, so the event loop keeps answering /health for
+    the whole build. This is the announced fallback when the helper process
+    cannot be spawned — never a silent second implementation: it calls the same
+    store functions the helper does.
     """
-    global _INDEX_CACHE
-    fingerprint = await asyncio.to_thread(_tree_fingerprint, root)
-    if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
-        return _INDEX_CACHE[1], _INDEX_CACHE[2]
-    async with _INDEX_READ_LOCK:
-        # A concurrent caller may have finished the very scan we were about to
-        # start while we waited for the lock.
-        if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
-            return _INDEX_CACHE[1], _INDEX_CACHE[2]
-        return await _scan_index(root, fingerprint)
+    started = time.monotonic()
+    changed, alive, truncated, _total = await asyncio.to_thread(plan_refresh, root, store)
+    for start in range(0, len(changed), chunk_size):
+        chunk = changed[start : start + chunk_size]
+        rows = await asyncio.to_thread(read_record_rows, chunk)
+        await asyncio.to_thread(store.upsert, rows)
+        await asyncio.sleep(0)
+    removed = await asyncio.to_thread(store.prune, alive)
+    return await asyncio.to_thread(
+        finalize_refresh,
+        store,
+        changed=len(changed),
+        removed=removed,
+        truncated=truncated,
+        duration=time.monotonic() - started,
+    )
+
+
+async def refresh_index(root: Path | None = None) -> dict[str, Any]:
+    """One incremental refresh of the persisted index. Single-flight."""
+    global _LAST_REFRESH_ERROR, _LAST_REFRESH_AT
+    sessions_root = root or default_sessions_root()
+    store = index_store()
+    async with _REFRESH_LOCK:
+        _LAST_REFRESH_AT = time.monotonic()
+        try:
+            result = await _refresh_in_helper(sessions_root, store)
+        except Exception as exc:
+            logger.warning(
+                "[claude_overview] Session-index helper process unavailable (%s) — "
+                "refreshing in this engine instead, in bounded chunks. The screen "
+                "is correct either way; remedy: check that the engine executable "
+                "can spawn itself with %s.",
+                exc,
+                claude_index_helper.HELPER_ARGUMENT,
+            )
+            try:
+                result = await _refresh_in_threads(sessions_root, store)
+            except Exception as inner:  # noqa: BLE001 — a failed refresh is a STATE
+                _LAST_REFRESH_ERROR = f"{type(inner).__name__}: {inner}"
+                logger.exception("[claude_overview] index refresh failed")
+                raise
+        result.update(await _refresh_transcripts(store))
+        _LAST_REFRESH_AT = time.monotonic()
+        _LAST_REFRESH_ERROR = None
+        return result
+
+
+async def _refresh_transcripts(store: ClaudeIndexStore) -> dict[str, Any]:
+    """The transcripts half of a refresh: sizes, and titles for the orphans.
+
+    It stays in the engine (in a thread) rather than the helper process: it is
+    1,638 stats plus the handful of orphan summaries whose transcript moved,
+    and the importer's bounded summary reader lives in a module the helper
+    deliberately never imports.
+    """
+    from app.services.coding_sessions.claude_history import _read_summary
+
+    sidebar_ids = set(await asyncio.to_thread(store.sidebar_session_ids))
+    try:
+        return await asyncio.to_thread(
+            refresh_transcripts_sync,
+            store,
+            sidebar_ids=sidebar_ids,
+            root=_claude_config_dir() / "projects",
+            read_summary=_read_summary,
+        )
+    except Exception as exc:  # noqa: BLE001 — the records half still stands
+        logger.warning(
+            "[claude_overview] transcript refresh failed (%s) — conversation "
+            "sizes and CLI-only sessions may be one refresh behind",
+            exc,
+        )
+        return {"transcripts_error": f"{type(exc).__name__}: {exc}"}
+
+
+def index_refreshing() -> bool:
+    """Is a refresh in flight — by ANY route?
+
+    The lock, not the background task: the startup warm-up and the title
+    reconciler await ``refresh_index`` directly, and a screen opened during
+    one of those must still read "refreshing" rather than a bare "cold".
+    """
+    if _REFRESH_LOCK.locked():
+        return True
+    return _REFRESH_TASK is not None and not _REFRESH_TASK.done()
+
+
+def start_index_refresh(root: Path | None = None, *, minimum_interval: float | None = None) -> bool:
+    """Kick a background refresh unless one is running or one just ran.
+
+    Returns whether a refresh is now in flight. Nothing awaits it: the screen
+    is answered from the persisted index and the next open shows the newer one.
+    """
+    global _REFRESH_TASK
+    if index_refreshing():
+        return True
+    interval = (
+        _INDEX_REFRESH_INTERVAL_SECONDS if minimum_interval is None else minimum_interval
+    )
+    if _LAST_REFRESH_AT and time.monotonic() - _LAST_REFRESH_AT < interval:
+        return False
+
+    async def _run() -> None:
+        try:
+            await refresh_index(root)
+        except Exception:  # noqa: BLE001 — refresh_index already logged it
+            return
+
+    try:
+        _REFRESH_TASK = asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        return False
+    _REFRESH_TASK.add_done_callback(lambda _: None)
+    return True
+
+
+def index_report(snapshot: IndexSnapshot) -> dict[str, Any]:
+    """What the screen says about the index behind the rows it is showing."""
+    refreshing = index_refreshing()
+    if not snapshot.complete:
+        state = "cold"
+    elif refreshing:
+        state = "refreshing"
+    else:
+        state = "fresh"
+    return {
+        "state": state,
+        "refreshing": refreshing,
+        "files_read": int(snapshot.totals.get("files", 0)),
+        "conversations": int(snapshot.totals.get("records", 0)),
+        "updated_at": snapshot.updated_at,
+        "changed_files": snapshot.last_changed_files,
+        "duration_seconds": snapshot.last_duration_seconds,
+        "limit_reached": bool(snapshot.totals.get("truncated")),
+        "unreadable": int(snapshot.totals.get("unreadable", 0)),
+        "error": _LAST_REFRESH_ERROR,
+    }
 
 
 async def read_session_index_async(
     root: Path | None = None,
+    *,
+    refresh: bool = True,
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    """Read the complete Claude index without occupying the engine event loop."""
-    return await _session_index_async(root or default_sessions_root())
+    """The complete index for a background reconciler, refreshed first.
 
-
-async def _scan_index(
-    root: Path, fingerprint: tuple[int, int]
-) -> tuple[dict[str, Any], dict[str, int]]:
-    global _INDEX_CACHE
-    try:
-        entries, totals = await _read_index_in_helper(root)
-    except Exception as exc:
-        logger.warning(
-            "[claude_overview] Session-index helper process unavailable (%s) — "
-            "falling back to an in-process scan, which puts the whole ~60s read "
-            "back inside this engine and can make unrelated timeouts fire. "
-            "Remedy: check that the engine executable can spawn itself with "
-            "%s; the Coding Sessions screen is correct either way.",
-            exc,
-            claude_index_helper.HELPER_ARGUMENT,
-        )
-        return await asyncio.to_thread(_session_index, root)
-    _INDEX_CACHE = (fingerprint, entries, totals)
-    return entries, totals
+    Unlike the screen, the title reconciler has nobody waiting on it and its
+    whole job is to notice a rename, so it pays for a refresh before reading.
+    """
+    if refresh:
+        try:
+            await refresh_index(root)
+        except Exception:  # noqa: BLE001 — refresh_index logged it; read what we have
+            pass
+    # WITH record paths: the reconciler writes a rename back into every
+    # account's copy of the record, so it needs to know where they all are.
+    snapshot = await index_snapshot(record_paths=True)
+    return snapshot.entries, snapshot.totals
 
 
 async def warm_index_cache(root: Path | None = None) -> None:
-    """Read the index once at engine start so the FIRST screen open is instant.
+    """Refresh the persisted index at engine start, before anyone asks.
 
-    Without this the first open after an engine start pays the whole cold read
-    (~47,000 records, ~25s here) while the person watches a spinner. The engine
-    has nothing else to do at startup, so it pays that cost before anyone asks.
-    Runs in a helper PROCESS, not a thread: a minute of scanning must not sit
-    inside the engine while its other startup phases are being timed.
+    After the first ever build this is a stat walk plus the handful of records
+    that changed while the app was closed — seconds, not the 25 s (or, on a
+    fresh engine, 1,209 s) full read the first screen open used to pay.
     """
-    await _session_index_async(root or default_sessions_root())
-
+    await refresh_index(root)
+    await index_snapshot()
 
 # ── Identity: the two spellings of one session ──────────────────────────────
 #
@@ -370,25 +540,92 @@ def _parse_iso_ns(raw: object) -> int | None:
 # ── Cloud truth ─────────────────────────────────────────────────────────────
 
 _CLOUD_CACHE: tuple[float, dict[str, dict[str, Any]], dict[str, Any]] | None = None
+_CLOUD_TASK: asyncio.Task[Any] | None = None
+_CLOUD_LOCK = asyncio.Lock()
+
+# With nothing cached at all there is no honest answer to give yet, so the
+# first caller waits this long for the server — long enough that a healthy
+# round trip lands inside it, short enough that the whole response still beats
+# the one-second bar. Past it the screen says the check is in flight and the
+# next read has it.
+_CLOUD_COLD_WAIT_SECONDS = 0.75
 
 
-async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """(raw session id -> server binding, meta) for every Claude session the
-    server holds for the signed-in AI Matrx user.
+async def cloud_inventory(
+    *, force: bool = False
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """The cached server inventory, refreshed in the background.
 
-    ``meta.checked`` is False when the server could not be asked; ``reason``
-    then names exactly why (no signed-in user, server unconfigured, offline,
-    or the server's own refusal) so the screen can say it instead of guessing.
+    The read itself is one paged pass over every bound session (1,671 on this
+    Mac), so it is never done on the request path: a cached answer is returned
+    immediately and a refresh is kicked behind it. ``meta`` always says how old
+    the answer is (``age_seconds``) and whether a newer one is being fetched
+    (``refreshing``), so the screen never presents a stale count as live truth.
     """
+    global _CLOUD_CACHE, _CLOUD_TASK
+    now = time.monotonic()
+    cached = _CLOUD_CACHE
+    fresh = cached is not None and now - cached[0] < _CLOUD_CACHE_SECONDS
+    if fresh and not force:
+        return cached[1], _cloud_meta_with_age(cached)
+
+    running = _CLOUD_TASK is not None and not _CLOUD_TASK.done()
+    if not running:
+        try:
+            _CLOUD_TASK = asyncio.get_running_loop().create_task(_refresh_cloud_inventory())
+        except RuntimeError:
+            return await _fetch_cloud_inventory()
+        _CLOUD_TASK.add_done_callback(lambda _: None)
+
+    if cached is not None and not force:
+        # A stale answer with its age on it beats making the screen wait.
+        return cached[1], _cloud_meta_with_age(cached)
+
+    task = _CLOUD_TASK
+    assert task is not None
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=_CLOUD_COLD_WAIT_SECONDS)
+    except Exception:  # noqa: BLE001 — timeout or failure: there is no answer yet
+        pass
+    cached = _CLOUD_CACHE
+    if cached is not None:
+        return cached[1], _cloud_meta_with_age(cached)
+    return {}, {
+        "checked": False,
+        "reason": "cloud_check_in_flight",
+        "detail": (
+            "AI Matrx is being asked which of these conversations it holds. "
+            "The answer lands within a few seconds — refresh to see it."
+        ),
+        "sessions": 0,
+        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "refreshing": True,
+        "age_seconds": None,
+    }
+
+
+def _cloud_meta_with_age(
+    cached: tuple[float, dict[str, dict[str, Any]], dict[str, Any]]
+) -> dict[str, Any]:
+    meta = dict(cached[2])
+    meta["age_seconds"] = round(max(0.0, time.monotonic() - cached[0]), 1)
+    meta["refreshing"] = _CLOUD_TASK is not None and not _CLOUD_TASK.done()
+    return meta
+
+
+async def _refresh_cloud_inventory() -> None:
+    """Fetch and cache, alone. Failures are cached too — they are answers."""
+    async with _CLOUD_LOCK:
+        try:
+            await _fetch_cloud_inventory()
+        except Exception:  # noqa: BLE001 — the screen keeps its previous answer
+            logger.exception("[claude_overview] cloud inventory refresh failed")
+
+
+async def _fetch_cloud_inventory() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """One real read of the server's inventory. Always writes the cache."""
     global _CLOUD_CACHE
     now = time.monotonic()
-    if (
-        not force
-        and _CLOUD_CACHE is not None
-        and now - _CLOUD_CACHE[0] < _CLOUD_CACHE_SECONDS
-    ):
-        return _CLOUD_CACHE[1], _CLOUD_CACHE[2]
-
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     meta: dict[str, Any] = {
         "checked": False,
@@ -584,6 +821,7 @@ def _session_state(
 def _transcript_only_rows(
     orphan_ids: list[str],
     transcripts: dict[str, tuple[int, int]],
+    summaries: dict[str, tuple[str | None, str | None]],
 ) -> list[dict[str, Any]]:
     """Rows for transcripts that have NO Claude sidebar record anywhere.
 
@@ -594,30 +832,16 @@ def _transcript_only_rows(
     importer's own source walk already reaches them (it reads the projects
     tree, not the index); only the screen was hiding them.
 
-    Title and project come from the transcript itself through the importer's
-    bounded reader (first 40 lines + last 256 KB), only for the orphans, so the
-    cost is ~80 small reads rather than 1,600.
+    Title and project were read from the transcripts here, on every request:
+    ~80 bounded reads (first 40 lines + last 256 KB each) inside the response.
+    They are now read once per changed transcript by the background refresh and
+    come in from the persisted index, so this function touches no disk at all.
     """
-    from app.services.coding_sessions.claude_history import _read_summary
-
-    root = _claude_config_dir() / "projects"
-    wanted = set(orphan_ids)
-    by_id: dict[str, Path] = {}
-    for path in root.glob("*/*.jsonl"):
-        if path.stem in wanted:
-            by_id[path.stem] = path
     rows: list[dict[str, Any]] = []
     for session_id in orphan_ids:
-        path = by_id.get(session_id)
-        if path is None:
-            continue
         size, mtime_ns = transcripts.get(session_id, (0, 0))
-        title = f"Claude session {session_id[:8]}"
-        project: str | None = None
-        try:
-            title, project, _branch = _read_summary(root, path, session_id)
-        except Exception:  # noqa: BLE001 — an unreadable summary still lists the row
-            logger.debug("[claude_overview] summary unreadable for %s", session_id, exc_info=True)
+        stored_title, project = summaries.get(session_id, (None, None))
+        title = stored_title or f"Claude session {session_id[:8]}"
         rows.append(
             {
                 "session_id": session_id,
@@ -631,13 +855,19 @@ def _transcript_only_rows(
 
 
 async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
-    """Accounts, conversations and cloud state — the whole screen in one call."""
+    """Accounts, conversations and cloud state — the whole screen in one call.
+
+    NOTHING here walks the session-index tree or waits on the server. The rows
+    are the last completed refresh of the persisted index, the cloud check is
+    the last completed inventory, and both report their own state and age in
+    ``index`` and ``cloud`` so the screen can say how current it is. A refresh
+    of each is kicked behind the response.
+    """
     current = active_account()
-    # 46,034 files and ~25s on a cold cache. On the event loop that freezes
-    # every other request in the engine for the whole scan, so it runs in a
-    # thread; the UI shows its loading state and nothing else stalls.
-    entries, totals = await _session_index_async(default_sessions_root())
-    transcripts = await asyncio.to_thread(_transcripts)
+    snapshot = await index_snapshot()
+    start_index_refresh()
+    entries, totals = snapshot.entries, snapshot.totals
+    transcripts = snapshot.transcripts
     cloud, cloud_meta = await cloud_inventory()
     queue = await _queue_by_session()
     waiting, quarantined = await _queue_totals()
@@ -694,7 +924,7 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     # every other row — the cloud does not care whether the sidebar knew.
     orphan_ids = sorted(set(transcripts) - set(entries))
     transcript_only = 0
-    for row in await asyncio.to_thread(_transcript_only_rows, orphan_ids, transcripts):
+    for row in _transcript_only_rows(orphan_ids, transcripts, snapshot.orphan_summaries):
         session_id = row["session_id"]
         binding = cloud.get(session_id)
         session_queue = queue.get(session_id, {"pending": 0, "quarantined": 0})
@@ -747,8 +977,12 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         # reads this instead of assuming Claude Code, so the day the engine
         # lists Codex or Cursor transcripts the filter grows on its own.
         "listed_providers": ["claude_code"],
-        "accounts": list_accounts(),
+        "accounts": list_accounts(snapshot.accounts),
         "cloud": cloud_meta,
+        # How current the rows below are, and whether a newer read is running.
+        # The screen shows the last known list immediately and says so — it
+        # never holds the response open for a disk walk again.
+        "index": index_report(snapshot),
         "conversations": conversations[:limit],
         "totals": {
             "conversations": len(conversations),
@@ -1024,9 +1258,11 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
     """Every fact behind one row's status, from every system that touched it."""
     from app.services.coding_sessions.service import get_coding_session_bridge_outbox
 
-    entries, _totals = await _session_index_async(default_sessions_root())
-    entry = entries.get(session_id)
-    transcripts = await asyncio.to_thread(_transcripts)
+    # With record paths: this view reports which accounts hold a copy.
+    snapshot = await index_snapshot(record_paths=True)
+    start_index_refresh()
+    entry = snapshot.entries.get(session_id)
+    transcripts = snapshot.transcripts
     size, mtime_ns = transcripts.get(session_id, (0, 0))
     # A CLI-only session has a transcript and no sidebar record. It is listed
     # on the screen, so its diagnosis must open too — a row that opens into a
@@ -1034,8 +1270,8 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
     if entry is None and size == 0:
         return None
     if entry is None:
-        transcript_row = (
-            await asyncio.to_thread(_transcript_only_rows, [session_id], transcripts)
+        transcript_row = _transcript_only_rows(
+            [session_id], transcripts, snapshot.orphan_summaries
         )
         summary = transcript_row[0] if transcript_row else None
     else:

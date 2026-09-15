@@ -28,7 +28,7 @@ import stat
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 # Claude keeps one index record per account per conversation, so this cap is
 # multiplied by however many accounts are on the machine. This Mac already
@@ -164,7 +164,7 @@ def _local_cwd(record: dict[str, Any]) -> Path | None:
     return None
 
 
-def _entry_from_record(record: dict[str, Any]) -> ClaudeSessionIndexEntry | None:
+def entry_from_record(record: dict[str, Any]) -> ClaudeSessionIndexEntry | None:
     cli_session_id = record.get("cliSessionId")
     if not isinstance(cli_session_id, str) or not cli_session_id.strip():
         return None
@@ -200,11 +200,9 @@ def read_session_index(
     """
     sessions_root = root or default_sessions_root()
     totals = {"files": 0, "records": 0, "unreadable": 0}
-    entries: dict[str, ClaudeSessionIndexEntry] = {}
-    freshness: dict[str, tuple[int, int]] = {}
-    paths: dict[str, list[Path]] = {}
+    candidates_seen: list[tuple[Path, int, ClaudeSessionIndexEntry]] = []
     if not sessions_root.exists() or not sessions_root.is_dir():
-        return entries, totals
+        return {}, totals
     candidates = sorted(sessions_root.rglob("local_*.json"))
     if len(candidates) > MAX_INDEX_FILES:
         totals["truncated"] = 1
@@ -226,15 +224,41 @@ def read_session_index(
         if not isinstance(record, dict):
             totals["unreadable"] += 1
             continue
-        entry = _entry_from_record(record)
+        entry = entry_from_record(record)
         if entry is None:
             continue
+        candidates_seen.append((path, info.st_mtime_ns, entry))
+    entries = merge_entries(candidates_seen)
+    totals["records"] = len(entries)
+    return entries, totals
+
+
+def merge_entries(
+    candidates: Iterable[tuple[Path, int, ClaudeSessionIndexEntry]],
+    *,
+    ledger: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, ClaudeSessionIndexEntry]:
+    """Collapse per-record rows into one entry per conversation.
+
+    ``candidates`` is ``(record path, record mtime_ns, entry)`` for every
+    record file, in any order. This is THE merge: the full disk scan and the
+    persisted incremental index
+    (:mod:`app.services.coding_sessions.claude_index_store`) both come through
+    here, so the freshness rule and the sidebar-ledger rules below cannot drift
+    apart between the two.
+    """
+    entries: dict[str, ClaudeSessionIndexEntry] = {}
+    freshness: dict[str, tuple[int, int]] = {}
+    paths: dict[str, list[Path]] = {}
+    for path, mtime_ns, entry in candidates:
         paths.setdefault(entry.cli_session_id, []).append(path)
-        rank = (entry.last_activity_at, info.st_mtime_ns)
+        rank = (entry.last_activity_at, mtime_ns)
         if entry.cli_session_id not in entries or rank > freshness[entry.cli_session_id]:
             entries[entry.cli_session_id] = entry
             freshness[entry.cli_session_id] = rank
-    ledger = read_sidebar_ledger()
+    for session_id in paths:
+        paths[session_id].sort()
+    ledger = read_sidebar_ledger() if ledger is None else ledger
     enriched: dict[str, ClaudeSessionIndexEntry] = {}
     for session_id, entry in entries.items():
         record_paths = tuple(paths[session_id])
@@ -268,9 +292,7 @@ def read_session_index(
             pinned_rank=rank if isinstance(rank, int) else None,
             category=category,
         )
-    entries = enriched
-    totals["records"] = len(entries)
-    return entries, totals
+    return enriched
 
 
 __all__ = [
@@ -279,6 +301,8 @@ __all__ = [
     "ClaudeSessionIndexEntry",
     "default_ledger_path",
     "default_sessions_root",
+    "entry_from_record",
+    "merge_entries",
     "read_session_index",
     "read_sidebar_ledger",
 ]

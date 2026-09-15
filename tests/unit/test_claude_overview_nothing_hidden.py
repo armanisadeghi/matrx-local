@@ -53,6 +53,7 @@ def claude_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, st
     sessions_root = tmp_path / "desktop-sessions"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("CLAUDE_DESKTOP_SESSIONS_DIR", str(sessions_root))
+    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(tmp_path / "absent-ledger.json"))
 
     indexed = "11111111-1111-4111-8111-111111111111"
     cli_only = "22222222-2222-4222-8222-222222222222"
@@ -61,10 +62,16 @@ def claude_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, st
     _write_transcript(projects, "-Users-x-code-demo", cli_only,
                       "Please audit the billing module for double charges")
 
-    # Fresh tree, fresh cache: the fingerprint differs from any earlier run.
+    # A throwaway persisted index, refreshed exactly the way the engine's
+    # startup does it — the screen reads the index, never the tree.
     import app.services.coding_sessions.claude_overview as overview_module
-    monkeypatch.setattr(overview_module, "_INDEX_CACHE", None)
-    return {"indexed": indexed, "cli_only": cli_only}
+    from app.services.coding_sessions.claude_index_store import ClaudeIndexStore
+
+    store = ClaudeIndexStore(tmp_path / "store" / "index.sqlite3")
+    overview_module._reset_index_state_for_tests(store)
+    asyncio.run(overview_module.warm_index_cache(sessions_root))
+    yield {"indexed": indexed, "cli_only": cli_only}
+    overview_module._reset_index_state_for_tests(None)
 
 
 def _run_overview(monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -116,33 +123,74 @@ def test_cli_only_rows_are_marked_and_titled_by_their_opening_message(
     assert cli_only["pinned"] is False
 
 
-def test_warm_index_cache_fills_the_cache_so_the_first_screen_open_is_free(
+def test_the_screen_never_walks_the_index_tree(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The response may not stat or parse the session-index tree at all.
+
+    This is the 31.76 s / 58.96 s / 1,209 s defect in one assertion: the walk
+    and the record reads happen in the background refresh, never inside the
+    request. Both are booby-trapped here, so a future edit that puts either
+    back on the request path fails immediately.
+    """
+    import app.services.coding_sessions.claude_index_store as store_module
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    def _must_not_walk(*_a, **_k):
+        raise AssertionError("the overview walked the session-index tree")
+
+    def _must_not_read(*_a, **_k):
+        raise AssertionError("the overview parsed a session-index record")
+
+    monkeypatch.setattr(overview_module, "plan_refresh", _must_not_walk)
+    monkeypatch.setattr(overview_module, "read_record_rows", _must_not_read)
+    monkeypatch.setattr(store_module, "walk_records", _must_not_walk)
+    monkeypatch.setattr(store_module, "walk_transcripts", _must_not_walk)
+    # Any tree walk at all, by any route: counting the accounts with rglob is
+    # exactly how 67,224 files were stat-ed on the event loop per response.
+    monkeypatch.setattr(Path, "rglob", _must_not_walk)
+    monkeypatch.setattr(Path, "glob", _must_not_walk)
+    # ...and no helper process either: a refresh kicked behind the response is
+    # allowed, but it must not be what answers it.
+    monkeypatch.setattr(
+        overview_module.claude_index_helper,
+        "helper_command",
+        lambda *_a, **_k: ["/nonexistent/matrx-helper"],
+    )
+
+    out = _run_overview(monkeypatch)
+    assert out["totals"]["conversations"] == 2
+    assert out["index"]["state"] in {"fresh", "refreshing"}
+    assert out["index"]["files_read"] == 1
+    assert out["index"]["updated_at"]
+
+
+def test_a_cold_index_says_so_instead_of_pretending_to_be_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The engine warms the index at startup; the first open must not re-parse."""
-    import app.services.coding_sessions.claude_overview as claude_overview
+    """Before the first refresh there are no rows — and the screen is told."""
+    import app.services.coding_sessions.claude_overview as overview_module
+    from app.services.coding_sessions.claude_index_store import ClaudeIndexStore
 
-    root = tmp_path / "claude-code-sessions"
-    _write_index_record(root, "11111111-1111-4111-8111-111111111111", "One")
-    _write_index_record(root, "22222222-2222-4222-8222-222222222222", "Two")
-    monkeypatch.setattr(claude_overview, "_INDEX_CACHE", None)
-    monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(tmp_path / "absent-ledger.json"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setenv("CLAUDE_DESKTOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+    overview_module._reset_index_state_for_tests(
+        ClaudeIndexStore(tmp_path / "store" / "index.sqlite3")
+    )
+    monkeypatch.setattr(
+        overview_module.claude_index_helper,
+        "helper_command",
+        lambda *_a, **_k: ["/nonexistent/matrx-helper"],
+    )
+    try:
+        out = _run_overview(monkeypatch)
+    finally:
+        overview_module._reset_index_state_for_tests(None)
 
-    asyncio.run(claude_overview.warm_index_cache(root))
-
-    cached = claude_overview._INDEX_CACHE
-    assert cached is not None, "warm_index_cache left the cache cold"
-    fingerprint, entries, totals = cached
-    assert fingerprint[0] == 2
-    assert totals["files"] == 2
-    assert not totals.get("truncated")
-    assert {entry.title for entry in entries.values()} == {"One", "Two"}
-
-    # The warmed cache is what the screen's own read returns — the very same
-    # objects. Re-parsing would build new dicts; identity is the proof.
-    screen_entries, screen_totals = claude_overview._session_index(root)
-    assert screen_entries is entries
-    assert screen_totals is totals
+    assert out["index"]["state"] == "cold"
+    assert out["index"]["files_read"] == 0
+    assert out["index"]["updated_at"] is None
+    assert out["conversations"] == []
 
 
 def test_a_cli_only_session_opens_a_diagnosis_instead_of_a_404(

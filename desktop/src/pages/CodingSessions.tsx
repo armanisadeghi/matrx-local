@@ -64,6 +64,7 @@ import type {
   CodingSessionProviderReadinessStatus,
 } from "@/lib/api";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
+import { laneBlockerTone } from "@/lib/lane-blocker";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
@@ -625,14 +626,20 @@ export function CodingSessions() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
           {blocker && (
             <div
-              className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm"
-              role="alert"
+              className={`flex items-start gap-3 rounded-lg border p-4 text-sm ${laneBlockerTone(blocker.code).container}`}
+              role={laneBlockerTone(blocker.code).role}
               data-testid="delivery-blocker"
             >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              {laneBlockerTone(blocker.code).quiet ? (
+                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              )}
               <div className="flex-1">
                 <p className="font-medium">
-                  Delivery to AI Matrx is paused for every provider
+                  {laneBlockerTone(blocker.code).quiet
+                    ? "Delivery to AI Matrx resumes as soon as your session is back"
+                    : "Delivery to AI Matrx is paused for every provider"}
                 </p>
                 <p className="mt-1">{blocker.message}</p>
                 {blocker.remedy && (
@@ -937,13 +944,21 @@ export function CodingSessions() {
               <>
                 {artifacts.blocker && (
                   <div
-                    className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 p-4 text-sm"
-                    role="alert"
+                    className={`flex items-start gap-3 border-b p-4 text-sm ${laneBlockerTone(artifacts.blocker.code).container}`}
+                    role={laneBlockerTone(artifacts.blocker.code).role}
                     data-testid="artifacts-blocker"
                   >
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    {laneBlockerTone(artifacts.blocker.code).quiet ? (
+                      <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : (
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    )}
                     <div className="flex-1">
-                      <p className="font-medium">Artifact publishing to AI Matrx is paused</p>
+                      <p className="font-medium">
+                        {laneBlockerTone(artifacts.blocker.code).quiet
+                          ? "Artifact publishing resumes as soon as your session is back"
+                          : "Artifact publishing to AI Matrx is paused"}
+                      </p>
                       <p className="mt-1">{artifacts.blocker.message}</p>
                       {artifacts.blocker.remedy && (
                         <p className="mt-1 text-muted-foreground">{artifacts.blocker.remedy}</p>

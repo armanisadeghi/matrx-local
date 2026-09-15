@@ -142,6 +142,11 @@ pub enum PlanOp {
         expected_version: Option<i64>,
     },
     /// Move one path to another on one side, preserving identity instead of re-transferring bytes.
+    ///
+    /// Like every other mutating op it carries its precondition (I3). Without one, a local move
+    /// that raced a remote edit of the old path renamed straight over the edit and the fleet
+    /// settled permanently split — the device keeping its bytes, the cloud keeping the other
+    /// device's, nothing planned ever again and nothing said (G5).
     Rename {
         /// Which side moves.
         side: Side,
@@ -149,6 +154,10 @@ pub enum PlanOp {
         from: String,
         /// The new mapping-relative path.
         to: String,
+        /// The version the source must still be at — the 412 precondition (I3).
+        expected_version: Option<i64>,
+        /// The checksum the source must still carry.
+        expected_checksum: Option<String>,
     },
     /// Write the losing copy under its D7 name. Both copies then reach the cloud.
     ConflictCopy {
@@ -291,12 +300,18 @@ pub fn plan(
     // decide — a path whose (volume, inode) matches the synced row, with unchanged content, is a
     // move, not a dispute — which is what every champion does (F8).
     let renames = detect_renames(local, remote, synced, direction);
-    let rename_pairs: BTreeSet<(String, String)> = renames.iter().cloned().collect();
+    let rename_pairs: BTreeSet<(String, String)> = renames
+        .iter()
+        .map(|(f, t)| (f.clone(), t.clone()))
+        .collect();
     for (from, to) in &renames {
+        let source = remote.get(from);
         ops.push(PlanOp::Rename {
             side: Side::Remote,
             from: from.clone(),
             to: to.clone(),
+            expected_version: source.and_then(|n| n.remote_version),
+            expected_checksum: source.and_then(|n| n.checksum.clone()),
         });
     }
     let renamed_from: BTreeSet<&str> = renames.iter().map(|(f, _)| f.as_str()).collect();
@@ -515,6 +530,18 @@ fn detect_renames(
         }
         if remote.get(path).is_some_and(|n| n.is_live()) {
             continue; // something already occupies the destination in the cloud
+        }
+        // G5: the SOURCE in the cloud must still be exactly what the synced row recorded. If
+        // another device edited it while this one moved the file, this is not a move — it is a
+        // local move AND a remote edit, which is a conflict and must be handled as one. Renaming
+        // over it kept the device's bytes and the cloud's other bytes forever, with no further op
+        // ever planned and nothing on screen: a silent, permanent split.
+        let source = remote.get(&old.path_nfc).filter(|n| n.is_live());
+        let source_unchanged = source.is_some_and(|n| {
+            n.remote_version == Some(old.remote_version) && n.checksum == old.checksum
+        });
+        if !source_unchanged {
+            continue;
         }
         consumed.insert(old.path_nfc.clone());
         out.push((old.path_nfc.clone(), path.clone()));

@@ -195,7 +195,23 @@ impl World {
                 }
                 self.synced.remove(path);
             }
-            PlanOp::Rename { side, from, to } => {
+            PlanOp::Rename {
+                side,
+                from,
+                to,
+                expected_version,
+                expected_checksum,
+            } => {
+                // G5: the precondition is checked here too, so the model cannot apply a rename
+                // over a source another device has moved on.
+                let source_ok = self.remote.get(from).is_some_and(|n| {
+                    n.is_live()
+                        && n.remote_version == *expected_version
+                        && n.checksum == *expected_checksum
+                });
+                if !source_ok {
+                    return;
+                }
                 match side {
                     Side::Remote => {
                         if let Some(mut n) = self.remote.remove(from) {
@@ -311,6 +327,14 @@ impl World {
             return;
         }
         if !l.is_dir && (l.content_hash.is_none() || r.checksum.is_none()) {
+            return;
+        }
+        // G5, the second half: the model must never write a `tree_synced` row that
+        // `Journal::confirm_op` would refuse. It manufactured exactly one — a rename's row with
+        // `content_hash != checksum` and no flag — and the property harness then explored a state
+        // the product cannot reach and called it converged. A real daemon would have got
+        // `SyncedWriteRefused` and left the op stuck.
+        if !l.is_dir && l.content_hash != r.checksum {
             return;
         }
         let Some(remote_file_id) = r.remote_file_id.clone() else {

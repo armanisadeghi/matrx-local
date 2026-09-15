@@ -574,9 +574,18 @@ impl Device {
                     }
                 }
             }
-            PlanOp::Rename { side, from, to } => match side {
+            PlanOp::Rename {
+                side,
+                from,
+                to,
+                expected_version,
+                ..
+            } => match side {
                 Side::Remote => {
-                    let version = server.live(&from).map(|f| f.version);
+                    // G5: the op's OWN precondition, taken when the plan was made — never the
+                    // server's current version, which would make the precondition a formality
+                    // that always passes.
+                    let version = expected_version;
                     let id = self.enqueue_and_lease(
                         OpKind::RenameRemote,
                         &from,

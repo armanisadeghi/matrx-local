@@ -1455,3 +1455,153 @@ fn a_conflict_copy_does_not_land_on_an_earlier_one_that_differs_only_in_case() {
         assert!(after.contains(c), "{c} was lost; reachable = {after:?}");
     }
 }
+
+/// G5, from hostile re-verification — **silent permanent divergence**. The re-verifier's exact
+/// case: `a.txt` is synced at `c1` version 1; this device moves it to `A.txt` (same volume+inode,
+/// content unchanged) while another device edits `a.txt` to `c2`, version 2.
+///
+/// `detect_renames` checked local identity, local content and that the destination was free — but
+/// never that the SOURCE in the cloud was still what the synced row recorded, and `PlanOp::Rename`
+/// carried no precondition for anything downstream to catch. The plan was one op with no conflict;
+/// driving it to a fixed point left the device on `c1`, the cloud on `c2`, no further op ever
+/// planned, and nothing said.
+#[test]
+fn a_rename_that_races_a_remote_edit_is_a_conflict_not_a_rename() {
+    let mut w = World::new();
+    // The cloud has moved on: version 2, content c2.
+    w.remote.insert(
+        "a.txt".to_string(),
+        RemoteNode {
+            path_nfc: "a.txt".to_string(),
+            is_dir: false,
+            size: Some(1),
+            remote_file_id: Some("file-0".to_string()),
+            remote_folder_id: None,
+            remote_version: Some(2),
+            checksum: Some("c2".to_string()),
+            client_modified_at: None,
+            origin_device_id: Some("device-b".to_string()),
+            deleted_at: None,
+            seen_at: None,
+        },
+    );
+    // The synced row still records version 1 / c1 …
+    w.synced.insert(
+        "a.txt".to_string(),
+        SyncedNode {
+            path_nfc: "a.txt".to_string(),
+            is_dir: false,
+            size: Some(1),
+            mtime_ns: Some(1),
+            volume_id: Some("vol-local".to_string()),
+            file_id: Some("inode-0".to_string()),
+            content_hash: Some("c1".to_string()),
+            remote_file_id: "file-0".to_string(),
+            remote_version: 1,
+            checksum: Some("c1".to_string()),
+            local_edit_flagged: false,
+            synced_at: "t".to_string(),
+        },
+    );
+    // … and locally the file moved, unchanged, to A.txt.
+    w.local.insert(
+        "A.txt".to_string(),
+        LocalNode {
+            path_nfc: "A.txt".to_string(),
+            is_dir: false,
+            size: Some(1),
+            mtime_ns: Some(2),
+            volume_id: Some("vol-local".to_string()),
+            file_id: Some("inode-0".to_string()),
+            content_hash: Some("c1".to_string()),
+            scanned_at: None,
+        },
+    );
+    w.next_id = 700;
+
+    let knobs = Knobs::default();
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext::default(),
+    );
+    assert!(
+        !p.ops
+            .iter()
+            .any(|o| matches!(o, matrx_sync::PlanOp::Rename { .. })),
+        "a move whose source changed under it is not a move: {:?}",
+        p.ops
+    );
+
+    drive(&mut w, Direction::TwoWay, &knobs, 24);
+
+    // Neither byte stream is lost …
+    let after = w.reachable_content();
+    assert!(
+        after.contains("c1") && after.contains("c2"),
+        "both versions must survive; reachable = {after:?}"
+    );
+    // … the user is told …
+    assert!(
+        !w.conflicts.is_empty(),
+        "the race must be reported, not settled silently"
+    );
+    // … and the fleet is not left permanently split with nothing planned.
+    for (path, s) in w.synced.iter() {
+        if s.local_edit_flagged || s.is_dir {
+            continue;
+        }
+        assert_eq!(
+            s.content_hash, s.checksum,
+            "{path}: the model wrote a synced row confirm_op would refuse"
+        );
+    }
+}
+
+/// Every rename the planner emits carries its precondition — the property, not just the case.
+#[test]
+fn every_planned_rename_carries_its_precondition() {
+    let mut w = world_of(&[("old.txt", None, Some("c1"), Some("c1"))]);
+    w.local.insert(
+        "new.txt".to_string(),
+        LocalNode {
+            path_nfc: "new.txt".to_string(),
+            is_dir: false,
+            size: Some(1),
+            mtime_ns: Some(2),
+            volume_id: Some("vol-local".to_string()),
+            file_id: Some("inode-0".to_string()),
+            content_hash: Some("c1".to_string()),
+            scanned_at: None,
+        },
+    );
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &Knobs::default(),
+        &PlanContext::default(),
+    );
+    let renames: Vec<_> = p
+        .ops
+        .iter()
+        .filter_map(|o| match o {
+            matrx_sync::PlanOp::Rename {
+                expected_version,
+                expected_checksum,
+                ..
+            } => Some((*expected_version, expected_checksum.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(renames.len(), 1, "the move must be a rename: {:?}", p.ops);
+    assert_eq!(
+        renames[0],
+        (Some(1), Some("c1".to_string())),
+        "the rename must carry the source's version and checksum"
+    );
+}

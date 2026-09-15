@@ -3,16 +3,50 @@
     "agent_memory": [
       "user_id"
     ],
+    "agent_plan": [
+      "project_id",
+      "user_id"
+    ],
     "agent_run": [
+      "user_id"
+    ],
+    "agent_task": [
+      "user_id"
+    ],
+    "artifact": [
+      "project_id"
+    ],
+    "code_edit": [
+      "user_id"
+    ],
+    "code_message_file": [
       "user_id"
     ],
     "conversation": [
       "project_id"
     ],
+    "media": [
+      "user_id"
+    ],
     "observational_memory": [
       "user_id"
     ],
+    "observational_memory_event": [
+      "user_id"
+    ],
+    "pending_injection": [
+      "user_id"
+    ],
+    "tool_call": [
+      "user_id"
+    ],
+    "tool_trace": [
+      "user_id"
+    ],
     "user_request": [
+      "user_id"
+    ],
+    "user_todo": [
       "user_id"
     ]
   }

@@ -834,6 +834,47 @@ async fn start_sidecar(
     *state.child.lock().unwrap() = Some(child);
     state.has_started.store(true, Ordering::SeqCst);
 
+    // Supervisor bookkeeping for THIS generation: a failed start's cause must
+    // be read from this spawn's own stderr, never the previous engine's.
+    {
+        let supervisor = app.state::<EngineSupervisorState>();
+        *supervisor.spawned_at.lock().unwrap() = Some(std::time::Instant::now());
+        supervisor.spawn_stderr.lock().unwrap().clear();
+    }
+    // An engine that survives the healthy window has started successfully —
+    // clear the failure count so a later, unrelated death gets the full ladder
+    // again, and take down any "restarting…" state the UI is still showing.
+    {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ENGINE_HEALTHY_UPTIME_MS)).await;
+            let still_ours = app_handle
+                .state::<SidecarState>()
+                .child
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|current| current.pid())
+                == Some(spawned_pid);
+            if !still_ours {
+                return;
+            }
+            let supervisor = app_handle.state::<EngineSupervisorState>();
+            let had_failures = supervisor
+                .consecutive_failures
+                .swap(0, std::sync::atomic::Ordering::SeqCst)
+                > 0;
+            let announced = supervisor.status.lock().unwrap().phase != "ok";
+            if had_failures || announced {
+                lifecycle_log::log(&format!(
+                    "[engine-supervisor] engine pid {} has been healthy for {}ms — failure count reset",
+                    spawned_pid, ENGINE_HEALTHY_UPTIME_MS
+                ));
+                supervisor.publish(&app_handle, EngineSupervisorStatus::ok());
+            }
+        });
+    }
+
     // Forward sidecar output to Tauri logs AND to the frontend via events.
     // The SidecarLogs ring buffer stores the last 200 lines so the frontend
     // can retrieve them on demand (e.g. when the recovery modal opens).
@@ -863,6 +904,17 @@ async fn start_sidecar(
                     // traceback goes, and a Finder-launched app has no
                     // captured stdio. See lifecycle_log::engine_stderr.
                     lifecycle_log::engine_stderr(&text);
+                    {
+                        // Per-generation copy: the supervisor names the cause
+                        // of THIS spawn's failure from THIS spawn's stderr.
+                        let supervisor = app_handle.state::<EngineSupervisorState>();
+                        let mut spawn_stderr = supervisor.spawn_stderr.lock().unwrap();
+                        spawn_stderr.push(text.clone());
+                        let excess = spawn_stderr.len().saturating_sub(80);
+                        if excess > 0 {
+                            spawn_stderr.drain(..excess);
+                        }
+                    }
                     {
                         let mut lines = log_lines.lock().unwrap();
                         lines.push(format!("[stderr] {}", text));
@@ -896,14 +948,29 @@ async fn start_sidecar(
                     // newly spawned generation N+1. This is also the Windows
                     // stale-handle liveness mechanism.
                     let sidecar_state = app_handle.state::<SidecarState>();
-                    let mut child = sidecar_state.child.lock().unwrap();
-                    if child.as_ref().map(|current| current.pid()) == Some(spawned_pid) {
-                        lifecycle_log::log(&format!(
-                            "[engine-exit] clearing terminated owned handle for pid {}",
-                            spawned_pid
-                        ));
-                        *child = None;
-                    }
+                    let we_asked_for_it = {
+                        let mut child = sidecar_state.child.lock().unwrap();
+                        let ours = child.as_ref().map(|current| current.pid()) == Some(spawned_pid);
+                        if ours {
+                            lifecycle_log::log(&format!(
+                                "[engine-exit] clearing terminated owned handle for pid {}",
+                                spawned_pid
+                            ));
+                            *child = None;
+                        }
+                        // The handle was already taken (stop_sidecar,
+                        // restart_sidecar, the shutdown path) or belongs to a
+                        // newer generation — either way, nobody is waiting on
+                        // us to bring this engine back.
+                        !ours
+                    };
+                    supervise_terminated_engine(
+                        &app_handle,
+                        spawned_pid,
+                        status.code,
+                        status.signal,
+                        we_asked_for_it,
+                    );
                     break;
                 }
                 _ => {}
@@ -912,6 +979,122 @@ async fn start_sidecar(
     });
 
     Ok(())
+}
+
+/// Act on an engine process that just exited: bounded automatic restart with
+/// backoff, a loud UI state while it happens, and an honest control once the
+/// bound is spent. Never a silently dead engine.
+fn supervise_terminated_engine(
+    app: &tauri::AppHandle,
+    spawned_pid: u32,
+    code: Option<i32>,
+    signal: Option<i32>,
+    we_asked_for_it: bool,
+) {
+    let supervisor = app.state::<EngineSupervisorState>();
+    let uptime_ms = supervisor
+        .spawned_at
+        .lock()
+        .unwrap()
+        .map(|spawned| spawned.elapsed().as_millis() as u64)
+        .unwrap_or(u64::MAX);
+    let exit = EngineExit {
+        code,
+        signal,
+        uptime_ms,
+        we_asked_for_it,
+        app_is_quitting: SHUTDOWN_STARTED.load(Ordering::SeqCst)
+            || SHUTDOWN_COMPLETE.load(Ordering::SeqCst),
+        consecutive_failures: supervisor
+            .consecutive_failures
+            .load(std::sync::atomic::Ordering::SeqCst),
+    };
+    let action = supervise_engine_exit(&exit);
+    if action == SupervisorAction::Ignore {
+        return;
+    }
+
+    let cause = engine_failure_cause(&supervisor.spawn_stderr.lock().unwrap(), code, signal);
+    match action {
+        SupervisorAction::Ignore => {}
+        SupervisorAction::Restart {
+            attempt,
+            of,
+            delay_ms,
+        } => {
+            supervisor
+                .consecutive_failures
+                .store(attempt, std::sync::atomic::Ordering::SeqCst);
+            lifecycle_log::log(&format!(
+                "[engine-supervisor] engine pid {} died after {}ms (code={:?} signal={:?}) — automatic restart {}/{} in {}ms. Cause: {}",
+                spawned_pid, uptime_ms, code, signal, attempt, of, delay_ms, cause
+            ));
+            supervisor.publish(
+                app,
+                EngineSupervisorStatus {
+                    phase: "restarting".into(),
+                    attempt,
+                    max_attempts: of,
+                    cause: Some(cause),
+                    remedy: Some(format!("Restarting the engine — attempt {attempt} of {of}.")),
+                    exit_code: code,
+                    exit_signal: signal,
+                    updated_at_ms: epoch_millis(),
+                },
+            );
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                // Reuse the canonical PID-scoped recycle (restart_sidecar):
+                // it clears any handle we still hold before spawning, so a
+                // stale generation can never be left running.
+                let state = app_handle.state::<SidecarState>();
+                if let Err(error) = restart_sidecar(app_handle.clone(), state).await {
+                    lifecycle_log::log(&format!(
+                        "[engine-supervisor] automatic restart {attempt}/{of} could not spawn the engine: {error}"
+                    ));
+                    let supervisor = app_handle.state::<EngineSupervisorState>();
+                    supervisor.publish(
+                        &app_handle,
+                        EngineSupervisorStatus {
+                            phase: "failed".into(),
+                            attempt,
+                            max_attempts: of,
+                            cause: Some(error),
+                            remedy: Some(
+                                "The engine could not be started. Restart it yourself, or reinstall AI Matrx if it keeps failing."
+                                    .into(),
+                            ),
+                            exit_code: None,
+                            exit_signal: None,
+                            updated_at_ms: epoch_millis(),
+                        },
+                    );
+                }
+            });
+        }
+        SupervisorAction::GiveUp { attempts } => {
+            lifecycle_log::log(&format!(
+                "[engine-supervisor] engine pid {} died after {}ms (code={:?} signal={:?}) and {} automatic restarts did not hold — stopping automatic retries. Cause: {}",
+                spawned_pid, uptime_ms, code, signal, attempts, cause
+            ));
+            supervisor.publish(
+                app,
+                EngineSupervisorStatus {
+                    phase: "failed".into(),
+                    attempt: attempts,
+                    max_attempts: ENGINE_MAX_AUTO_RESTARTS,
+                    cause: Some(cause),
+                    remedy: Some(format!(
+                        "{attempts} automatic restarts did not hold. Restart the engine yourself, or reinstall AI Matrx — a bundled engine file that fails to unpack is repaired by reinstalling."
+                    )),
+                    exit_code: code,
+                    exit_signal: signal,
+                    updated_at_ms: epoch_millis(),
+                },
+            );
+        }
+    }
 }
 
 /// Stop the Python/FastAPI engine sidecar gracefully.
@@ -2193,6 +2376,7 @@ pub fn run() {
         .manage(SidecarLogs {
             lines: Arc::new(Mutex::new(Vec::new())),
         })
+        .manage(EngineSupervisorState::default())
         .manage(CloseToTray(AtomicBool::new(true)))
         .manage(windows::WindowRegistry::default())
         .manage(PendingOAuthUrl(Mutex::new(None)))
@@ -2224,6 +2408,7 @@ pub fn run() {
             restart_app,
             reload_renderer,
             sidecar_status,
+            engine_supervisor_status,
             get_sidecar_logs,
             check_engine_health,
             discover_engine_port,
@@ -2802,21 +2987,11 @@ pub fn run() {
                         // An update restart (code=Some(nonzero)) must instead
                         // flow through tauri's relaunch sequence untouched.
                         #[cfg(unix)]
-                        if matches!(code, None | Some(0)) {
-                            // RunEvent::Exit will never fire — persist window
-                            // geometry now (the window-state plugin saves on
-                            // Exit, which _exit(0) skips).
-                            {
-                                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                                let _ = app.save_window_state(StateFlags::all());
-                            }
-                            lifecycle_log::log(
-                                "[graceful-shutdown] cleanup complete — terminating with _exit(0) to bypass GGML atexit destructors",
-                            );
-                            unsafe { libc::_exit(0) };
-                        }
-                        // Windows / update restart: let the exit proceed.
-                        let _ = code;
+                        terminate_after_cleanup(app, code);
+                        #[cfg(not(unix))]
+                        let _ = &code;
+                        // Windows: the normal exit path carries no GGML atexit
+                        // crash — let it proceed.
                         return;
                     }
 
@@ -2854,6 +3029,358 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+// ── Engine supervisor (SR-02) ───────────────────────────────────────────────
+//
+// The engine used to die at spawn (frozen-archive `zlib.error` on the
+// pandas/pytesseract import chain) and simply STAY dead: the
+// `CommandEvent::Terminated` handler logged the exit code and cleared the
+// handle, and nothing ever called `start_sidecar` again. The audit measured
+// one incident where the whole app sat unusable for ~11 minutes behind a
+// banner whose only offer was a manual button
+// (`common-docs/projects/coding-agent-bridge/audit-2026-09-14-engine-self-repair.md`,
+// row SR-02). This supervisor makes the retry automatic, bounded, and loud.
+
+/// How long a freshly spawned engine must survive before its death counts as
+/// "it was running and then died" rather than "it cannot start".
+const ENGINE_HEALTHY_UPTIME_MS: u64 = 60_000;
+/// Automatic attempts before the user gets an honest control instead of an
+/// endless retry loop.
+const ENGINE_MAX_AUTO_RESTARTS: u32 = 3;
+/// Backoff before automatic attempt N (index = N - 1). An unpacking failure
+/// is not a race, so the ladder widens fast rather than hammering.
+const ENGINE_RESTART_BACKOFF_MS: [u64; ENGINE_MAX_AUTO_RESTARTS as usize] =
+    [1_000, 4_000, 10_000];
+
+/// Everything the supervisor is allowed to reason about. A plain struct so the
+/// decision is a pure function with a test, not behaviour buried in an async
+/// event loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EngineExit {
+    code: Option<i32>,
+    signal: Option<i32>,
+    /// Milliseconds between this spawn and this exit.
+    uptime_ms: u64,
+    /// True when WE took the child handle first — stop_sidecar,
+    /// restart_sidecar, the orphan sweep, or a superseded generation.
+    we_asked_for_it: bool,
+    /// True once app shutdown has begun; the engine is supposed to die.
+    app_is_quitting: bool,
+    /// Consecutive unexplained deaths already counted for this engine.
+    consecutive_failures: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SupervisorAction {
+    /// This death was expected — the engine is not coming back by itself.
+    Ignore,
+    /// Bring the engine back: attempt `attempt` of `of`, after `delay_ms`.
+    Restart { attempt: u32, of: u32, delay_ms: u64 },
+    /// The bound is spent. Stop retrying and hand the user a real control.
+    GiveUp { attempts: u32 },
+}
+
+/// Decide what to do about an engine process that just exited.
+///
+/// A death after a healthy run is a FRESH incident (its counter resets): the
+/// bound exists to stop a boot loop, not to punish an engine that ran fine for
+/// an hour. A death inside the healthy window is a failed start and counts.
+fn supervise_engine_exit(exit: &EngineExit) -> SupervisorAction {
+    if exit.app_is_quitting || exit.we_asked_for_it {
+        return SupervisorAction::Ignore;
+    }
+    let already = if exit.uptime_ms >= ENGINE_HEALTHY_UPTIME_MS {
+        0
+    } else {
+        exit.consecutive_failures
+    };
+    if already >= ENGINE_MAX_AUTO_RESTARTS {
+        return SupervisorAction::GiveUp { attempts: already };
+    }
+    let attempt = already + 1;
+    SupervisorAction::Restart {
+        attempt,
+        of: ENGINE_MAX_AUTO_RESTARTS,
+        delay_ms: ENGINE_RESTART_BACKOFF_MS[(attempt - 1) as usize],
+    }
+}
+
+/// Name the cause of a failed start in the words the engine itself used.
+///
+/// "Engine failed to start" on its own is a dead end for everyone, including
+/// us; the failing import line is what identifies the class. Prefers the last
+/// exception line in the spawn's stderr and falls back to the exit status —
+/// never to an empty string.
+fn engine_failure_cause(stderr_tail: &[String], code: Option<i32>, signal: Option<i32>) -> String {
+    fn looks_like_an_exception(line: &str) -> bool {
+        let Some((head, _)) = line.split_once(": ") else {
+            return false;
+        };
+        let name = head.rsplit(['.', ' ', '\t']).next().unwrap_or(head);
+        !name.is_empty()
+            && (name.ends_with("Error")
+                || name.ends_with("error")
+                || name.ends_with("Exception")
+                || name.ends_with("exception"))
+    }
+    let clean = |line: &str| {
+        let trimmed = line
+            .trim()
+            .trim_start_matches("[stderr]")
+            .trim_start_matches("[stdout]")
+            .trim();
+        if trimmed.chars().count() > 240 {
+            format!("{}…", trimmed.chars().take(240).collect::<String>())
+        } else {
+            trimmed.to_string()
+        }
+    };
+    if let Some(line) = stderr_tail
+        .iter()
+        .rev()
+        .map(|line| clean(line))
+        .find(|line| looks_like_an_exception(line))
+    {
+        return line;
+    }
+    if let Some(line) = stderr_tail
+        .iter()
+        .rev()
+        .map(|line| clean(line))
+        .find(|line| !line.is_empty())
+    {
+        return line;
+    }
+    match (code, signal) {
+        (Some(code), _) => format!("the engine exited with code {code} and said nothing"),
+        (None, Some(signal)) => format!("the engine was killed by signal {signal}"),
+        _ => "the engine exited for an unknown reason".to_string(),
+    }
+}
+
+/// What the desktop UI is told about the engine supervisor. Emitted on the
+/// `engine-supervisor` event and readable at any time via the
+/// `engine_supervisor_status` command, so a window that mounts mid-incident
+/// sees the same truth as one that was already open.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineSupervisorStatus {
+    /// `ok` (nothing wrong), `restarting` (an automatic attempt is pending or
+    /// running) or `failed` (the bound is spent — the user must act).
+    phase: String,
+    attempt: u32,
+    max_attempts: u32,
+    /// The engine's own words, always present for `restarting` / `failed`.
+    cause: Option<String>,
+    /// What the app is doing next, in plain English.
+    remedy: Option<String>,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
+    /// Epoch milliseconds, so the UI can age the message honestly.
+    updated_at_ms: u64,
+}
+
+impl EngineSupervisorStatus {
+    fn ok() -> Self {
+        Self {
+            phase: "ok".into(),
+            attempt: 0,
+            max_attempts: ENGINE_MAX_AUTO_RESTARTS,
+            cause: None,
+            remedy: None,
+            exit_code: None,
+            exit_signal: None,
+            updated_at_ms: epoch_millis(),
+        }
+    }
+}
+
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Supervisor state for the one engine this app owns.
+struct EngineSupervisorState {
+    consecutive_failures: std::sync::atomic::AtomicU32,
+    status: Mutex<EngineSupervisorStatus>,
+    /// stderr of the CURRENT spawn only. The ring buffer behind
+    /// `get_sidecar_logs` spans every generation; a failed start's cause must
+    /// not be read out of the previous engine's output.
+    spawn_stderr: Mutex<Vec<String>>,
+    spawned_at: Mutex<Option<std::time::Instant>>,
+}
+
+impl Default for EngineSupervisorState {
+    fn default() -> Self {
+        Self {
+            consecutive_failures: std::sync::atomic::AtomicU32::new(0),
+            status: Mutex::new(EngineSupervisorStatus::ok()),
+            spawn_stderr: Mutex::new(Vec::new()),
+            spawned_at: Mutex::new(None),
+        }
+    }
+}
+
+impl EngineSupervisorState {
+    fn publish(&self, app: &tauri::AppHandle, status: EngineSupervisorStatus) {
+        *self.status.lock().unwrap() = status.clone();
+        let _ = app.emit("engine-supervisor", status);
+    }
+}
+
+/// The desktop UI reads the supervisor's current truth here on mount.
+#[tauri::command]
+fn engine_supervisor_status(
+    state: tauri::State<'_, EngineSupervisorState>,
+) -> EngineSupervisorStatus {
+    state.status.lock().unwrap().clone()
+}
+
+/// What the process must do when tauri's event loop asks to exit *after* our
+/// own graceful cleanup has already finished.
+///
+/// Extracted from the `RunEvent::ExitRequested` handler so the mapping from
+/// exit code to termination strategy is provable in a unit test instead of
+/// only in a release-day crash report.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum PostCleanupExit {
+    /// Skip libc's static destructors and end this process immediately.
+    BypassAtexit,
+    /// Same, but spawn our successor first (restart / auto-update relaunch),
+    /// because `_exit(0)` also skips tauri's own relaunch on `RunEvent::Exit`.
+    RelaunchThenBypassAtexit,
+}
+
+/// Map an `ExitRequested` code to its termination strategy.
+///
+/// `tauri::RESTART_EXIT_CODE` (`i32::MAX`) is the ONLY code tauri uses, and it
+/// means "relaunch after exiting" (`AppHandle::request_restart`, which is what
+/// `restart_app` / `restart_for_update` call). `None` is a native Cmd+Q /
+/// NSApplication terminate:, `Some(0)` is our own `app.exit(0)`.
+#[cfg(unix)]
+fn post_cleanup_exit(code: Option<i32>) -> PostCleanupExit {
+    if code == Some(tauri::RESTART_EXIT_CODE) {
+        PostCleanupExit::RelaunchThenBypassAtexit
+    } else {
+        PostCleanupExit::BypassAtexit
+    }
+}
+
+/// End this process the one safe way, whatever asked it to end.
+///
+/// Called only once `graceful_shutdown_sync` has finished, so every sidecar,
+/// GGML context and child we own is already gone and libc's remaining static
+/// destructors have nothing left to do except crash.
+#[cfg(unix)]
+fn terminate_after_cleanup(app: &tauri::AppHandle, code: Option<i32>) {
+    // RunEvent::Exit will never fire — persist window geometry now (the
+    // window-state plugin saves on Exit, which _exit(0) skips).
+    save_window_geometry_before_bypass(app);
+    if post_cleanup_exit(code) == PostCleanupExit::RelaunchThenBypassAtexit {
+        lifecycle_log::log(
+            "[graceful-shutdown] relaunch requested — spawning successor, then _exit(0) to bypass GGML atexit destructors",
+        );
+        // Release the single-instance socket BEFORE the successor starts:
+        // while this process still owns the listener, the successor's
+        // notify_singleton() succeeds and it exits instead of taking over —
+        // the app would never come back from an update.
+        tauri_plugin_single_instance::destroy(app);
+        spawn_successor_process();
+    } else {
+        lifecycle_log::log(
+            "[graceful-shutdown] cleanup complete — terminating with _exit(0) to bypass GGML atexit destructors",
+        );
+    }
+    unsafe { libc::_exit(0) };
+}
+
+/// The window-state plugin persists geometry on `RunEvent::Exit`, which
+/// `_exit(0)` never reaches — save it by hand on every bypassing path.
+#[cfg(unix)]
+fn save_window_geometry_before_bypass(app: &tauri::AppHandle) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+    let _ = app.save_window_state(StateFlags::all());
+}
+
+/// Resolve the executable a relaunch must spawn.
+///
+/// On macOS an auto-update can rename the bundle's binary, so the bundle's own
+/// `Info.plist` is the authority — same rule tauri's `process::restart` uses.
+#[cfg(target_os = "macos")]
+fn bundle_executable(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = current_exe.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name()? != "Contents" {
+        return None;
+    }
+    let info: plist::Dictionary = plist::from_file(contents_dir.join("Info.plist")).ok()?;
+    Some(macos_dir.join(info.get("CFBundleExecutable")?.as_string()?))
+}
+
+#[cfg(unix)]
+fn successor_executable() -> Option<std::path::PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(bundled) = bundle_executable(&current) {
+            return Some(bundled);
+        }
+    }
+    Some(current)
+}
+
+/// Spawn a fresh copy of this application before the current process ends.
+///
+/// Mirrors `tauri::process::restart` — including the macOS `Info.plist` lookup
+/// that survives an update renaming the binary — but WITHOUT its trailing
+/// `exit(0)`: the caller ends the process with `_exit(0)` so libc's static
+/// destructors (GGML's Metal teardown, which calls `ggml_abort()`) never run.
+///
+/// A failure here is loud: it is the difference between "the app restarts" and
+/// "the app is gone", so it is written to the lifecycle log with its remedy.
+#[cfg(unix)]
+fn spawn_successor_process() {
+    let Some(executable) = successor_executable() else {
+        lifecycle_log::log(
+            "[graceful-shutdown] RELAUNCH FAILED: could not resolve this app's own executable — \
+             AI Matrx will NOT come back up on its own. Remedy: open AI Matrx from Applications.",
+        );
+        return;
+    };
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    match spawn_successor(&executable, &args) {
+        Ok(pid) => lifecycle_log::log(&format!(
+            "[graceful-shutdown] successor spawned: pid {pid} ({})",
+            executable.display()
+        )),
+        Err(error) => lifecycle_log::log(&format!(
+            "[graceful-shutdown] RELAUNCH FAILED: could not spawn {} ({error}) — AI Matrx will \
+             NOT come back up on its own. Remedy: open AI Matrx from Applications.",
+            executable.display()
+        )),
+    }
+}
+
+/// Start the successor process. Separated from the resolution and the logging
+/// so a test can prove a process really starts — the half of the relaunch that
+/// either works or leaves the user with no app at all.
+#[cfg(unix)]
+fn spawn_successor(
+    executable: &std::path::Path,
+    args: &[std::ffi::OsString],
+) -> std::io::Result<u32> {
+    std::process::Command::new(executable)
+        .args(args)
+        .spawn()
+        .map(|child| child.id())
 }
 
 #[cfg(test)]
@@ -3068,5 +3595,287 @@ mod engine_termination_tests {
             Duration::from_millis(100),
         );
         assert_eq!(outcome, super::SweepOutcome::default());
+    }
+}
+
+
+/// Forcing-function guards for the shutdown ladder (SR-01).
+///
+/// Every release-train auto-update produced a real `SIGABRT` crash report
+/// (17 in the 72 h window of
+/// `common-docs/projects/coding-agent-bridge/audit-2026-09-14-engine-self-repair.md`)
+/// because the `_exit(0)` GGML-atexit bypass was applied to the quit path and
+/// NOT to the restart path. These tests fail on that shipped logic.
+#[cfg(all(test, unix))]
+mod shutdown_exit_tests {
+    use super::{post_cleanup_exit, PostCleanupExit};
+
+    /// THE GUARD. A relaunch is the auto-update path. If it does not bypass
+    /// libc's static destructors, `__cxa_finalize_ranges` runs GGML's Metal
+    /// teardown, which calls `ggml_abort()` → SIGABRT → macOS records a crash
+    /// on every single release.
+    #[test]
+    fn an_update_restart_never_runs_the_ggml_atexit_destructors() {
+        assert_eq!(
+            post_cleanup_exit(Some(tauri::RESTART_EXIT_CODE)),
+            PostCleanupExit::RelaunchThenBypassAtexit,
+            "the auto-update relaunch must exit the same safe way a quit does \
+             (and spawn its own successor, because _exit(0) skips tauri's relaunch)"
+        );
+    }
+
+    /// The paths that already worked must keep working.
+    #[test]
+    fn a_true_quit_still_bypasses_the_destructors() {
+        assert_eq!(post_cleanup_exit(None), PostCleanupExit::BypassAtexit);
+        assert_eq!(post_cleanup_exit(Some(0)), PostCleanupExit::BypassAtexit);
+    }
+
+    /// No shutdown path may fall through to libc's exit on Unix — that is the
+    /// crash. Every code tauri can hand us has to bypass the destructors, and
+    /// only the relaunch code may also spawn a successor.
+    #[test]
+    fn every_unix_shutdown_path_bypasses_the_atexit_destructors() {
+        for code in [None, Some(0), Some(1), Some(2), Some(-1)] {
+            assert_eq!(
+                post_cleanup_exit(code),
+                PostCleanupExit::BypassAtexit,
+                "exit code {code:?} must bypass the GGML atexit destructors"
+            );
+        }
+        assert_eq!(
+            post_cleanup_exit(Some(tauri::RESTART_EXIT_CODE)),
+            PostCleanupExit::RelaunchThenBypassAtexit
+        );
+    }
+}
+
+/// The successor must be a process that ACTUALLY STARTS. `_exit(0)` skips
+/// tauri's own relaunch on `RunEvent::Exit`, so if this spawn does not happen
+/// the user's app is simply gone after an update — the worst possible outcome
+/// of the SR-01 fix, and the one thing worth a real process to prove.
+#[cfg(all(test, unix))]
+mod successor_spawn_tests {
+    use super::spawn_successor;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_successor_is_really_started_and_receives_our_arguments() {
+        let dir = std::env::temp_dir().join(format!("matrx-successor-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        let marker = dir.join("started");
+        let script = dir.join("successor.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s' \"$1\" > {}\n", marker.display()),
+        )
+        .expect("fixture script");
+        std::process::Command::new("chmod")
+            .args(["+x", script.to_str().expect("utf-8 path")])
+            .status()
+            .expect("chmod");
+
+        let pid = spawn_successor(&script, &[std::ffi::OsString::from("--relaunched")])
+            .expect("the successor must start");
+        assert!(pid > 1);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            marker.exists(),
+            "the successor process never ran — an update would leave the user with no app"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("marker"),
+            "--relaunched",
+            "the successor must inherit our command line, not a bare launch"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A relaunch that cannot spawn must report it, never pretend.
+    #[test]
+    fn a_missing_successor_is_an_error_not_a_silent_success() {
+        let missing = std::env::temp_dir().join("matrx-successor-guard-does-not-exist");
+        assert!(spawn_successor(&missing, &[]).is_err());
+    }
+}
+
+/// The relaunch must target the binary the bundle's `Info.plist` names, not
+/// the name this process happens to have been launched under — an update can
+/// rename it, and spawning the old name would silently fail to come back.
+#[cfg(all(test, target_os = "macos"))]
+mod relaunch_target_tests {
+    use super::bundle_executable;
+
+    #[test]
+    fn a_renamed_bundle_binary_is_resolved_from_info_plist() {
+        let root = std::env::temp_dir().join(format!("matrx-relaunch-guard-{}", std::process::id()));
+        let macos_dir = root.join("AI Matrx.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos_dir).expect("fixture bundle");
+        std::fs::write(
+            root.join("AI Matrx.app/Contents/Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>aimatrx-desktop-renamed</string>
+</dict></plist>
+"#,
+        )
+        .expect("fixture Info.plist");
+
+        let resolved = bundle_executable(&macos_dir.join("aimatrx-desktop"));
+        assert_eq!(
+            resolved.as_deref(),
+            Some(macos_dir.join("aimatrx-desktop-renamed").as_path()),
+            "an updated bundle that renamed its binary must still be relaunchable"
+        );
+
+        // A plain (non-bundled) executable has no Info.plist to consult.
+        assert_eq!(bundle_executable(&root.join("aimatrx-desktop")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+
+/// Forcing-function guards for the engine supervisor (SR-02).
+///
+/// The shipped `CommandEvent::Terminated` handler logged the exit code and
+/// cleared the handle — nothing more. An engine that died at spawn stayed dead
+/// until a human clicked Restart (measured: ~11 minutes of a fully unusable
+/// app behind a banner). These tests fail on that behaviour, because on that
+/// behaviour there is no decision function to call at all.
+#[cfg(test)]
+mod engine_supervisor_tests {
+    use super::{
+        engine_failure_cause, supervise_engine_exit, EngineExit, SupervisorAction,
+        ENGINE_HEALTHY_UPTIME_MS, ENGINE_MAX_AUTO_RESTARTS,
+    };
+
+    fn crashed_at_spawn(consecutive_failures: u32) -> EngineExit {
+        EngineExit {
+            code: Some(1),
+            signal: None,
+            uptime_ms: 2_000,
+            we_asked_for_it: false,
+            app_is_quitting: false,
+            consecutive_failures,
+        }
+    }
+
+    /// THE GUARD. An engine that dies seconds after spawn must be brought back
+    /// automatically — never left down waiting for a human to notice a banner.
+    #[test]
+    fn an_engine_that_dies_at_spawn_is_restarted_automatically() {
+        assert_eq!(
+            supervise_engine_exit(&crashed_at_spawn(0)),
+            SupervisorAction::Restart {
+                attempt: 1,
+                of: ENGINE_MAX_AUTO_RESTARTS,
+                delay_ms: 1_000
+            },
+            "a dead engine must not wait for a human"
+        );
+    }
+
+    /// The retry must be BOUNDED and backed off — a boot loop that cannot
+    /// succeed has to stop and hand the user a real control.
+    #[test]
+    fn automatic_restarts_back_off_and_stop_at_the_bound() {
+        let mut delays = Vec::new();
+        for failures in 0..ENGINE_MAX_AUTO_RESTARTS {
+            match supervise_engine_exit(&crashed_at_spawn(failures)) {
+                SupervisorAction::Restart {
+                    attempt, delay_ms, ..
+                } => {
+                    assert_eq!(attempt, failures + 1);
+                    delays.push(delay_ms);
+                }
+                other => panic!("attempt {} must still be automatic, got {other:?}", failures + 1),
+            }
+        }
+        assert!(
+            delays.windows(2).all(|pair| pair[1] > pair[0]),
+            "each attempt must wait longer than the last (got {delays:?})"
+        );
+        assert_eq!(
+            supervise_engine_exit(&crashed_at_spawn(ENGINE_MAX_AUTO_RESTARTS)),
+            SupervisorAction::GiveUp {
+                attempts: ENGINE_MAX_AUTO_RESTARTS
+            },
+            "past the bound the app must stop retrying and say so"
+        );
+    }
+
+    /// A death after a healthy run is a fresh incident, not the next rung of a
+    /// spent ladder — otherwise an app left open for days would refuse to
+    /// restart its engine at all.
+    #[test]
+    fn a_death_after_a_healthy_run_gets_the_full_ladder_again() {
+        let exit = EngineExit {
+            uptime_ms: ENGINE_HEALTHY_UPTIME_MS + 1,
+            consecutive_failures: ENGINE_MAX_AUTO_RESTARTS,
+            ..crashed_at_spawn(0)
+        };
+        assert_eq!(
+            supervise_engine_exit(&exit),
+            SupervisorAction::Restart {
+                attempt: 1,
+                of: ENGINE_MAX_AUTO_RESTARTS,
+                delay_ms: 1_000
+            }
+        );
+    }
+
+    /// Our own stop/restart and app shutdown must never trigger a respawn —
+    /// that would resurrect the engine we are deliberately killing.
+    #[test]
+    fn engine_deaths_we_caused_are_never_fought() {
+        assert_eq!(
+            supervise_engine_exit(&EngineExit {
+                we_asked_for_it: true,
+                ..crashed_at_spawn(0)
+            }),
+            SupervisorAction::Ignore
+        );
+        assert_eq!(
+            supervise_engine_exit(&EngineExit {
+                app_is_quitting: true,
+                ..crashed_at_spawn(0)
+            }),
+            SupervisorAction::Ignore
+        );
+    }
+
+    /// Nothing fails silently: the state the user is shown must name the
+    /// engine's OWN cause, which for SR-02 is the frozen-archive read error.
+    #[test]
+    fn the_cause_is_the_engines_own_words() {
+        let stderr = vec![
+            "  File \"pyimod01_archive.py\", line 134, in extract".to_string(),
+            "zlib.error: Error -3 while decompressing data: incorrect header check".to_string(),
+            String::new(),
+        ];
+        assert_eq!(
+            engine_failure_cause(&stderr, Some(1), None),
+            "zlib.error: Error -3 while decompressing data: incorrect header check"
+        );
+    }
+
+    /// …and when the engine says nothing at all, the cause is still honest
+    /// rather than empty.
+    #[test]
+    fn a_silent_engine_still_gets_an_honest_cause() {
+        assert_eq!(
+            engine_failure_cause(&[], Some(1), None),
+            "the engine exited with code 1 and said nothing"
+        );
+        assert_eq!(
+            engine_failure_cause(&[], None, Some(9)),
+            "the engine was killed by signal 9"
+        );
+        assert!(!engine_failure_cause(&[], None, None).is_empty());
     }
 }

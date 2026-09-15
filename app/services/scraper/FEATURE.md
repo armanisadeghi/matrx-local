@@ -9,8 +9,8 @@ plumbing that moves results between this machine and the server.
 |---|---|
 | `engine.py` | Runs the package's orchestrator locally |
 | `scrape_store.py` | The dual write: local SQLite, then cloud |
-| `remote_client.py` | HTTP client for `scraper.app.matrxserver.com` |
-| `retry_queue.py` | Polls the server for URLs it wants us to scrape |
+| `remote_client.py` | HTTP client for `scraper.app.matrxserver.com`. **Every authenticated call names its organization** — `_auth_headers()` attaches `X-Organization-Id` on the same line as the bearer, because the scraper service's `AuthMiddleware` refuses an authenticated request that names none with 400 `organization_required` before it routes. Never attach it per call site (SR-04, 2026-09-14: every user-scoped scraper call had been 400ing). Guard: `tests/unit/test_aidream_transport_organization_header.py` |
+| `retry_queue.py` | Polls the server for URLs it wants us to scrape. **A permanent 4xx is a terminal state, not a retry schedule**: a non-retryable 4xx (anything but 408/425/429) stops the poll, marks `scraper_retry_queue` FAILED with the server's own `user_message` as the remedy, and re-arms only when a different user signs in; 5xx/timeouts/429 keep the exponential backoff + DEGRADED. Guard: `tests/unit/test_scraper_retry_queue_terminal_refusal.py` |
 | `auth_helper.py` | The signed-in user's JWT for background calls |
 
 ---
@@ -138,6 +138,25 @@ retry has run the state is `browser_starting` — "The built-in browser is still
 starting", `available=False`, and **no ActionNeeded**, because a transient state
 is never an ask. Only when the retry also fails does `browser_launch_failed`
 stand. Pinned in `tests/unit/test_browser_runtime_state.py`.
+
+**An installed browser this engine cannot launch is not an installed browser.**
+Playwright resolves a browser by EXACT build id (`chromium_headless_shell-<rev>`),
+pinned inside the Playwright package the running engine imported. When an install
+into a world was performed by a different Playwright version the directory on
+disk carries a different revision, every launch fails at a path that does not
+exist, and no launch retry can ever clear it — live on 2026-09-14 for 18.6+ hours
+(pinned 1208 vs. 1234 on disk). So presence is judged against the build THIS
+engine resolves: `browser_install_report()` reconciles
+`expected_browser_revision()` with a newest-first scan of the path
+(`installed_browser_builds()`, `resolve_browser_executable()`), and
+`browser_binary_present()` means *launchable*. An unreadable pin falls back to
+the old any-complete-build rule, so it can never call a working install broken.
+The mismatch is its own honest state (`browser_build_mismatch`, naming both
+builds and promising no restart) with the usual one-click ask, and
+`self_heal_browser_build()` repairs it IN the running engine — one bounded
+attempt per process, then `ensure_browser_pool()`, no app restart and no click
+(`schedule_browser_build_repair()` in `engine.py`, from Phase 3). Pinned in
+`tests/unit/test_browser_build_mismatch.py`.
 
 **"Repair browser" repairs.** `POST /browser-runtime/install` used to re-download
 ~90 MB of Chromium the machine already had. It now looks first: pool live → say

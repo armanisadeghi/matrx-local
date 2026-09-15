@@ -2802,21 +2802,11 @@ pub fn run() {
                         // An update restart (code=Some(nonzero)) must instead
                         // flow through tauri's relaunch sequence untouched.
                         #[cfg(unix)]
-                        if matches!(code, None | Some(0)) {
-                            // RunEvent::Exit will never fire — persist window
-                            // geometry now (the window-state plugin saves on
-                            // Exit, which _exit(0) skips).
-                            {
-                                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                                let _ = app.save_window_state(StateFlags::all());
-                            }
-                            lifecycle_log::log(
-                                "[graceful-shutdown] cleanup complete — terminating with _exit(0) to bypass GGML atexit destructors",
-                            );
-                            unsafe { libc::_exit(0) };
-                        }
-                        // Windows / update restart: let the exit proceed.
-                        let _ = code;
+                        terminate_after_cleanup(app, code);
+                        #[cfg(not(unix))]
+                        let _ = &code;
+                        // Windows: the normal exit path carries no GGML atexit
+                        // crash — let it proceed.
                         return;
                     }
 
@@ -2854,6 +2844,136 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+/// What the process must do when tauri's event loop asks to exit *after* our
+/// own graceful cleanup has already finished.
+///
+/// Extracted from the `RunEvent::ExitRequested` handler so the mapping from
+/// exit code to termination strategy is provable in a unit test instead of
+/// only in a release-day crash report.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum PostCleanupExit {
+    /// Skip libc's static destructors and end this process immediately.
+    BypassAtexit,
+    /// Same, but spawn our successor first (restart / auto-update relaunch),
+    /// because `_exit(0)` also skips tauri's own relaunch on `RunEvent::Exit`.
+    RelaunchThenBypassAtexit,
+}
+
+/// Map an `ExitRequested` code to its termination strategy.
+///
+/// `tauri::RESTART_EXIT_CODE` (`i32::MAX`) is the ONLY code tauri uses, and it
+/// means "relaunch after exiting" (`AppHandle::request_restart`, which is what
+/// `restart_app` / `restart_for_update` call). `None` is a native Cmd+Q /
+/// NSApplication terminate:, `Some(0)` is our own `app.exit(0)`.
+#[cfg(unix)]
+fn post_cleanup_exit(code: Option<i32>) -> PostCleanupExit {
+    if code == Some(tauri::RESTART_EXIT_CODE) {
+        PostCleanupExit::RelaunchThenBypassAtexit
+    } else {
+        PostCleanupExit::BypassAtexit
+    }
+}
+
+/// End this process the one safe way, whatever asked it to end.
+///
+/// Called only once `graceful_shutdown_sync` has finished, so every sidecar,
+/// GGML context and child we own is already gone and libc's remaining static
+/// destructors have nothing left to do except crash.
+#[cfg(unix)]
+fn terminate_after_cleanup(app: &tauri::AppHandle, code: Option<i32>) {
+    // RunEvent::Exit will never fire — persist window geometry now (the
+    // window-state plugin saves on Exit, which _exit(0) skips).
+    save_window_geometry_before_bypass(app);
+    if post_cleanup_exit(code) == PostCleanupExit::RelaunchThenBypassAtexit {
+        lifecycle_log::log(
+            "[graceful-shutdown] relaunch requested — spawning successor, then _exit(0) to bypass GGML atexit destructors",
+        );
+        // Release the single-instance socket BEFORE the successor starts:
+        // while this process still owns the listener, the successor's
+        // notify_singleton() succeeds and it exits instead of taking over —
+        // the app would never come back from an update.
+        tauri_plugin_single_instance::destroy(app);
+        spawn_successor_process();
+    } else {
+        lifecycle_log::log(
+            "[graceful-shutdown] cleanup complete — terminating with _exit(0) to bypass GGML atexit destructors",
+        );
+    }
+    unsafe { libc::_exit(0) };
+}
+
+/// The window-state plugin persists geometry on `RunEvent::Exit`, which
+/// `_exit(0)` never reaches — save it by hand on every bypassing path.
+#[cfg(unix)]
+fn save_window_geometry_before_bypass(app: &tauri::AppHandle) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+    let _ = app.save_window_state(StateFlags::all());
+}
+
+/// Resolve the executable a relaunch must spawn.
+///
+/// On macOS an auto-update can rename the bundle's binary, so the bundle's own
+/// `Info.plist` is the authority — same rule tauri's `process::restart` uses.
+#[cfg(target_os = "macos")]
+fn bundle_executable(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = current_exe.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name()? != "Contents" {
+        return None;
+    }
+    let info: plist::Dictionary = plist::from_file(contents_dir.join("Info.plist")).ok()?;
+    Some(macos_dir.join(info.get("CFBundleExecutable")?.as_string()?))
+}
+
+#[cfg(unix)]
+fn successor_executable() -> Option<std::path::PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(bundled) = bundle_executable(&current) {
+            return Some(bundled);
+        }
+    }
+    Some(current)
+}
+
+/// Spawn a fresh copy of this application before the current process ends.
+///
+/// Mirrors `tauri::process::restart` — including the macOS `Info.plist` lookup
+/// that survives an update renaming the binary — but WITHOUT its trailing
+/// `exit(0)`: the caller ends the process with `_exit(0)` so libc's static
+/// destructors (GGML's Metal teardown, which calls `ggml_abort()`) never run.
+///
+/// A failure here is loud: it is the difference between "the app restarts" and
+/// "the app is gone", so it is written to the lifecycle log with its remedy.
+#[cfg(unix)]
+fn spawn_successor_process() {
+    let Some(executable) = successor_executable() else {
+        lifecycle_log::log(
+            "[graceful-shutdown] RELAUNCH FAILED: could not resolve this app's own executable — \
+             AI Matrx will NOT come back up on its own. Remedy: open AI Matrx from Applications.",
+        );
+        return;
+    };
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    match std::process::Command::new(&executable).args(&args).spawn() {
+        Ok(child) => lifecycle_log::log(&format!(
+            "[graceful-shutdown] successor spawned: pid {} ({})",
+            child.id(),
+            executable.display()
+        )),
+        Err(error) => lifecycle_log::log(&format!(
+            "[graceful-shutdown] RELAUNCH FAILED: could not spawn {} ({error}) — AI Matrx will \
+             NOT come back up on its own. Remedy: open AI Matrx from Applications.",
+            executable.display()
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -3068,5 +3188,93 @@ mod engine_termination_tests {
             Duration::from_millis(100),
         );
         assert_eq!(outcome, super::SweepOutcome::default());
+    }
+}
+
+
+/// Forcing-function guards for the shutdown ladder (SR-01).
+///
+/// Every release-train auto-update produced a real `SIGABRT` crash report
+/// (17 in the 72 h window of
+/// `common-docs/projects/coding-agent-bridge/audit-2026-09-14-engine-self-repair.md`)
+/// because the `_exit(0)` GGML-atexit bypass was applied to the quit path and
+/// NOT to the restart path. These tests fail on that shipped logic.
+#[cfg(all(test, unix))]
+mod shutdown_exit_tests {
+    use super::{post_cleanup_exit, PostCleanupExit};
+
+    /// THE GUARD. A relaunch is the auto-update path. If it does not bypass
+    /// libc's static destructors, `__cxa_finalize_ranges` runs GGML's Metal
+    /// teardown, which calls `ggml_abort()` → SIGABRT → macOS records a crash
+    /// on every single release.
+    #[test]
+    fn an_update_restart_never_runs_the_ggml_atexit_destructors() {
+        assert_eq!(
+            post_cleanup_exit(Some(tauri::RESTART_EXIT_CODE)),
+            PostCleanupExit::RelaunchThenBypassAtexit,
+            "the auto-update relaunch must exit the same safe way a quit does \
+             (and spawn its own successor, because _exit(0) skips tauri's relaunch)"
+        );
+    }
+
+    /// The paths that already worked must keep working.
+    #[test]
+    fn a_true_quit_still_bypasses_the_destructors() {
+        assert_eq!(post_cleanup_exit(None), PostCleanupExit::BypassAtexit);
+        assert_eq!(post_cleanup_exit(Some(0)), PostCleanupExit::BypassAtexit);
+    }
+
+    /// No shutdown path may fall through to libc's exit on Unix — that is the
+    /// crash. Every code tauri can hand us has to bypass the destructors, and
+    /// only the relaunch code may also spawn a successor.
+    #[test]
+    fn every_unix_shutdown_path_bypasses_the_atexit_destructors() {
+        for code in [None, Some(0), Some(1), Some(2), Some(-1)] {
+            assert_eq!(
+                post_cleanup_exit(code),
+                PostCleanupExit::BypassAtexit,
+                "exit code {code:?} must bypass the GGML atexit destructors"
+            );
+        }
+        assert_eq!(
+            post_cleanup_exit(Some(tauri::RESTART_EXIT_CODE)),
+            PostCleanupExit::RelaunchThenBypassAtexit
+        );
+    }
+}
+
+/// The relaunch must target the binary the bundle's `Info.plist` names, not
+/// the name this process happens to have been launched under — an update can
+/// rename it, and spawning the old name would silently fail to come back.
+#[cfg(all(test, target_os = "macos"))]
+mod relaunch_target_tests {
+    use super::bundle_executable;
+
+    #[test]
+    fn a_renamed_bundle_binary_is_resolved_from_info_plist() {
+        let root = std::env::temp_dir().join(format!("matrx-relaunch-guard-{}", std::process::id()));
+        let macos_dir = root.join("AI Matrx.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos_dir).expect("fixture bundle");
+        std::fs::write(
+            root.join("AI Matrx.app/Contents/Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>aimatrx-desktop-renamed</string>
+</dict></plist>
+"#,
+        )
+        .expect("fixture Info.plist");
+
+        let resolved = bundle_executable(&macos_dir.join("aimatrx-desktop"));
+        assert_eq!(
+            resolved.as_deref(),
+            Some(macos_dir.join("aimatrx-desktop-renamed").as_path()),
+            "an updated bundle that renamed its binary must still be relaunchable"
+        );
+
+        // A plain (non-bundled) executable has no Info.plist to consult.
+        assert_eq!(bundle_executable(&root.join("aimatrx-desktop")), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

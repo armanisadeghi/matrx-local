@@ -391,6 +391,28 @@ in both cases and is exercised here against the real server.
 * The local `auth_tokens` table is dropped by local-DB migration 34, so a residual encrypted
   refresh token cannot survive the upgrade.
 
+### The cutover's own migration (CS-19, landed after the above)
+
+FS-C5b shipped in 1.4.124 **without carrying the session the previous release had**, and that is
+how a Mac signed in on 2026-09-14 reported `{"state":"signed_out","world":"live"}` on 2026-09-15:
+the daemon's journal is created by the release that introduced the daemon, so `resume()` found no
+row and could only say `signed_out`; local-DB migration 34 DROPPED `auth_tokens` without reading
+it; and the webview's own pre-cutover Supabase entry — the one surviving refresh token on the
+machine — was left unread because the new client cannot see it.
+
+`POST /v1/adopt` (control scope) + `Custodian::adopt_legacy_session` close that: the app offers
+that entry once, the daemon presents it on the ordinary refresh grant, takes custody and logs
+`carried over the session this computer already had for …`. A definitive refusal becomes
+`sign_in_needed` carrying `CUTOVER_SIGN_IN_REMEDY`, which the sign-in screen and every engine
+lane's blocker now show verbatim; a transport failure is `retry` and spends nothing. Both halves
+are proven failing-then-passing (`crates/matrx-sync/tests/custody.rs`,
+`desktop/src/lib/legacy-session-handover.test.ts`, `desktop/src/pages/Login.test.tsx`,
+`tests/unit/test_session_freshness.py`), and the hand-run §13 grep is now the mechanical
+`pnpm check:session-custody` with its own self-test.
+
+**NOT proven here:** the handover running inside the packaged app on a real pre-cutover home.
+The one place that could be proven is Arman's installed 1.4.124, which agents do not touch.
+
 **NOT proven here, and not claimed:** the end-to-end run *through the app UI* — sign in from the
 window, a data query and a `realtime.setAuth()` observed in the live webview, quit-and-relaunch
 still signed in, sign out from the UI. Two concrete reasons, both about this machine rather than

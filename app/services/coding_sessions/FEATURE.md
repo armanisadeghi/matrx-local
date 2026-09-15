@@ -480,7 +480,12 @@ branch deferred the head row and said nothing (`publisher.blocker` was null whil
   `session_freshness.py::session_blocker` is the ONE producer of both, and every
   lane in the engine builds its payload there (publisher, artifacts, label sync,
   overview, and the capture-reconciler's 409 at the route boundary) — a lane that
-  writes its own text drifts out of one of the states. While the engine has a
+  writes its own text drifts out of one of the states. **The remedy is the
+  DAEMON's own sentence** (`session_freshness.py::daemon_remedy`, from
+  `sync_client.last_state.state_reason`), falling back to `DEFAULT_REMEDY` only
+  when the daemon has published none: after the custody cutover the generic
+  "sign out and back in" told a silently signed-out Arman to sign out of
+  something he was not signed in to (CS-19). While the engine has a
   delivered ask outstanding, the code is `session_refreshing`, the message is
   "Refreshing your AI Matrx session…" and there is NO remedy: nothing for the
   person to do about a gap the desktop is already closing. `_REFRESH_GRACE_SECONDS`

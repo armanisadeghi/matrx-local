@@ -166,6 +166,31 @@ pub async fn syncd_sign_out() -> Result<serde_json::Value, String> {
     call(reqwest::Method::POST, "/v1/sign-out", Some(serde_json::json!({}))).await
 }
 
+/// Hand the daemon a session this Mac held **before** the custody cutover, once.
+///
+/// The webview is the one place that still has it: before the cutover the Supabase client
+/// persisted a session to the webview's own storage, so on a Mac that was signed in yesterday
+/// that entry is still there while the daemon's brand-new journal knows nothing. Reading it there
+/// and handing it here is what turns "signed out this morning for no reason" into "still signed
+/// in". The call is **control scope** — Rust makes it (S17), the same way sign-in and sign-out do,
+/// so a page cannot install a session on this device.
+///
+/// It returns the daemon's outcome verbatim, including `spent`: on `retry` (offline, a captive
+/// portal) the caller keeps what it has and offers it again, because that credential is the only
+/// recoverable one on the machine.
+#[tauri::command]
+pub async fn syncd_adopt_legacy_session(
+    refresh_token: Option<String>,
+    email: Option<String>,
+) -> Result<serde_json::Value, String> {
+    call(
+        reqwest::Method::POST,
+        "/v1/adopt",
+        Some(serde_json::json!({ "refresh_token": refresh_token, "email": email })),
+    )
+    .await
+}
+
 /// The session, for the host's own use (the tray, and the first render before the stream opens).
 #[tauri::command]
 pub async fn syncd_session() -> Result<serde_json::Value, String> {

@@ -131,3 +131,58 @@ async def test_temporary_daemon_failure_is_bounded_and_signout_is_explicit(monke
         lane="a", reason="signed_out"
     )
     assert not session_freshness.session_refresh_pending()
+
+
+async def test_every_lane_repeats_the_daemons_own_remedy(monkeypatch) -> None:
+    """CS-19 — the blocker must not hand out impossible advice.
+
+    Live on 1.4.124 (2026-09-15): the custody cutover left Arman's Mac signed out and
+    every engine lane told him to "sign out and back in to AI Matrx in Matrx Local".
+    There was nothing signed in to sign out of. The daemon knows the real reason, so
+    the blocker says the daemon's sentence and the app's sign-in screen says the same
+    one. Proven failing before the fix, when this text was a constant in this module.
+    """
+    from app.services import sync_client
+    from app.services.sync_client.client import SessionSnapshot
+
+    cutover = (
+        "Sign in again to AI Matrx — this update changed how this computer keeps "
+        "you signed in. Nothing was lost: your folders, history and settings are "
+        "exactly as you left them."
+    )
+
+    class Client:
+        last_state = SessionSnapshot(state="sign_in_needed", state_reason=cutover)
+
+    monkeypatch.setattr(sync_client, "get_sync_client", Client)
+    session_freshness.session_restored()
+
+    blocker = session_freshness.session_blocker(lane="title_sync")
+    assert blocker["code"] == session_freshness.NO_SESSION_CODE
+    assert blocker["remedy"] == cutover
+    assert "sign out and back in" not in blocker["remedy"]
+
+
+async def test_the_generic_remedy_survives_a_daemon_with_nothing_to_say(monkeypatch) -> None:
+    """A daemon that has published no reason must not produce a blocker with no remedy."""
+    from app.services import sync_client
+    from app.services.sync_client.client import SessionSnapshot
+
+    class Blank:
+        last_state = SessionSnapshot(state="signed_out", state_reason="   ")
+
+    monkeypatch.setattr(sync_client, "get_sync_client", Blank)
+    session_freshness.session_restored()
+    assert (
+        session_freshness.session_blocker(lane="file_sync")["remedy"]
+        == session_freshness.DEFAULT_REMEDY
+    )
+
+    class Silent:
+        last_state = None
+
+    monkeypatch.setattr(sync_client, "get_sync_client", Silent)
+    assert (
+        session_freshness.session_blocker(lane="file_sync")["remedy"]
+        == session_freshness.DEFAULT_REMEDY
+    )

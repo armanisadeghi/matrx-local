@@ -158,6 +158,37 @@ pub struct SignedIn {
     pub email: String,
 }
 
+/// The sentence a device shows when a session it held before the custody cutover could not be
+/// carried over.
+///
+/// It exists because "signed out" is true but not honest here: the person did not sign out, the
+/// app changed where it keeps the session. One constant, read by the daemon's state row, by the
+/// engine's blocker payload and by the app's sign-in screen, so no surface invents its own words.
+pub const CUTOVER_SIGN_IN_REMEDY: &str =
+    "Sign in again to AI Matrx — this update changed how this computer keeps you signed in. \
+     Nothing was lost: your folders, history and settings are exactly as you left them.";
+
+/// What one attempt to carry a pre-cutover session into daemon custody achieved.
+///
+/// Every variant is reported; none of them is silence. `Retry` exists so a laptop that opened the
+/// app with no network does not spend its one recoverable credential on a transport failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdoptOutcome {
+    /// The pre-cutover refresh token was accepted. This device is signed in again with no user
+    /// action, and the keychain item now exists.
+    Adopted,
+    /// This device held a session before the cutover and it cannot be carried over. The session
+    /// row is `sign_in_needed` carrying [`CUTOVER_SIGN_IN_REMEDY`].
+    SignInNeeded,
+    /// The authorization server could not be reached or answered ambiguously. Nothing was
+    /// consumed; the caller keeps what it has and offers it again later.
+    Retry,
+    /// Nothing to do: the daemon already holds a session, this journal already carries a state
+    /// that was not the never-signed-in one, or this device never had a session to carry.
+    NotNeeded,
+}
+
 /// A granted access token (`GET /v1/token` 200).
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenGrant {
@@ -422,6 +453,145 @@ impl Custodian {
             }
         }
         self.session().await
+    }
+
+    /// Carry a session this device held **before** the custody cutover into daemon custody, once.
+    ///
+    /// The daemon's journal is created by the release that introduced the daemon, so on the first
+    /// start after the cutover it has no session row and [`resume`] can only say `signed_out` —
+    /// which is exactly how a person who was signed in yesterday woke up signed out with no
+    /// explanation. The pre-cutover refresh token lived in the app's own storage, which is the one
+    /// place that survives the upgrade, so the app offers it here and the daemon presents it on
+    /// the ordinary refresh grant. From that moment there is one credential holder again.
+    ///
+    /// This is deliberately **one-shot by construction**: it refuses as soon as the journal holds
+    /// any state other than the never-signed-in one, so the refusal path (`sign_in_needed`) can
+    /// never be re-entered and a stale token can never be presented twice.
+    ///
+    /// `refresh_token` is `None` when the app found evidence of a prior session but no usable
+    /// credential — that is still a fact the person must be told, not a reason to say nothing.
+    ///
+    /// [`resume`]: Self::resume
+    pub async fn adopt_legacy_session(
+        &self,
+        refresh_token: Option<&str>,
+        prior_email: Option<&str>,
+    ) -> AdoptOutcome {
+        // Already a session holder? Then the cutover is behind this device and there is nothing to
+        // carry. A journal that carries any state but the fresh `signed_out` row has already been
+        // through this, or through a real sign-in or sign-out, and must not be overwritten.
+        if self.inner.live.lock().await.is_some() {
+            return AdoptOutcome::NotNeeded;
+        }
+        match self.inner.sessions.read().ok().flatten() {
+            Some(row) if row.state == SessionState::SignedOut && row.user_id.is_none() => {}
+            // No row at all cannot happen after `resume()`, but a daemon asked before it resumed
+            // is still a daemon that never held a session — proceed.
+            None => {}
+            _ => return AdoptOutcome::NotNeeded,
+        }
+
+        let Some(token) = refresh_token.filter(|t| !t.is_empty()) else {
+            if prior_email.is_none() {
+                // A genuinely fresh install. `signed_out` is the whole truth and shouting a
+                // migration sentence at it would be a lie of a different kind (law 4).
+                return AdoptOutcome::NotNeeded;
+            }
+            log_line(
+                "this computer held a session before the custody cutover but no renewable \
+                 credential survived it; asking for one sign-in",
+            );
+            self.enter_state(
+                SessionState::SignInNeeded,
+                CUTOVER_SIGN_IN_REMEDY,
+                None,
+                prior_email.map(str::to_string),
+            )
+            .await;
+            return AdoptOutcome::SignInNeeded;
+        };
+
+        let response = match self.inner.oauth.refresh(token).await {
+            Ok(response) => response,
+            Err(e) => {
+                // Only a definitive refusal spends the one chance. Offline, a captive portal or a
+                // 5xx leaves the credential where it is and says so.
+                if state_for(&e) != SessionState::SignInNeeded {
+                    log_line(&format!(
+                        "could not yet carry over the session this computer held before the \
+                         custody cutover ({}); will offer it again",
+                        e.message()
+                    ));
+                    return AdoptOutcome::Retry;
+                }
+                log_line(&format!(
+                    "the session this computer held before the custody cutover can no longer be \
+                     renewed ({}); asking for one sign-in",
+                    e.message()
+                ));
+                self.enter_state(
+                    SessionState::SignInNeeded,
+                    CUTOVER_SIGN_IN_REMEDY,
+                    None,
+                    prior_email.map(str::to_string),
+                )
+                .await;
+                return AdoptOutcome::SignInNeeded;
+            }
+        };
+
+        // A grant with no replacement refresh token would leave this device unable to renew — the
+        // MXL-D-046 shape. Refuse it as a sign-in rather than adopt a dead end.
+        let (Some(rotated), Ok(identity)) = (
+            response.refresh_token.clone(),
+            oauth::identity_from_jwt(&response.access_token),
+        ) else {
+            log_line(
+                "the pre-cutover session was accepted but the answer carried nothing this device \
+                 could renew with; asking for one sign-in",
+            );
+            self.enter_state(
+                SessionState::SignInNeeded,
+                CUTOVER_SIGN_IN_REMEDY,
+                None,
+                prior_email.map(str::to_string),
+            )
+            .await;
+            return AdoptOutcome::SignInNeeded;
+        };
+
+        let now_str = rfc3339(self.inner.clock.now_wall());
+        // S8's write-ahead rule, the same order a sign-in uses: the keychain gets the refresh
+        // token before anybody is handed an access token.
+        let credential = StoredCredential {
+            v: StoredCredential::VERSION,
+            refresh_token: rotated.clone(),
+            user_id: identity.user_id.clone(),
+            email: identity.email.clone(),
+            client_id: self.inner.config.client_id.clone(),
+            issued_at: now_str.clone(),
+            rotated_at: now_str.clone(),
+            world: self.inner.config.world,
+        };
+        if let Err(e) = self.save_credential(credential).await {
+            self.enter_state(
+                SessionState::CredentialStoreUnavailable,
+                e.remedy(),
+                Some(identity.user_id.clone()),
+                Some(identity.email.clone()),
+            )
+            .await;
+        }
+
+        let adopted = self
+            .adopt(&identity.user_id, &identity.email, &rotated, &response, &now_str)
+            .await;
+        self.record_success(&adopted).await;
+        log_line(&format!(
+            "carried over the session this computer already had for {} — no sign-in was needed",
+            identity.email
+        ));
+        AdoptOutcome::Adopted
     }
 
     /// Run the refresh loop until the returned handle's task is cancelled.

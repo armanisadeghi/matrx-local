@@ -77,3 +77,21 @@ production regression, not a hypothetical.
     read "Couldn't read your conversations" until he clicked Refresh.
     Guards: `desktop/src/lib/api-mount-auth-readiness.test.ts`,
     `desktop/src/lib/native-vault-auth-readiness.test.ts`.
+14. **Changing where a credential or a session lives — a new holder, a new
+    store, a dropped table, a new "only owner"?** → the release that moves it
+    MIGRATES what the last release left behind, in the same commit, and
+    announces the migration in a log line; and if it cannot be migrated the
+    screen says so in the daemon's own words with one click to fix it. The
+    custody cutover made the daemon the only session holder, dropped the
+    engine's `auth_tokens` table without reading it, and left the webview's
+    pre-cutover Supabase entry unread — so Arman, signed in the day before, was
+    silently signed out by the 1.4.124 upgrade and every engine lane advised
+    him to "sign out and back in" to something he was not signed in to. A user
+    who was signed in yesterday must never wake up silently signed out.
+    Guards: `crates/matrx-sync/tests/custody.rs` (the six
+    `pre_cutover`/`fresh_install`/`one chance` tests),
+    `desktop/src/lib/legacy-session-handover.test.ts`,
+    `desktop/src/pages/Login.test.tsx`,
+    `tests/unit/test_session_freshness.py`, and the mechanical
+    `pnpm check:session-custody` (which replaces a grep somebody used to run by
+    hand).

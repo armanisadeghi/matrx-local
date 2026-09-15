@@ -177,7 +177,16 @@ fn the_read_scope_reaches_the_five_read_routes_and_nothing_else() {
         assert_ne!(error_code(&body).as_deref(), Some("forbidden_scope"));
     }
 
-    for path in ["/v1/sign-in", "/v1/sign-in/callback", "/v1/sign-out", "/v1/shutdown"] {
+    // `/v1/adopt` installs a session on this device from a credential the caller supplies. If a
+    // page could reach it, an XSS could sign this Mac in as somebody else — so it is control scope
+    // like the other four, and this loop is the guard that says so.
+    for path in [
+        "/v1/sign-in",
+        "/v1/sign-in/callback",
+        "/v1/sign-out",
+        "/v1/adopt",
+        "/v1/shutdown",
+    ] {
         let (status, body) = daemon.post(path, &daemon.read);
         assert_eq!(status, 403, "the read scope must NOT reach {path}: {body}");
         assert_eq!(error_code(&body).as_deref(), Some("forbidden_scope"));

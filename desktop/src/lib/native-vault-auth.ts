@@ -32,6 +32,7 @@ import {
   type MatrxSession,
   type SessionSnapshot,
 } from "@/lib/custodian";
+import { handOverLegacySession } from "@/lib/legacy-session-handover";
 import {
   NativeVaultHostAuthCoordinator,
   type EngineAlignment,
@@ -92,7 +93,22 @@ function ensureHostSubscription(): void {
     previousSubject = subject;
     publishHostReconciliation(event, session, snapshot);
   };
-  void getSession().then((snapshot) => deliver(snapshot, false));
+  // The FIRST read of the process also carries the custody cutover's one-shot handover: a Mac
+  // that was signed in before the daemon existed still has its session in this window's own
+  // storage, and the daemon's brand-new journal does not. `handOverLegacySession` reads the
+  // session, offers that credential when — and only when — the daemon reports a device that never
+  // held one, and returns whichever state the daemon actually reached. Every later read goes
+  // through the stream below, untouched.
+  void getSession().then((snapshot) => {
+    deliver(snapshot, false);
+    // The custody cutover's one-shot handover, AFTER the first state is published so no render
+    // waits on it: a Mac that was signed in before the daemon existed still has its session in
+    // this window's own storage, and the daemon's brand-new journal does not. When that offer is
+    // accepted the daemon's new state is published here, through the same path a sign-in uses.
+    void handOverLegacySession(snapshot, getSession).then((migrated) => {
+      if (migrated) deliver(migrated, false);
+    });
+  });
   subscribeSession((snapshot, rotated) => deliver(snapshot, rotated));
 }
 

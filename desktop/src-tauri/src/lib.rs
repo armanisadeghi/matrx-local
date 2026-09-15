@@ -2505,6 +2505,7 @@ pub fn run() {
             syncd::syncd_sign_in,
             syncd::syncd_sign_in_callback,
             syncd::syncd_sign_out,
+            syncd::syncd_adopt_legacy_session,
             syncd::syncd_session,
         ])
         .setup(|app| {

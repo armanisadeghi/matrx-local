@@ -1,4 +1,4 @@
-import { Loader2, Zap } from "lucide-react";
+import { AlertTriangle, Loader2, Zap } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
 import { Card, CardContent } from "@/components/ui/card";
 import type { useAuth } from "@/hooks/use-auth";
@@ -14,7 +14,23 @@ interface LoginProps {
     | "error"
     | "accountConnectionUnavailable"
     | "retryAccountCleanup"
+    // The daemon's own honest state. A sign-in screen that shows only "Sign in to your
+    // workspace" to somebody who WAS signed in yesterday is a screen that says nothing about
+    // what happened (law 4) — and after the custody cutover that was exactly the experience.
+    | "snapshot"
   >;
+}
+
+/** Whether this screen owes the person an explanation, and the daemon's own words for it.
+ *
+ *  `signed_out` on a device that has never held a session is a clean first run and gets the plain
+ *  screen. Every other state — a session this Mac could not carry over, a keychain that will not
+ *  open, a daemon that is not running — has a reason the daemon wrote, and it is shown verbatim so
+ *  no surface invents a second vocabulary for the same condition. */
+export function loginNotice(snapshot: LoginProps["auth"]["snapshot"]): string | null {
+  if (snapshot.state === "signed_out" && snapshot.user_id === null) return null;
+  if (snapshot.state === "signed_in") return null;
+  return snapshot.state_reason ?? null;
 }
 
 export function Login({ auth }: LoginProps) {
@@ -59,6 +75,8 @@ export function Login({ auth }: LoginProps) {
     );
   }
 
+  const notice = loginNotice(auth.snapshot);
+
   // ── Normal login page ──────────────────────────────────────────────
   return (
     <div className="relative flex h-screen items-center justify-center overflow-hidden bg-background">
@@ -90,13 +108,22 @@ export function Login({ auth }: LoginProps) {
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight">Matrx Local</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Sign in to your workspace
+              {notice ? "Sign in again to continue" : "Sign in to your workspace"}
             </p>
           </div>
         </div>
 
         <Card className="border-border/60 shadow-xl shadow-black/5">
           <CardContent className="space-y-4 pt-6">
+            {notice && (
+              <div
+                role="status"
+                className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-left"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-900 dark:text-amber-200">{notice}</p>
+              </div>
+            )}
             {/* Single AI Matrx OAuth button */}
             <Button
               className="w-full gap-2"

@@ -6,7 +6,7 @@ use crate::discovery::Scope;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response, StatusCode};
-use matrx_sync::custody::{CustodyError, RedirectKind};
+use matrx_sync::custody::{AdoptOutcome, CustodyError, RedirectKind};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -292,6 +292,33 @@ async fn route(
             }
         }
 
+        // The custody cutover's one-shot handover. The daemon arrived with the release that made
+        // it the only session holder, so on its first start its journal has no session and it can
+        // only say `signed_out` — which is how a person signed in yesterday woke up signed out.
+        // The app offers the credential it still holds from before the cutover here; control
+        // scope, because a page must never be able to install a session on this device.
+        (&Method::POST, "/v1/adopt") => {
+            #[derive(Deserialize, Default)]
+            struct Body {
+                refresh_token: Option<String>,
+                email: Option<String>,
+            }
+            let body: Body = read_json(request).await.unwrap_or_default();
+            let outcome = state
+                .custodian
+                .adopt_legacy_session(body.refresh_token.as_deref(), body.email.as_deref())
+                .await;
+            let session = state.custodian.session().await;
+            ok_json(json!({
+                "outcome": outcome,
+                // Whether the caller should stop offering it. A `Retry` keeps its one chance.
+                "spent": outcome != AdoptOutcome::Retry,
+                "state": session.state.as_str(),
+                "state_reason": session.state_reason,
+                "email": session.email,
+            }))
+        }
+
         (&Method::POST, "/v1/sign-out") => match state.custodian.sign_out().await {
             Ok(()) => ok_json(json!({"ok": true})),
             Err(e) => custody_error(&e),
@@ -343,9 +370,8 @@ fn methods_for(path: &str) -> &'static str {
     match path {
         "/v1/health" | "/v1/version" | "/v1/token" | "/v1/session" | "/v1/status"
         | "/v1/events" => "GET, OPTIONS",
-        "/v1/sign-in" | "/v1/sign-in/callback" | "/v1/sign-out" | "/v1/shutdown" => {
-            "POST, OPTIONS"
-        }
+        "/v1/sign-in" | "/v1/sign-in/callback" | "/v1/sign-out" | "/v1/adopt"
+        | "/v1/shutdown" => "POST, OPTIONS",
         _ => "GET, POST, OPTIONS",
     }
 }
@@ -405,5 +431,7 @@ mod tests {
     fn allow_methods_never_offers_a_verb_a_route_does_not_serve() {
         assert_eq!(methods_for("/v1/token"), "GET, OPTIONS");
         assert_eq!(methods_for("/v1/sign-out"), "POST, OPTIONS");
+        // Control scope, so it must never be offered as a GET a page could make.
+        assert_eq!(methods_for("/v1/adopt"), "POST, OPTIONS");
     }
 }

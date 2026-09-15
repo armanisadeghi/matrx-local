@@ -793,3 +793,155 @@ async fn a_refusals_sentence_always_belongs_to_the_state_it_reports() {
     );
     assert!(refusal.state_reason.contains("Sign in on this computer"));
 }
+
+// ------------------------------------------- the custody cutover (CS-19, MXL-D-0xx)
+//
+// The daemon arrived with 1.4.124, so on the first start after the cutover its journal has no
+// session row and `resume()` can only say `signed_out`. Arman's Mac was signed in yesterday and
+// woke up signed out with no explanation: live evidence 2026-09-15, `curl --unix-socket
+// ~/.matrx/run/syncd.sock /v1/health` -> {"state":"signed_out","world":"live"} while the engine
+// logged `[title_sync] pass skipped: this Mac has no valid signed-in session` every minute.
+// A user who was signed in yesterday must never wake up silently signed out.
+
+#[tokio::test]
+async fn a_pre_cutover_session_is_carried_over_with_no_user_action() {
+    let rig = Rig::new();
+    // First start after the cutover: nothing in the journal, nothing in the keychain.
+    let before = rig.custodian.resume().await;
+    assert_eq!(before.state, SessionState::SignedOut);
+    assert!(!before.signed_in);
+
+    // The app offers the refresh token it still holds from before the cutover.
+    rig.auth
+        .push_ok(&jwt("4cf62e4e", "admin@admin.com"), Some("rotated-1"), 3600);
+    let outcome = rig
+        .custodian
+        .adopt_legacy_session(Some("pre-cutover-refresh"), Some("admin@admin.com"))
+        .await;
+
+    assert_eq!(outcome, matrx_sync::custody::AdoptOutcome::Adopted);
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignedIn, "no sign-in screen is owed");
+    assert_eq!(row.user_id.as_deref(), Some("4cf62e4e"));
+    assert_eq!(row.email.as_deref(), Some("admin@admin.com"));
+    // Custody is real, not in-memory: the daemon can now renew on its own after a restart.
+    assert_eq!(
+        rig.keychain.stored_refresh_token("4cf62e4e").as_deref(),
+        Some("rotated-1"),
+        "the rotated token is written ahead, as S8 requires"
+    );
+    // And a consumer can get a token immediately — which is what every blocked engine lane needs.
+    let grant = rig.custodian.token().await.expect("a grant");
+    assert_eq!(grant.user_id, "4cf62e4e");
+}
+
+#[tokio::test]
+async fn a_pre_cutover_session_that_cannot_be_renewed_asks_for_one_sign_in_and_says_why() {
+    let rig = Rig::new();
+    rig.custodian.resume().await;
+    rig.auth.push_err(FakeFailure::InvalidGrant);
+
+    let outcome = rig
+        .custodian
+        .adopt_legacy_session(Some("rotated-away"), Some("admin@admin.com"))
+        .await;
+
+    assert_eq!(outcome, matrx_sync::custody::AdoptOutcome::SignInNeeded);
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignInNeeded);
+    assert_eq!(row.email.as_deref(), Some("admin@admin.com"));
+    let reason = row.state_reason.clone().expect("a remedy");
+    assert_eq!(reason, matrx_sync::custody::CUTOVER_SIGN_IN_REMEDY);
+    // The generic sentence would leave the person believing they signed themselves out.
+    assert!(reason.contains("changed how this computer keeps you signed in"));
+    assert!(reason.contains("Nothing was lost"));
+    // S18: a terminal session loss notifies once, so it is not only visible inside the window.
+    assert!(
+        rig.notifier
+            .posted()
+            .iter()
+            .any(|(_title, body)| body.contains("changed how this computer keeps you signed in")),
+        "the person is told outside the window too: {:?}",
+        rig.notifier.posted()
+    );
+}
+
+#[tokio::test]
+async fn evidence_of_a_prior_session_with_no_credential_still_explains_itself() {
+    let rig = Rig::new();
+    rig.custodian.resume().await;
+    // The app knows this Mac was signed in (its own storage names the account) but has no token.
+    let outcome = rig
+        .custodian
+        .adopt_legacy_session(None, Some("admin@admin.com"))
+        .await;
+    assert_eq!(outcome, matrx_sync::custody::AdoptOutcome::SignInNeeded);
+    assert_eq!(
+        rig.row().state_reason.as_deref(),
+        Some(matrx_sync::custody::CUTOVER_SIGN_IN_REMEDY)
+    );
+}
+
+#[tokio::test]
+async fn a_fresh_install_is_never_shown_the_cutover_sentence() {
+    let rig = Rig::new();
+    rig.custodian.resume().await;
+    let outcome = rig.custodian.adopt_legacy_session(None, None).await;
+    assert_eq!(outcome, matrx_sync::custody::AdoptOutcome::NotNeeded);
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignedOut);
+    assert_eq!(
+        row.state_reason.as_deref(),
+        Some("Sign in on this computer to start syncing your folders.")
+    );
+}
+
+#[tokio::test]
+async fn a_laptop_with_no_network_keeps_its_one_chance() {
+    let rig = Rig::new();
+    rig.custodian.resume().await;
+    rig.auth.push_err(FakeFailure::Offline);
+
+    let outcome = rig
+        .custodian
+        .adopt_legacy_session(Some("still-good"), Some("admin@admin.com"))
+        .await;
+
+    // A transport failure must not spend the only recoverable credential on the machine.
+    assert_eq!(outcome, matrx_sync::custody::AdoptOutcome::Retry);
+    assert_eq!(rig.row().state, SessionState::SignedOut);
+
+    // Offered again once the network is back, it works.
+    rig.auth
+        .push_ok(&jwt("4cf62e4e", "admin@admin.com"), Some("rotated-2"), 3600);
+    assert_eq!(
+        rig.custodian
+            .adopt_legacy_session(Some("still-good"), Some("admin@admin.com"))
+            .await,
+        matrx_sync::custody::AdoptOutcome::Adopted
+    );
+}
+
+#[tokio::test]
+async fn adoption_never_overwrites_a_session_this_device_already_decided() {
+    let rig = Rig::new();
+    rig.sign_in("user-1", "admin@admin.com", "refresh-1", 3600).await;
+    assert_eq!(
+        rig.custodian
+            .adopt_legacy_session(Some("some-old-token"), Some("someone@else.com"))
+            .await,
+        matrx_sync::custody::AdoptOutcome::NotNeeded,
+        "a signed-in device is not migrated on top of"
+    );
+    assert_eq!(rig.row().user_id.as_deref(), Some("user-1"));
+
+    // And a deliberate sign-out is not undone by a leftover pre-cutover token either.
+    rig.custodian.sign_out().await.expect("sign out");
+    assert_eq!(
+        rig.custodian
+            .adopt_legacy_session(Some("some-old-token"), Some("admin@admin.com"))
+            .await,
+        matrx_sync::custody::AdoptOutcome::NotNeeded
+    );
+    assert_eq!(rig.row().state, SessionState::SignedOut);
+}

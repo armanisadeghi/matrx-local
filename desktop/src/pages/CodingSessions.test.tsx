@@ -36,11 +36,14 @@ vi.mock("@ai-matrx/design-system", () => ({
   ),
   BasicInput: (props: InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
 }));
-vi.mock("@ai-matrx/kit/format", () => ({
-  formatFileSize: (value: number) => `${value} B`,
-  formatRelativeTime: () => "just now",
-  formatCount: (value: number) => String(value),
-}));
+vi.mock("@ai-matrx/kit/format", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@ai-matrx/kit/format")>();
+  return {
+    ...actual,
+    formatFileSize: (value: number) => `${value} B`,
+    formatCount: (value: number) => String(value),
+  };
+});
 vi.mock("@/components/coding-sessions/AgentRuntimeCard", () => ({
   AgentRuntimeCard: () => <div data-testid="agent-runtime-card" />,
 }));
@@ -513,10 +516,10 @@ describe("The cloud check that has not happened yet", () => {
     } as unknown as ClaudeOverview);
     await render("/coding-sessions");
     expect(container.querySelector("[data-testid='cloud-checked-note']")?.textContent).toContain(
-      "checked 4 min ago",
+      "checked 4m ago",
     );
     expect(container.querySelector("[data-testid='coding-sessions-subtitle']")?.textContent).toContain(
-      "AI Matrx holds 1,671 of them (checked 4 min ago)",
+      "AI Matrx holds 1,671 of them (checked 4m ago)",
     );
   });
 });

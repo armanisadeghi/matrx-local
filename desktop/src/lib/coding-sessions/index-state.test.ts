@@ -124,10 +124,10 @@ describe("the cloud check", () => {
     expect(cloudCheckPending(cloud({ checked: false, reason: "signed_out" }))).toBe(false);
   });
 
-  it("says how old the answer is in minutes", () => {
-    expect(cloudAgeLabel(cloud({ age_seconds: 2 }))).toBe("checked just now");
-    expect(cloudAgeLabel(cloud({ age_seconds: 44.6 }))).toBe("checked 45 sec ago");
-    expect(cloudAgeLabel(cloud({ age_seconds: 240 }))).toBe("checked 4 min ago");
+  it("says how old the answer is with the shared relative-time voice", () => {
+    expect(cloudAgeLabel(cloud({ age_seconds: 2 }))).toBe("checked 2s ago");
+    expect(cloudAgeLabel(cloud({ age_seconds: 44.6 }))).toBe("checked 44s ago");
+    expect(cloudAgeLabel(cloud({ age_seconds: 240 }))).toBe("checked 4m ago");
     // An engine that does not report an age gets no invented one.
     expect(cloudAgeLabel(cloud({}))).toBeNull();
     expect(cloudAgeLabel(cloud({ age_seconds: null }))).toBeNull();
@@ -136,7 +136,7 @@ describe("the cloud check", () => {
   it("gives each phase its own header wording", () => {
     const stamp = () => "a moment ago";
     expect(cloudHeaderText(cloud({ sessions: 1_671, age_seconds: 120 }), stamp)).toBe(
-      "AI Matrx holds 1,671 of them (checked 2 min ago)",
+      "AI Matrx holds 1,671 of them (checked 2m ago)",
     );
     expect(cloudHeaderText(cloud({ sessions: 3 }), stamp)).toBe(
       "AI Matrx holds 3 of them (checked a moment ago)",

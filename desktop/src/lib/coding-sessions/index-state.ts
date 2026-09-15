@@ -22,6 +22,7 @@
  */
 
 import type { ClaudeCloudCheck, ClaudeIndexReport, ClaudeOverview } from "@/lib/api";
+import { formatRelativeTime } from "@ai-matrx/kit/format";
 
 export type IndexState = "cold" | "refreshing" | "fresh" | "unreported";
 
@@ -123,10 +124,8 @@ export function cloudCheckPending(cloud: ClaudeCloudCheck | null | undefined): b
 export function cloudAgeLabel(cloud: ClaudeCloudCheck | null | undefined): string | null {
   const age = cloud?.age_seconds;
   if (age === null || age === undefined || !Number.isFinite(age)) return null;
-  if (age < 10) return "checked just now";
-  if (age < 90) return `checked ${Math.round(age)} sec ago`;
-  const minutes = Math.round(age / 60);
-  return `checked ${minutes} min ago`;
+  const now = Date.now();
+  return `checked ${formatRelativeTime(now - age * 1_000, { now })}`;
 }
 
 /** The header's cloud clause, in the voice the phase earns. */

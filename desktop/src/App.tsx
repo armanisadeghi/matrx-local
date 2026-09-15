@@ -83,11 +83,21 @@ import { isTauri } from "@/lib/sidecar";
 import {
   initUnifiedLog,
   initTauriLogStream,
-  initConsoleCapture,
   stopEngineStreams,
   stopTauriStream,
 } from "@/hooks/use-unified-log";
 import { getAuthedSession } from "@/lib/custodian";
+import supabase, { createAccessTokenBoundSupabaseClient } from "@/lib/supabase";
+import {
+  createErrorOutboxIdentityCoordinator,
+  installErrorOutboxPersistence,
+  uploadIdentityBoundErrorBatch,
+} from "@/lib/error-outbox";
+import {
+  ACTIVE_ORGANIZATION_CHANGE_EVENT,
+  getActiveOrganizationId,
+} from "@/lib/org/active-org";
+import { isWindowLeader } from "@/lib/window-role";
 import {
   ActionNeededNavigationBridge,
   ActionNeededSources,
@@ -333,10 +343,81 @@ function AppInner() {
   // Unified log streams
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    const restoreConsole = initConsoleCapture();
     initTauriLogStream();
+    const identityCoordinator = createErrorOutboxIdentityCoordinator();
+    const stopErrorPersistence = installErrorOutboxPersistence(async (events) => {
+      if (!isWindowLeader()) return [];
+      const identityGeneration = identityCoordinator.currentGeneration();
+      const identityBound = events.filter(
+        (event) => event.userId && event.organizationId,
+      );
+      if (identityBound.length === 0) return [];
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return [];
+      const activeOrganizationId = await getActiveOrganizationId();
+      if (!activeOrganizationId || !identityCoordinator.isCurrent(identityGeneration)) {
+        return [];
+      }
+      identityCoordinator.commit(identityGeneration, {
+        userId: session.user.id,
+        organizationId: activeOrganizationId,
+      });
+      const pinnedClient = createAccessTokenBoundSupabaseClient(
+        session.access_token,
+      );
+      return uploadIdentityBoundErrorBatch(
+        identityBound,
+        {
+          userId: session.user.id,
+          organizationId: activeOrganizationId,
+          accessToken: session.access_token,
+        },
+        (args) => pinnedClient.rpc("log_client_error", args),
+        () => identityCoordinator.isCurrent(identityGeneration),
+      );
+    });
+
+    const resolveCaptureContext = async (generation: number) => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const organizationId = session ? await getActiveOrganizationId() : null;
+        identityCoordinator.commit(
+          generation,
+          session && organizationId
+            ? { userId: session.user.id, organizationId }
+            : null,
+        );
+      } catch {
+        identityCoordinator.commit(generation, null);
+      }
+    };
+    const refreshCaptureContext = () => {
+      const generation = identityCoordinator.beginTransition();
+      queueMicrotask(() => void resolveCaptureContext(generation));
+    };
+    refreshCaptureContext();
+    const onOrganizationChange = () => refreshCaptureContext();
+    window.addEventListener(
+      ACTIVE_ORGANIZATION_CHANGE_EVENT,
+      onOrganizationChange,
+    );
+    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
+      // Supabase advises against awaiting other client calls inside the auth
+      // callback; leave its lock before resolving the organization context.
+      refreshCaptureContext();
+    });
     return () => {
-      restoreConsole();
+      authListener.subscription.unsubscribe();
+      window.removeEventListener(
+        ACTIVE_ORGANIZATION_CHANGE_EVENT,
+        onOrganizationChange,
+      );
+      identityCoordinator.beginTransition();
+      stopErrorPersistence();
       stopTauriStream();
     };
   }, []);

@@ -26,6 +26,7 @@ mod lifecycle_log;
 // SPEC-ENGINE §1.2's detached first-run spawn. The daemon is NOT in this process's tree and is
 // deliberately absent from the engine supervisor and from every kill sweep (rules 9 and 10).
 mod syncd;
+mod error_outbox;
 mod native_vault;
 mod tcc;
 
@@ -84,23 +85,26 @@ fn global_process_sweeps_allowed(isolated: bool) -> bool {
     !isolated
 }
 
-/// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
-fn matrx_discovery_file() -> Option<std::path::PathBuf> {
-    if !global_process_sweeps_allowed(isolated_test_run()) {
+/// This build's data boundary. Debug, installed, and isolated smoke worlds
+/// must never share discovery, settings, or diagnostic transport state.
+pub(crate) fn matrx_home_dir() -> Option<std::path::PathBuf> {
+    if isolated_test_run() {
         return std::env::var("MATRX_HOME_DIR")
             .ok()
-            .map(std::path::PathBuf::from)
-            .map(|path| path.join("local.json"));
+            .map(std::path::PathBuf::from);
     }
     #[cfg(unix)]
     let home = std::env::var("HOME").ok();
     #[cfg(windows)]
     let home = std::env::var("USERPROFILE").ok();
-    home.map(|h| {
-        std::path::PathBuf::from(h)
-            .join(DEFAULT_MATRX_HOME_DIRNAME)
-            .join("local.json")
+    home.map(|base| {
+        std::path::PathBuf::from(base).join(DEFAULT_MATRX_HOME_DIRNAME)
     })
+}
+
+/// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
+fn matrx_discovery_file() -> Option<std::path::PathBuf> {
+    matrx_home_dir().map(|path| path.join("local.json"))
 }
 
 // ── proxy_fetch types ────────────────────────────────────────────────────────
@@ -2428,6 +2432,9 @@ pub fn run() {
             sidecar_status,
             engine_supervisor_status,
             get_sidecar_logs,
+            error_outbox::enqueue_error_outbox_event,
+            error_outbox::read_error_outbox_events,
+            error_outbox::acknowledge_error_outbox_events,
             check_engine_health,
             discover_engine_port,
             set_close_to_tray,

@@ -89,7 +89,17 @@ The **Activity** page in the Matrx Local desktop app (`/activity`) already consu
 - **HTTP Requests tab** — live-streamed structured access log (method, path, status, duration, origin)
 - **System Log tab** — raw tailed `system.log` with ERROR/WARNING/INFO color-coding
 
-No changes needed in the desktop app.
+The visible Activity ring remains in memory. Separately, renderer warnings and
+errors enter a bounded, redacted native outbox before React renders. Records
+captured after a full-window auth and organization context is established keep
+that occurrence-time identity; pre-React and identity-free panel/overlay events
+remain local. Identity-bound records survive restart and are uploaded only by the
+elected full-window leader through the canonical `public.log_client_error` RPC
+with `source_app='matrx-local'`. Auth or organization transitions clear capture
+identity synchronously. Each upload batch uses an immutable access token, and a
+transition during upload retains the in-flight suffix. A failed or rejected RPC
+likewise leaves the exact record queued; successful acknowledgement removes only
+the named records.
 
 ---
 
@@ -164,3 +174,8 @@ Then just render the entries however you like. The `origin` field tells you whic
 | `app/main.py`                                  | Updated `log_requests` middleware to call `access_log.record()` with timing                         |
 | `desktop/src/pages/Activity.tsx`               | Replaced with two-tab real-time viewer                                                              |
 | `desktop/src/components/layout/AppSidebar.tsx` | Added **Activity** nav item                                                                         |
+| `desktop/src/lib/error-outbox.ts`              | Bounded renderer queue, redaction, identity-bound upload, and exact acknowledgement                 |
+| `desktop/src/lib/supabase.ts`                  | Creates request-only clients pinned to one captured access token                                    |
+| `desktop/src-tauri/src/error_outbox.rs`        | Private disk-backed native outbox with atomic recovery                                               |
+| `desktop/src/hooks/use-unified-log.ts`         | Enqueues warning/error entries at the existing renderer log chokepoint                              |
+| `desktop/src/main.tsx`                         | Installs uncaught-error and unhandled-rejection capture before React renders                         |

@@ -137,6 +137,8 @@ BROWSER_POOL_REPAIR_TIMEOUT_SECONDS = BROWSER_POOL_START_TIMEOUT_SECONDS * 2
 # The one scheduled retry task, kept referenced so the loop cannot garbage
 # collect it mid-sleep.
 _pool_retry_task: "asyncio.Task[None] | None" = None
+# The one automatic browser-build repair task, same reference rule.
+_build_repair_task: "asyncio.Task[None] | None" = None
 
 
 class BrowserUnavailable(RuntimeError):
@@ -761,6 +763,30 @@ def schedule_browser_pool_retry(
     # Hold the reference until it finishes; without this the loop may collect a
     # task that is only sleeping.
     _pool_retry_task.add_done_callback(lambda _task: None)
+    return True
+
+
+def schedule_browser_build_repair() -> bool:
+    """Repair a browser-build mismatch in the background, once.
+
+    The engine's Playwright resolves a browser by exact build id, so an install
+    performed by a different Playwright version leaves every launch failing at
+    a path that does not exist. No launch retry can clear that — the missing
+    build has to be fetched. Returns whether a repair was scheduled.
+    """
+    global _build_repair_task
+
+    if _build_repair_task is not None and not _build_repair_task.done():
+        return False
+    if browser_runtime.self_repair_attempted():
+        return False
+
+    logger.warning(
+        "[scraper/engine.py] Browser build mismatch — starting automatic repair: %s",
+        browser_runtime.browser_install_report().describe(),
+    )
+    _build_repair_task = asyncio.create_task(browser_runtime.self_heal_browser_build())
+    _build_repair_task.add_done_callback(lambda _task: None)
     return True
 
 

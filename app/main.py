@@ -1188,6 +1188,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
             schedule_browser_pool_retry(engine)
 
+        # A build mismatch is NOT a transient launch failure and no retry can
+        # clear it: the browser this engine resolves is simply not on disk
+        # (audit row SR-03 — 18.6+ hours degraded, silently). Repair it in the
+        # background, in this running engine, and let the honest degraded state
+        # stand while it downloads.
+        if _browser_runtime.status().code == "browser_build_mismatch":
+            from app.services.scraper.engine import schedule_browser_build_repair
+
+            schedule_browser_build_repair()
+
         _browser_status = _browser_runtime.sync_service_registry()
         print(
             "[phase:scraper] Scraper engine ready"

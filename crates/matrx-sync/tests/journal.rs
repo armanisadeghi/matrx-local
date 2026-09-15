@@ -72,9 +72,35 @@ fn remote_confirmation() -> RemoteConfirmation {
 
 #[test]
 fn a_fresh_journal_migrates_to_the_binarys_max_version() {
+    // The expected version is spelled out, not just compared with itself, so adding a migration —
+    // or amending one in place — is a deliberate, visible change rather than a silent one.
+    //
+    // 003 was amended IN PLACE on 2026-09-15 to add `mass_delete_window_open` (the breaker's frozen
+    // denominator). That is normally forbidden — migrations are forward-only and an edit leaves
+    // every already-migrated journal behind — and was acceptable only because 003 had shipped to no
+    // user: there is no daemon yet, the only journals carrying it are this crate's own tempdirs and
+    // in-memory databases, and matrx-local is pre-launch. The next schema change is 004.
+    const EXPECTED_VERSION: i64 = 3;
+
     let j = Journal::open_in_memory().expect("open");
-    assert_eq!(j.schema_version().expect("version"), matrx_sync::journal::max_version());
-    assert!(matrx_sync::journal::max_version() >= 1);
+    assert_eq!(
+        matrx_sync::journal::max_version(),
+        EXPECTED_VERSION,
+        "the migration set changed; update EXPECTED_VERSION and say why in the commit"
+    );
+    assert_eq!(j.schema_version().expect("version"), EXPECTED_VERSION);
+    // Every table the later migrations add is really there on a fresh journal.
+    for table in ["synced_write_guard", "mass_delete_window", "mass_delete_window_open"] {
+        let found: i64 = j
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                [table],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert_eq!(found, 1, "{table} is missing from a freshly migrated journal");
+    }
 }
 
 #[test]
@@ -870,5 +896,126 @@ fn only_real_deletions_count_and_only_against_their_own_mapping() {
     assert_eq!(
         j.deletions_since(&other.id, "2000-01-01T00:00:00Z").expect("count"),
         0
+    );
+}
+
+/// I1: the window's denominator is frozen by the deletion that OPENS it, at the count BEFORE that
+/// deletion's row is removed — and it does not move when the mapping grows or shrinks afterwards.
+#[test]
+fn the_window_freezes_the_item_count_it_opened_with() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+
+    // Three synced files, then one is deleted.
+    for i in 0..3 {
+        let path = format!("f{i}.txt");
+        let mut op = upload_op();
+        op.path_nfc = path.clone();
+        op.seq = i;
+        op.idempotency_key = format!("key-up-{i}");
+        let id = j.enqueue_op(&op).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_op(
+            id,
+            "x",
+            &local_confirmation(),
+            &remote_confirmation(),
+            "2026-09-13T00:00:05Z",
+        )
+        .expect("confirm");
+    }
+    assert_eq!(j.synced_tree(MAPPING).expect("tree").len(), 3);
+
+    let mut del = upload_op();
+    del.kind = OpKind::DeleteRemote;
+    del.path_nfc = "f0.txt".to_string();
+    del.seq = 10;
+    del.idempotency_key = "key-del-0".to_string();
+    let id = j.enqueue_op(&del).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T11:00:00Z", "2026-09-13T11:15:00Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+        .expect("confirm");
+
+    let since = "2026-09-13T00:00:00Z";
+    assert_eq!(
+        j.window_item_count(MAPPING, since).expect("count"),
+        Some(3),
+        "the count is taken BEFORE the opening deletion's row goes, so it is 3, not 2"
+    );
+
+    // The mapping grows. The frozen denominator does not.
+    for i in 3..20 {
+        let path = format!("f{i}.txt");
+        let mut op = upload_op();
+        op.path_nfc = path.clone();
+        op.seq = 20 + i;
+        op.idempotency_key = format!("key-up2-{i}");
+        let id = j.enqueue_op(&op).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T13:00:00Z", "2026-09-13T13:15:00Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_op(
+            id,
+            "x",
+            &local_confirmation(),
+            &remote_confirmation(),
+            "2026-09-13T13:00:05Z",
+        )
+        .expect("confirm");
+    }
+    assert_eq!(
+        j.window_item_count(MAPPING, since).expect("count"),
+        Some(3),
+        "files added during the window must not dilute the percentage"
+    );
+
+    // A window that has aged out offers no denominator …
+    assert_eq!(
+        j.window_item_count(MAPPING, "2026-09-14T00:00:00Z").expect("count"),
+        None
+    );
+    // … and resuming clears it outright, so the next window opens fresh.
+    j.clear_deletion_window(MAPPING).expect("clear");
+    assert_eq!(j.window_item_count(MAPPING, since).expect("count"), None);
+}
+
+/// I2: a clock that jumps BACKWARDS must not hide a deletion from the window.
+#[test]
+fn a_backwards_clock_cannot_shrink_the_deletion_window() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+
+    for (i, stamp) in [
+        // The clock then jumps two days backwards between the instalments.
+        (0, "2026-09-13T12:00:00Z"),
+        (1, "2026-09-11T12:00:00Z"),
+    ] {
+        let mut del = upload_op();
+        del.kind = OpKind::DeleteLocal;
+        del.path_nfc = format!("f{i}.txt");
+        del.seq = 100 + i;
+        del.idempotency_key = format!("key-back-{i}");
+        let id = j.enqueue_op(&del).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:00Z", "2026-09-13T23:00:00Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_delete_op(id, "x", true, true, stamp).expect("confirm");
+    }
+
+    // Both are inside the last 24 hours as the daemon now sees it. Without the clamp the second
+    // deletion is stamped two days earlier and falls out: one of two counted.
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-12T12:00:00Z").expect("count"),
+        2,
+        "a backwards clock must not hide a deletion from the window"
+    );
+    assert_eq!(
+        j.window_item_count(MAPPING, "2026-09-12T12:00:00Z").expect("count"),
+        Some(0),
+        "and the window it opened must stay inside the window too"
     );
 }

@@ -538,6 +538,26 @@ impl Journal {
         Ok(n.max(0) as usize)
     }
 
+    /// The mapping's item count when the deletion window opened, if a window is open and has not
+    /// aged out past `since`.
+    ///
+    /// This is [`crate::PlanContext::window_item_count`] — the percentage arm's **frozen**
+    /// denominator (SPEC-ENGINE §2 amendment 3). `None` means no window is open, and the planner
+    /// then falls back to what the mapping holds now, which is the same number when no deletions
+    /// have happened.
+    pub fn window_item_count(&self, mapping_id: &str, since: &str) -> Result<Option<usize>> {
+        let row: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT item_count FROM mass_delete_window_open
+                 WHERE mapping_id = ?1 AND opened_at >= ?2",
+                params![mapping_id, since],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(row.map(|n| n.max(0) as usize))
+    }
+
     /// Forget this mapping's deletion window.
     ///
     /// Called when the user **resumes a suspended mapping** — they have looked at what was about
@@ -546,6 +566,10 @@ impl Journal {
     ///
     /// It touches only the breaker's own memory; the `activity` log the user reads is untouched.
     pub fn clear_deletion_window(&self, mapping_id: &str) -> Result<usize> {
+        self.conn.execute(
+            "DELETE FROM mass_delete_window_open WHERE mapping_id = ?1",
+            params![mapping_id],
+        )?;
         let n = self.conn.execute(
             "DELETE FROM mass_delete_window WHERE mapping_id = ?1",
             params![mapping_id],
@@ -558,6 +582,12 @@ impl Journal {
     /// Separate from [`Journal::clear_deletion_window`] on purpose: this is housekeeping outside
     /// the window, that one is the user's decision inside it.
     pub fn prune_deletion_window(&self, before: &str) -> Result<usize> {
+        // A window whose opening has aged out is no window: its frozen denominator must go with
+        // it, or a stale count would divide a fresh window's deletions.
+        self.conn.execute(
+            "DELETE FROM mass_delete_window_open WHERE opened_at < ?1",
+            params![before],
+        )?;
         let n = self.conn.execute(
             "DELETE FROM mass_delete_window WHERE at < ?1",
             params![before],

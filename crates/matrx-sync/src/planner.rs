@@ -247,6 +247,15 @@ pub struct PlanContext {
     /// planner in instalments is still a wipe (H1). The planner is pure, so it cannot read a clock
     /// or the journal to work this out — it arrives as a value like every other input.
     pub recent_deletions: usize,
+    /// The mapping's item count when the deletion window opened — the percentage arm's **frozen**
+    /// denominator (SPEC-ENGINE §2 amendment 3), or `None` when no window is open.
+    ///
+    /// It is frozen because reading the live count at plan time is wrong in both directions. A
+    /// shrinking mapping dilutes its own percentage (each instalment is small *relative to what is
+    /// left*), and so does a growing one: 40 files, 19 deleted, 200 added, 19 more deleted read as
+    /// 15.8% instead of 95% and propagated with no suspension. A mapping receiving a download, an
+    /// import or a restore while a local `rm -rf` walks the tree is exactly that shape.
+    pub window_item_count: Option<usize>,
     /// Paths carrying an unresolved `conflicts` row.
     ///
     /// A path awaiting the user's decision gets **no ops at all** — that is what the mapping state
@@ -262,6 +271,7 @@ impl Default for PlanContext {
             device_name: "this device".to_string(),
             today: "1970-01-01".to_string(),
             recent_deletions: 0,
+            window_item_count: None,
             open_conflicts: BTreeSet::new(),
         }
     }
@@ -451,9 +461,14 @@ pub fn plan(
     }
 
     let planned_deletes = ops.iter().filter(|o| o.is_destructive()).count();
-    // The window's deletions are already gone from `tree_synced`, so the denominator is what the
-    // mapping held when the window opened — not what is left after the damage.
-    let tracked_items = synced.len() + ctx.recent_deletions;
+    // The denominator is the mapping's item count at the START of the window, recorded by the
+    // deletion that opened it. Deriving it from `tree_synced` at plan time was wrong: the window's
+    // own deletions are gone from it (a shrinking mapping dilutes itself) AND anything added since
+    // inflates it (a growing mapping dilutes itself too — the case that let 38 of 40 through).
+    // With no window open there is nothing to freeze, and the live count is the right answer.
+    let tracked_items = ctx
+        .window_item_count
+        .unwrap_or(synced.len() + ctx.recent_deletions);
     if trips_breaker(
         planned_deletes + ctx.recent_deletions,
         tracked_items,

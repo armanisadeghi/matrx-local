@@ -194,3 +194,107 @@ async def test_delegation_unresolvable_organization_refuses_with_a_remedy(
     assert excinfo.value.status == 400
     assert "Choose your organization in the desktop app" in str(excinfo.value)
     assert seen == []
+
+
+# ── RemoteScraperClient — the scraper.app.matrxserver.com transport ─────────
+#
+# THE THIRD TRANSPORT, FOUND 22 HOURS INTO AN OUTAGE (SR-04, 2026-09-14).
+# This suite's premise is that EVERY authenticated call this app makes names
+# its organization. It covered two transports; there were three. The scraper
+# client sent `Authorization` and nothing else, so the desktop retry queue's
+# every poll of GET /api/scraper/queue/pending answered
+#
+#     400 {"error": "organization_required", ...}
+#
+# from at least 2026-09-13 22:40 until the fix. Proven live against
+# scraper.app.matrxserver.com on 2026-09-14 with the admin@admin.com JWT:
+# without the header 400 organization_required, with it 200 and one real
+# queued URL waiting since 2026-09-12. The backoff logic in
+# `scraper/retry_queue.py` was never at fault — it cannot out-wait a contract.
+
+
+@pytest.fixture
+def scraper_transport(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+    """Record what the scraper client actually puts on the wire."""
+    from app.services.scraper import remote_client as remote_client_module
+
+    seen, transport = _recorder()
+    real_client = httpx.AsyncClient
+
+    def _factory(*_args: object, **_kwargs: object) -> httpx.AsyncClient:
+        return real_client(transport=transport)
+
+    monkeypatch.setattr(remote_client_module.httpx, "AsyncClient", _factory)
+    return seen
+
+
+def _scraper_client():
+    from app.services.scraper.remote_client import RemoteScraperClient
+
+    return RemoteScraperClient(server_url="https://scraper.test", api_key="")
+
+
+@pytest.mark.anyio
+async def test_scraper_queue_poll_names_its_organization(
+    resolves_org: None, scraper_transport: list[httpx.Request]
+) -> None:
+    """The SR-04 path itself: GET /api/scraper/queue/pending."""
+    await _scraper_client().get_pending(tier="desktop", limit=5, auth_token=JWT)
+
+    request = scraper_transport[0]
+    assert request.headers["X-Organization-Id"] == ORG
+    assert request.headers["Authorization"] == f"Bearer {JWT}"
+
+
+@pytest.mark.anyio
+async def test_every_user_scoped_scraper_call_names_its_organization(
+    resolves_org: None, scraper_transport: list[httpx.Request]
+) -> None:
+    """Not just the poll — the whole retry cycle plus the content push. A fix
+    applied only to `get_pending` would have left claim/submit/fail 400ing the
+    moment the poll started working, which is the per-call-site failure mode
+    this suite exists to prevent."""
+    client = _scraper_client()
+
+    await client.get_pending(auth_token=JWT)
+    await client.claim_items(item_ids=["x"], client_id="c", auth_token=JWT)
+    await client.submit_result(
+        queue_item_id="x", url="https://e.test", content={}, auth_token=JWT
+    )
+    await client.report_failure(queue_item_id="x", error="no", auth_token=JWT)
+    await client.save_content(
+        url="https://e.test", page_name="e", content={}, auth_token=JWT
+    )
+
+    assert len(scraper_transport) == 5
+    for request in scraper_transport:
+        assert request.headers["X-Organization-Id"] == ORG, request.url.path
+
+
+@pytest.mark.anyio
+async def test_scraper_api_key_lane_states_no_organization(
+    resolves_org: None, scraper_transport: list[httpx.Request]
+) -> None:
+    """The approved-server lane names no acting user, so nothing is org-scoped
+    — and the transport must not invent a tenant for it."""
+    from app.services.scraper.remote_client import RemoteScraperClient
+
+    client = RemoteScraperClient(server_url="https://scraper.test", api_key="svc-key")
+    await client.get_pending()
+
+    request = scraper_transport[0]
+    assert "X-Organization-Id" not in request.headers
+    assert request.headers["Authorization"] == "Bearer svc-key"
+
+
+@pytest.mark.anyio
+async def test_scraper_unresolvable_organization_refuses_with_a_remedy(
+    cannot_resolve_org: None, scraper_transport: list[httpx.Request]
+) -> None:
+    from app.services.scraper.remote_client import RemoteScraperOrganizationError
+
+    with pytest.raises(RemoteScraperOrganizationError) as excinfo:
+        await _scraper_client().get_pending(auth_token=JWT)
+
+    assert "Choose your organization in the desktop app" in excinfo.value.remedy
+    assert scraper_transport == []

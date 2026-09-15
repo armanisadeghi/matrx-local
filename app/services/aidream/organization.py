@@ -59,6 +59,13 @@ def _jwt_sub(jwt_value: str) -> str | None:
         return None
 
 
+def jwt_user_id(jwt_value: str) -> str | None:
+    """The caller's user id from an unverified JWT — the public name for
+    ``_jwt_sub``, so other services can ask "is this the same caller?" without
+    reaching into a private helper."""
+    return _jwt_sub(jwt_value)
+
+
 async def _active_memberships(jwt_value: str) -> list[dict[str, Any]]:
     """Every organization the caller is an active member of, via the
     canonical ``mbr_for_user`` RPC — never re-derived from a junction table."""

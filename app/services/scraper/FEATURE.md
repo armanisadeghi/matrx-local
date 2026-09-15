@@ -9,8 +9,8 @@ plumbing that moves results between this machine and the server.
 |---|---|
 | `engine.py` | Runs the package's orchestrator locally |
 | `scrape_store.py` | The dual write: local SQLite, then cloud |
-| `remote_client.py` | HTTP client for `scraper.app.matrxserver.com` |
-| `retry_queue.py` | Polls the server for URLs it wants us to scrape |
+| `remote_client.py` | HTTP client for `scraper.app.matrxserver.com`. **Every authenticated call names its organization** — `_auth_headers()` attaches `X-Organization-Id` on the same line as the bearer, because the scraper service's `AuthMiddleware` refuses an authenticated request that names none with 400 `organization_required` before it routes. Never attach it per call site (SR-04, 2026-09-14: every user-scoped scraper call had been 400ing). Guard: `tests/unit/test_aidream_transport_organization_header.py` |
+| `retry_queue.py` | Polls the server for URLs it wants us to scrape. **A permanent 4xx is a terminal state, not a retry schedule**: a non-retryable 4xx (anything but 408/425/429) stops the poll, marks `scraper_retry_queue` FAILED with the server's own `user_message` as the remedy, and re-arms only when a different user signs in; 5xx/timeouts/429 keep the exponential backoff + DEGRADED. Guard: `tests/unit/test_scraper_retry_queue_terminal_refusal.py` |
 | `auth_helper.py` | The signed-in user's JWT for background calls |
 
 ---

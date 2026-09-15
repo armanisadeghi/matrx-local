@@ -320,22 +320,14 @@ async def extension_websocket(websocket: WebSocket) -> None:
                 )
                 raise
     except WebSocketDisconnect as exc:
-        # 1001 (Going Away) and 1012 (Service Restart) are expected
-        # close codes during normal extension lifecycle (page unload,
-        # engine restart). Log them quietly.
-        if exc.code in (1001, 1012):
-            logger.debug(
-                "[extension_ws] session=%s closed normally code=%s",
-                session.session_id,
-                exc.code,
-            )
-        else:
-            logger.info(
-                "[extension_ws] session=%s disconnected code=%s reason=%s",
-                session.session_id,
-                exc.code,
-                exc.reason,
-            )
+        # Same classifier as every other WS route in this engine, so one close
+        # code can never mean two severities in two log files.
+        from app.api.ws_close import classify_ws_close
+
+        close = classify_ws_close(exc.code, exc.reason)
+        getattr(logger, close.level)(
+            "[extension_ws] session=%s %s", session.session_id, close.summary
+        )
     except Exception as exc:
         logger.error(
             "[extension_ws] session=%s read loop crashed: %s",

@@ -43,11 +43,15 @@ from app.services.coding_sessions.claude_session_index import (
     default_sessions_root,
     read_session_index,
 )
+from app.services.coding_sessions.continuation import continuation_hint
 from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
     fetch_complete_identity_inventory,
 )
-from app.services.session_freshness import request_ui_session_refresh
+from app.services.session_freshness import (
+    request_ui_session_refresh,
+    session_blocker,
+)
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -379,17 +383,19 @@ async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, A
         or not token_row.get("user_id")
         or tokens.is_expired(token_row)
     ):
-        meta["reason"] = "no_active_user_jwt"
-        meta["detail"] = (
-            "This Mac has no valid signed-in session; Matrx Local is asking the desktop "
-            "for a fresh one. If this stays, sign out and back in to AI Matrx in Matrx Local."
-        )
-        _CLOUD_CACHE = (now, {}, meta)
         # The stored token is the engine's, the session is the desktop's: ask
-        # the owner for a fresh copy instead of waiting for the next hour.
+        # the owner for a fresh copy instead of waiting for the next hour — and
+        # ask BEFORE describing the gap, so one the desktop is already filling
+        # is reported as a refresh in progress and not as a signed-out Mac.
         await request_ui_session_refresh(
             lane="claude_overview", reason="stored access token missing or expired"
         )
+        state = session_blocker(lane="claude_overview")
+        meta["reason"] = state["code"]
+        meta["detail"] = " ".join(
+            part for part in (state["message"], state.get("remedy")) if part
+        )
+        _CLOUD_CACHE = (now, {}, meta)
         return {}, meta
 
     from app.services.aidream.client import get_aidream_client
@@ -633,6 +639,8 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         conversations.append(
             {
                 "session_id": session_id,
+                "provider": "claude_code",
+                "continuation": continuation_hint(session_id),
                 "title": entry.title or "Untitled",
                 "title_source": entry.title_source,
                 "project": entry.workspace_name,
@@ -679,6 +687,8 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         conversations.append(
             {
                 "session_id": session_id,
+                "provider": "claude_code",
+                "continuation": continuation_hint(session_id),
                 "title": row["title"],
                 "title_source": None,
                 "project": row["project"],
@@ -711,6 +721,10 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     return {
         "schema_version": 2,
         "account_id": current,
+        # Which providers this payload actually LISTS sessions for. The screen
+        # reads this instead of assuming Claude Code, so the day the engine
+        # lists Codex or Cursor transcripts the filter grows on its own.
+        "listed_providers": ["claude_code"],
         "accounts": list_accounts(),
         "cloud": cloud_meta,
         "conversations": conversations[:limit],

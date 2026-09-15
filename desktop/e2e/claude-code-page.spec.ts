@@ -18,7 +18,13 @@ test("Coding Sessions shows every provider, scrolls, and syncs in one action", a
   ).toBeVisible();
 
   // Every provider stays visible. Deleting the old screen must never again
-  // mean deleting Codex, Cursor and VS Code along with it.
+  // mean deleting Codex, Cursor and VS Code along with it. Since 2026-09-14
+  // the per-provider bridge table lives on the Settings & diagnostics tab —
+  // it is operational, not "here is my conversation" — and the Sessions tab
+  // carries the same providers as filter chips.
+  await expect(page.getByTestId("provider-chips")).toContainText("Claude Code");
+  await expect(page.getByTestId("provider-chips")).toContainText("Codex");
+  await page.getByTestId("coding-sessions-tab-settings").click();
   for (const editor of ["Claude Code", "Codex", "Cursor", "VS Code"]) {
     await expect(page.getByRole("cell", { name: editor, exact: true })).toBeVisible();
   }

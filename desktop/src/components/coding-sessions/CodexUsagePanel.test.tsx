@@ -6,11 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ getCodexUsage: vi.fn(), getCodexAllowance: vi.fn() }));
 vi.mock("@/lib/api", () => ({ engine: mocks }));
-vi.mock("@/components/layout/PageHeader", () => ({ PageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header> }));
 vi.mock("@ai-matrx/design-system", () => ({ Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>, Button: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button>, BasicInput: (props: InputHTMLAttributes<HTMLInputElement>) => <input {...props} /> }));
 
-import { codexUsageRangeFor } from "./CodexUsage";
-import { CodexUsage } from "./CodexUsage";
+import { codexUsageRangeFor } from "./CodexUsagePanel";
+import { CodexUsagePanel } from "./CodexUsagePanel";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -33,7 +32,7 @@ describe("codexUsageRangeFor", () => {
   });
 
   it("recomputes the last-twelve-hour request in the refresh handler", async () => {
-    await act(async () => { root.render(<CodexUsage />); await Promise.resolve(); });
+    await act(async () => { root.render(<CodexUsagePanel />); await Promise.resolve(); });
     const last12h = [...container.querySelectorAll("button")].find(button => button.textContent === "Last 12h")!;
     await act(async () => { last12h.click(); await Promise.resolve(); });
     vi.setSystemTime(new Date("2026-09-13T14:00:00Z"));
@@ -48,7 +47,7 @@ describe("codexUsageRangeFor", () => {
   it("selects a model scope from the interactive model table", async () => {
     const row = { model: "gpt-5.6-terra", total_tokens: 10, response_count: 1, estimated_standard_credits: 2, input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
     mocks.getCodexUsage.mockResolvedValue({ ...snapshot, credits: { ...snapshot.credits, estimated_standard: 2 }, models: [row], cells: [row] });
-    await act(async () => { root.render(<CodexUsage />); await Promise.resolve(); });
+    await act(async () => { root.render(<CodexUsagePanel />); await Promise.resolve(); });
     const model = [...container.querySelectorAll("button")].find(button => button.textContent === "gpt-5.6-terra")!;
     await act(async () => { model.click(); });
     expect(container.textContent).toContain("model: gpt-5.6-terra");

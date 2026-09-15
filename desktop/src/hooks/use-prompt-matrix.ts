@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  EngineSignedOutError,
   engine,
   getPromptMatrixLibrary,
   getPromptMatrixPaths,
@@ -138,7 +139,9 @@ export interface PromptMatrixActions {
   /** Insert a library entry into the current matrix. */
   insertLibraryEntry: (entryId: string) => void;
   removeLibraryEntry: (entryId: string) => Promise<void>;
-  refreshLibrary: () => Promise<void>;
+  refreshLibrary: () => Promise<
+    "loaded" | "failed" | "signed-out" | "no-engine"
+  >;
 }
 
 export function usePromptMatrix<TJob>(
@@ -195,14 +198,16 @@ export function usePromptMatrix<TJob>(
     [targetId],
   );
 
-  const refreshLibrary = useCallback(async () => {
+  const refreshLibrary = useCallback(async (): Promise<
+    "loaded" | "failed" | "signed-out" | "no-engine"
+  > => {
     const base = engine.engineUrl;
     if (base === null) {
       setLibraryError(
         "Engine not connected — library is on disk via the engine. Start the engine to load/save it.",
       );
       setLibraryReady(true);
-      return;
+      return "no-engine";
     }
     try {
       const [paths, libDoc, tmplDoc] = await Promise.all([
@@ -243,26 +248,60 @@ export function usePromptMatrix<TJob>(
       setLibrary(sanitizeLibraryEntries(libDoc.entries));
       setLibraryError(null);
       diskSynced.current = true;
+      return "loaded";
     } catch (err) {
+      if (err instanceof EngineSignedOutError) {
+        setLibraryError(
+          "Sign in to AI Matrx to load and save your prompt library — it lives on disk behind the engine, which needs your identity.",
+        );
+        return "signed-out";
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setLibraryError(`Could not load on-disk library: ${msg}`);
+      return "failed";
     } finally {
       setLibraryReady(true);
     }
   }, [targetId]);
 
   // Load from disk once the engine URL is available (and retry when it appears).
+  //
+  // THE RETRY BACKS OFF AND GIVES UP WHILE SIGNED OUT (SR-05, 2026-09-14).
+  // This was a flat 2s `setInterval` whose only exit was success: a signed-out
+  // session never sets `diskSynced`, so all three of these routes
+  // (/prompt-matrix/paths, /templates, /library) were re-asked every two
+  // seconds for as long as the app stayed open — the three largest rejected-
+  // request classes in the engine log, ~37,000 in 72 hours. Two things were
+  // missing: any backoff at all, and any notion that a refusal can be
+  // permanent until the person signs in.
   useEffect(() => {
     if (diskSynced.current) return;
-    void refreshLibrary();
-    const id = window.setInterval(() => {
-      if (diskSynced.current) {
-        window.clearInterval(id);
-        return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let delay = 2000;
+    const MAX_DELAY = 30_000;
+
+    const attempt = async () => {
+      if (cancelled || diskSynced.current) return;
+      if (engine.engineUrl !== null) {
+        const outcome = await refreshLibrary();
+        if (cancelled || diskSynced.current) return;
+        if (outcome === "signed-out") {
+          // Nothing to wait for: the retry resumes when a session appears
+          // and this effect re-runs. Re-asking cannot change the answer.
+          return;
+        }
       }
-      if (engine.engineUrl !== null) void refreshLibrary();
-    }, 2000);
-    return () => window.clearInterval(id);
+      delay = Math.min(delay * 2, MAX_DELAY);
+      timer = window.setTimeout(() => void attempt(), delay);
+    };
+
+    void attempt();
+    timer = window.setTimeout(() => void attempt(), delay);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [refreshLibrary]);
 
   /**

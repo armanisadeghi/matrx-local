@@ -50,12 +50,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request, WebSocket
 
+from app.api.auth_rejection_log import log_rejection
 from app.common.system_logger import get_logger
 from app.config import SUPABASE_URL
 
@@ -119,134 +119,21 @@ def _log_startup_notice_once(reason: str) -> None:
             "verification of these tokens."
         )
 
-
 # Per-kid suppression for the per-request DEBUG noise. Without this, a
 # steady stream of /extension/sessions polls (every 2s) emits one DEBUG
 # line per call for the same offending key id, drowning the log.
 _DEBUG_FAILED_KIDS: set[str] = set()
 
 
-# ---------------------------------------------------------------------------
-# Rate-limited rejection logging
-#
-# The extension and other clients commonly poll /extension/rpc on a 2s
-# interval. When the user is signed out (or the popup hasn't yet fetched a
-# token), every poll fails with "missing Bearer token" — without rate
-# limiting that's 30 WARNING lines per minute per polling client, which
-# completely drowns the engine log and makes real warnings impossible to
-# spot.
-#
-# Strategy: log the FIRST rejection of a given (path, reason) tuple as
-# WARNING so the operator sees the issue immediately. Subsequent identical
-# rejections within ``_REJECT_LOG_WINDOW_SECONDS`` are demoted to DEBUG and
-# coalesced into a single "still rejecting" summary every
-# ``_REJECT_SUMMARY_INTERVAL_SECONDS``. The summary tells you the
-# rejection rate without restoring the per-request flood.
-# ---------------------------------------------------------------------------
-
-# Quiet gap after which the next rejection re-surfaces as a WARNING (a
-# stream that stopped and later resumed is news, not suppressed noise).
-_REJECT_LOG_WINDOW_SECONDS = 60.0
-_REJECT_SUMMARY_INTERVAL_SECONDS = 60.0
-# Hard bound on tracked (kind, path, reason) keys so arbitrary rejected
-# paths (port scanners, typo'd clients) cannot grow the dict forever.
-_REJECT_STATE_MAX_KEYS = 256
-
-# Per-rejection-key state: { key: {first_seen, last_seen, last_summary, count} }
-_RejectStateKey = tuple[str, str, str]  # (kind, path, reason)
-_reject_log_state: dict[_RejectStateKey, dict[str, float]] = {}
+# Rate-limited rejection logging lives in ONE place for every surface:
+# app/api/auth_rejection_log.py. It used to live here and only here, which is
+# why app/api/auth.py logged ~37,000 unthrottled rejections in 72h (SR-05).
 
 
 def _log_rejection(kind: str, path: str, reason: str, *, method: str = "") -> None:
-    """Log an auth-rejected request with rate-limit suppression.
+    """Log an auth-rejected /extension/* request with rate-limit suppression."""
+    log_rejection("extension_auth", kind, path, reason, method=method)
 
-    Args:
-        kind: ``"http"`` or ``"ws"`` — purely cosmetic, distinguishes
-            the two surfaces in the log line.
-        path: the rejected request path. Used as part of the suppression
-            key so the same path's repeated rejects coalesce, but a
-            different path still surfaces immediately.
-        reason: short stable identifier for *why* it was rejected
-            (e.g. ``"missing_bearer"``, ``"invalid_signature"``).
-        method: HTTP method (HTTP rejections only); blank for WS.
-
-    Behaviour:
-        * First reject for a (kind, path, reason) tuple → WARNING.
-        * Subsequent rejects within the suppression window → DEBUG
-          (silent in normal operation).
-        * Every ``_REJECT_SUMMARY_INTERVAL_SECONDS`` of continuous
-          rejections → INFO summary with the cumulative count.
-    """
-    now = time.monotonic()
-    key: _RejectStateKey = (kind, path, reason)
-    state = _reject_log_state.get(key)
-
-    # A rejection stream that went quiet for the full window and then
-    # resumed is news — drop the stale entry so it re-WARNs below.
-    if state is not None and now - state["last_seen"] >= _REJECT_LOG_WINDOW_SECONDS:
-        del _reject_log_state[key]
-        state = None
-
-    method_str = f"{method} " if method else ""
-    label = "rejected" if kind == "http" else "WS rejected"
-
-    if state is None:
-        # Bound the state dict: evict the longest-idle key when full.
-        if len(_reject_log_state) >= _REJECT_STATE_MAX_KEYS:
-            oldest = min(
-                _reject_log_state,
-                key=lambda k: _reject_log_state[k]["last_seen"],
-            )
-            del _reject_log_state[oldest]
-        _reject_log_state[key] = {
-            "first_seen": now,
-            "last_seen": now,
-            "last_summary": now,
-            "count": 1.0,
-        }
-        logger.warning(
-            "[extension_auth] %s %s%s — %s",
-            label,
-            method_str,
-            path,
-            reason.replace("_", " "),
-        )
-        return
-
-    state["count"] += 1
-    state["last_seen"] = now
-
-    # Continued rejection beyond the suppression window — emit a periodic
-    # summary so the operator knows the situation hasn't resolved.
-    if now - state["last_summary"] >= _REJECT_SUMMARY_INTERVAL_SECONDS:
-        elapsed = now - state["first_seen"]
-        rate = state["count"] / elapsed if elapsed > 0 else 0.0
-        logger.info(
-            "[extension_auth] still %s %s%s (%s) — %.0f rejections in last %.0fs (%.1f/s)",
-            label,
-            method_str,
-            path,
-            reason.replace("_", " "),
-            state["count"],
-            elapsed,
-            rate,
-        )
-        state["last_summary"] = now
-        # Reset count so the next summary covers the next window without
-        # double-counting historic data.
-        state["first_seen"] = now
-        state["count"] = 0.0
-        return
-
-    # Within suppression window after the initial WARNING — DEBUG only.
-    logger.debug(
-        "[extension_auth] %s %s%s — %s (suppressed; count=%.0f)",
-        label,
-        method_str,
-        path,
-        reason.replace("_", " "),
-        state["count"],
-    )
 
 
 def _debug_log_jwks_failure(token: str, exc: Exception) -> None:

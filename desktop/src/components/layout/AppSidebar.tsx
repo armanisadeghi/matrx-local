@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   AudioLines,
-  BarChart3,
   BookOpen,
   BrainCircuit,
   Cloud,
@@ -77,7 +76,6 @@ const navItems = [
   { to: "/browser", icon: MonitorSmartphone, label: "Browser" },
   { to: "/bridge-test", icon: Plug, label: "Bridge Test" },
   { to: "/coding-sessions", icon: Terminal, label: "Coding Sessions" },
-  { to: "/codex-usage", icon: BarChart3, label: "Codex Usage" },
   { to: "/configurations", icon: SlidersHorizontal, label: "Configurations" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];

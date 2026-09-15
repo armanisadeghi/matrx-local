@@ -43,6 +43,7 @@ from app.services.coding_sessions.models import (
 from app.services.session_freshness import (
     request_ui_session_refresh,
     session_blocker,
+    session_refresh_pending,
 )
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
@@ -377,6 +378,11 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
         "no_active_user_jwt": (
             "sign_in_required",
             "Sign in to AI Matrx to deliver queued coding-session events.",
+        )
+        if not session_refresh_pending()
+        else (
+            "session_refreshing",
+            "Matrx Local is refreshing your AI Matrx session; delivery resumes on its own.",
         ),
         "aidream_server_unconfigured": (
             "cloud_server_unavailable",
@@ -665,7 +671,10 @@ class CodingSessionBridgeOutbox:
         # No valid signed-in session on this Mac (missing, undecodable or expired
         # access token). Set by the tick that found it, cleared by the first
         # tick that finds a usable token; the desktop is asked to re-push.
-        self._session_blocker: dict[str, Any] | None = None
+        # Only WHEN the current gap started is kept; the payload itself is
+        # built on every read, because "the desktop is mid-refresh" and "this
+        # Mac is signed out" are the same absence at different ages.
+        self._session_blocker_since: str | None = None
         # Cloud participation switched off, or no AI Dream server configured.
         # Both used to be silent early returns.
         self._configuration_blocker: dict[str, Any] | None = None
@@ -733,8 +742,10 @@ class CodingSessionBridgeOutbox:
         """
         if self._credential_blocker is not None:
             return dict(self._credential_blocker)
-        if self._session_blocker is not None:
-            return dict(self._session_blocker)
+        if self._session_blocker_since is not None:
+            return session_blocker(
+                lane="coding_session_bridge", since=self._session_blocker_since
+            )
         if self._configuration_blocker is not None:
             return dict(self._configuration_blocker)
         if self._organization_blocker is not None:
@@ -1931,14 +1942,11 @@ class CodingSessionBridgeOutbox:
                 await self._defer_head("no_active_user_jwt", increment=False)
                 self._credential_blocker = None
                 self._blocked_token_hash = None
-                if self._session_blocker is None:
-                    self._session_blocker = session_blocker(
-                        lane="coding_session_bridge", since=_utc_now_iso()
-                    )
-                    logger.warning(
-                        "[coding_session_bridge] delivery PAUSED: no valid signed-in "
-                        "session on this Mac — asking the desktop for a fresh one"
-                    )
+                first_pass = self._session_blocker_since is None
+                if first_pass:
+                    self._session_blocker_since = _utc_now_iso()
+                # Ask BEFORE reading the state: a gap the desktop is already
+                # answering must never be logged or shown as an error.
                 await request_ui_session_refresh(
                     lane="coding_session_bridge",
                     reason=(
@@ -1947,12 +1955,23 @@ class CodingSessionBridgeOutbox:
                         else "no stored session"
                     ),
                 )
+                if first_pass:
+                    if session_refresh_pending():
+                        logger.info(
+                            "[coding_session_bridge] delivery is waiting on a session "
+                            "refresh the desktop is already answering"
+                        )
+                    else:
+                        logger.warning(
+                            "[coding_session_bridge] delivery PAUSED: no valid signed-in "
+                            "session on this Mac — asking the desktop for a fresh one"
+                        )
                 return {"sent": 0, "failed": 0, "blocked": "no_active_user_jwt"}
-            if self._session_blocker is not None:
+            if self._session_blocker_since is not None:
                 logger.info(
                     "[coding_session_bridge] a valid session is back — delivery resumes"
                 )
-                self._session_blocker = None
+                self._session_blocker_since = None
 
             access_token = str(token_row["access_token"])
             token_hash = hashlib.sha256(access_token.encode("utf-8")).hexdigest()

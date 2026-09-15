@@ -9,9 +9,15 @@
  *
  * Per the repo's states-not-errors doctrine, this renders the STATE the engine
  * reports, never `cloud_sync_error`:
- *   signed_out — the engine's stored JWT went stale. "Sign in to sync" pushes
- *                the live Supabase token back to the engine, which drains the
- *                whole backlog (POST /auth/token → sync_after_sign_in).
+ *   signed_out — nobody is signed in, or the server refused the token, so the
+ *                push is blocked (`BLOCKED_AUTH` in `scrape_store.py`). The
+ *                engine holds no credential of its own since the custody
+ *                cutover (FS-C5b, 7faafcff2): it asks the sync daemon for a
+ *                short-lived token when it needs one, and the desktop's old
+ *                `POST /auth/token` hand-off is gone (the route 404s). So this
+ *                button re-checks the session with the daemon
+ *                (`getAuthedSession`) and triggers the drain
+ *                (`POST /scrapes/sync`) — there is no token left to push.
  *   offline    — informational; it fixes itself.
  *   rejected   — the only true failure, and retry is still offered.
  *   queued     — a quiet note that upload is in flight.

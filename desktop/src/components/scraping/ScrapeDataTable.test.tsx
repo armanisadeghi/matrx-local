@@ -31,18 +31,8 @@ describe("ScrapeDataTable", () => {
 
     const canonicalTable = node.querySelector<HTMLElement>("[data-matrx-table]");
     expect(canonicalTable).not.toBeNull();
-    expect(canonicalTable!.style.getPropertyValue("outline")).toBe("2px solid #2563eb");
-    expect(canonicalTable!.style.getPropertyPriority("outline")).toBe("important");
-    expect(canonicalTable!.style.getPropertyValue("outline-offset")).toBe("-2px");
-    expect(canonicalTable!.style.getPropertyPriority("outline-offset")).toBe("important");
-    const foregroundBoundary = canonicalTable!.querySelector<HTMLElement>(
-      ":scope > [data-matrx-table-boundary]",
-    );
-    expect(foregroundBoundary).not.toBeNull();
-    expect(foregroundBoundary!.getAttribute("aria-hidden")).toBe("true");
-    expect(foregroundBoundary!.style.getPropertyValue("position")).toBe("absolute");
-    expect(foregroundBoundary!.style.getPropertyValue("z-index")).toBe("2147483647");
-    expect(foregroundBoundary!.style.getPropertyValue("pointer-events")).toBe("none");
+    // The current design-system release retires its temporary blue diagnostic
+    // boundary. Keep asserting the canonical table and its user behavior.
     expect(node.textContent).toContain("Table 1");
     expect(node.querySelector('input[placeholder="Search this table"]')).not.toBeNull();
     expect(node.querySelector('button[aria-label="Copy, transform or export Table 1"]')).not.toBeNull();

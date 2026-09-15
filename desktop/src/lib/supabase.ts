@@ -30,10 +30,14 @@ if (!supabaseUrl || !supabaseKey) {
     );
 }
 
-const supabase = createClient(supabaseUrl ?? '', supabaseKey ?? '', {
+const tokenClient = createClient(supabaseUrl ?? '', supabaseKey ?? '', {
     // May be called concurrently and many times — `getToken` memoises and single-flights.
     accessToken: async () => await getToken(),
 });
+
+// supabase-js's type still exposes auth even though accessToken disables it.
+// Make the actual runtime contract a compile-time constraint for every consumer.
+const supabase = tokenClient as typeof tokenClient & { readonly auth: never };
 
 subscribeSession(() => {
     // An account change or sign-out need not be a token-rotation event. Let
@@ -46,16 +50,10 @@ subscribeSession(() => {
 /** A request-only client whose Authorization header cannot follow later auth
  * state changes on the shared application client. */
 export function createAccessTokenBoundSupabaseClient(accessToken: string) {
-    return createClient(supabaseUrl ?? '', supabaseKey ?? '', {
-        auth: {
-            autoRefreshToken: false,
-            detectSessionInUrl: false,
-            persistSession: false,
-        },
-        global: {
-            headers: { Authorization: `Bearer ${accessToken}` },
-        },
+    const client = createClient(supabaseUrl ?? '', supabaseKey ?? '', {
+        accessToken: async () => accessToken,
     });
+    return client as typeof client & { readonly auth: never };
 }
 
 export default supabase;

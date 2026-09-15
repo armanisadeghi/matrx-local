@@ -86,8 +86,8 @@ import {
   stopEngineStreams,
   stopTauriStream,
 } from "@/hooks/use-unified-log";
-import { getAuthedSession } from "@/lib/custodian";
-import supabase, { createAccessTokenBoundSupabaseClient } from "@/lib/supabase";
+import { getAuthedSession, subscribeSession } from "@/lib/custodian";
+import { createAccessTokenBoundSupabaseClient } from "@/lib/supabase";
 import {
   createErrorOutboxIdentityCoordinator,
   installErrorOutboxPersistence,
@@ -352,9 +352,7 @@ function AppInner() {
         (event) => event.userId && event.organizationId,
       );
       if (identityBound.length === 0) return [];
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       if (!session) return [];
       const activeOrganizationId = await getActiveOrganizationId();
       if (!activeOrganizationId || !identityCoordinator.isCurrent(identityGeneration)) {
@@ -381,9 +379,7 @@ function AppInner() {
 
     const resolveCaptureContext = async (generation: number) => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         const organizationId = session ? await getActiveOrganizationId() : null;
         identityCoordinator.commit(
           generation,
@@ -405,13 +401,11 @@ function AppInner() {
       ACTIVE_ORGANIZATION_CHANGE_EVENT,
       onOrganizationChange,
     );
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
-      // Supabase advises against awaiting other client calls inside the auth
-      // callback; leave its lock before resolving the organization context.
+    const stopSessionListener = subscribeSession(() => {
       refreshCaptureContext();
     });
     return () => {
-      authListener.subscription.unsubscribe();
+      stopSessionListener();
       window.removeEventListener(
         ACTIVE_ORGANIZATION_CHANGE_EVENT,
         onOrganizationChange,

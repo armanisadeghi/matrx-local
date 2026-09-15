@@ -2399,14 +2399,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       } finally {
         if (runGateRef.current.finish(runId)) {
           if (claimedDelegationConversation && engineUrl && delegationAccessToken) {
-            void supabase.auth
-              .getSession()
-              .then(({ data }) =>
+            void getAuthedSession()
+              .then((session) =>
                 releaseDelegationUi(
                   engineUrl,
                   claimedDelegationConversation!,
-                  data.session?.user.id === ownerAtStart
-                    ? (data.session.access_token ?? delegationAccessToken)
+                  session?.user.id === ownerAtStart
+                    ? session.access_token
                     : delegationAccessToken,
                 ),
               );

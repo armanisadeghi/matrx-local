@@ -47,7 +47,10 @@ from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
     fetch_complete_identity_inventory,
 )
-from app.services.session_freshness import request_ui_session_refresh
+from app.services.session_freshness import (
+    request_ui_session_refresh,
+    session_blocker,
+)
 from app.services.local_db.database import get_db
 from app.services.local_db.repositories import TokenRepo
 
@@ -379,17 +382,19 @@ async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, A
         or not token_row.get("user_id")
         or tokens.is_expired(token_row)
     ):
-        meta["reason"] = "no_active_user_jwt"
-        meta["detail"] = (
-            "This Mac has no valid signed-in session; Matrx Local is asking the desktop "
-            "for a fresh one. If this stays, sign out and back in to AI Matrx in Matrx Local."
-        )
-        _CLOUD_CACHE = (now, {}, meta)
         # The stored token is the engine's, the session is the desktop's: ask
-        # the owner for a fresh copy instead of waiting for the next hour.
+        # the owner for a fresh copy instead of waiting for the next hour — and
+        # ask BEFORE describing the gap, so one the desktop is already filling
+        # is reported as a refresh in progress and not as a signed-out Mac.
         await request_ui_session_refresh(
             lane="claude_overview", reason="stored access token missing or expired"
         )
+        state = session_blocker(lane="claude_overview")
+        meta["reason"] = state["code"]
+        meta["detail"] = " ".join(
+            part for part in (state["message"], state.get("remedy")) if part
+        )
+        _CLOUD_CACHE = (now, {}, meta)
         return {}, meta
 
     from app.services.aidream.client import get_aidream_client

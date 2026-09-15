@@ -2521,16 +2521,18 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             await websocket_manager.handle_tool_message(conn, data)
     except Exception as e:
-        # WebSocketDisconnect with code 1012 = "Service Restart" — this is the
-        # normal close code sent when the old engine is killed during a restart.
-        # Logging it as ERROR creates noise in every update/restart cycle.
-        # Any other unexpected exception is a genuine error worth surfacing.
+        # A disconnect is not an error just because we did not whitelist its
+        # code. ONE classifier decides the severity for every WS route in this
+        # engine (app/api/ws_close.py) — including 1005/1006, which are
+        # synthesised locally when a client's connection vanishes without a
+        # close handshake and are therefore an observation, never a failure.
         from starlette.websockets import WebSocketDisconnect
 
-        if isinstance(e, WebSocketDisconnect) and e.code in (1001, 1012):
-            # 1001 = Going Away (page unload / app close) — expected, not an error.
-            # 1012 = Service Restart — normal on engine restart/update.
-            logger.debug(f"WebSocket closed normally ({e.code}): {url}")
+        from app.api.ws_close import classify_ws_close
+
+        if isinstance(e, WebSocketDisconnect):
+            close = classify_ws_close(e.code, getattr(e, "reason", None))
+            getattr(logger, close.level)(f"WebSocket {close.summary}: {url}")
         else:
             logger.error(
                 f"WebSocket error: {e} | {url} | Headers: {dict(websocket.headers)}"

@@ -33,6 +33,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "002_i1_write_guard",
         sql: include_str!("../../migrations/002_i1_write_guard.sql"),
     },
+    Migration {
+        version: 3,
+        name: "003_mass_delete_window",
+        sql: include_str!("../../migrations/003_mass_delete_window.sql"),
+    },
 ];
 
 /// The highest schema version this binary can read.

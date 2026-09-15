@@ -42,6 +42,11 @@ pub struct World {
     pub next_id: u64,
     /// Wall-clock stand-in, incremented per applied op. Deterministic.
     pub tick: u64,
+    /// Deletions this world has EXECUTED — the breaker's rolling window (H1).
+    ///
+    /// The journal keeps the real one in `mass_delete_window`; the model keeps a count, because
+    /// every property run is one window. Resuming a suspended mapping is what clears it.
+    pub executed_deletions: usize,
 }
 
 impl World {
@@ -183,11 +188,13 @@ impl World {
                 self.record_synced_from_trees(path);
             }
             PlanOp::DeleteLocalToTrash { path, .. } => {
+                self.executed_deletions += 1;
                 self.local.remove(path);
                 self.unhashed.remove(path);
                 self.synced.remove(path);
             }
             PlanOp::DeleteRemoteTombstone { path, .. } => {
+                self.executed_deletions += 1;
                 if let Some(n) = self.remote.get_mut(path) {
                     let at = format!("2026-09-13T00:01:{:02}Z", self.tick % 60);
                     n.deleted_at = Some(at);

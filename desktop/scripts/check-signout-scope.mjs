@@ -41,7 +41,9 @@ export function findingsIn(source, file) {
   lines.forEach((line, i) => {
     if (COMMENT.test(line)) return;
     const where = `${file}:${i + 1}`;
-    for (const m of line.matchAll(SIGN_OUT)) {
+    // Rust `sign_out()` methods here are local keychain/state clears, never a
+    // GoTrue call; only a logout URL can be global in .rs / .py.
+    for (const m of /\.(rs|py)$/.test(file) ? [] : line.matchAll(SIGN_OUT)) {
       const scope = LITERAL_SCOPE.exec(m.groups.args ?? "");
       if (!scope) out.push(`${where}: .signOut( without a literal scope (supabase-js defaults to GLOBAL)`);
       else if (scope.groups.scope === "global") out.push(`${where}: explicit scope "global" sign-out`);

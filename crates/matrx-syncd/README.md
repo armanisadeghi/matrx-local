@@ -374,3 +374,57 @@ in both cases and is exercised here against the real server.
   sites in 21 files — setting the `accessToken` option makes `supabase.auth` throw on every access,
   so a half-switch cannot ship. It is **not** landed here. Until it is, this daemon is an
   *additional* session holder rather than the only one, and nothing in this file claims otherwise.
+
+## FS-C5b — the app side of the cutover
+
+`origin/main` `e6a3a1491`. The webview, the Tauri host and the Python engine all became token
+*consumers* in one commit; there is no build in that series where the app holds a refresh token.
+
+**Proven, mechanically:**
+
+* `pnpm typecheck` clean across the 21 repointed files; `cargo build -p aimatrx-desktop` clean;
+  152 Rust tests; 373 Python tests.
+* The §13 grep guard finds no `setSession`, `persistSession`, `autoRefreshToken` or
+  `refresh_token` anywhere in `desktop/src` outside generated API types.
+* `supabase.auth` cannot be reached at all: the client is built with `accessToken`, which makes
+  every property access on that namespace throw. A half-switch cannot compile, let alone ship.
+* The local `auth_tokens` table is dropped by local-DB migration 34, so a residual encrypted
+  refresh token cannot survive the upgrade.
+
+**NOT proven here, and not claimed:** the end-to-end run *through the app UI* — sign in from the
+window, a data query and a `realtime.setAuth()` observed in the live webview, quit-and-relaunch
+still signed in, sign out from the UI. Two concrete reasons, both about this machine rather than
+the code:
+
+1. `pnpm tauri:dev` needs port **1420**, and the daemon's dev CORS allow-list permits exactly that
+   origin (SPEC-ENGINE §3). Another session on this shared checkout holds 1420 with
+   `vite preview --strictPort`, and taking it from them is not mine to do. Moving the app to
+   another port would mean widening the allow-list to pass a test, which is falsifying the
+   contract rather than satisfying it.
+2. Driving the packaged window instead needs a user-approved automation grant, and no human is
+   present in this session to approve one.
+
+What the packaged **smoke** run does cover is the startup surface this change touches, and it is
+CLEAN on a real packaged artifact (`./scripts/smoke.sh packaged`, isolated home, isolated engine
+ports):
+
+```
+app.log line 1:  [syncd] started matrx-syncd (pid 3848)
+✅ packaged: app exited cleanly on a graceful quit signal in 16s
+✅ packaged: no orphaned children after shutdown
+✅ packaged app log: no fatal lines in the log
+✅ packaged: pre-existing live engine remained healthy and PID-stable
+Result: CLEAN
+```
+
+The app's very first log line is SPEC-ENGINE §1.2 step 3 — the app ensuring the daemon is running
+— and the isolated home afterwards holds `syncd.db` but **no** `syncd.json` and **no**
+`syncd.token`, which is the teardown rule above, observed on the packaged build.
+
+**A note for FS-L2a while it is fresh.** An isolated smoke run gives the daemon an isolated
+`MATRX_HOME_DIR`, so its journal, discovery file and tokens are isolated — but its *world* is
+still decided by `debug_assertions`, so a release smoke build allocates from the **live** daemon
+band (22160–22179) and would name a keychain item in the live service namespace if a sign-in ever
+happened during one. The engine solves the same problem with `VITE_MATRX_TEST_ENGINE_PORT_BASE`;
+the daemon has no equivalent yet. Harmless today (the allocator simply takes a free port, and
+smoke never signs in), and it belongs with the rest of the lifecycle work.

@@ -211,6 +211,10 @@ class CodingSessionArtifactsLane:
         self._last_run_seconds: float | None = None
         self._last_error: dict[str, str] | None = None
         self._blocker: dict[str, Any] | None = None
+        # A missing session is the one blocker whose payload ages (quiet while
+        # the desktop answers our ask, honest once that window closes), so only
+        # its start is kept and the text is built on every read.
+        self._session_blocker_since: str | None = None
         self._last_tick: dict[str, Any] = {}
 
     # ── configuration ────────────────────────────────────────────────
@@ -283,7 +287,15 @@ class CodingSessionArtifactsLane:
             "skipped_over_size": sum(s.skipped_over_size for s in sessions),
             "skipped_over_count": sum(s.skipped_over_count for s in sessions),
             "cloud_enabled": self._cloud_enabled,
-            "blocker": dict(self._blocker) if self._blocker else None,
+            "blocker": (
+                session_blocker(
+                    lane="coding_session_artifacts", since=self._session_blocker_since
+                )
+                if self._session_blocker_since is not None
+                else dict(self._blocker)
+                if self._blocker
+                else None
+            ),
             "last_error": dict(self._last_error) if self._last_error else None,
             "last_run_at": self._last_run_at,
             "last_run_seconds": self._last_run_seconds,
@@ -444,13 +456,19 @@ class CodingSessionArtifactsLane:
         ]
         if not pending:
             self._blocker = None
+            self._session_blocker_since = None
             return 0, 0
         tokens = TokenRepo(self._db)
         token_row = await tokens.get()
         jwt = token_row.get("access_token") if token_row else None
         if not jwt or tokens.is_expired(token_row):
-            self._blocker = session_blocker(lane="coding_session_artifacts", since=self._last_run_at)
-            await request_ui_session_refresh(lane="coding_session_artifacts", reason="expired_or_missing")
+            self._blocker = None
+            self._session_blocker_since = (
+                self._session_blocker_since or self._last_run_at or _utc_now_iso()
+            )
+            await request_ui_session_refresh(
+                lane="coding_session_artifacts", reason="expired_or_missing"
+            )
             return 0, 0
         self._client.set_jwt(jwt)
         counts = {"uploaded": 0, "failed": 0}
@@ -494,6 +512,7 @@ class CodingSessionArtifactsLane:
                     )
                     counts["uploaded"] += 1
                     self._blocker = None
+                    self._session_blocker_since = None
                 except OrganizationNotResolvedError as exc:
                     self._blocker = {
                         "code": "no_organization",
@@ -503,8 +522,11 @@ class CodingSessionArtifactsLane:
                     halt.set()
                 except FileSyncHTTPError as exc:
                     if exc.is_auth:
-                        self._blocker = session_blocker(
-                            lane="coding_session_artifacts", since=self._last_run_at
+                        self._blocker = None
+                        self._session_blocker_since = (
+                            self._session_blocker_since
+                            or self._last_run_at
+                            or _utc_now_iso()
                         )
                         await request_ui_session_refresh(
                             lane="coding_session_artifacts", reason="rejected_401"

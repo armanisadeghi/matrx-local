@@ -1226,6 +1226,69 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     }
   }, [hydrateConversationMessages]);
 
+  /**
+   * Open ONE conversation by its server id, even when the history list this
+   * surface loads (chat-route features) does not contain it.
+   *
+   * Coding sessions need this: a session row already carries the server's
+   * conversation id, and clicking the row must bring up THAT conversation —
+   * "it shows names, but if you click on them, it doesn't actually bring up
+   * the conversations" (Arman, 2026-09-14). Same table, same columns, same
+   * message hydration as every other conversation here; only the filter
+   * differs, so nothing about the chat surface is forked for it.
+   *
+   * Resolves with null on success, or with the reason it could not be opened.
+   */
+  const openConversationById = useCallback(
+    async (conversationId: string): Promise<string | null> => {
+      const known = conversationsRef.current.find(
+        (item) => item.id === conversationId || item.serverConversationId === conversationId,
+      );
+      if (known) {
+        setExecutionTarget("cloud");
+        selectConversation(known.id);
+        return null;
+      }
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const { data, error } = await supabase
+          .schema("chat")
+          .from("conversation")
+          .select(HISTORY_COLUMNS)
+          .eq("id", conversationId)
+          .is("deleted_at", null)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          const reason =
+            "AI Matrx holds no conversation with that id for this account — it may not have been delivered yet, or it belongs to another account.";
+          setHistoryError(reason);
+          return reason;
+        }
+        const merged = mergeRemoteConversations(conversationsRef.current, [
+          data as CloudConversationRow,
+        ]);
+        // The ref is what `hydrateConversationMessages` reads, and React has
+        // not re-rendered yet, so it is written here rather than waited on.
+        conversationsRef.current = merged;
+        setConversations(merged);
+        setExecutionTarget("cloud");
+        setActiveConversationId(conversationId);
+        await hydrateConversationMessages(conversationId, true);
+        return null;
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : "Failed to open that conversation";
+        setHistoryError(message);
+        return message;
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [hydrateConversationMessages, selectConversation],
+  );
+
   const deleteConversation = useCallback(
     (id: string) => {
       const target = conversationsRef.current.find((conversation) => conversation.id === id);
@@ -2415,6 +2478,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     googleFileActions,
     groupedConversations,
     createConversation,
+    openConversationById,
     selectConversation,
     deleteConversation,
     renameConversation,

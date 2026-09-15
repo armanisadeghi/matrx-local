@@ -90,18 +90,195 @@ def playwright_package_present() -> bool:
 INSTALL_COMPLETE_MARKER = "INSTALLATION_COMPLETE"
 
 
-def browser_binary_present() -> bool:
-    """Is at least one COMPLETELY installed Chromium build in this world's path?"""
+@dataclass(frozen=True)
+class BrowserBuild:
+    """One versioned Playwright browser directory on this machine."""
+
+    name: str
+    """Directory prefix without the revision — ``chromium_headless_shell``."""
+    revision: int
+    """Playwright's build id. ``-1`` when the directory name carries none."""
+    directory: Path
+    complete: bool
+    """Has Playwright written INSTALLATION_COMPLETE into it?"""
+
+    @property
+    def label(self) -> str:
+        return f"{self.name}-{self.revision}" if self.revision >= 0 else self.name
+
+
+def installed_browser_builds(include_incomplete: bool = False) -> list[BrowserBuild]:
+    """Every Chromium build in this world's browsers path, NEWEST FIRST.
+
+    Scanned, never assumed: what is on disk is decided by whichever Playwright
+    last ran an install here, and that is not necessarily the one this engine
+    imports (see :func:`browser_install_report`).
+    """
     path = browsers_path()
     try:
-        entries = os.listdir(path)
+        entries = sorted(os.listdir(path))
     except OSError:
-        return False
-    return any(
-        entry.startswith(marker) and (path / entry / INSTALL_COMPLETE_MARKER).exists()
-        for marker in BROWSER_MARKERS
-        for entry in entries
+        return []
+    builds: list[BrowserBuild] = []
+    for entry in entries:
+        for marker in BROWSER_MARKERS:
+            if not entry.startswith(marker):
+                continue
+            name = marker.rstrip("-")
+            tail = entry[len(marker) :]
+            revision = int(tail) if tail.isdigit() else -1
+            directory = path / entry
+            build = BrowserBuild(
+                name=name,
+                revision=revision,
+                directory=directory,
+                complete=(directory / INSTALL_COMPLETE_MARKER).exists(),
+            )
+            if build.complete or include_incomplete:
+                builds.append(build)
+            break
+    builds.sort(key=lambda build: build.revision, reverse=True)
+    return builds
+
+
+# The launchable binaries Playwright ships, by basename. Playwright's layout is
+# arch-suffixed and has changed shape before
+# (``chrome-headless-shell-mac-arm64/chrome-headless-shell``,
+# ``chrome-mac-arm64/Google Chrome for Testing.app/...``), so the build
+# directory is SCANNED for these rather than assembled from a guessed path — a
+# guess that misses is a path that does not exist, which is the whole bug class.
+_EXECUTABLE_NAMES = (
+    "chrome-headless-shell",
+    "chrome-headless-shell.exe",
+    "headless_shell",
+    "headless_shell.exe",
+    "chrome",
+    "chrome.exe",
+)
+
+
+def _executable_inside(directory: Path) -> Path | None:
+    try:
+        platform_dirs = sorted(entry for entry in directory.iterdir() if entry.is_dir())
+    except OSError:
+        return None
+    for platform_dir in platform_dirs:
+        for name in _EXECUTABLE_NAMES:
+            candidate = platform_dir / name
+            if candidate.is_file():
+                return candidate
+        # macOS full Chromium ships an .app bundle instead of a bare binary.
+        for bundled in sorted(platform_dir.glob("*.app/Contents/MacOS/*")):
+            if bundled.is_file():
+                return bundled
+    return None
+
+
+def resolve_browser_executable() -> Path | None:
+    """The launchable binary of the NEWEST complete build actually on disk.
+
+    Diagnostic and forward-looking: it names the browser this machine really
+    has, whatever revision the engine's own Playwright happens to pin. (Handing
+    it to the pool needs ``executable_path`` support in
+    ``matrx_scraper.browser_pool.PlaywrightBrowserPool``, which does not exist
+    yet — so today the repair is to install the revision this engine asks for.)
+    """
+    for build in installed_browser_builds():
+        executable = _executable_inside(build.directory)
+        if executable is not None:
+            return executable
+    return None
+
+
+def expected_browser_revision(browser: str = INSTALL_BROWSER) -> int | None:
+    """The build id THIS engine's Playwright will look for, or None if unknown.
+
+    Playwright resolves a browser by exact directory name
+    (``chromium_headless_shell-<revision>``), and the revision is pinned inside
+    the Playwright package this process imported. When an install into this
+    world was performed by a DIFFERENT Playwright version, the directory on
+    disk carries a different revision and every launch fails with "Executable
+    doesn't exist" until somebody restarts something — the condition that left
+    browser-rendered scraping dead for 18.6+ hours (audit row SR-03).
+    """
+    try:
+        from playwright._impl._driver import compute_driver_directory  # type: ignore[import]
+
+        manifest = Path(compute_driver_directory()) / "package" / "browsers.json"
+    except Exception:
+        try:
+            import playwright  # type: ignore[import]
+
+            manifest = (
+                Path(playwright.__file__).parent / "driver" / "package" / "browsers.json"
+            )
+        except Exception:
+            return None
+    try:
+        import json
+
+        entries = json.loads(manifest.read_text()).get("browsers", [])
+    except Exception:
+        return None
+    for entry in entries:
+        if entry.get("name") == browser:
+            revision = str(entry.get("revision", ""))
+            return int(revision) if revision.isdigit() else None
+    return None
+
+
+@dataclass(frozen=True)
+class BrowserInstallReport:
+    """What this engine needs versus what this machine has."""
+
+    expected_revision: int | None
+    installed: tuple[BrowserBuild, ...]
+
+    @property
+    def newest_installed(self) -> BrowserBuild | None:
+        return self.installed[0] if self.installed else None
+
+    @property
+    def expected_present(self) -> bool:
+        """Can this engine's Playwright resolve a browser at all?
+
+        Unknown pin (a build whose manifest we cannot read) falls back to the
+        old rule — any complete build counts — rather than declaring a working
+        install broken.
+        """
+        if self.expected_revision is None:
+            return bool(self.installed)
+        return any(build.revision == self.expected_revision for build in self.installed)
+
+    @property
+    def mismatch(self) -> bool:
+        """A browser IS installed, but not the build this engine asks for."""
+        return bool(self.installed) and not self.expected_present
+
+    def describe(self) -> str:
+        newest = self.newest_installed
+        return (
+            f"This engine needs browser build {self.expected_revision}, but the only "
+            f"build installed in {browsers_path()} is {newest.label if newest else 'none'}. "
+            "Installing the build it needs fixes it — no app restart."
+        )
+
+
+def browser_install_report() -> BrowserInstallReport:
+    return BrowserInstallReport(
+        expected_revision=expected_browser_revision(),
+        installed=tuple(installed_browser_builds()),
     )
+
+
+def browser_binary_present() -> bool:
+    """Is a browser THIS engine can actually launch installed in this world?
+
+    Not "is there a chromium directory": a complete install of the wrong
+    revision is unlaunchable, and treating it as present is what made the
+    one-click repair skip the download and the whole class self-heal never.
+    """
+    return browser_install_report().expected_present
 
 
 @dataclass(frozen=True)
@@ -249,7 +426,27 @@ def status() -> BrowserRuntimeStatus:
             install_message=_install.message,
         )
 
+    # browser_binary_present() stays the ONE presence seam (it is what the
+    # install route and the retry scheduler ask); the report only decides WHICH
+    # absence this is.
     if not browser_binary_present():
+        report = browser_install_report()
+        if report.mismatch:
+            # A browser IS on disk — just not the build this engine resolves.
+            # Saying "not installed" here would send the user looking for a
+            # download they already have; the reason names both builds.
+            reason = report.describe()
+            if _launch_error:
+                reason = f"{reason} Last launch error: {_launch_error}"
+            return BrowserRuntimeStatus(
+                available=False,
+                code="browser_build_mismatch",
+                reason=reason,
+                browsers_path=path,
+                installing=_install.running,
+                install_percent=_install.percent,
+                install_message=_install.message,
+            )
         reason = (
             "No Chromium build was found in this app's browser folder "
             f"({path})."
@@ -331,7 +528,16 @@ def browser_action_needed(feature: str = FEATURE) -> ActionNeeded | None:
         # has nothing to do. An ask here would be noise that clears itself.
         return None
 
-    if current.code == "browser_launch_failed":
+    if current.code == "browser_build_mismatch":
+        title = "The built-in browser needs an update"
+        message = (
+            "The built-in browser on this computer is a different version from "
+            "the one this app needs, so pages that need a real browser can't be "
+            f"loaded. Getting the right version is a {DOWNLOAD_SIZE_HINT} download "
+            "and nothing else stops working meanwhile."
+        )
+        label = "Update browser"
+    elif current.code == "browser_launch_failed":
         title = "The built-in browser needs a restart"
         message = (
             "Web pages that need a real browser can't be loaded right now. "
@@ -374,6 +580,94 @@ def browser_action_needed(feature: str = FEATURE) -> ActionNeeded | None:
             "download_size_hint": DOWNLOAD_SIZE_HINT,
         },
     )
+
+
+# One automatic build repair per engine process. A ~90 MB download is not
+# free, and a repair that cannot fix the condition must never loop.
+_self_repair_attempted = False
+
+
+def self_repair_attempted() -> bool:
+    return _self_repair_attempted
+
+
+async def self_heal_browser_build() -> bool:
+    """Install the browser build THIS engine needs, then bring the pool up.
+
+    The repair for a build mismatch, performed IN the running engine — no app
+    restart, no user click. Before this, the condition (row SR-03) sat degraded
+    for 18.6+ hours: nothing re-resolved the path while the engine lived, and
+    the only fix was a restart nobody was ever told to perform.
+
+    Bounded to one attempt per process and loud at both ends: the install
+    announces itself through the shared install state (so every surface shows
+    the download, not just a tab that clicked something), and a failure leaves
+    the honest degraded state plus its one-click action in place.
+
+    Returns whether browser rendering is available afterwards.
+    """
+    global _self_repair_attempted
+
+    report = browser_install_report()
+    if not report.mismatch:
+        return report.expected_present
+    if _self_repair_attempted:
+        return False
+    if _install.running:
+        return False
+    _self_repair_attempted = True
+
+    path = str(browsers_path())
+    logger.warning(
+        "[scraper/browser_runtime] Browser build mismatch — repairing automatically: %s",
+        report.describe(),
+    )
+    install_started()
+    install_progress(5, "Updating the built-in browser…")
+    failed = False
+    try:
+        from app.api.browser_runtime_routes import _parse_progress
+        from app.api.setup_routes import _install_playwright_browsers
+
+        async for event in _install_playwright_browsers(path, browser=INSTALL_BROWSER):
+            # Mirror the ONE installer's own progress into the shared state, so
+            # every surface shows the download rather than a silent stall.
+            percent, message, event_status = _parse_progress(event)
+            install_progress(percent, message)
+            if event_status == "error":
+                failed = True
+    except Exception:
+        failed = True
+        logger.warning(
+            "[scraper/browser_runtime] Automatic browser repair could not run",
+            exc_info=True,
+        )
+    finally:
+        install_finished()
+
+    if failed or not browser_binary_present():
+        logger.warning(
+            "[scraper/browser_runtime] Automatic browser repair did not produce build %s "
+            "— leaving the visible degraded state and its one-click repair in place",
+            report.expected_revision,
+        )
+        sync_service_registry()
+        await publish_action_needed()
+        return False
+
+    # The right build is on disk: bring the pool up in THIS engine.
+    from app.services.scraper.engine import get_scraper_engine
+
+    engine = get_scraper_engine()
+    started = await engine.ensure_browser_pool()
+    logger.info(
+        "[scraper/browser_runtime] Automatic browser repair installed build %s and %s",
+        report.expected_revision,
+        "browser rendering is available again" if started else "the pool still would not start",
+    )
+    sync_service_registry()
+    await publish_action_needed()
+    return started
 
 
 def sync_service_registry() -> BrowserRuntimeStatus:

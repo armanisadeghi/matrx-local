@@ -122,6 +122,58 @@ scenario is inexpressible here** (the mock never purges tombstones, by design), 
 longer than the 90-day floor is unverified anywhere — that belongs to FS-C6/FS-V2 — and the soak
 timings quoted below are this Mac's, on this day, and should not be read as a benchmark.
 
+## Findings from hostile re-verification (round 2, 2026-09-13)
+
+A **second** fresh seat, zero authorship of the build *and* of the first fix set, re-ran every one
+of F1–F9, attacked each fix with input this lane had not thought of, re-proved three red-then-green
+by reverting them, and re-soaked at 1.5M property cases and 210 simulation seeds —
+`common-docs` `projects/folder-sync/verification/FS-C2-C4-reverify.md`, verdict
+**PASS_WITH_FINDINGS** at `ffbbaaa81`. All nine fixes held. Six new things did not.
+
+| # | Severity | What it was | Fix |
+|---|---|---|---|
+| **G1** | HIGH, **data loss** | The conflict copy's own name was never name-guarded. The template adds ~40 characters, so a legal 244-character path rendered a 287-character copy name — planned with zero conflicts recorded. On a real volume the copy write fails and the `Download` beside it overwrites the user's bytes. **A mock filesystem with no name limits structurally cannot catch this.** | The stem is shortened to fit, as Dropbox does. When no stem length can be named, `unique_conflict_copy_path` returns `CopyName::Unrepresentable(kind)`, the planner records an ordinary `path_too_long` / `case_collision` conflict — putting the mapping in the **existing** `needs_conflict_resolution` state, no new state value — and **plans no download at all** for that path. Now also a **property over every plan of every run**, which is how SPEC-ENGINE §4.3 (amendment 2) states it. |
+| **G2** | MEDIUM, **data loss** | `taken` was byte-exact while every other name comparison in the crate folds. An earlier copy differing only in **case** was invisible to it, so the new copy landed on the old one on any case-insensitive volume — the F1 outcome reached through a case fold. | Both the occupied set and the candidate go through `collision_key`. |
+| **G3** | MEDIUM, guard bypass | F2 closed the `local_edit_flagged` door into `confirm_op` and **left `is_dir` open**: `is_dir: true` walked past the hash-≠-checksum refusal and wrote a row assembled from two moments, plus a type mismatch. F2's own reasoning had condemned this exact shape. | The row type is **derived from the op's kind**; the caller's boolean must agree; a directory confirmation carrying content is refused; file rows always check. |
+| **G4** | MEDIUM, partial enforcement | Migration 002's "only the three confirmation methods raise the flag" was itself a convention claim — the kind F3 was raised for. Raw SQL could raise the flag or `DROP TRIGGER`. | The three methods live in `src/journal/confirm.rs` and a test greps the crate, failing if the flag is named outside a three-file allowlist. The residue — a caller that *means* it — is now **stated as out of the threat model** in that file and in README, rather than implied away. |
+| **G5** | MEDIUM, **silent permanent divergence** | A local rename racing a remote edit of the old path renamed over the edit and settled split: device on `c1`, cloud on `c2`, plan empty, no conflict, nothing ever planned again. Nothing was destroyed, so data preservation passed — which is why convergence is a separate invariant. | `detect_renames` requires the cloud's **source** row to still match the synced row, and `PlanOp::Rename` carries `expected_version` / `expected_checksum` like every other mutating op. The executor passes the **op's** precondition, not the server's current version. |
+| **G6** | LOW | A twin that is also a case twin was reported as `case_collision`, telling the user the wrong reason to rename. | Case is folded out of both sides first, then normalisation decides. The precedence rule — **normalisation outranks case** — is stated in the code. |
+
+**And one thing the re-verifier drew out of G5 that was the harness's own fault:** `World::apply`
+was manufacturing a `tree_synced` row with `content_hash != checksum` and no flag — precisely the
+row `Journal::confirm_op` refuses. The property harness was exploring states the product cannot
+reach and calling them converged, and a real daemon running that plan would have taken
+`SyncedWriteRefused` and left the op stuck. **The model now refuses what the journal refuses.**
+A harness that can reach states the product cannot is not a conservative harness; it is a
+misleading one.
+
+### The breaker rule changed, and this is the second time
+
+Amendment 1 combined the two mass-delete knobs with **AND**. The re-verifier's twelve-file scenario
+ran at defaults, emptied the cloud on 30 of 30 seeds with no suspension, and made the consequence
+plain: under AND-only, **no folder smaller than 1,000 files is ever protected** — a 900-file
+Documents folder vanishing to an unmounted drive propagates the whole wipe.
+
+SPEC-ENGINE §2 amendment 2 supersedes it: suspend when
+`deleted_count >= sync.mass_delete_count` **OR**
+(`deleted_percent >= sync.mass_delete_percent` **AND** `deleted_count >= sync.mass_delete_min_count`),
+with the new knob defaulting to 20. The floor is what AND-only was really reaching for. All five of
+the spec's worked examples are a test at the spec's own defaults — including the one the spec
+itself records as a discrepancy in the original ruling (30 losing 16 does **not** suspend, because
+16 is under the floor), and the twelve-file case, which does not suspend at defaults and does once
+an org lowers the floor. That is the ruled behaviour, asserted so nobody later mistakes it for a
+defect.
+
+### Two things the re-verifier said to carry forward
+
+* **The tombstone-retention scenario is inexpressible here — confirmed twice over.** The mock never
+  purges tombstones *and* `refresh_remote` reads every row including tombstoned ones, so a device
+  cannot even be kept blind. The 90-day floor's hazard is unverified anywhere; FS-C6/FS-V2 owns it.
+* **`SIM_SEEDS` could not reach a fresh range.** The bare count always extended from one offset, so
+  a verifier wanting seeds nobody had used had to write a throwaway harness. It now takes
+  `START..END` and `START+COUNT` as well, and a spec it cannot parse is a loud panic rather than a
+  soak that silently adds nothing.
+
 ## Defects the harness found
 
 Both were found by the property tests at a few hundred cases, before any large run — which is the
@@ -262,6 +314,15 @@ Soak runs on this Mac, 2026-09-13, after the whole fix round:
 | `PROPTEST_CASES=200000 … --release --test planner_properties` | 12/12 green, 13.3 s |
 | `PROPTEST_CASES=1000000 … --release --test planner_properties` | 12/12 green, 62.7 s |
 | `SIM_SEEDS=200 … --release --test simulation` | 10/10 green, 210 seeds, 59.4 s |
+
+After round 2 (the six G-findings, the amended breaker, the new scenario), on this Mac,
+2026-09-14 — timings are this machine's on this day, not a benchmark:
+
+| Run | Result |
+|---|---|
+| `cargo test -p matrx-sync --test planner_properties` | **18 green** |
+| `cargo test -p matrx-sync --test simulation` | **12 green** |
+| `cargo test -p matrx-sync --test journal` | **21 green** |
 
 **The harness is a mock and its README says so.** It proves the planner and the executor's shape.
 Product evidence is FS-V2, on real machines with real files.

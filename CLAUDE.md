@@ -226,6 +226,7 @@ keep going until done or stuck; update docs when code changes. Never edit
 staleness instead.
 
 - **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
+  **Never in Arman's installed app.** `/Applications/AI Matrx.app` and its engine on port **22140** are his, signed in as him: agents never sign in, sign out, click, restart, or update it. Test only on a source engine you started (ports 22240–22259, isolated home) with the desktop in dev mode — read the installed engine only via `Authorization: Bearer local-probe` GETs. (Arman, 2026-09-15: "the installed app on my system is for my use; if they're screwing with it, they're breaking my rules.")
 
 ## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned (pre-launch rule)
 

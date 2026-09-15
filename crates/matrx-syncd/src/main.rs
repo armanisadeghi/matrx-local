@@ -312,13 +312,22 @@ async fn run(options: Options) -> std::process::ExitCode {
             .unwrap_or_else(|| "unavailable".into()),
     );
 
-    // S9: adopt whatever the keychain holds and rotate immediately.
-    let snapshot = custodian.resume().await;
-    eprintln!(
-        "[syncd] session state on start: {} ({})",
-        snapshot.state.as_str(),
-        snapshot.state_reason.as_deref().unwrap_or("")
-    );
+    // S9: adopt whatever the keychain holds and rotate immediately — but **as a task, not
+    // inline**. Adoption talks to the OS keychain and to the network, and a daemon that cannot be
+    // stopped until it finishes adopting is a daemon nobody can stop on the one day adoption is
+    // the thing that is stuck. The API is already serving; the journal already holds the last
+    // known state; `session.changed` announces the outcome.
+    let adopting = {
+        let custodian = custodian.clone();
+        tokio::spawn(async move {
+            let snapshot = custodian.resume().await;
+            eprintln!(
+                "[syncd] session state on start: {} ({})",
+                snapshot.state.as_str(),
+                snapshot.state_reason.as_deref().unwrap_or("")
+            );
+        })
+    };
     let refresher = custodian.spawn_refresh_loop();
 
     // Only `POST /v1/shutdown` stops it (SPEC-ENGINE rule 11). A terminal Ctrl-C is honoured too,
@@ -334,6 +343,7 @@ async fn run(options: Options) -> std::process::ExitCode {
     // §1.3's teardown, in order. Nothing is killed and nothing is signalled.
     handles.abort();
     refresher.abort();
+    adopting.abort();
     {
         // Commit and checkpoint the journal WAL before reporting done — rule 12, and the guard
         // against the 60–76 MB WAL a skipped teardown leaves behind.

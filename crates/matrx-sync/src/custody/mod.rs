@@ -1176,12 +1176,22 @@ impl Custodian {
             SessionState::SignedIn => fallback,
             other => other,
         };
-        SessionRefusal {
-            state_reason: snapshot
+        // **The sentence must belong to the state being reported.** Taking the state from one
+        // place and the reason from another produced a real refusal that read
+        // `{"state":"signed_out","state_reason":"Signed in and syncing."}` — a screen that lies
+        // (law 4), observed live on 2026-09-15. When the row has not caught up, its sentence is
+        // about the state it still thinks it is in, so the state's own sentence is used instead.
+        let state_reason = if snapshot.state == state {
+            snapshot
                 .state_reason
                 .clone()
-                .unwrap_or_else(|| default_reason(state).to_string()),
+                .unwrap_or_else(|| default_reason(state).to_string())
+        } else {
+            default_reason(state).to_string()
+        };
+        SessionRefusal {
             state,
+            state_reason,
             since: snapshot.since,
             email: snapshot.email,
         }
@@ -1300,10 +1310,13 @@ fn default_reason(state: SessionState) -> &'static str {
         SessionState::SignedIn => "Signed in and syncing.",
         SessionState::SignInNeeded => "Sign in again on this computer to resume syncing.",
         SessionState::SignedOut => "Sign in on this computer to start syncing your folders.",
-        SessionState::CredentialStoreUnavailable => {
-            "Install and unlock a system keyring — on Linux gnome-keyring or kwallet — or this \
-             device will need to sign in again after every restart."
+        // Same sentence as CustodyError's remedy, from the same place, so a surface reading the
+        // state and a surface reading the error never disagree.
+        SessionState::CredentialStoreUnavailable => CustodyError::CredentialStore {
+            operation: "open the credential store",
+            cause: String::new(),
         }
+        .remedy(),
         SessionState::Offline => "Not connected — retrying.",
     }
 }

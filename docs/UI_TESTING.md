@@ -66,7 +66,9 @@ is `false` and every Tauri-only surface is out of reach:
 
 - No sidecar spawn, tray, auto-update, compact recorder window, llama-server
   control, native permissions, or `invoke()`-backed Rust commands.
-- Engine discovery falls back to the JS `fetch()` port scan (22140-22159)
+- Engine discovery falls back to the JS `fetch()` port scan (22140-22159; in
+  a browser test ALWAYS point it at your own dev engine on 22240–22259 — 22140
+  is Arman's installed app and is off-limits, see CLAUDE.md)
   instead of the Rust-assisted path — this is the same code path `pnpm dev`
   in a browser uses, and it works.
 - Everything else — login, routing, all pages, engine REST/WS features —

@@ -299,7 +299,12 @@ async fn route(
 
         // ---- SPEC-ENGINE's own verbs that FS-C5 needs.
         (&Method::POST, "/v1/shutdown") => {
-            state.shutdown.notify_waiters();
+            // `notify_one` and NOT `notify_waiters`: the latter wakes only waiters that already
+            // exist, so a shutdown arriving before the run loop reaches its `select!` — which is
+            // exactly what happens while the daemon is still adopting its session at start — was
+            // answered 202 "accepted" and then silently dropped. `notify_one` stores a permit for
+            // the next waiter, so the answer stays true. Observed live on 2026-09-15.
+            state.shutdown.notify_one();
             Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header(header::CONTENT_TYPE, "application/json")

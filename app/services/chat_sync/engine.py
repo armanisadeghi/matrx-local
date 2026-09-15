@@ -155,6 +155,51 @@ _CONVERSATION_ORG_CHILDREN = frozenset(
 )
 
 DEFAULT_INTERVAL = int(os.getenv("MATRX_CHAT_SYNC_INTERVAL", "300"))
+# Cloud columns this build cannot store, reported ONCE per (table, column).
+#
+# 🚨 A PER-ROW WARNING IS NOT AN ALERT (SR-10, 2026-09-11 → 09-14). This line
+# fired 8,566 times in 72 hours — 5,682 for chat.request_snapshot and 2,884 for
+# chat.tool_trace — and every one of them said the same five column names. The
+# volume did not make it louder, it made it invisible: it buried the rest of
+# system.log and still nothing outside the log file ever knew that real cloud
+# values were being dropped. So: state it once, at ERROR (values ARE being
+# lost, that is not a warning), name the remedy, and count the rest.
+_reported_snapshot_drift: dict[str, set[str]] = {}
+_snapshot_drift_rows: dict[str, int] = {}
+
+
+def snapshot_drift_state() -> dict[str, dict[str, object]]:
+    """What this engine run has dropped, for /admin/status and diagnostics.
+
+    Nothing fails silently: the count keeps accruing after the one ERROR, so a
+    status surface can say "8,566 rows, five columns" instead of nothing.
+    """
+    return {
+        table: {"columns": sorted(cols), "rows": _snapshot_drift_rows.get(table, 0)}
+        for table, cols in _reported_snapshot_drift.items()
+    }
+
+
+def _report_snapshot_drift(table: str, unknown: list[str]) -> None:
+    seen = _reported_snapshot_drift.setdefault(table, set())
+    _snapshot_drift_rows[table] = _snapshot_drift_rows.get(table, 0) + 1
+    fresh = sorted(set(unknown) - seen)
+    if not fresh:
+        return
+    seen.update(fresh)
+    logger.error(
+        "[chat_sync] chat.%s: the cloud sends %s and this build has no column for "
+        "them, so those values are NOT being stored locally (every pulled row of "
+        "this table, silently, until fixed). WHAT TO DO: refresh "
+        "schema_mirror/snapshot.json from the live schema, run "
+        "scripts/generate_mirror_schema.py, and ship it — "
+        "scripts/check_mirror_snapshot_drift.py finds this before release. "
+        "Reported once per column; the row count keeps accruing in "
+        "chat_sync.snapshot_drift_state().",
+        table, fresh,
+    )
+
+
 _PULL_PAGE_SIZE = 500
 _MAX_PAGES_PER_TABLE = 20
 _PUSH_BATCH = 50
@@ -995,11 +1040,7 @@ class ChatSyncEngine:
 
         unknown = [c for c in remote if c not in spec["pg_types"]]
         if unknown:
-            logger.warning(
-                "[chat_sync] chat.%s cloud row carries columns not in the local "
-                "snapshot %s — refresh schema_mirror/snapshot.json (values not stored)",
-                table, unknown,
-            )
+            _report_snapshot_drift(table, unknown)
 
         entity_type = f"{_SCHEMA}.{table}"
         pending = None

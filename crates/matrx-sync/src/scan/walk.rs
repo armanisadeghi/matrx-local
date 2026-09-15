@@ -94,12 +94,73 @@ pub struct ScanReport {
     pub needs_hash: BTreeMap<String, RehashReason>,
     /// Directories the walk could not read at all.
     pub unreadable_dirs: Vec<SkippedEntry>,
+    /// Files that could not be hashed, and why. They stay in the tree with no hash, which the
+    /// planner reads as "not yet known" and answers with a `HashRequest` rather than a guess.
+    pub failed_hashes: Vec<(String, crate::scan::hash::HashError)>,
+    /// Distinct on-disk names that normalise to ONE tree key.
+    ///
+    /// Invariant I8 makes NFD-on-disk against NFC-in-the-cloud a `unicode_collision`, "never a
+    /// silent rename". The tree can hold only one of them, so the other is recorded here rather
+    /// than dropped: a file that disappears from the scan with nothing said is the silence the
+    /// invariant forbids. The planner turns these into conflict rows.
+    pub normalisation_collisions: Vec<NormalisationCollision>,
+}
+
+/// Two on-disk names that became one key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalisationCollision {
+    /// The key they share.
+    pub path_nfc: String,
+    /// The one that is in the tree.
+    pub kept: PathBuf,
+    /// The one that is not.
+    pub dropped: PathBuf,
 }
 
 impl ScanReport {
     /// How many files this scan must hash before the planner can decide anything about them.
     pub fn hash_backlog(&self) -> usize {
         self.needs_hash.len()
+    }
+
+    /// The backlog as hashing work, in path order.
+    pub fn hash_requests(&self) -> Vec<crate::scan::hash::HashRequest> {
+        self.needs_hash
+            .keys()
+            .filter_map(|path| {
+                self.on_disk.get(path).map(|on_disk| crate::scan::hash::HashRequest {
+                    path_nfc: path.clone(),
+                    on_disk: on_disk.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Fold hashing results back into the tree.
+    ///
+    /// A file that vanished between the walk and the hash is REMOVED from the tree rather than
+    /// left hash-less: it is not "not yet known", it is gone, and leaving it would have the
+    /// planner ask for its hash forever. Anything else keeps `content_hash: None` — I9's "not yet
+    /// known" — and stays in [`ScanReport::failed_hashes`] so the caller can retry or report it.
+    pub fn apply_hashes(&mut self, outcomes: Vec<crate::scan::hash::HashOutcome>) {
+        for outcome in outcomes {
+            match outcome.result {
+                Ok(hash) => {
+                    if let Some(node) = self.tree.get_mut(&outcome.path_nfc) {
+                        node.content_hash = Some(hash);
+                    }
+                    self.needs_hash.remove(&outcome.path_nfc);
+                }
+                Err(crate::scan::hash::HashError::Vanished) => {
+                    self.tree.remove(&outcome.path_nfc);
+                    self.on_disk.remove(&outcome.path_nfc);
+                    self.needs_hash.remove(&outcome.path_nfc);
+                }
+                Err(e) => {
+                    self.failed_hashes.push((outcome.path_nfc, e));
+                }
+            }
+        }
     }
 }
 
@@ -114,6 +175,8 @@ pub fn scan_root(root: &Path, previous: &LocalTree, opts: &ScanOptions) -> ScanR
         skipped: Vec::new(),
         needs_hash: BTreeMap::new(),
         unreadable_dirs: Vec::new(),
+        failed_hashes: Vec::new(),
+        normalisation_collisions: Vec::new(),
     };
     let mut queue: Vec<PathBuf> = vec![root.to_path_buf()];
 
@@ -227,6 +290,16 @@ pub fn scan_root(root: &Path, previous: &LocalTree, opts: &ScanOptions) -> ScanR
                 }
             };
 
+            if let Some(kept) = report.on_disk.get(&rel) {
+                if kept != &path {
+                    report.normalisation_collisions.push(NormalisationCollision {
+                        path_nfc: rel.clone(),
+                        kept: kept.clone(),
+                        dropped: path.clone(),
+                    });
+                    continue;
+                }
+            }
             report.tree.insert(
                 rel.clone(),
                 LocalNode {
@@ -256,15 +329,21 @@ fn file_identity(_path: &Path, meta: &std::fs::Metadata) -> crate::scan::FileIde
     identity::identity_of(meta)
 }
 
-/// The path relative to the mapping root, with `/` separators on every platform — the shape
-/// `path_nfc` has in the journal and in the cloud.
+/// The path relative to the mapping root, `/`-separated and **NFC-normalised** — the shape
+/// `path_nfc` has in the journal and in the cloud (invariant I8: "the journal is NFC everywhere").
+///
+/// macOS hands out NFD for names typed with combining marks while the cloud stores NFC, so without
+/// this the same file is two different paths depending on which side saw it last.
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
+    crate::naming::nfc(
+        &path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 /// Modification time in nanoseconds since the unix epoch.

@@ -338,3 +338,189 @@ fn two_scans_of_an_unchanged_tree_are_identical() {
     assert_eq!(a.on_disk, b.on_disk);
     assert_eq!(a.tree.len(), 24, "20 files and 4 directories");
 }
+
+// ------------------------------------------------- unit 1b: hashing, NFC, the marker
+
+#[test]
+fn hashing_produces_the_servers_sha256_and_folds_back_into_the_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), b"abc").expect("write");
+
+    let mut report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+    assert_eq!(report.hash_backlog(), 1);
+
+    let outcomes = matrx_sync::scan::hash_files(&report.hash_requests(), 4);
+    report.apply_hashes(outcomes);
+
+    assert_eq!(
+        report.tree.get("a.txt").expect("scanned").content_hash.as_deref(),
+        // The canonical SHA-256 of "abc" — if this ever changes, we are not speaking the server's
+        // language any more, and every checksum comparison against the cloud is broken.
+        Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+    );
+    assert_eq!(report.hash_backlog(), 0);
+    assert!(report.failed_hashes.is_empty());
+}
+
+#[test]
+fn hashing_is_streamed_and_order_stable_under_concurrency() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Bigger than the 1 MiB read buffer, so the streaming path is actually exercised rather than
+    // one lucky read.
+    let big = vec![b'x'; 3 * 1024 * 1024 + 7];
+    std::fs::write(dir.path().join("big.bin"), &big).expect("write");
+    for i in 0..25 {
+        std::fs::write(dir.path().join(format!("f{i:02}.txt")), format!("body {i}")).expect("write");
+    }
+
+    let report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+    let requests = report.hash_requests();
+    assert_eq!(requests.len(), 26);
+
+    let one = matrx_sync::scan::hash_files(&requests, 1);
+    let many = matrx_sync::scan::hash_files(&requests, 8);
+    assert_eq!(
+        one, many,
+        "results must come back in request order whatever order the threads finished in, or two \
+         scans of one tree are not comparable"
+    );
+    let paths: Vec<&str> = many.iter().map(|o| o.path_nfc.as_str()).collect();
+    let mut sorted = paths.clone();
+    sorted.sort_unstable();
+    assert_eq!(paths, sorted);
+
+    // The big file hashes to the same value as a single-shot hash of its bytes.
+    let expected = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&big);
+        format!("{:x}", h.finalize())
+    };
+    let got = many
+        .iter()
+        .find(|o| o.path_nfc == "big.bin")
+        .and_then(|o| o.result.clone().ok());
+    assert_eq!(got.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn the_default_hash_concurrency_leaves_the_machine_usable() {
+    let n = matrx_sync::scan::hash_concurrency_default();
+    assert!(n >= 2, "never below two, or a single-core VM cannot overlap IO");
+    let cores = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(2);
+    assert!(
+        n <= cores.max(2),
+        "half the cores, so a first sync of a large tree does not make the machine feel broken"
+    );
+}
+
+#[test]
+fn a_file_that_vanishes_between_the_walk_and_the_hash_leaves_the_tree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("fleeting.txt"), b"here for now").expect("write");
+    let mut report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+
+    std::fs::remove_file(dir.path().join("fleeting.txt")).expect("remove");
+    let outcomes = matrx_sync::scan::hash_files(&report.hash_requests(), 2);
+    assert!(matches!(
+        outcomes[0].result,
+        Err(matrx_sync::scan::HashError::Vanished)
+    ));
+    report.apply_hashes(outcomes);
+
+    assert!(
+        report.tree.get("fleeting.txt").is_none(),
+        "it is not 'not yet known', it is gone — leaving it would have the planner ask for its \
+         hash forever"
+    );
+    assert_eq!(report.hash_backlog(), 0);
+    assert!(report.failed_hashes.is_empty(), "a vanished file is not a failure");
+}
+
+#[test]
+fn paths_are_nfc_whatever_the_filesystem_hands_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // "café" written DECOMPOSED (e + U+0301), the spelling macOS hands out.
+    let nfd = "cafe\u{301}.txt";
+    let nfc = "caf\u{e9}.txt";
+    std::fs::write(dir.path().join(nfd), b"x").expect("write");
+
+    let report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+
+    assert!(
+        report.tree.get(nfc).is_some(),
+        "the journal is NFC everywhere (I8); the cloud stores NFC: {:?}",
+        report.tree.paths().collect::<Vec<_>>()
+    );
+    // And the REAL name is kept, because bytes are never found through `path_nfc`.
+    let on_disk = report.on_disk.get(nfc).expect("the real path is recorded");
+    assert!(on_disk.exists(), "the recorded path must actually open: {on_disk:?}");
+}
+
+#[test]
+fn two_names_that_normalise_to_one_key_are_reported_not_silently_dropped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let nfd = dir.path().join("cafe\u{301}.txt");
+    let nfc = dir.path().join("caf\u{e9}.txt");
+    std::fs::write(&nfd, b"decomposed").expect("write");
+    if std::fs::write(&nfc, b"precomposed").is_err() || !both_exist(&nfd, &nfc) {
+        // APFS is normalisation-INSENSITIVE: the second write lands on the first file, so this
+        // class cannot be produced here. It is produced on ext4 and NTFS, which are
+        // normalisation-preserving, and that is where this assertion matters.
+        return;
+    }
+
+    let report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+
+    assert_eq!(report.tree.len(), 1, "one key can hold one node");
+    assert_eq!(
+        report.normalisation_collisions.len(),
+        1,
+        "and the other must be REPORTED — a file that disappears from the scan with nothing said \
+         is exactly the silence I8 forbids"
+    );
+}
+
+fn both_exist(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    ma.len() != mb.len()
+}
+
+#[test]
+fn the_marker_tells_an_unmounted_drive_from_an_emptied_folder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uuid = "11111111-2222-3333-4444-555555555555";
+
+    // Before admission there is no marker: an empty directory is NOT this mapping's folder.
+    assert_eq!(
+        matrx_sync::scan::check_marker(dir.path(), uuid),
+        matrx_sync::scan::MarkerState::Missing
+    );
+    assert_eq!(
+        matrx_sync::scan::check_marker(dir.path(), uuid).suspension_state(),
+        Some("suspended_marker_missing"),
+        "an unmounted volume must suspend the mapping, never empty the cloud"
+    );
+
+    matrx_sync::scan::write_marker(dir.path(), uuid).expect("write marker");
+    assert!(matrx_sync::scan::check_marker(dir.path(), uuid).is_present());
+    assert!(
+        dir.path().join(".matrx-sync/tmp").is_dir(),
+        "the staging directory is created with it: downloads land there before they are verified"
+    );
+
+    // A folder carrying ANOTHER mapping's marker — copied from another machine, or two mappings
+    // pointed at one folder — is not this mapping's either, and says which.
+    let foreign = matrx_sync::scan::check_marker(dir.path(), "99999999-9999-9999-9999-999999999999");
+    match foreign {
+        matrx_sync::scan::MarkerState::Foreign { ref found } => assert_eq!(found, uuid),
+        other => panic!("expected Foreign, got {other:?}"),
+    }
+    assert_eq!(foreign.suspension_state(), Some("suspended_marker_missing"));
+
+    // And the marker never syncs: it lives in the directory the scan skips.
+    let report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+    assert!(report.tree.paths().all(|p| !p.starts_with(".matrx-sync")));
+}

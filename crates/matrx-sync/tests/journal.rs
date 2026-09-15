@@ -644,21 +644,35 @@ fn the_row_type_comes_from_the_op_kind_not_from_the_caller() {
     assert!(row.is_dir && row.content_hash.is_none() && row.checksum.is_none());
 }
 
-/// G4, from hostile re-verification. Migration 002's claim that "only the three confirmation
-/// methods raise the flag" was itself a convention claim — the kind F3 was raised for. This test
-/// is the enforcement: the flag may be named only inside its own allowlist, so a fourth site
-/// cannot appear without CI saying so.
+/// **Secondary, belt-and-braces.** The PRIMARY enforcement of invariant I1's single door is the
+/// type system: `tree_synced` is written only through `GuardRaised::write`, and `GuardRaised` is
+/// private to `src/journal/confirm.rs` with a private constructor, so a fourth door does not
+/// compile. `the_guard_token_is_not_exported` pins that.
 ///
-/// The allowlist is exactly three files, named here and nowhere else:
-/// `src/journal/confirm.rs`, `migrations/002_i1_write_guard.sql`, and this test file.
+/// This test is the second layer. The third hostile pass (H2) defeated its earlier form — a
+/// literal grep for the flag's name — with `concat!("synced_write", "_", "guard")` in a new `src/`
+/// file, so it now flags any file outside the allowlist that **writes `tree_synced`** at all,
+/// which is what that probe actually did. It is still a substring search and can still be worked
+/// around by someone who means to; it is here to catch a fourth door arriving by accident, and the
+/// compiler is what catches the rest.
 #[test]
-fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
+fn nothing_outside_the_allowlist_writes_the_synced_tree_or_its_guard() {
     use std::path::{Path, PathBuf};
 
     const ALLOWED: &[&str] = &[
         "src/journal/confirm.rs",
+        "src/journal/mod.rs", // reads only: local_tree/remote_tree/synced_tree SELECTs
+        "migrations/001_initial.sql",
         "migrations/002_i1_write_guard.sql",
         "tests/journal.rs",
+    ];
+    /// Writing shapes. A SELECT over `tree_synced` is fine; these are not.
+    const WRITE_SHAPES: &[&str] = &[
+        "INSERT INTO tree_synced",
+        "INSERT OR REPLACE INTO tree_synced",
+        "UPDATE tree_synced",
+        "DELETE FROM tree_synced",
+        "synced_write_guard",
     ];
 
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -671,7 +685,7 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
                 walk(&path, out);
             } else if path
                 .extension()
-                .is_some_and(|e| e == "rs" || e == "sql" || e == "md")
+                .is_some_and(|e| e == "rs" || e == "sql")
             {
                 out.push(path);
             }
@@ -686,12 +700,13 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
     assert!(files.len() > 5, "the walk found almost nothing; it is broken");
 
     let mut offenders = Vec::new();
-    let mut found_in_allowlist = 0usize;
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        if !text.contains("synced_write_guard") {
+        // Normalise whitespace so a wrapped SQL literal is still recognised.
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !WRITE_SHAPES.iter().any(|shape| flat.contains(shape)) {
             continue;
         }
         let relative = file
@@ -699,23 +714,56 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
             .expect("under the crate root")
             .to_string_lossy()
             .replace('\\', "/");
-        if ALLOWED.contains(&relative.as_str()) {
-            found_in_allowlist += 1;
-        } else {
+        if !ALLOWED.contains(&relative.as_str()) {
             offenders.push(relative);
         }
     }
 
-    assert_eq!(
-        found_in_allowlist,
-        ALLOWED.len(),
-        "the allowlist names a file that no longer mentions the guard; the test has gone stale"
-    );
     assert!(
         offenders.is_empty(),
-        "`synced_write_guard` is referenced outside its allowlist ({ALLOWED:?}): {offenders:?}. \
-         The flag is the whole of invariant I1's enforcement — a new site raising it is a new door \
-         into tree_synced, and it must be argued, not added."
+        "these files write tree_synced or its guard from outside the allowlist ({ALLOWED:?}): \
+         {offenders:?}. The synced tree has exactly three doors and they all live in \
+         src/journal/confirm.rs."
+    );
+}
+
+/// H2: the guard token is **not exported**, so no other module can raise the guard — the property
+/// the grep above only approximates.
+#[test]
+fn the_guard_token_is_not_exported() {
+    let confirm = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/journal/confirm.rs"),
+    )
+    .expect("read confirm.rs");
+
+    assert!(
+        confirm.contains("struct GuardRaised"),
+        "the guard token has been renamed or removed; this test and the module doc need updating"
+    );
+    for forbidden in [
+        "pub struct GuardRaised",
+        "pub(crate) struct GuardRaised",
+        "pub(super) struct GuardRaised",
+        "pub fn raise(",
+        "pub(crate) fn raise(",
+        "pub(super) fn raise(",
+    ] {
+        assert!(
+            !confirm.contains(forbidden),
+            "`{forbidden}` would let another module raise the tree_synced write guard. The token \
+             and its constructor are private to src/journal/confirm.rs on purpose: that privacy is \
+             what makes a fourth door a compile error instead of a test finding."
+        );
+    }
+
+    // And the module itself is private, so even a `pub` item inside it would not escape the crate.
+    let journal = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/journal/mod.rs"),
+    )
+    .expect("read journal/mod.rs");
+    assert!(
+        journal.contains("mod confirm;") && !journal.contains("pub mod confirm;"),
+        "src/journal/confirm.rs must stay a private module"
     );
 }
 

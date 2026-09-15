@@ -68,6 +68,17 @@ const HANDOUT_BUDGET: Duration = Duration::from_secs(5);
 /// S10: at most one consumer-forced refresh per minute.
 const FORCED_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How long any OS credential-store call may take before it is treated as unavailable (S7).
+///
+/// A keychain read is milliseconds. A keychain read that is **waiting for a human to approve it**
+/// never returns — and on macOS an item's ACL is bound to the creating binary's designated
+/// requirement, so a rebuilt or re-signed binary prompts. S15 names this: "a login-time daemon has
+/// no UI to answer a prompt — that is MXL-D-046's shape wearing a new hat." Without this bound the
+/// daemon simply hangs on start, holding a session it can neither use nor report. With it, the
+/// hang becomes `credential_store_unavailable` and its remedy. Observed live on 2026-09-15: a
+/// rebuilt dev binary blocked `resume()` indefinitely.
+const CREDENTIAL_STORE_BUDGET: Duration = Duration::from_secs(3);
+
 /// §5: jittered exponential backoff, 1 s → 5 min cap, forever.
 const BACKOFF_FLOOR: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
@@ -241,6 +252,11 @@ struct Inner {
     live: Mutex<Option<LiveSession>>,
     /// At most one live transaction per user (S5). A second `POST /v1/sign-in` cancels the first.
     transaction: StdMutex<Option<Transaction>>,
+    /// The loopback listener serving the live transaction, when it took that leg. Cancelling a
+    /// transaction must release its socket too: the redirect port is FIXED (exact matching, §3.1),
+    /// so a leaked listener makes every subsequent sign-in fail with `loopback_port_unavailable`
+    /// until the daemon restarts. Found by running it, not by reading it.
+    loopback: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     events: broadcast::Sender<SessionChanged>,
     /// The monotonic reading of the last consumer-forced refresh (S10).
     last_forced: StdMutex<Option<Duration>>,
@@ -289,6 +305,7 @@ impl Custodian {
                 journal,
                 live: Mutex::new(None),
                 transaction: StdMutex::new(None),
+                loopback: StdMutex::new(None),
                 events,
                 last_forced: StdMutex::new(None),
                 last_tick: StdMutex::new(None),
@@ -353,14 +370,10 @@ impl Custodian {
         let loaded = {
             let store = Arc::clone(&self.inner.store);
             let id = user_id.clone();
-            tokio::task::spawn_blocking(move || store.load(&id))
-                .await
-                .unwrap_or_else(|e| {
-                    Err(CustodyError::CredentialStore {
-                        operation: "read the credential item",
-                        cause: e.to_string(),
-                    })
-                })
+            bounded_store_call("read the credential item", async move {
+                tokio::task::spawn_blocking(move || store.load(&id)).await
+            })
+            .await
         };
 
         match loaded {
@@ -494,21 +507,36 @@ impl Custodian {
             redirect_kind: kind.as_str(),
         };
 
+        // Cancelling the previous transaction (S5) must release its listener before the new one
+        // binds the same fixed port.
+        self.stop_loopback().await;
+
         // The loopback leg binds the fixed port BEFORE the browser opens, so the redirect can
         // never arrive at a closed socket. A port already held is named, not silently retried.
         if kind == RedirectKind::Loopback {
             let listener = LoopbackListener::bind(world.oauth_callback_port()).await?;
             let custodian = self.clone();
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 match listener.accept_callback().await {
                     Ok(callback) => {
+                        // Clear our own handle FIRST. `accept_callback` consumed the listener, so
+                        // the port is already released — and `complete_sign_in` calls
+                        // `stop_loopback`, which would otherwise abort THIS task in the middle of
+                        // the token exchange and lose the sign-in silently. Found by running it.
+                        {
+                            let mut slot = custodian.inner.loopback.lock().expect("loopback lock");
+                            *slot = None;
+                        }
                         if let Err(e) = custodian.complete_sign_in(&callback.code, &callback.state).await {
                             log_line(&format!("loopback sign-in could not complete: {e}"));
+                        } else {
+                            log_line("loopback sign-in completed");
                         }
                     }
                     Err(e) => log_line(&format!("loopback sign-in listener stopped: {e}")),
                 }
             });
+            *self.inner.loopback.lock().expect("loopback lock") = Some(task);
         }
 
         *self.inner.transaction.lock().expect("transaction lock") = Some(transaction);
@@ -533,6 +561,8 @@ impl Custodian {
                 _ => return Err(CustodyError::UnknownTransaction),
             }
         };
+        // The transaction is spent; its listener has no reason to hold the fixed port.
+        self.stop_loopback().await;
 
         let response = self
             .inner
@@ -930,9 +960,9 @@ impl Custodian {
 
         // (4) delete the now-worthless refresh token, keeping user_id/email in the journal so the
         // prompt can still say who to sign back in as.
-        let store = Arc::clone(&self.inner.store);
-        let user_id = session.user_id.clone();
-        let _ = tokio::task::spawn_blocking(move || store.delete(&user_id)).await;
+        if let Err(e) = self.delete_credential(session.user_id.clone()).await {
+            log_line(&format!("the worthless refresh token could not be deleted: {e}"));
+        }
 
         // (5) drop the access token.
         *self.inner.live.lock().await = None;
@@ -965,20 +995,13 @@ impl Custodian {
             .map(|s| s.user_id.clone())
             .or_else(|| self.inner.sessions.read().ok().flatten().and_then(|r| r.user_id));
         if let Some(user_id) = known_user.clone() {
-            let store = Arc::clone(&self.inner.store);
-            tokio::task::spawn_blocking(move || store.delete(&user_id))
-                .await
-                .unwrap_or_else(|e| {
-                    Err(CustodyError::CredentialStore {
-                        operation: "delete the credential item",
-                        cause: e.to_string(),
-                    })
-                })?;
+            self.delete_credential(user_id).await?;
         }
 
         // Then the in-memory access token and the single-flight cache.
         *self.inner.live.lock().await = None;
         *self.inner.transaction.lock().expect("transaction lock") = None;
+        self.stop_loopback().await;
 
         let mut row = self
             .inner
@@ -1195,16 +1218,59 @@ impl Custodian {
         session
     }
 
+    /// Release the loopback listener, if one is bound.
+    ///
+    /// **The abort must be awaited.** `JoinHandle::abort` only *requests* cancellation; the task
+    /// still owns the listener until it actually stops, so returning early and binding the same
+    /// fixed port immediately fails with `Address already in use`. Awaiting the handle — which
+    /// resolves to `Err(cancelled)` — is what guarantees the socket is unbound before the caller
+    /// binds it again. Proven by the regression test failing on the abort-without-await version.
+    async fn stop_loopback(&self) {
+        let task = self.inner.loopback.lock().expect("loopback lock").take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
     async fn save_credential(&self, credential: StoredCredential) -> Result<()> {
         let store = Arc::clone(&self.inner.store);
-        tokio::task::spawn_blocking(move || store.save(&credential))
-            .await
-            .unwrap_or_else(|e| {
-                Err(CustodyError::CredentialStore {
-                    operation: "write the credential item",
-                    cause: e.to_string(),
-                })
-            })
+        bounded_store_call("write the credential item", async move {
+            tokio::task::spawn_blocking(move || store.save(&credential)).await
+        })
+        .await
+    }
+
+    async fn delete_credential(&self, user_id: String) -> Result<()> {
+        let store = Arc::clone(&self.inner.store);
+        bounded_store_call("delete the credential item", async move {
+            tokio::task::spawn_blocking(move || store.delete(&user_id)).await
+        })
+        .await
+    }
+}
+
+/// Run one credential-store call under [`CREDENTIAL_STORE_BUDGET`].
+///
+/// A store that does not answer inside the budget is **unavailable**, not slow: the only thing
+/// that makes an OS keychain take seconds is a dialog nobody is there to click.
+async fn bounded_store_call<T>(
+    operation: &'static str,
+    call: impl std::future::Future<Output = std::result::Result<Result<T>, tokio::task::JoinError>>,
+) -> Result<T> {
+    match tokio::time::timeout(CREDENTIAL_STORE_BUDGET, call).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join)) => Err(CustodyError::CredentialStore {
+            operation,
+            cause: join.to_string(),
+        }),
+        Err(_) => Err(CustodyError::CredentialStore {
+            operation,
+            cause: format!(
+                "it did not answer within {}s. This usually means the system is showing a dialog                  asking someone to allow access, and a background service has no window to answer                  it in",
+                CREDENTIAL_STORE_BUDGET.as_secs()
+            ),
+        }),
     }
 }
 

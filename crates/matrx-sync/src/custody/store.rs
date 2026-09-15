@@ -167,6 +167,9 @@ pub struct FakeKeychain {
     locked: Mutex<Option<String>>,
     /// When set, only writes fail — S8's write-ahead failure path.
     refuse_writes: Mutex<Option<String>>,
+    /// When set, every operation blocks for this long — the macOS "a dialog is up and nobody is
+    /// there to click it" path (S15). Observed live on 2026-09-15.
+    hang_for: Mutex<Option<std::time::Duration>>,
 }
 
 impl FakeKeychain {
@@ -178,6 +181,13 @@ impl FakeKeychain {
     /// Make every operation fail as if the store were locked or absent (S7).
     pub fn lock(&self, cause: &str) {
         *self.locked.lock().expect("fake keychain lock") = Some(cause.to_string());
+    }
+
+    /// Make every operation block, as a keychain showing an approval dialog does. A background
+    /// service has no window to answer that dialog in, so this must become a named state rather
+    /// than a hang (S7, S15).
+    pub fn hang(&self, for_duration: std::time::Duration) {
+        *self.hang_for.lock().expect("fake keychain lock") = Some(for_duration);
     }
 
     /// Make writes — and only writes — fail (S8).
@@ -219,6 +229,10 @@ impl FakeKeychain {
     }
 
     fn gate(&self, operation: &'static str) -> Result<()> {
+        let hang = *self.hang_for.lock().expect("fake keychain lock");
+        if let Some(duration) = hang {
+            std::thread::sleep(duration);
+        }
         if let Some(cause) = self.locked.lock().expect("fake keychain lock").clone() {
             return Err(CustodyError::CredentialStore { operation, cause });
         }

@@ -653,3 +653,81 @@ async fn session_changed_is_published_on_sign_in_rotation_and_sign_out() {
     assert!(!out.session.signed_in);
     assert_eq!(out.session.state, SessionState::SignedOut);
 }
+
+// ------------------------------------------- the fixed loopback port (S3, S5, S21)
+
+#[tokio::test]
+async fn cancelling_a_sign_in_releases_the_fixed_loopback_port() {
+    // Found by running it: S5 says a second `POST /v1/sign-in` cancels the first, and S3 fixes the
+    // redirect port because Supabase matches redirect URIs EXACTLY. A cancelled transaction that
+    // kept its listener therefore made every later sign-in fail `loopback_port_unavailable` until
+    // the daemon restarted. Proven failing before the fix.
+    let rig = Rig::new();
+    let first = rig
+        .custodian
+        .begin_sign_in(Some(matrx_sync::custody::RedirectKind::Loopback))
+        .await
+        .expect(
+            "first sign-in must bind the fixed dev callback port 22261. If this says \
+             `Address already in use`, a dev daemon is running on this machine — stop it with \
+             POST /v1/shutdown; the port is fixed by S3 and cannot be moved for a test.",
+        );
+    assert_eq!(first.redirect_uri, "http://localhost:22261/oauth/callback");
+
+    let second = rig
+        .custodian
+        .begin_sign_in(Some(matrx_sync::custody::RedirectKind::Loopback))
+        .await
+        .expect("the second must rebind the same fixed port, not collide with the first");
+    assert_eq!(second.redirect_uri, first.redirect_uri);
+    assert_ne!(second.transaction_id, first.transaction_id);
+
+    // And completing one releases it, so a later sign-in can bind again.
+    rig.auth.push_ok(&jwt("u", "e@x.y"), Some("r1"), 3600);
+    rig.custodian
+        .complete_sign_in("code", &state_of(&second.authorize_url))
+        .await
+        .expect("callback");
+    rig.custodian
+        .begin_sign_in(Some(matrx_sync::custody::RedirectKind::Loopback))
+        .await
+        .expect("the port is free after the transaction is spent");
+    rig.custodian.sign_out().await.expect("sign out releases it too");
+    rig.custodian
+        .begin_sign_in(Some(matrx_sync::custody::RedirectKind::Loopback))
+        .await
+        .expect("free after sign-out");
+}
+
+#[tokio::test]
+async fn a_keychain_that_shows_a_dialog_becomes_a_state_instead_of_hanging_the_daemon() {
+    // Observed live on 2026-09-15: a rebuilt dev binary asked macOS for an item its previous
+    // build had created, macOS put up an approval dialog, and `resume()` blocked forever — the
+    // daemon served the socket but never reported a session state at all. S15 names this exact
+    // shape ("a login-time daemon has no UI to answer a prompt — MXL-D-046's shape wearing a new
+    // hat"), and law 4 forbids a surface that just stops. Proven failing before the bound.
+    let rig = Rig::new();
+    rig.sign_in("u", "admin@admin.com", "r1", 3600).await;
+    rig.keychain.hang(Duration::from_secs(30));
+
+    let started = std::time::Instant::now();
+    let refusal = tokio::time::timeout(Duration::from_secs(25), async {
+        rig.auth.push_ok(&jwt("u", "admin@admin.com"), Some("r2"), 3600);
+        rig.custodian.force_refresh().await
+    })
+    .await
+    .expect("the daemon must answer, not hang")
+    .expect_err("a store that will not answer is unavailable");
+
+    assert_eq!(refusal.state, SessionState::CredentialStoreUnavailable);
+    assert!(
+        started.elapsed() < Duration::from_secs(25),
+        "it answered in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        refusal.state_reason.contains("keyring"),
+        "the remedy travels with the state: {}",
+        refusal.state_reason
+    );
+}

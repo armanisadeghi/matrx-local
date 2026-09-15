@@ -103,11 +103,16 @@ async fn handle(mut stream: TcpStream) -> Result<Option<LoopbackCallback>> {
 
     let parsed = parse_callback(target);
     let (status, body) = match &parsed {
+        // This page is written BEFORE the token exchange runs, so it must not claim the sign-in
+        // succeeded — only that the browser's part is over. The app's own surface renders the real
+        // outcome from `session.changed`. Saying "You are signed in" here was a screen that lies
+        // (law 4), and it lied for real once.
         Some(_) => (
             "200 OK",
-            "<!doctype html><meta charset=utf-8><title>Signed in</title>\
+            "<!doctype html><meta charset=utf-8><title>Back to AI Matrx</title>\
              <body style=\"font:16px system-ui;padding:3rem\">\
-             <p>You are signed in to AI Matrx. You can close this tab and go back to the app.</p>",
+             <p>AI Matrx received your sign-in. You can close this tab — the app will show \
+             whether it finished.</p>",
         ),
         None => (
             "404 Not Found",

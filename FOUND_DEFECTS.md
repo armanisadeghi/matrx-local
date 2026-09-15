@@ -1221,6 +1221,30 @@ one-line fixes.
 
 ---
 
+## Dependency integrity
+
+### MXL-D-091 — Core lock installs two distributions over the same OpenCV files
+- **Status:** open; discovered 2026-09-15 during reliability isolation certification.
+- **Area:** `pyproject.toml` direct `opencv-python` dependency and `uv.lock`'s
+  `matrx-files` dependency on `opencv-python-headless`.
+- **Analyzed 2026-09-15:** a clean Linux/aarch64 core-only locked install from
+  source `f19fbf5164452619f553c8dd7fc310b0e52bc7ec` plus the reviewed isolation
+  patch installs both distributions. Independent Sol checked 251 installed
+  distribution RECORDs: seven entries in `opencv_python` and four in
+  `opencv_python_headless` mismatched, including shared `cv2/__init__.py` and
+  `cv2.abi3.so`. Both manifests cannot describe the resulting installation.
+- **Evidence:** immutable image
+  `sha256:f531b69b077b6a26880691bf1f96e3135d74108fc5bff03f785b07983332930c`;
+  independent receipt SHA-256
+  `1992e2539384bca625606a3be5d8d506868be7ae4bfbd7ef03c2716506d2f041`.
+  Durable receipt is maintained in the existing common-docs Matrx Local
+  reliability workstream. No application import, installed failure, or repair
+  is claimed by this evidence.
+- **Owner hint:** Matrx Local dependency owner; select the required OpenCV
+  distribution after checking GUI consumers, reconcile the shared package
+  contract if necessary, regenerate the lock, and independently verify the
+  resulting artifact. This holding entry does not grant a repair claim.
+
 ## Rejected
 
 _One line each: `- MXL-D-### — <short reason> — <date> — delete when: <condition>`.

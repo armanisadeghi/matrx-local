@@ -156,11 +156,78 @@ export function nativeVaultEngineAlignment(): EngineAlignment | null {
 
 export function isNativeVaultHostRevisionCurrent(revision: number): boolean { return coordinator.isCurrentRevision(revision); }
 
+/**
+ * THE AUTH-READINESS RULE — "signed out" is an answer the daemon gives, never a
+ * race this app loses.
+ *
+ * Measured 2026-09-15 on installed 1.4.115 (verify-2026-09-15-matrx-local.md):
+ * a page that mounted during app start sent all five of its reads before the
+ * daemon's first session answer had landed, `getAuthedSession()` answered null,
+ * `authHeaders()` attached nothing, the engine correctly answered 401 on every
+ * one, and the screen said "Couldn't read your conversations" on a Mac that was
+ * signed in the whole time. Nothing re-asked.
+ *
+ * So no consumer is told "no token" until the daemon's state is KNOWN. This
+ * resolves once the first custody envelope has been delivered and adopted, or
+ * once the bound expires — never rejects: an unreachable daemon is a
+ * determinate answer of its own (DAEMON_DOWN), not a reason to hang a request.
+ */
+const CUSTODY_SETTLE_TIMEOUT_MS = 8_000;
+const CUSTODY_SETTLE_POLL_MS = 25;
+
+export async function waitForCustodySettlement(
+  timeoutMs: number = CUSTODY_SETTLE_TIMEOUT_MS,
+): Promise<boolean> {
+  ensureHostSubscription();
+  const deadline = Date.now() + timeoutMs;
+  while (latestEnvelope === null && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, CUSTODY_SETTLE_POLL_MS));
+  }
+  const envelope = latestEnvelope;
+  if (!envelope) return false;
+  await envelope.completion.catch(() => undefined);
+  return true;
+}
+
+/** How long a signed-in daemon gets to produce the token its snapshot implies. */
+const GRANT_LAG_TIMEOUT_MS = 3_000;
+
+/**
+ * The daemon's session, allowing for its token lagging its own snapshot.
+ *
+ * `null` means one thing only: the daemon says nobody is signed in. A signed-in
+ * daemon that has not produced a grant yet is a WAIT, never a "no" — answering
+ * "no" there is what sent five unauthenticated Coding Sessions reads at mount.
+ * If the grant never lands, the caller is told that, in those words; it is never
+ * dressed up as being signed out.
+ */
+async function observeDaemonSession(): Promise<
+  Awaited<ReturnType<typeof getAuthedSession>>
+> {
+  const deadline = Date.now() + GRANT_LAG_TIMEOUT_MS;
+  let wait = CUSTODY_SETTLE_POLL_MS;
+  for (;;) {
+    const observed = await getAuthedSession();
+    if (observed) return observed;
+    if (!currentCustodySnapshot().signed_in) return null;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "You are signed in, but the AI Matrx session daemon on this Mac has not " +
+          "handed over a session yet. It retries on its own; if this does not " +
+          "clear within a minute, choose Start sync in Matrx Local.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    wait = Math.min(wait * 2, 400);
+  }
+}
+
 /** Wait for daemon identity, the current envelope, and the engine fence before releasing a token. */
 export async function resolveNativeVaultEngineAccessToken(): Promise<string | null> {
   ensureHostSubscription();
+  await waitForCustodySettlement();
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const observed = await getAuthedSession();
+    const observed = await observeDaemonSession();
     if (!observed) return null;
     const envelope = latestEnvelope;
     if (envelope) await envelope.completion;

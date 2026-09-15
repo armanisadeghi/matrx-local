@@ -174,6 +174,36 @@ defect.
   `START..END` and `START+COUNT` as well, and a spec it cannot parse is a loud panic rather than a
   soak that silently adds nothing.
 
+## Findings from the third hostile pass (round 3, 2026-09-15)
+
+A **third** fresh seat — zero authorship of the build, of round 1 and of round 2 — re-attacked all
+six G-fixes with inputs this lane had not used, re-proved two red-then-green by reverting, and
+re-soaked at 1.5M property cases and 101 fresh seeds:
+`common-docs` `projects/folder-sync/verification/FS-C2-C4-reverify-2.md`, verdict
+**PASS_WITH_FINDINGS** at `5c93f5f1d`. **All six round-2 fixes held**, including against the four
+sharpest G1 probes (two stems that truncate to one prefix, exactly-255 and exactly-400 boundaries,
+directory-level conflicts, and an extension that alone overruns) and both G5 probes. Three things
+were new.
+
+| # | Severity | What it was | Fix |
+|---|---|---|---|
+| **H1** | MEDIUM, **data loss** | The breaker counted **the plan in front of it** and remembered nothing, so a wipe arriving in instalments was several small deletions, each below both arms. 38 of 40 files propagated to the cloud with no suspension and **no user-visible event of any kind**, at the shipped defaults. Not exotic: the daemon plans on a `sync.watcher_debounce_ms` timer and the scanner walks a large tree incrementally, so an `rm -rf`, an unmounting drive, or ransomware working alphabetically all arrive as a **stream** of small deletions — the one scenario the breaker exists for. | `deleted_count`/`deleted_percent` are measured over a **rolling window** per mapping: deletions executed in the last `sync.mass_delete_window_hours` (new knob, default 24) **plus** the plan being built, with the denominator being what the mapping held when the window opened. Migration `003` records each confirmed deletion in the SAME transaction that removes the `tree_synced` row, so the count cannot be lost and **survives the restart an `rm -rf` frequently causes**. Resuming a suspended mapping clears the window — otherwise the user's "go on" would be refused again and a legitimate large cleanup could never finish. The planner stays pure: a window is state, so the count arrives in `PlanContext`. |
+| **H2** | LOW/MEDIUM | G4's allowlist test was a **literal** substring grep, and `concat!("synced_write", "_", "guard")` in a new `src/` file fabricated a flagged row with CI green. A grep catches a developer who writes the name, not one who writes a wrapper. | Primary enforcement is now the **type system**: `tree_synced` is written only through `GuardRaised::write`, and `GuardRaised` plus its constructor are private to `src/journal/confirm.rs`, inside a private module. A fourth door is a **compile error** (`module confirm is private`, `associated function raise is private`) — proven by adding one. The grep survives as a clearly-labelled **secondary** check, widened from the flag's name to `tree_synced` write shapes, which does catch that probe. `the_guard_token_is_not_exported` fails if the privacy is ever loosened or the token renamed. |
+| **H3** | observation | G1's "the copy name must be creatable" property had **nothing to bite on**: the generator pool's longest path was 47 characters, so disabling the stem-shortening loop left all 18 property tests green through 500,000 cases. The length half of the class was carried by one unit test, not by the soak. | The pool gains a 250-character **segment** (whose copy renders at 293) and a 396-character **path** across four short segments — the two halves of the limit. `the_generator_pool_reaches_the_stem_shortening_branch` asserts the branch is actually hit and that a "shortening" was never just the uniquifier firing. |
+
+**H3's reachability, measured rather than assumed.** Disabling stem-shortening outright still leaves
+the property green, and correctly so: with no representable name the planner emits **no download**,
+so there is no unprotected overwrite to report — the safe fallback is doing its job. The mutation
+that proves reachability is the dangerous one: accept the first rendered candidate *whatever* its
+verdict. Before the long paths, that left all 18 green; now
+`converges_per_direction`, `preserves_data` and `terminates_without_panicking` all fail with the
+property's own message — *"the conflict copy is planned at a name no filesystem can create"* — on
+both new paths. That is the difference between a guard and a guard that can fire.
+
+**H1 is a spec gap the re-verifier named as such**, and the ruling followed: SPEC-ENGINE §2 is being
+amended to define `deleted_count` over the window rather than leaving both terms undefined. The
+per-plan reading was a reasonable reading of an under-specified rule.
+
 ## Defects the harness found
 
 Both were found by the property tests at a few hundred cases, before any large run — which is the
@@ -323,6 +353,14 @@ After round 2 (the six G-findings, the amended breaker, the new scenario), on th
 | `cargo test -p matrx-sync --test planner_properties` | **18 green** |
 | `cargo test -p matrx-sync --test simulation` | **12 green** |
 | `cargo test -p matrx-sync --test journal` | **21 green** |
+
+After round 3 (H1's rolling window, H2's structural guard, H3's long paths):
+
+| Run | Result |
+|---|---|
+| `cargo test -p matrx-sync --test planner_properties` | **21 green** |
+| `cargo test -p matrx-sync --test journal` | **24 green** |
+| `cargo test -p matrx-sync --test simulation` | **12 green** |
 
 **The harness is a mock and its README says so.** It proves the planner and the executor's shape.
 Product evidence is FS-V2, on real machines with real files.

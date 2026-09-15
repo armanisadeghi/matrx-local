@@ -37,7 +37,32 @@ const PATHS: &[&str] = &[
     "x (conflicted copy from device-a 2026-09-13).txt",
     "cafe\u{301}.txt",
     "caf\u{e9}.txt",
+    LONG_SEGMENT,
+    LONG_PATH,
 ];
+
+/// A single name of 250 characters — legal (`sync.max_segment_chars` is 255), but its conflict copy
+/// would render at 293 and must be shortened to fit. H3: without a path like this in the pool, the
+/// G1 length property had nothing to bite on, and disabling the stem-shortening loop left all 18
+/// property tests green through 500,000 cases.
+const LONG_SEGMENT: &str = concat!(
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllll",
+    ".txt"
+);
+
+/// A path of 396 characters across four segments — legal (`files.max_path_chars` is 400) and each
+/// segment short, so only the WHOLE-path limit is near. Its copy overruns on the path limit rather
+/// than the segment limit, which is the other half of the class.
+const LONG_PATH: &str = concat!(
+    "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp/",
+    "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq/",
+    "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr/",
+    "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.txt"
+);
 
 /// Content ids. Small on purpose: collisions between generated contents are the interesting cases.
 const CONTENTS: &[&str] = &["c0", "c1", "c2"];
@@ -1769,4 +1794,61 @@ fn resuming_a_suspended_mapping_resets_the_window() {
         "after a resume the same deletions must go through"
     );
     assert!(resumed.ops.iter().any(|o| o.is_destructive()));
+}
+
+/// H3: the pool's two long paths really do exercise the stem-shortening branch — the property is
+/// only as strong as what the generator can reach, and the previous pool could reach nothing over
+/// 47 characters.
+#[test]
+fn the_generator_pool_reaches_the_stem_shortening_branch() {
+    let knobs = Knobs::default();
+    let mut shortened = 0;
+    let mut checked = 0;
+
+    for path in PATHS {
+        let naive = matrx_sync::naming::conflict_copy_path(path, "device-a", "2026-09-13", &knobs);
+        let fitted =
+            matrx_sync::naming::unique_conflict_copy_path(path, "device-a", "2026-09-13", &knobs, |_| false);
+        let matrx_sync::naming::CopyName::Ok(fitted) = fitted else {
+            panic!("{path}: every pool path must have SOME representable copy name");
+        };
+        checked += 1;
+        assert_eq!(
+            matrx_sync::naming::check_name(&fitted, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "{path}: the fitted copy name is not creatable: {fitted}"
+        );
+        if fitted != naive {
+            // The naive render must genuinely have been illegal — otherwise "shortened" would just
+            // mean the uniquifier fired and this count would prove nothing.
+            assert_ne!(
+                matrx_sync::naming::check_name(&naive, &knobs),
+                matrx_sync::naming::NameVerdict::Ok,
+                "{path}: shortened a name that was already fine"
+            );
+            shortened += 1;
+        }
+    }
+
+    assert_eq!(checked, PATHS.len());
+    assert!(
+        shortened >= 2,
+        "the pool must reach the shortening branch, or G1's length property is unreachable and \
+         only the hand-written unit test carries that class; shortened {shortened} of {checked}"
+    );
+
+    // And the two long paths are legal themselves — the class is "a legal name whose COPY is not".
+    for path in [LONG_SEGMENT, LONG_PATH] {
+        assert_eq!(
+            matrx_sync::naming::check_name(path, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "{path} must itself be legal"
+        );
+        let naive = matrx_sync::naming::conflict_copy_path(path, "device-a", "2026-09-13", &knobs);
+        assert_ne!(
+            matrx_sync::naming::check_name(&naive, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "its unshortened copy name must overrun, or it proves nothing"
+        );
+    }
 }

@@ -28,8 +28,14 @@ pub enum DownloadOnlyLocalEdit {
 pub struct Knobs {
     /// `sync.mass_delete_percent` — percent 1–100, default 50 (D8).
     pub mass_delete_percent: u8,
-    /// `sync.mass_delete_count` — items ≥10, default 1000 (D8).
+    /// `sync.mass_delete_count` — items ≥10, default 1000 (D8). The **absolute** arm.
     pub mass_delete_count: u32,
+    /// `sync.mass_delete_min_count` — items ≥1, default 20. The **floor under the percentage
+    /// arm**, added by SPEC-ENGINE amendment 2 (2026-09-13).
+    ///
+    /// It is what lets the percentage arm protect a small folder without suspending a two-file
+    /// folder for one deletion — the false positive that made amendment 1 choose AND-only.
+    pub mass_delete_min_count: u32,
     /// `sync.upload_only_propagates_deletes` — default true (D6).
     pub upload_only_propagates_deletes: bool,
     /// `sync.download_only_local_edit` — default `preserve_and_flag` (D6).
@@ -64,6 +70,7 @@ impl Default for Knobs {
         Knobs {
             mass_delete_percent: 50,
             mass_delete_count: 1000,
+            mass_delete_min_count: 20,
             upload_only_propagates_deletes: true,
             download_only_local_edit: DownloadOnlyLocalEdit::PreserveAndFlag,
             conflict_copy_template: "{stem} (conflicted copy from {device} {YYYY-MM-DD}){ext}"
@@ -131,6 +138,12 @@ impl Knobs {
                 value: self.mass_delete_count.to_string(),
             });
         }
+        if self.mass_delete_min_count < 1 {
+            return Err(KnobOutOfRange {
+                knob: "sync.mass_delete_min_count",
+                value: self.mass_delete_min_count.to_string(),
+            });
+        }
         if self.max_segment_chars == 0 {
             return Err(KnobOutOfRange {
                 knob: "sync.max_segment_chars",
@@ -156,6 +169,7 @@ mod tests {
         let k = Knobs::default();
         assert_eq!(k.mass_delete_percent, 50);
         assert_eq!(k.mass_delete_count, 1000);
+        assert_eq!(k.mass_delete_min_count, 20);
         assert_eq!(k.max_path_chars, 400);
         assert_eq!(k.max_segment_chars, 255);
         assert_eq!(k.max_file_bytes, 5_000_000_000);
@@ -177,5 +191,10 @@ mod tests {
             ..Knobs::default()
         };
         assert!(count.validate().is_err());
+        let floor = Knobs {
+            mass_delete_min_count: 0,
+            ..Knobs::default()
+        };
+        assert!(floor.validate().is_err());
     }
 }

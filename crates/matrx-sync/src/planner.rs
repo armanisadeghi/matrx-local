@@ -59,8 +59,10 @@ pub enum SuspendReason {
         tracked_items: usize,
         /// The `sync.mass_delete_percent` value in force.
         percent_threshold: u8,
-        /// The `sync.mass_delete_count` value in force.
+        /// The `sync.mass_delete_count` value in force — the absolute arm.
         count_threshold: u32,
+        /// The `sync.mass_delete_min_count` value in force — the floor under the percentage arm.
+        min_count_threshold: u32,
     },
 }
 
@@ -140,6 +142,11 @@ pub enum PlanOp {
         expected_version: Option<i64>,
     },
     /// Move one path to another on one side, preserving identity instead of re-transferring bytes.
+    ///
+    /// Like every other mutating op it carries its precondition (I3). Without one, a local move
+    /// that raced a remote edit of the old path renamed straight over the edit and the fleet
+    /// settled permanently split — the device keeping its bytes, the cloud keeping the other
+    /// device's, nothing planned ever again and nothing said (G5).
     Rename {
         /// Which side moves.
         side: Side,
@@ -147,6 +154,10 @@ pub enum PlanOp {
         from: String,
         /// The new mapping-relative path.
         to: String,
+        /// The version the source must still be at — the 412 precondition (I3).
+        expected_version: Option<i64>,
+        /// The checksum the source must still carry.
+        expected_checksum: Option<String>,
     },
     /// Write the losing copy under its D7 name. Both copies then reach the cloud.
     ConflictCopy {
@@ -264,16 +275,15 @@ impl Plan {
 ///
 /// # The mass-delete circuit breaker (D8)
 ///
-/// The registry gives the breaker two knobs, `sync.mass_delete_percent` (50) and
-/// `sync.mass_delete_count` (1000), and does not state how they combine. They are combined with
-/// **AND**: a plan trips the breaker when its deletions are both a large enough *fraction* of what
-/// the mapping manages and a large enough *absolute number*. That is the only combinator under
-/// which both defaults are individually coherent — a pure OR on the percentage would suspend a
-/// two-file folder for one deletion, which no champion does. **This combinator is not stated by the
-/// frozen spec and is reported as a gap; it is a one-line change if the amendment rules otherwise.**
+/// SPEC-ENGINE §2 as amended (amendment 2, 2026-09-13):
+/// suspend when `deleted_count >= sync.mass_delete_count` **OR**
+/// (`deleted_percent >= sync.mass_delete_percent` **AND**
+/// `deleted_count >= sync.mass_delete_min_count`).
 ///
-/// A tripped plan carries the [`SuspendReason`] **and nothing else**, so no destructive op can be
-/// executed alongside a suspension.
+/// The absolute arm protects a huge folder, where 50% is unreachable in one pass; the percentage
+/// arm protects a small one, and the `min_count` floor under it is what stops a two-file folder
+/// being suspended for a single deletion. A tripped plan carries the [`SuspendReason`] **and
+/// nothing else**, so no destructive op can be executed alongside a suspension.
 pub fn plan(
     local: &LocalTree,
     remote: &RemoteTree,
@@ -290,12 +300,18 @@ pub fn plan(
     // decide — a path whose (volume, inode) matches the synced row, with unchanged content, is a
     // move, not a dispute — which is what every champion does (F8).
     let renames = detect_renames(local, remote, synced, direction);
-    let rename_pairs: BTreeSet<(String, String)> = renames.iter().cloned().collect();
+    let rename_pairs: BTreeSet<(String, String)> = renames
+        .iter()
+        .map(|(f, t)| (f.clone(), t.clone()))
+        .collect();
     for (from, to) in &renames {
+        let source = remote.get(from);
         ops.push(PlanOp::Rename {
             side: Side::Remote,
             from: from.clone(),
             to: to.clone(),
+            expected_version: source.and_then(|n| n.remote_version),
+            expected_checksum: source.and_then(|n| n.checksum.clone()),
         });
     }
     let renamed_from: BTreeSet<&str> = renames.iter().map(|(f, _)| f.as_str()).collect();
@@ -432,6 +448,7 @@ pub fn plan(
                 tracked_items,
                 percent_threshold: knobs.mass_delete_percent,
                 count_threshold: knobs.mass_delete_count,
+                min_count_threshold: knobs.mass_delete_min_count,
             }),
         };
     }
@@ -450,7 +467,17 @@ fn kind_word(is_dir: bool) -> &'static str {
     }
 }
 
-/// See [`plan`]'s documentation for why the two knobs are combined with AND.
+/// The mass-delete circuit breaker, exactly as SPEC-ENGINE §2 states it (amendment 2, 2026-09-13):
+///
+/// > suspend when `deleted_count >= sync.mass_delete_count` **OR**
+/// > ( `deleted_percent >= sync.mass_delete_percent` **AND**
+/// > `deleted_count >= sync.mass_delete_min_count` ).
+///
+/// The absolute arm protects a huge folder, where 50% is unreachable in one pass. The percentage
+/// arm protects a small one — and the `min_count` floor under it is what stops a two-file folder
+/// being suspended for a single deletion, which is the false positive amendment 1 was avoiding
+/// when it chose AND-only. The floor is a knob, not a constant, so an org that wants a twelve-file
+/// folder protected lowers it.
 fn trips_breaker(planned_deletes: usize, tracked_items: usize, knobs: &Knobs) -> bool {
     if planned_deletes == 0 || tracked_items == 0 {
         return false;
@@ -458,7 +485,8 @@ fn trips_breaker(planned_deletes: usize, tracked_items: usize, knobs: &Knobs) ->
     let over_count = planned_deletes >= knobs.mass_delete_count as usize;
     let over_percent =
         planned_deletes.saturating_mul(100) >= tracked_items * knobs.mass_delete_percent as usize;
-    over_count && over_percent
+    let over_floor = planned_deletes >= knobs.mass_delete_min_count as usize;
+    over_count || (over_percent && over_floor)
 }
 
 /// A local file that is new at `to`, absent at `from`, carries the identity `tree_synced` recorded
@@ -502,6 +530,18 @@ fn detect_renames(
         }
         if remote.get(path).is_some_and(|n| n.is_live()) {
             continue; // something already occupies the destination in the cloud
+        }
+        // G5: the SOURCE in the cloud must still be exactly what the synced row recorded. If
+        // another device edited it while this one moved the file, this is not a move — it is a
+        // local move AND a remote edit, which is a conflict and must be handled as one. Renaming
+        // over it kept the device's bytes and the cloud's other bytes forever, with no further op
+        // ever planned and nothing on screen: a silent, permanent split.
+        let source = remote.get(&old.path_nfc).filter(|n| n.is_live());
+        let source_unchanged = source.is_some_and(|n| {
+            n.remote_version == Some(old.remote_version) && n.checksum == old.checksum
+        });
+        if !source_unchanged {
+            continue;
         }
         consumed.insert(old.path_nfc.clone());
         out.push((old.path_nfc.clone(), path.clone()));
@@ -871,21 +911,34 @@ fn conflict_copy(
         |candidate| occupied.contains(&naming::collision_key(candidate)),
     ) {
         naming::CopyName::Ok(name) => name,
-        naming::CopyName::Unrepresentable(verdict) => {
-            // A named state for the path, in the spec's own `conflicts.kind` vocabulary — no new
-            // honest-state value is invented here, because `contracts/honest_states.json` is a
-            // contract SPEC-SERVER generates its CHECK from. The path is quarantined, so the
-            // download that would have overwritten the local bytes is never planned.
-            let kind = match verdict {
-                naming::NameVerdict::TooLong(k) => k,
-                _ => ConflictKind::IllegalName,
+        naming::CopyName::Unrepresentable(kind) => {
+            // SPEC-ENGINE §4.3 (amendment 2): record an ordinary `conflicts` row, which puts the
+            // mapping in the EXISTING `needs_conflict_resolution` state with a reason naming the
+            // length or the collision. No new state value is introduced, so
+            // `contracts/honest_states.json` and SPEC-SERVER's generated CHECK are untouched.
+            // The path is quarantined, so the download that would have replaced the user's bytes
+            // is never planned.
+            let why = match kind {
+                ConflictKind::PathTooLong => format!(
+                    "no copy name fits — this system allows {} characters per name and {} per \
+                     path, and the conflict-copy name for “{path}” is longer however much of the \
+                     name is kept",
+                    knobs.max_segment_chars, knobs.max_path_chars
+                ),
+                ConflictKind::CaseCollision => format!(
+                    "every conflict-copy name for “{path}” is already taken by a file whose name \
+                     differs only in case or in Unicode spelling"
+                ),
+                _ => format!(
+                    "the conflict-copy name for “{path}” cannot exist on this system"
+                ),
             };
             return vec![PlanOp::RecordConflict {
                 path: path.to_string(),
                 kind,
                 detail: format!(
-                    "“{path}” differs here and in the cloud, but no conflict copy can be named for \
-                     it on this system — rename or shorten it, then sync again"
+                    "“{path}” differs here and in the cloud, and {why} — rename or shorten it, \
+                     then sync again. Nothing was overwritten."
                 ),
             }];
         }

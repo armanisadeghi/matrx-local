@@ -668,6 +668,122 @@ fn cases() -> u32 {
 
 // ------------------------------------------------------- hand-written cases
 
+/// SPEC-ENGINE §2's worked examples for the breaker, as amended (amendment 2, 2026-09-13):
+///
+/// > suspend when `deleted_count >= sync.mass_delete_count` OR
+/// > (`deleted_percent >= sync.mass_delete_percent` AND `deleted_count >= sync.mass_delete_min_count`)
+///
+/// Each row is the spec's own worked example, at the spec's own defaults.
+#[test]
+fn the_breakers_worked_examples_match_the_amended_rule() {
+    // (tracked, deleted, expect_suspend, why)
+    let cases: &[(usize, usize, bool, &str)] = &[
+        (30, 22, true, "73% clears 50% and 22 clears the floor of 20"),
+        (30, 16, false, "53% clears 50% but 16 is under the floor of 20"),
+        (2, 1, false, "50% clears the percentage arm but 1 is far under the floor"),
+        (100_000, 1_200, true, "1.2% fails the percentage arm; 1,200 clears the absolute 1,000"),
+        (12, 12, false, "100% clears 50% but 12 is under the floor — the re-verify's case"),
+    ];
+    for (tracked, deleted, expect, why) in cases {
+        let w = deletion_world(*tracked, *deleted);
+        let p = plan(
+            &w.local,
+            &w.remote,
+            &w.synced,
+            Direction::TwoWay,
+            &Knobs::default(),
+            &PlanContext::default(),
+        );
+        assert_eq!(
+            p.suspended.is_some(),
+            *expect,
+            "{tracked} tracked, {deleted} deleted: expected suspend={expect} ({why});              plan had {} ops",
+            p.ops.len()
+        );
+        if *expect {
+            assert!(p.ops.is_empty(), "a suspended plan carries nothing else");
+        }
+    }
+
+    // The floor is a knob, not a constant: the twelve-file case suspends once an org lowers it,
+    // which is the spec's own note on why it is a knob.
+    let w = deletion_world(12, 12);
+    let lowered = Knobs {
+        mass_delete_min_count: 10,
+        ..Knobs::default()
+    };
+    let p = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &lowered,
+        &PlanContext::default(),
+    );
+    let reason = p
+        .suspended
+        .expect("12 of 12 suspends once the floor is lowered to 10");
+    assert_eq!(reason.honest_state(), "suspended_mass_delete");
+}
+
+/// A world of `tracked` synced files, `deleted` of which are gone from disk.
+fn deletion_world(tracked: usize, deleted: usize) -> World {
+    let mut w = World::new();
+    for i in 0..tracked {
+        let path = format!("f{i}.txt");
+        w.remote.insert(
+            path.clone(),
+            RemoteNode {
+                path_nfc: path.clone(),
+                is_dir: false,
+                size: Some(1),
+                remote_file_id: Some(format!("file-{i}")),
+                remote_folder_id: None,
+                remote_version: Some(1),
+                checksum: Some("c0".to_string()),
+                client_modified_at: None,
+                origin_device_id: None,
+                deleted_at: None,
+                seen_at: None,
+            },
+        );
+        w.synced.insert(
+            path.clone(),
+            SyncedNode {
+                path_nfc: path.clone(),
+                is_dir: false,
+                size: Some(1),
+                mtime_ns: Some(1),
+                volume_id: Some("vol-local".to_string()),
+                file_id: Some(format!("inode-{i}")),
+                content_hash: Some("c0".to_string()),
+                remote_file_id: format!("file-{i}"),
+                remote_version: 1,
+                checksum: Some("c0".to_string()),
+                local_edit_flagged: false,
+                synced_at: "t".to_string(),
+            },
+        );
+        if i >= deleted {
+            w.local.insert(
+                path.clone(),
+                LocalNode {
+                    path_nfc: path.clone(),
+                    is_dir: false,
+                    size: Some(1),
+                    mtime_ns: Some(1),
+                    volume_id: Some("vol-local".to_string()),
+                    file_id: Some(format!("inode-{i}")),
+                    content_hash: Some("c0".to_string()),
+                    scanned_at: None,
+                },
+            );
+        }
+    }
+    w.next_id = 9_000;
+    w
+}
+
 /// The circuit breaker is a plan item, never an act (D8).
 #[test]
 fn the_mass_delete_breaker_suspends_instead_of_deleting() {

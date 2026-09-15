@@ -12,10 +12,16 @@ use crate::model::ConflictKind;
 pub enum CopyName {
     /// A legal, free name for the losing bytes.
     Ok(String),
-    /// No legal name exists — the parent path, the device name or the template itself makes every
-    /// candidate unrepresentable. The planner turns this into a conflict row for the path and
-    /// **does not** plan the download that would replace the original.
-    Unrepresentable(NameVerdict),
+    /// No representable name exists — every candidate overruns the length knobs, carries a
+    /// character no filesystem accepts, or collides case-insensitively with a name already in use.
+    ///
+    /// The carried [`ConflictKind`] is the reason, and SPEC-ENGINE §4.3 (amendment 2) names which
+    /// ones this can be: `path_too_long` or `case_collision`, with `illegal_name` for a character
+    /// the template or the parent path makes unusable. The planner records it as an ordinary
+    /// `conflicts` row — putting the mapping in the **existing** `needs_conflict_resolution` state,
+    /// introducing no new state value — and **does not** plan the download that would replace the
+    /// original.
+    Unrepresentable(ConflictKind),
 }
 
 /// Render a conflict-copy name from `sync.conflict_copy_template` (D7), **uniquified and
@@ -56,6 +62,7 @@ pub fn unique_conflict_copy_path(
     // `None` is the plain rendered name; `Some(n)` adds the ` (n)` uniquifier.
     let suffixes = std::iter::once(None).chain((2..10_000u32).map(Some));
     let mut last_verdict = NameVerdict::Ok;
+    let mut any_legal_candidate = false;
     for suffix in suffixes {
         // Shorten the stem until the whole rendered path is legal. Longest first, so a name that
         // already fits is never truncated.
@@ -79,11 +86,31 @@ pub fn unique_conflict_copy_path(
         }
         match fitted {
             Some(candidate) if !taken(&candidate) => return CopyName::Ok(candidate),
-            Some(_) => continue, // legal but occupied: try the next suffix
-            None => return CopyName::Unrepresentable(last_verdict),
+            Some(_) => {
+                // Legal but occupied — by the crate's fold, which is what `taken` is asked. Try
+                // the next suffix.
+                any_legal_candidate = true;
+                continue;
+            }
+            None => return CopyName::Unrepresentable(verdict_to_kind(last_verdict)),
         }
     }
-    CopyName::Unrepresentable(last_verdict)
+    // Every suffix produced a legal name and every one of them was already taken: the reason is a
+    // collision, not a length (SPEC-ENGINE §4.3, amendment 2).
+    if any_legal_candidate {
+        CopyName::Unrepresentable(ConflictKind::CaseCollision)
+    } else {
+        CopyName::Unrepresentable(verdict_to_kind(last_verdict))
+    }
+}
+
+fn verdict_to_kind(verdict: NameVerdict) -> ConflictKind {
+    match verdict {
+        NameVerdict::TooLong(kind) => kind,
+        // `Ok` is unreachable here (a name that passed would have been returned), and `Illegal`
+        // means a character or reserved word the template or the parent path forces.
+        NameVerdict::Ok | NameVerdict::Illegal => ConflictKind::IllegalName,
+    }
 }
 
 fn render(

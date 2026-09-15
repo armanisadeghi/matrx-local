@@ -373,6 +373,12 @@ async def save_token(req: TokenRequest) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("[token_routes] Post-login scrape sync failed: %s", exc)
 
+    # The gap every cloud lane was reporting is over the moment a session
+    # lands: close the refresh window here rather than letting it time out.
+    from app.services.session_freshness import session_restored
+
+    session_restored()
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():

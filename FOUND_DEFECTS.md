@@ -932,6 +932,30 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   online, or report the known offline limitation as a STATE (warn-level /
   structured) rather than an error. Do not weaken the boot test.
 
+- **MXL-D-091 — Browser-mode sign-in intermittently dies with "Account
+  transition timed out", and a deep link set right after sign-in can be
+  overridden by the shell's own late navigation.**
+  Area: `desktop/src/lib/native-vault-auth-coordinator.ts` (5s
+  `boundedCallerWait`), plus whatever navigates after `AppLayout` mounts.
+  Status: `open` — NOT the coding-sessions lane (the session fence is another
+  lane's subject; filed here so it is not rediscovered in silence).
+  Analyzed 2026-09-14 — observed live, twice in five Playwright runs against
+  a source engine (`pnpm playwright test coding-sessions-tabs.spec.ts`, real
+  admin test account, static production bundle on :1420):
+  1. the Login card rendered `Error: Account transition timed out. Retry the
+     account action.` AFTER the shell had already appeared, bouncing the app
+     back to Login mid-test — the string exists only at
+     `native-vault-auth-coordinator.ts:43`, whose caller wait is 5s while the
+     native vault has no Tauri host to answer it in browser mode;
+  2. a `page.goto("/#/cloud-chat?conversation=…")` issued immediately after
+     sign-in ended up on `/coding-sessions?tab=usage` instead — something in
+     the shell navigates after mount and wins the race. Retrying the hash in a
+     `toPass` loop makes it stick, which is what the spec now does.
+  Fix shape: a host transition with no native host should resolve as
+  "unsupported/aligned" rather than time out into a user-facing error, and the
+  shell's post-auth navigation should not replace a route the user (or a deep
+  link) explicitly asked for.
+
 ## Cross-repo
 
 ### MXL-D-083 — stream-events.ts carries a registry-INDEPENDENT copy of every block's data shape, and nothing imports it

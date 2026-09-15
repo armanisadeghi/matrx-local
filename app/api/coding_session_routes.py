@@ -469,9 +469,20 @@ async def reconcile_claude_capture(
     try:
         return await get_claude_capture_reconciler().reconcile(dry_run=dry_run)
     except CaptureReconcileBlocked as exc:
+        # The reconciler's own reason stays "no_active_user_jwt" (its callers
+        # branch on it); what the UI is TOLD follows the one shared session
+        # state, so a gap the desktop is already filling is not an error.
+        from app.services.session_freshness import (
+            NO_SESSION_CODE,
+            session_blocker,
+        )
+
+        reason = exc.reason
+        if reason == NO_SESSION_CODE:
+            reason = session_blocker(lane="claude_capture_reconciler")["code"]
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=exc.reason,
+            detail=reason,
         ) from exc
 
 

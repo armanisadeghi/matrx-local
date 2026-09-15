@@ -37,6 +37,22 @@ envelope, and the aidream server injects tools from the DB:
   `app/tools/actions.py` + live `tool.definition.category` (aidream
   migration `0201_consolidate_desktop_tool_categories.sql`).
 
+## Opening ONE conversation by id (`?conversation=<id>`)
+
+`use-cloud-chat.ts` exposes `openConversationById`, and Cloud Chat opens
+whatever `/cloud-chat?conversation=<id>` names — once per value, so a
+re-render never yanks a person back to it. The history list this surface loads
+is filtered to the chat-route features, so a conversation from elsewhere would
+never appear in it; `openConversationById` reads that ONE row from
+`chat.conversation` by id (same columns, same message hydration, no extra
+filter) and merges it in. `&from=coding-sessions` renders the way back.
+
+The first consumer is the Coding Sessions list: a session row carries the
+server's `conversation_id`, and clicking the row must bring up THAT
+conversation (Arman, 2026-09-14). Never build a second transcript renderer for
+a conversation the platform already holds —
+`app/services/coding_sessions/FEATURE.md` § The Coding Sessions screen.
+
 ## Delegated execution + streaming continuation
 
 Tool calls suspend the turn server-side; the delegation engine executes

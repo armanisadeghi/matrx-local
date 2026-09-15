@@ -34,6 +34,10 @@ import {
   parseCodingSessionsTab,
   type CodingSessionsTab,
 } from "@/lib/coding-sessions/tabs";
+import {
+  cloudHeaderText,
+  indexNotice as readIndexNotice,
+} from "@/lib/coding-sessions/index-state";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
 import { laneBlockerTone } from "@/lib/lane-blocker";
 
@@ -86,6 +90,11 @@ export function CodingSessions() {
   const totals = snapshot.overview?.totals;
   const cloud = snapshot.overview?.cloud;
   const blocker = snapshot.bridge?.publisher.blocker ?? null;
+  const indexNotice = readIndexNotice(snapshot.overview);
+  // The engine refreshing its index behind an answer is work in progress too,
+  // so the header's Refresh wears the same announced-refresh state it wears
+  // for this screen's own read (CS-11) — never a still button over moving data.
+  const busy = snapshot.refreshing || indexNotice !== null;
 
   return (
     // AppLayout mounts every page inside `overflow-hidden`, so a page that does
@@ -95,15 +104,16 @@ export function CodingSessions() {
         <div>
           <h1 className="text-2xl font-semibold">Coding Sessions</h1>
           <p className="text-sm text-muted-foreground" data-testid="coding-sessions-subtitle">
-            {snapshot.overviewPending && !snapshot.overview
-              ? "Reading your conversations and asking AI Matrx what it holds…"
+            {(snapshot.overviewPending && !snapshot.overview) || indexNotice?.state === "cold"
+              ? // A cold index has nothing to count yet, so it is never counted:
+                // "0 conversations on this Mac" was a lie the engine's own
+                // `index.state` now spares this screen.
+                indexNotice?.state === "cold"
+                ? `${indexNotice.headline} ${indexNotice.detail ?? ""}`.trim()
+                : "Reading your conversations and asking AI Matrx what it holds…"
               : `${(totals?.conversations ?? 0).toLocaleString()} conversations on this Mac · ${
                   snapshot.overview?.accounts.length ?? 0
-                } accounts · ${
-                  cloud?.checked
-                    ? `AI Matrx holds ${cloud.sessions.toLocaleString()} of them (checked ${formatStamp(cloud.checked_at)})`
-                    : "AI Matrx could not be asked"
-                }${
+                } accounts · ${cloudHeaderText(cloud, formatStamp)}${
                   snapshot.overviewPending
                     ? " · refreshing…"
                     : snapshot.overviewFromCache && snapshot.overviewAt
@@ -118,12 +128,10 @@ export function CodingSessions() {
             onClick={() => void refresh()}
             disabled={snapshot.refreshing}
             data-testid="coding-sessions-refresh"
-            aria-busy={snapshot.refreshing}
+            aria-busy={busy}
           >
-            <RefreshCw
-              className={`mr-2 h-4 w-4 ${snapshot.refreshing ? "animate-spin" : ""}`}
-            />
-            {snapshot.refreshing ? "Refreshing…" : "Refresh"}
+            <RefreshCw className={`mr-2 h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+            {busy ? "Refreshing…" : "Refresh"}
           </Button>
           <Button onClick={() => void syncEverything()} disabled={syncing}>
             {syncing ? (

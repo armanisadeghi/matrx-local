@@ -348,3 +348,175 @@ describe("A row is a door", () => {
     expect(writeText).toHaveBeenCalledWith("claude --resume session-0");
   });
 });
+
+/**
+ * The engine answers in milliseconds now (1.4.125), which means a fast answer
+ * can be an EMPTY or an INCOMPLETE one. Every case below fails against the
+ * screen as it shipped in 1.4.124: it counted whatever arrived, so a first-run
+ * engine read "0 conversations on this Mac", a re-read behind the response was
+ * invisible, and a cloud check that had not happened YET wore the same warning
+ * as one that could not happen at all.
+ */
+describe("A cold index is never an empty Mac", () => {
+  function coldPayload(filesRead: number): ClaudeOverview {
+    const base = overviewPayload([]);
+    return {
+      ...base,
+      index: {
+        state: "cold",
+        refreshing: true,
+        files_read: filesRead,
+        conversations: 0,
+        updated_at: null,
+        changed_files: null,
+        duration_seconds: null,
+        limit_reached: false,
+        unreadable: 0,
+        error: null,
+      },
+    } as unknown as ClaudeOverview;
+  }
+
+  it("shows the first read with its counter instead of '0 conversations'", async () => {
+    mocks.getClaudeOverview.mockResolvedValue(coldPayload(4_096));
+    await render("/coding-sessions");
+    const subtitle = container.querySelector("[data-testid='coding-sessions-subtitle']");
+    expect(subtitle?.textContent).toContain("Reading your conversations for the first time…");
+    expect(subtitle?.textContent).toContain("4,096 index files read so far");
+    expect(subtitle?.textContent).not.toContain("0 conversations");
+    expect(container.querySelector("[data-testid='index-cold']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='sessions-empty-cold']")).not.toBeNull();
+    expect(container.textContent).not.toContain("No coding-agent conversations found");
+  });
+
+  it("asks again a few seconds later, until the index is fresh", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getClaudeOverview.mockResolvedValue(coldPayload(10));
+      await render("/coding-sessions");
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(2);
+      // A fresh answer ends the polling.
+      mocks.getClaudeOverview.mockResolvedValue(overviewPayload(["First session"]));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(3);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("A refresh running behind the answer", () => {
+  function refreshingPayload(): ClaudeOverview {
+    const base = overviewPayload(["First session"]);
+    return {
+      ...base,
+      index: {
+        state: "refreshing",
+        refreshing: true,
+        files_read: 67_224,
+        conversations: 1_806,
+        updated_at: "2026-09-15T20:00:00Z",
+        changed_files: 7,
+        duration_seconds: 1.25,
+        limit_reached: false,
+        unreadable: 0,
+        error: null,
+      },
+    } as unknown as ClaudeOverview;
+  }
+
+  it("wears the announced-refresh state and says what the engine is re-reading", async () => {
+    mocks.getClaudeOverview.mockResolvedValue(refreshingPayload());
+    await render("/coding-sessions");
+    const refresh = container.querySelector(
+      "[data-testid='coding-sessions-refresh']",
+    ) as HTMLButtonElement;
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    expect(refresh.textContent).toContain("Refreshing…");
+    const note = container.querySelector("[data-testid='index-refreshing-note']");
+    expect(note?.textContent).toContain("Re-reading this Mac's conversations");
+    expect(note?.textContent).toContain("7 changed records");
+    expect(note?.textContent).toContain("last read took 1.3s");
+    // The rows it already has stay on screen.
+    expect(container.textContent).toContain("First session");
+  });
+
+  it("re-fetches once a few seconds later", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getClaudeOverview.mockResolvedValue(refreshingPayload());
+      await render("/coding-sessions");
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_500);
+      });
+      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("The cloud check that has not happened yet", () => {
+  function inFlightPayload(): ClaudeOverview {
+    const base = overviewPayload(["First session"]);
+    return {
+      ...base,
+      cloud: {
+        checked: false,
+        reason: "cloud_check_in_flight",
+        detail: "AI Matrx is being asked which of these conversations it holds.",
+        sessions: 0,
+        checked_at: "2026-09-15T20:00:00Z",
+        refreshing: true,
+        age_seconds: null,
+      },
+      conversations: base.conversations.map((row) => ({ ...row, state: "unknown", cloud: null })),
+    } as unknown as ClaudeOverview;
+  }
+
+  it("says 'not asked yet' quietly instead of 'could not be asked'", async () => {
+    mocks.getClaudeOverview.mockResolvedValue(inFlightPayload());
+    await render("/coding-sessions");
+    const quiet = container.querySelector("[data-testid='cloud-in-flight']");
+    expect(quiet?.textContent).toContain("has not been asked yet");
+    expect(quiet?.getAttribute("role")).toBe("status");
+    expect(container.textContent).not.toContain("could not be asked");
+    expect(container.querySelector("[data-testid='coding-sessions-subtitle']")?.textContent).toContain(
+      "AI Matrx is being asked which of them it holds",
+    );
+  });
+
+  it("lets the rows read unknown quietly during that window", async () => {
+    mocks.getClaudeOverview.mockResolvedValue(inFlightPayload());
+    await render("/coding-sessions");
+    const cell = container.querySelector("[data-testid='state-checking']");
+    expect(cell?.textContent).toContain("Checking…");
+    expect(container.textContent).not.toContain("Unknown");
+  });
+
+  it("shows how old a real answer is", async () => {
+    const base = overviewPayload(["First session"]);
+    mocks.getClaudeOverview.mockResolvedValue({
+      ...base,
+      cloud: { ...base.cloud, sessions: 1_671, age_seconds: 240, refreshing: false },
+    } as unknown as ClaudeOverview);
+    await render("/coding-sessions");
+    expect(container.querySelector("[data-testid='cloud-checked-note']")?.textContent).toContain(
+      "checked 4 min ago",
+    );
+    expect(container.querySelector("[data-testid='coding-sessions-subtitle']")?.textContent).toContain(
+      "AI Matrx holds 1,671 of them (checked 4 min ago)",
+    );
+  });
+});

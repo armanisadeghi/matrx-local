@@ -39,6 +39,12 @@ import { Stat, formatStamp, formatWhen } from "@/components/coding-sessions/shar
 import type { ClaudeConversation, ClaudeSessionState, CodingSessionProvider } from "@/lib/api";
 import { getWebAppOrigin } from "@/lib/app-config";
 import {
+  cloudAgeLabel,
+  cloudCheckPending,
+  indexCountsAreReal,
+  indexNotice,
+} from "@/lib/coding-sessions/index-state";
+import {
   filterRowsByProvider,
   providerChips,
   unlistedProviderNote,
@@ -126,8 +132,12 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
   );
 
   const data = snapshot.overview;
-  const totals = data?.totals;
   const cloud = data?.cloud;
+  const notice = indexNotice(data);
+  const cloudPending = cloudCheckPending(cloud);
+  // Counts belong to an index that has been read. While it is cold they are
+  // zeroes about nothing, so the cards stay away instead of reporting them.
+  const totals = indexCountsAreReal(data) ? data?.totals : undefined;
   const chips = useMemo(
     () => providerChips(data, snapshot.readiness),
     [data, snapshot.readiness],
@@ -148,6 +158,13 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
       );
     });
   }, [data, filter, provider, query]);
+
+  /**
+   * "Unknown" earns its warning voice only when the server COULD NOT be asked.
+   * While the check is merely in flight the row says "Checking…" quietly —
+   * the next read replaces it with the real answer.
+   */
+  const quietUnknown = (row: ClaudeConversation) => cloudPending && row.state === "unknown";
 
   const toggleFilter = (next: ListFilter) =>
     setFilter((current) => (current === next ? "all" : next));
@@ -184,7 +201,45 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         </div>
       )}
 
-      {cloud && !cloud.checked && (
+      {/* A first read of this Mac is not an empty Mac. While the engine's index
+          is cold there is nothing to count, so nothing is counted: the counter
+          moves and the rows arrive. */}
+      {notice?.state === "cold" && (
+        <div
+          className="flex items-start gap-3 rounded-lg border p-4 text-sm"
+          role="status"
+          data-testid="index-cold"
+        >
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+          <div>
+            <p className="font-medium">{notice.headline}</p>
+            {notice.detail && <p className="mt-1 text-muted-foreground">{notice.detail}</p>}
+          </div>
+        </div>
+      )}
+
+      {cloudPending && (
+        // Not asked YET is not a failure: quiet voice, no warning colour, and
+        // it clears itself on the next read.
+        <div
+          className="flex items-start gap-3 rounded-lg border p-4 text-sm"
+          role="status"
+          data-testid="cloud-in-flight"
+        >
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+          <div>
+            <p className="font-medium">
+              AI Matrx has not been asked yet which conversations it holds
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              {cloud?.detail ??
+                "The answer lands within a few seconds — until it does, these rows say so rather than guessing."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {cloud && !cloud.checked && !cloudPending && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <div>
@@ -398,10 +453,17 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
                     />
                   </td>
                   <td
-                    className={`px-4 py-2 text-right ${SESSION_STATE_TONE[row.state]}`}
-                    title={SESSION_STATE_HINT[row.state]}
+                    className={`px-4 py-2 text-right ${
+                      quietUnknown(row) ? "text-muted-foreground" : SESSION_STATE_TONE[row.state]
+                    }`}
+                    title={
+                      quietUnknown(row)
+                        ? "AI Matrx has not been asked yet. The next read has the answer."
+                        : SESSION_STATE_HINT[row.state]
+                    }
+                    data-testid={quietUnknown(row) ? "state-checking" : undefined}
                   >
-                    {SESSION_STATE_LABEL[row.state]}
+                    {quietUnknown(row) ? "Checking…" : SESSION_STATE_LABEL[row.state]}
                     {row.delivery.quarantined > 0 && (
                       <span className="ml-1 text-xs">({row.delivery.quarantined} refused)</span>
                     )}
@@ -460,11 +522,22 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
             {!snapshot.overviewPending && conversations.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                  {activeChip && !activeChip.listed
-                    ? unlistedProviderNote(activeChip)
-                    : query || filter !== "all"
-                      ? "No conversations match that search or filter."
-                      : "No coding-agent conversations found on this Mac."}
+                  {notice?.state === "cold" ? (
+                    <span
+                      className="inline-flex items-center gap-2"
+                      data-testid="sessions-empty-cold"
+                    >
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {notice.headline}
+                      {notice.detail ? ` ${notice.detail}` : ""}
+                    </span>
+                  ) : activeChip && !activeChip.listed ? (
+                    unlistedProviderNote(activeChip)
+                  ) : query || filter !== "all" ? (
+                    "No conversations match that search or filter."
+                  ) : (
+                    "No coding-agent conversations found on this Mac."
+                  )}
                 </td>
               </tr>
             )}
@@ -478,6 +551,18 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
             <RefreshCw className="h-3 w-3 animate-spin" />
             Re-reading this Mac's sessions — the list below is the previous answer
             {snapshot.overviewAt ? ` from ${formatWhen(snapshot.overviewAt)}` : ""}.
+          </p>
+        )}
+        {!snapshot.overviewPending && notice?.state === "refreshing" && (
+          // The engine is re-reading behind the answer we are showing. Say so,
+          // with what it is actually doing when it knows.
+          <p
+            className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground"
+            data-testid="index-refreshing-note"
+          >
+            <RefreshCw className="h-3 w-3 animate-spin" />
+            {notice.headline}
+            {notice.detail ? ` ${notice.detail}.` : ""}
           </p>
         )}
         {snapshot.overviewCacheTruncated && (
@@ -503,9 +588,10 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
       )}
 
       {cloud?.checked && (
-        <p className="text-xs text-muted-foreground">
-          AI Matrx holds {cloud.sessions.toLocaleString()} of these sessions · checked{" "}
-          {formatStamp(cloud.checked_at)}
+        <p className="text-xs text-muted-foreground" data-testid="cloud-checked-note">
+          AI Matrx holds {cloud.sessions.toLocaleString()} of these sessions ·{" "}
+          {cloudAgeLabel(cloud) ?? `checked ${formatStamp(cloud.checked_at)}`}
+          {cloud.refreshing ? " · asking again now" : ""}
         </p>
       )}
 

@@ -804,10 +804,49 @@ export interface ClaudeAccount {
 export interface ClaudeCloudCheck {
   /** False when AI Matrx could not be asked; `reason`/`detail` say why. */
   checked: boolean;
+  /**
+   * `"cloud_check_in_flight"` is the ONE reason that is not a failure: the
+   * server has not been asked YET and the next read has the answer. The screen
+   * says so quietly and never wears the could-not-be-asked warning.
+   */
   reason: string | null;
   detail: string | null;
   sessions: number;
   checked_at: string;
+  /**
+   * How old this answer is, in seconds — the inventory is served from cache and
+   * refreshed behind the response, so a count is never presented as live truth.
+   * Optional: engines before 1.4.125 omit it.
+   */
+  age_seconds?: number | null;
+  /** True while a newer inventory is being fetched. Same engine floor. */
+  refreshing?: boolean;
+}
+
+/**
+ * What the engine says about the index BEHIND the rows in this payload
+ * (`claude_overview.py::index_report`). The overview answers from the
+ * persisted index and refreshes behind the response, so a fast answer can be
+ * an empty or an incomplete one — and the screen has to say which:
+ *   cold        nothing indexed yet; `conversations` is genuinely empty
+ *   refreshing  the rows are real, a re-read is running behind this answer
+ *   fresh       the rows are everything on this Mac
+ */
+export interface ClaudeIndexReport {
+  state: "fresh" | "refreshing" | "cold";
+  refreshing: boolean;
+  /** Index record files read into the store so far — the cold-start counter. */
+  files_read: number;
+  conversations: number;
+  updated_at: string | null;
+  /** Records the last refresh actually re-read; null when it never ran here. */
+  changed_files: number | null;
+  duration_seconds: number | null;
+  /** True when the reader hit its cap: the list is incomplete, and says so. */
+  limit_reached: boolean;
+  unreadable: number;
+  /** The last refresh's failure, verbatim. Never swallowed. */
+  error: string | null;
 }
 
 export interface ClaudeOverview {
@@ -822,6 +861,12 @@ export interface ClaudeOverview {
   listed_providers?: CodingSessionProvider[];
   accounts: ClaudeAccount[];
   cloud: ClaudeCloudCheck;
+  /**
+   * The index behind `conversations`. Optional: engines before 1.4.125 read the
+   * whole tree inside the request and had no state to report, so an absent
+   * block means "this engine only ever answers with a complete list".
+   */
+  index?: ClaudeIndexReport;
   conversations: ClaudeConversation[];
   totals: {
     conversations: number;
@@ -2956,8 +3001,36 @@ class EngineAPI {
     return this.request(`/coding-session/delivery/envelopes/${encodeURIComponent(receiptId)}?confirm=${confirm ? "true" : "false"}`, { method: "DELETE" });
   }
 
+  /**
+   * The coding-sessions screen's whole payload.
+   *
+   * Engine 1.4.125 moved the Claude index read off the request path, so this
+   * answers in milliseconds — but the shared 60s ceiling was the wrong one
+   * either way: lane V-ML measured this path at 31.8s and then 59.0s against
+   * it on 2026-09-15, 1.04s from the client aborting a read that was working.
+   * A ceiling this screen cannot hit on a current engine, and that still
+   * covers an older engine's in-request scan, replaces it — and when it IS
+   * exceeded the screen says so inline (SessionsTab's read-failure banner)
+   * instead of leaving the Refresh button spinning.
+   */
   async getClaudeOverview(): Promise<ClaudeOverview> {
-    return this.request("/coding-session/claude/overview");
+    try {
+      return await this.request<ClaudeOverview>(
+        "/coding-session/claude/overview",
+        undefined,
+        EngineAPI.CLAUDE_OVERVIEW_TIMEOUT_MS,
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("timed out")) {
+        throw new Error(
+          `${message} — the engine is still reading this Mac's sessions. ` +
+            "Update Matrx Local (engine 1.4.125 and newer answer this in milliseconds), " +
+            "then press Refresh.",
+        );
+      }
+      throw e;
+    }
   }
 
   async getClaudeSessionDiagnosis(sessionId: string): Promise<ClaudeSessionDiagnosis> {
@@ -3168,7 +3241,25 @@ class EngineAPI {
    */
   private static readonly DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  /**
+   * The coding-sessions overview's own ceiling. See `getClaudeOverview()`: the
+   * current engine answers in milliseconds, an engine older than the index
+   * store scans the tree inside the request (59s measured), and 60s cut that
+   * read off a second before it landed. Sane, not absent: past this the screen
+   * shows the timeout with its remedy.
+   */
+  private static readonly CLAUDE_OVERVIEW_TIMEOUT_MS = 120_000;
+
+  private async request<T>(
+    path: string,
+    init?: RequestInit,
+    /**
+     * A ceiling for THIS path, when the shared default is the wrong shape of
+     * promise for it. A caller-supplied `init.signal` still takes over
+     * entirely; this only replaces the default.
+     */
+    overrideTimeoutMs?: number,
+  ): Promise<T> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     let authHdrs = await this.authHeaders();
     // The signed-out fence: a path the engine already refused for "no
@@ -3180,7 +3271,7 @@ class EngineAPI {
     );
     // A caller-supplied signal takes over timeout responsibility entirely;
     // otherwise apply the default timeout ceiling.
-    const timeoutMs = EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeoutMs = overrideTimeoutMs ?? EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
     const send = async (headers: Record<string, string>): Promise<Response> => {
       // One fresh timeout per attempt: an AbortSignal.timeout() is spent once
       // it has been handed to a fetch.

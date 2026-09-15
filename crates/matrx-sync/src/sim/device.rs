@@ -229,6 +229,9 @@ impl Device {
             recent_deletions: self
                 .journal
                 .deletions_since(&self.mapping_id, &self.window_start(now))?,
+            window_item_count: self
+                .journal
+                .window_item_count(&self.mapping_id, &self.window_start(now))?,
             open_conflicts: self
                 .journal
                 .open_conflicts(&self.mapping_id)?

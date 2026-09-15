@@ -1075,7 +1075,10 @@ fn a_journal_left_at_version_3_without_the_table_upgrades_cleanly() {
 /// it, which is how `mass_delete_window_open` went missing from upgraded journals while the whole
 /// suite stayed green.
 ///
-/// `migrations/MANIFEST` records each file's length and FNV-1a fingerprint. This is a **change
+/// `migrations/FINGERPRINTS.md` records each file's length and FNV-1a fingerprint. (The name
+/// is neither `MANIFEST` nor `*.manifest`: the repo's root `.gitignore` blocks both, which kept the
+/// first version of this file untracked — the test passed here and would have failed on a fresh
+/// clone. The assertion below is what catches that class now.) This is a **change
 /// detector**, not a security control — FNV-1a is not cryptographic and is not trying to be, and
 /// nothing here stops someone who edits the manifest too. It stops the edit nobody meant to make
 /// permanent.
@@ -1090,35 +1093,63 @@ fn no_migration_file_changes_after_it_is_committed() {
         h
     }
 
-    let manifest = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/MANIFEST"),
-    )
-    .expect("migrations/MANIFEST is checked in");
+    // The file has to be IN the repository, not just on this disk. The first version of it was
+    // named `MANIFEST`, which the root .gitignore silently swallowed: green here, broken on a
+    // fresh clone. A guard that only exists locally is not a guard.
+    let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations/FINGERPRINTS.md");
+    let ignored = std::process::Command::new("git")
+        .args(["check-ignore", "-q"])
+        .arg(&manifest_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(
+        !ignored,
+        "{} is matched by .gitignore, so it is not in the repository and this whole test only \
+         works on the machine that wrote it",
+        manifest_path.display()
+    );
 
+    let manifest = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/FINGERPRINTS.md"),
+    )
+    .expect("migrations/FINGERPRINTS.md is checked in");
+
+    // The file is prose plus data lines, so a data line is recognised by its SHAPE — three tokens,
+    // a length and a hex fingerprint — rather than by everything else being commented. A parser
+    // that had to be told what to skip would break the first time someone added a sentence.
     let recorded: Vec<(String, usize, u64)> = manifest
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| {
-            let mut parts = l.split_whitespace();
-            let name = parts.next().expect("name").to_string();
-            let len: usize = parts.next().expect("length").parse().expect("a number");
-            let fp = u64::from_str_radix(parts.next().expect("fingerprint"), 16).expect("hex");
-            (name, len, fp)
+        .filter_map(|l| {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            let [name, len, fp] = parts[..] else { return None };
+            Some((
+                name.to_string(),
+                len.parse::<usize>().ok()?,
+                u64::from_str_radix(fp, 16).ok()?,
+            ))
         })
         .collect();
+    assert!(
+        !recorded.is_empty(),
+        "no fingerprint lines parsed out of {}; the file's shape changed",
+        manifest_path.display()
+    );
 
     assert_eq!(
         recorded.len(),
         matrx_sync::journal::MIGRATIONS.len(),
-        "MANIFEST lists {} migrations, the binary carries {}. Adding a migration means adding its \
-         file, its MIGRATIONS entry AND its MANIFEST line.",
+        "the manifest lists {} migrations, the binary carries {}. Adding a migration means adding its \
+         file, its MIGRATIONS entry AND its manifest line.",
         recorded.len(),
         matrx_sync::journal::MIGRATIONS.len()
     );
 
     for (m, (name, len, fp)) in matrx_sync::journal::MIGRATIONS.iter().zip(&recorded) {
-        assert_eq!(&m.name, name, "MANIFEST is out of order with MIGRATIONS");
+        assert_eq!(&m.name, name, "the manifest is out of order with MIGRATIONS");
         let bytes = m.sql.as_bytes();
         assert_eq!(
             (bytes.len(), fingerprint(bytes)),
@@ -1127,8 +1158,8 @@ fn no_migration_file_changes_after_it_is_committed() {
              it will never see the edit — that is what forward-only means, and it is exactly how \
              `mass_delete_window_open` went missing from upgraded journals while every test, which \
              opens a fresh journal, stayed green. Write a NEW migration instead. If this change is \
-             genuinely intended and no journal anywhere has applied the old body, update MANIFEST \
-             in the same commit and say why."
+             genuinely intended and no journal anywhere has applied the old body, update \
+             migrations/FINGERPRINTS.md in the same commit and say why."
         );
     }
 }

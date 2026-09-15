@@ -16,7 +16,7 @@
 -- first breaker read failed with `no such table: mass_delete_window_open`. Every test opens a fresh
 -- journal, so the whole suite was blind to it — the exact shape of "migrations are forward-only".
 -- `003` has been restored to the body it was committed with, this file carries the addition, and
--- `migrations/MANIFEST` plus `no_migration_file_changes_after_it_is_committed` make a repeat a test
+-- `migrations/FINGERPRINTS.md` plus `no_migration_file_changes_after_it_is_committed` make a repeat a test
 -- failure rather than a discovery.
 --
 -- IF NOT EXISTS because a journal that was migrated while 003 carried the amendment already has it.

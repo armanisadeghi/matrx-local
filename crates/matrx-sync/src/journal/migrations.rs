@@ -11,7 +11,7 @@
 //! existing file**, which leaves every already-migrated journal behind. That is not hypothetical:
 //! `003` was once amended in place to add a table, and a journal already at `schema_version = 3`
 //! never got it, failing the next breaker read with `no such table`. Every test opened a fresh
-//! journal, so the suite could not see it. `migrations/MANIFEST` records each file's fingerprint
+//! journal, so the suite could not see it. `migrations/FINGERPRINTS.md` records each file's fingerprint
 //! and `no_migration_file_changes_after_it_is_committed` fails if one changes, so the next attempt
 //! is a test failure rather than a discovery.
 

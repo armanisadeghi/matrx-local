@@ -74,17 +74,21 @@ def _write_record(
 
 
 @pytest.fixture
-async def env(tmp_path: Path):
+async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db = LocalDatabase(tmp_path / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
-    outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
     try:
+        from app.services import sync_client
+
+        class _Daemon:
+            async def access_grant(self) -> tuple[str, str]:
+                return (
+                    "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                    "00000000-0000-4000-8000-000000000001",
+                )
+
+        monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
+        outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
         yield db, outbox, tmp_path
     finally:
         await db.close()

@@ -177,10 +177,10 @@ def install_client_host_queue_guard() -> None:
             return None
         return original()
 
-    async def _guarded_drain_pending_injections(config, ctx):
+    async def _guarded_drain_pending_injections(config, ctx, *, include_turn_end: bool = False):
         if _client_host_without_orm():
             return ctx
-        return await original_drain(config, ctx)
+        return await original_drain(config, ctx, include_turn_end=include_turn_end)
 
     async def _guarded_apply_authoritative_user_request_rollup(user_request_id: str) -> None:
         if _client_host_without_orm():

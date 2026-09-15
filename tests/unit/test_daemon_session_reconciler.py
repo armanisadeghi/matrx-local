@@ -4,6 +4,17 @@ from app.services.daemon_session_reconciler import DaemonSessionReconciler
 from app.services.sync_client.client import SessionSnapshot
 
 
+@pytest.fixture(autouse=True)
+def isolated_catalog(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import app.services.local_db.sync_engine as sync_engine
+
+    monkeypatch.setattr(
+        sync_engine, "get_sync_engine", lambda: SimpleNamespace(sync_agents=AsyncMock())
+    )
+
+
 @pytest.mark.anyio
 async def test_transitions_and_retry(monkeypatch):
     import app.services.sync_client as sc

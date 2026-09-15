@@ -34,6 +34,20 @@ _MUTATED = (
 )
 
 
+def _install_daemon_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use the daemon's atomic grant instead of a retired SQLite token row."""
+    from app.services import sync_client
+
+    class _Daemon:
+        async def access_grant(self) -> tuple[str, str]:
+            return (
+                "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                "00000000-0000-4000-8000-000000000001",
+            )
+
+    monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
+
+
 def _request(event_id: str) -> BridgeRequest:
     return BridgeRequest(
         schema_version=1,
@@ -96,15 +110,12 @@ def test_a_server_error_is_always_retryable() -> None:
 
 
 @pytest.mark.anyio
-async def test_poison_row_is_quarantined_and_the_queue_drains(tmp_path: Path) -> None:
+async def test_poison_row_is_quarantined_and_the_queue_drains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db = LocalDatabase(tmp_path / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
+    _install_daemon_grant(monkeypatch)
 
     poison = str(uuid4())
     client = _Client(poison)
@@ -131,16 +142,11 @@ async def test_poison_row_is_quarantined_and_the_queue_drains(tmp_path: Path) ->
 
 @pytest.mark.anyio
 async def test_invalid_local_envelope_is_quarantined_without_retrying(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = LocalDatabase(tmp_path / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
+    _install_daemon_grant(monkeypatch)
 
     client = _Client("never-refuse")
     outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)

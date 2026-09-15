@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from app.common.system_logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class DaemonSessionReconciler:
@@ -134,6 +134,11 @@ class DaemonSessionReconciler:
             if not await current():
                 return
             await refresh_server_tool_definitions()
+            if not await current():
+                return
+            from app.services.local_db.sync_engine import get_sync_engine
+
+            await get_sync_engine().sync_agents()
             if not await current():
                 return
             if CLOUD_PARTICIPATION_ENABLED:

@@ -100,7 +100,6 @@ _MOCK_EXECUTION_DEFINITION = {
     "custom_tools": [],
     "mcp_servers": [],
     "variable_definitions": [],
-    "context_slots": [],
     "tool_config": {},
     "output_schema": None,
     "matrx_actions": None,

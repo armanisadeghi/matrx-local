@@ -55,7 +55,15 @@ pub enum SuspendReason {
     MassDelete {
         /// How many deletions this plan would have performed.
         planned_deletes: usize,
-        /// How many paths the mapping currently has under management (`tree_synced`).
+        /// The **frozen denominator**: the mapping's item count when the deletion window opened.
+        ///
+        /// ⚠️ **Never render this as the mapping's size.** It is a historical number, deliberately
+        /// not the live one — the whole point is that it stops moving while a wipe is in progress,
+        /// so by the time a surface shows a suspension it is already out of date, and it excludes
+        /// everything added since. A sentence like "42 of 240 files" built from it would be a lie
+        /// in exactly the situation where the user most needs the truth. Use it only as the
+        /// percentage arm's divisor and to explain WHY the breaker tripped; read the mapping's
+        /// current size from `tree_synced`.
         tracked_items: usize,
         /// The `sync.mass_delete_percent` value in force.
         percent_threshold: u8,

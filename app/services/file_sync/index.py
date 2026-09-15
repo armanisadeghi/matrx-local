@@ -39,6 +39,82 @@ _FILE_FEED_TO_MIRROR = {
     "deleted_at": "deleted_at",
 }
 
+# ── A cloud RECORD is not a feed ENTRY (fixed 2026-09-15) ───────────────────
+#
+# 🚨 THE TWO SHAPES USE DIFFERENT NAMES FOR THE SAME THREE FIELDS.
+# The change feed (GET /files/sync/changes) sends `file_id`, `version` and
+# `folder_id`. The record read (GET /files/{id}, matrx-files `FileRecord`)
+# sends `id`, `current_version` and `parent_folder_id` for exactly those
+# fields. Both post-write echo sites in engine.py hand-built a feed entry out
+# of a RECORD payload with `record.get("file_id")`, so every echo after an
+# upload, rename or move produced file_id=None (plus version=None and
+# folder_id=None), the mirror upsert below refused it, and it logged one ERROR
+# carrying the whole row — again on every retry of the same push, forever.
+#
+# One converter, here beside the wire mapping it has to agree with, so the two
+# call sites cannot drift from it or from each other again.
+def record_to_feed_entry(
+    record: dict[str, Any], *, checksum: str | None = None
+) -> dict[str, Any]:
+    """A ``FileRecord`` payload in the change-feed entry shape.
+
+    ``checksum`` overrides the record's own when the caller knows the bytes it
+    just wrote (the upload echo hashes them locally).
+    """
+    entry: dict[str, Any] = {
+        "file_id": record.get("id") or record.get("file_id"),
+        "file_path": record.get("file_path"),
+        "file_name": record.get("file_name"),
+        "mime_type": record.get("mime_type"),
+        "size_bytes": record.get("size_bytes"),
+        "checksum": checksum if checksum is not None else record.get("checksum"),
+        "visibility": record.get("visibility"),
+        "version": record.get("current_version") or record.get("version"),
+        "folder_id": record.get("parent_folder_id") or record.get("folder_id"),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+        "deleted_at": record.get("deleted_at"),
+    }
+    return entry
+
+
+# ── An entry the mirror cannot key is named ONCE, then counted ───────────────
+#
+# The refusal itself is right (a row with no id cannot be stored), but it was
+# an ERROR per occurrence carrying the full row, and the producer bug above
+# made the same row fail on every cycle — a log loop that said the same thing
+# thousands of times and still named no remedy. The skip is now announced once
+# per (table, path) with what to do about it, and the recurrence accrues in
+# ``unmirrorable_entry_state()`` for anything that wants to show it.
+_reported_unmirrorable: set[tuple[str, str]] = set()
+_unmirrorable_counts: dict[str, int] = {}
+
+
+def unmirrorable_entry_state() -> dict[str, int]:
+    """Entries this process refused to mirror, per table. Never resets."""
+    return dict(_unmirrorable_counts)
+
+
+def report_unmirrorable_entry(table: str, entry: dict[str, Any], *, reason: str) -> None:
+    """Announce an unkeyable entry once; count every repeat silently."""
+    _unmirrorable_counts[table] = _unmirrorable_counts.get(table, 0) + 1
+    key = (table, str(entry.get("file_path") or entry.get("folder_path") or ""))
+    if key in _reported_unmirrorable:
+        return
+    _reported_unmirrorable.add(key)
+    logger.error(
+        "[file_sync] %s: an entry for %r %s, so it cannot be stored in the local "
+        "mirror and was skipped. Nothing is lost cloud-side; this replica is "
+        "missing that row until a producer sends it with an id. WHAT TO DO: the "
+        "sender is either the change feed or one of this engine's own post-write "
+        "echoes — an echo must convert the record with "
+        "file_sync.index.record_to_feed_entry, never read feed key names off a "
+        "record payload. Reported once per path; repeats accrue in "
+        "file_sync.unmirrorable_entry_state(). Entry: %r",
+        table, key[1] or "(no path)", reason, entry,
+    )
+
+
 _FOLDER_FEED_TO_MIRROR = {
     "folder_id": "id",
     "folder_path": "folder_path",
@@ -82,7 +158,7 @@ class FileSyncIndex:
                     value = int(value)
                 cols[col] = value
         if "id" not in cols or cols["id"] is None:
-            logger.error("[file_sync] %s feed entry missing id — skipped: %r", table, entry)
+            report_unmirrorable_entry(table, entry, reason="carries no id")
             return
         db = get_db()
         col_sql = ", ".join(f'"{c}"' for c in cols)

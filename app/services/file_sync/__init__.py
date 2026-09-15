@@ -6,5 +6,14 @@ tree + placeholders locally, bytes hydrated on demand).
 """
 
 from app.services.file_sync.engine import FileSyncEngine, get_file_sync_engine
+from app.services.file_sync.index import (
+    record_to_feed_entry,
+    unmirrorable_entry_state,
+)
 
-__all__ = ["FileSyncEngine", "get_file_sync_engine"]
+__all__ = [
+    "FileSyncEngine",
+    "get_file_sync_engine",
+    "record_to_feed_entry",
+    "unmirrorable_entry_state",
+]

@@ -46,6 +46,15 @@ Doctrine: `docs/SYNC_CONTRACT.md` (this feature has a row in its matrix).
   index-only, disk untouched, ERROR-logged.
 - **Placeholders are zero-byte**; a placeholder that gains content is a local
   edit. A 0-byte watcher event on a pointer is churn, ignored.
+- **A cloud RECORD is not a feed ENTRY.** The feed says `file_id` / `version` /
+  `folder_id`; `GET /files/{id}` says `id` / `current_version` /
+  `parent_folder_id` for the same three fields. Every post-write echo converts
+  with `index.record_to_feed_entry` — reading feed names off a record payload
+  yields `file_id=None`, which the mirror refuses (guard:
+  `tests/unit/test_file_sync_record_echo.py`, incl. a census of the echo sites).
+- **An entry the mirror cannot key is named ONCE per path**, with its remedy,
+  and the repeats accrue in `unmirrorable_entry_state()` — never one ERROR per
+  occurrence. A skipped entry is counted as `skipped`, never as `applied`.
 - **Cursor** = the feed's opaque `next_cursor`, checkpointed in `sync_meta`
   entity `files.files`. Never parse it; never substitute a raw timestamp.
 - System paths (`generations/`, `system-files/`) never sync — excluded

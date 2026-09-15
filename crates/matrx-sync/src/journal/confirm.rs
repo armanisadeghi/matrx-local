@@ -1,25 +1,35 @@
 //! The three — and only three — doors into `tree_synced` (invariant I1).
 //!
-//! **This file is the whole allowlist.** `tests/journal.rs::the_synced_write_guard_is_referenced_
-//! only_from_its_allowlist` greps the crate and fails if `synced_write_guard` is named anywhere
-//! but here, its migration, and that test. Hostile re-verification pointed out (G4) that migration
-//! `002`'s claim — "only the three confirmation methods raise the flag" — was itself a convention
-//! claim of exactly the kind that got the old `connection()` comment condemned. Now the claim is
-//! checked: if a fourth site ever reaches for the flag, CI says so.
+//! **This file is the whole allowlist, and the compiler enforces it.** Every write to
+//! `tree_synced` goes through [`GuardRaised::write`], which needs a `GuardRaised` — a struct
+//! private to this module whose only constructor is private to this module. A fourth door is a
+//! **compile error**, not a test finding.
+//!
+//! That is the primary enforcement as of the third hostile pass (H2). Before it, the allowlist was
+//! a substring grep over the crate, and the grep was defeated in two lines: a new `src/` file
+//! spelling the flag as `concat!("synced_write", "_", "guard")` fabricated a flagged row and CI
+//! stayed green. A grep catches a developer who writes the name, not one who writes a wrapper. A
+//! type cannot be reached by string concatenation. The grep survives as a clearly-labelled
+//! **secondary** check, widened to `tree_synced` writes, which does catch that probe.
+//!
+//! The history this replaces: migration `002`'s claim that "only the three confirmation methods
+//! raise the flag" was a convention claim of exactly the kind that got the old `connection()`
+//! comment condemned (G4).
 //!
 //! # Threat model
 //!
 //! The guard defends the invariant against **mistake**, across every accidental and cross-process
 //! route: a plain `INSERT`, an `UPDATE` or `DELETE` of a legitimately confirmed row, a second
 //! `rusqlite::Connection` on the same file, and an `ATTACH` from an unrelated connection are all
-//! refused by `RAISE(ABORT)` — the re-verifier ran all four.
+//! refused by `RAISE(ABORT)` — a verifier ran all four.
 //!
 //! It does **not** defend against a caller that means it. Code in this process can
 //! `UPDATE synced_write_guard SET active = 1` or `DROP TRIGGER` through
 //! [`super::Journal::connection`] and then write whatever it likes; the DDL change even persists.
 //! A co-located process with the journal file open can do the same. That is out of the threat
 //! model and is stated rather than papered over: this is enforcement against error, not against
-//! intent, and the grep test above is what keeps intent from arriving by accident.
+//! intent. What changed with H2 is that a mistake now has to get past the **type system** first,
+//! not a string search.
 
 use super::{Journal, LocalConfirmation, RemoteConfirmation};
 use crate::model::{OpKind, OpState};
@@ -132,8 +142,8 @@ impl Journal {
                 )));
             }
         }
-        raise_guard(&tx, "confirm_op")?;
-        tx.execute(
+        let guard = GuardRaised::raise(&tx, "confirm_op")?;
+        guard.write(
             "INSERT OR REPLACE INTO tree_synced
                (mapping_id, path_nfc, is_dir, size, mtime_ns, volume_id, file_id, content_hash,
                 remote_file_id, remote_version, checksum, local_edit_flagged, synced_at)
@@ -154,7 +164,7 @@ impl Journal {
                 synced_at,
             ],
         )?;
-        lower_guard(&tx)?;
+        guard.release()?;
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",
@@ -185,14 +195,14 @@ impl Journal {
             )));
         }
         let tx = self.conn.transaction()?;
-        let found: Option<(String, String, String, Option<String>)> = tx
+        let found: Option<(String, String, String, String, Option<String>)> = tx
             .query_row(
-                "SELECT mapping_id, path_nfc, state, lease_owner FROM ops WHERE id = ?1",
+                "SELECT mapping_id, path_nfc, kind, state, lease_owner FROM ops WHERE id = ?1",
                 params![id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?;
-        let Some((mapping_id, path_nfc, state, lease_owner)) = found else {
+        let Some((mapping_id, path_nfc, kind, state, lease_owner)) = found else {
             return Err(SyncError::SyncedWriteRefused(format!("op {id} does not exist")));
         };
         if state != OpState::Leased.as_str() || lease_owner.as_deref() != Some(owner) {
@@ -200,12 +210,28 @@ impl Journal {
                 "op {id} is not leased by {owner:?} (state '{state}')"
             )));
         }
-        raise_guard(&tx, "confirm_delete_op")?;
-        tx.execute(
+        let Some(kind) = OpKind::parse(&kind) else {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} has an unknown kind '{kind}'"
+            )));
+        };
+        let guard = GuardRaised::raise(&tx, "confirm_delete_op")?;
+        guard.write(
             "DELETE FROM tree_synced WHERE mapping_id = ?1 AND path_nfc = ?2",
             params![mapping_id, path_nfc],
         )?;
-        lower_guard(&tx)?;
+        guard.release()?;
+        // H1: the breaker's rolling window is recorded in the SAME transaction that removes the
+        // synced row, so a crash between the delete and its accounting is impossible and the count
+        // survives the restart an `rm -rf` frequently causes. Only the two ops that actually
+        // destroy a user-visible copy count; `unindex` and the like are bookkeeping.
+        if matches!(kind, OpKind::DeleteLocal | OpKind::DeleteRemote) {
+            tx.execute(
+                "INSERT INTO mass_delete_window (mapping_id, at, kind, path_nfc)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![mapping_id, now, kind.as_str(), path_nfc],
+            )?;
+        }
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",
@@ -273,8 +299,8 @@ impl Journal {
                 "op {id} is not leased by {owner:?} (state '{state}')"
             )));
         }
-        raise_guard(&tx, "preserve_local_edit")?;
-        tx.execute(
+        let guard = GuardRaised::raise(&tx, "preserve_local_edit")?;
+        guard.write(
             "INSERT OR REPLACE INTO tree_synced
                (mapping_id, path_nfc, is_dir, size, mtime_ns, volume_id, file_id, content_hash,
                 remote_file_id, remote_version, checksum, local_edit_flagged, synced_at)
@@ -293,7 +319,7 @@ impl Journal {
                 at,
             ],
         )?;
-        lower_guard(&tx)?;
+        guard.release()?;
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",
@@ -305,21 +331,49 @@ impl Journal {
 
 }
 
-/// Raise the `tree_synced` write guard for the rest of this transaction (migration `002`).
-fn raise_guard(tx: &rusqlite::Transaction<'_>, door: &str) -> Result<()> {
-    tx.execute(
-        "UPDATE synced_write_guard SET active = 1, door = ?1 WHERE id = 1",
-        params![door],
-    )?;
-    Ok(())
+/// **Proof, in the type system, that the `tree_synced` write guard is raised.**
+///
+/// The struct is private to this module and [`GuardRaised::raise`] is its ONLY constructor, so no
+/// other module in the crate can produce one — and every write to `tree_synced` in this crate goes
+/// through [`GuardRaised::write`], which needs one. A fourth door into the synced tree is therefore
+/// a **compile error**, not a test finding.
+///
+/// That replaces the substring-grep allowlist as the primary enforcement. The third hostile pass
+/// (H2) defeated the grep in two lines — `concat!("synced_write", "_", "guard")` in a new `src/`
+/// file fabricated a flagged row and CI stayed green — because a grep catches a developer who
+/// writes the name, not one who writes a wrapper. A type cannot be reached by string concatenation.
+///
+/// It still does not defend against raw SQL through [`super::Journal::connection`]; that remains
+/// out of the threat model, stated at the top of this file.
+struct GuardRaised<'a> {
+    tx: &'a rusqlite::Transaction<'a>,
 }
 
-/// Lower it again, so nothing later in the same transaction writes unauthorised.
-fn lower_guard(tx: &rusqlite::Transaction<'_>) -> Result<()> {
-    tx.execute(
-        "UPDATE synced_write_guard SET active = 0, door = NULL WHERE id = 1",
-        [],
-    )?;
-    Ok(())
-}
+impl<'a> GuardRaised<'a> {
+    /// Raise the guard for the rest of this transaction (migration `002`).
+    ///
+    /// Private, and private on purpose: this is the whole allowlist.
+    fn raise(tx: &'a rusqlite::Transaction<'a>, door: &str) -> Result<Self> {
+        tx.execute(
+            "UPDATE synced_write_guard SET active = 1, door = ?1 WHERE id = 1",
+            params![door],
+        )?;
+        Ok(GuardRaised { tx })
+    }
 
+    /// Write `tree_synced` under the raised guard. Requires `&self`, so it requires the proof.
+    fn write(&self, sql: &str, p: impl rusqlite::Params) -> Result<usize> {
+        Ok(self.tx.execute(sql, p)?)
+    }
+
+    /// Lower it again, so nothing later in the same transaction writes unauthorised.
+    ///
+    /// Takes `self` by value: the proof is consumed, so no write can follow the release.
+    fn release(self) -> Result<()> {
+        self.tx.execute(
+            "UPDATE synced_write_guard SET active = 0, door = NULL WHERE id = 1",
+            [],
+        )?;
+        Ok(())
+    }
+}

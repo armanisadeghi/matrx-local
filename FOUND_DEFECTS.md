@@ -783,6 +783,28 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   watches exists today, which is itself part of the defect).
 - **Owner hint:** tools / engine performance.
 
+## Docs
+
+### MXL-D-093 — `docs/official/lifecycle-ownership.md` still shows `assign_engine_port` in the startup sequence, which is no longer the path
+- **Area:** `docs/official/lifecycle-ownership.md:69` (the "Startup sequence
+  (normal)" diagram)
+- **Symptom:** the diagram reads `→ assign_engine_port → ~/.matrx/local.json`.
+  Since 2026-09-15 run.py claims the port with `bind_engine_port`, which binds
+  and KEEPS the socket and hands it to uvicorn (the check-then-bind race fix);
+  `assign_engine_port` survives only as the reporting-only helper behind
+  `python -m app.preflight ports`, and it explicitly must not be used to decide
+  where a server binds. An agent reading the diagram would reintroduce the race.
+- **Evidence:** the line above vs. `app/preflight.py::bind_engine_port` and
+  `run.py` (`port, engine_socket = bind_engine_port()` →
+  `server.run(sockets=[sock])`). Guard:
+  `tests/unit/test_port_claim_is_atomic.py`.
+- **Status:** open — flagged, NOT edited: `docs/official/**` needs Arman's
+  explicit approval (CLAUDE.md § Working style), and this is a one-line
+  correction inside a diagram he owns.
+- **Analysis stamp:** Analyzed 2026-09-15 — verified in code.
+- **Owner hint:** one word in one line (`assign_engine_port` →
+  `bind_engine_port`), once approved.
+
 ## Testing infrastructure
 
 ### MXL-D-092 — `test_managed_runtime_bundle` fails as a 30 s timeout on a busy machine, so the frozen-bundle guard is red for reasons that have nothing to do with the bundle

@@ -19,6 +19,7 @@ from app.config import LOCAL_DB_PATH
 from app.common.system_logger import get_logger
 from app.services.local_db.mirror import attach_and_ensure_mirror
 from app.services.local_db.schema import MIGRATIONS
+from app.services.local_db.write_gate import write_gate
 
 logger = get_logger()
 
@@ -31,6 +32,10 @@ class LocalDatabase:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or LOCAL_DB_PATH
         self._db: Optional[aiosqlite.Connection] = None
+        # The write-gate hold covering this connection's open transaction, and
+        # whether a statement has actually opened one under it yet.
+        self._gate = None
+        self._gate_armed = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -81,6 +86,7 @@ class LocalDatabase:
         logger.info("[local_db] Connected to %s", self.path)
 
     async def close(self) -> None:
+        self._release_write_gate()
         if self._db:
             await self._db.close()
             self._db = None
@@ -96,19 +102,110 @@ class LocalDatabase:
     # Convenience: execute / fetch
     # ------------------------------------------------------------------
 
+    # ── The write gate on the SHARED connection ──────────────────────────
+    #
+    # 🚨 THIS CONNECTION IS THE OTHER HALF OF THE RACE (fixed 2026-09-14).
+    # `write_gate.py` was written to serialize this app's writers against the
+    # coding-session bridge's BEGIN IMMEDIATE connections. Only the bridge side
+    # ever took it; ~70 write call sites reached SQLite through the three
+    # methods below and took nothing, so SQLite kept arbitrating and kept
+    # handing the loser `database is locked` — 328 tracebacks and 48
+    # SQLITE_BUSY_SNAPSHOT in the 72h to 2026-09-14.
+    #
+    # Gating it HERE, once, is what brings those ~70 writers under the gate
+    # without touching them. It is held for the whole implicit transaction
+    # (first write → COMMIT/ROLLBACK), not per statement: a per-statement hold
+    # would release while this connection still owned SQLite's write lock,
+    # which is the same race with extra steps. The gate is reentrant per task,
+    # so the `async with write_gate():` blocks that call these methods are
+    # unaffected.
+    _WRITE_VERBS = (
+        "INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT",
+        "CREATE", "DROP", "ALTER", "TRUNCATE", "VACUUM", "BEGIN",
+    )
+
+    @classmethod
+    def _is_write(cls, sql: str) -> bool:
+        head = sql.lstrip().lstrip("(").lstrip()[:9].upper()
+        return any(head.startswith(verb) for verb in cls._WRITE_VERBS)
+
+    async def _hold_write_gate(self, sql: str) -> None:
+        """Take the gate before the first write of a transaction."""
+        if self._gate is not None or not self._is_write(sql):
+            return
+        hold = write_gate()
+        self._gate_armed = False
+        await hold.acquire(stale_check=self._gate_is_stale)
+        self._gate = hold
+
+    def _gate_is_stale(self) -> bool:
+        """True once this connection's transaction is over by ANY route.
+
+        Callers can end it without passing through ``commit()`` — a raw
+        ``connection.rollback()`` does, and tests do exactly that. The hold
+        then guards nothing, and the next writer should not wait for it.
+        """
+        return (
+            self._gate_armed
+            and self._db is not None
+            and not self._db.in_transaction
+        )
+
+    def _release_write_gate(self) -> None:
+        self._gate_armed = False
+        hold, self._gate = self._gate, None
+        if hold is not None:
+            hold.release()
+
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
+        await self._hold_write_gate(sql)
         try:
-            return await self.db.execute(sql, params)
+            cursor = await self.db.execute(sql, params)
         except sqlite3.OperationalError as exc:
             await self._discard_transaction_after(exc, sql)
+            # A rolled-back or never-opened transaction holds no write lock,
+            # so the gate goes on to the next writer instead of waiting out
+            # its bounded timeout. A transaction still open (a non-lock error
+            # mid-write) keeps it, because this connection still owns SQLite's
+            # write lock.
+            self._release_gate_if_no_transaction()
             raise
+        except BaseException:
+            self._release_gate_if_no_transaction()
+            raise
+        self._release_gate_if_no_transaction()
+        return cursor
 
     async def executemany(self, sql: str, params_seq) -> aiosqlite.Cursor:
+        await self._hold_write_gate(sql)
         try:
-            return await self.db.executemany(sql, params_seq)
+            cursor = await self.db.executemany(sql, params_seq)
         except sqlite3.OperationalError as exc:
             await self._discard_transaction_after(exc, sql)
+            # A rolled-back or never-opened transaction holds no write lock,
+            # so the gate goes on to the next writer instead of waiting out
+            # its bounded timeout. A transaction still open (a non-lock error
+            # mid-write) keeps it, because this connection still owns SQLite's
+            # write lock.
+            self._release_gate_if_no_transaction()
             raise
+        except BaseException:
+            self._release_gate_if_no_transaction()
+            raise
+        self._release_gate_if_no_transaction()
+        return cursor
+
+    def _release_gate_if_no_transaction(self) -> None:
+        """A statement that left no open transaction (DDL, a PRAGMA, an
+        autocommit write) has nothing left to protect — hand the gate on
+        immediately instead of waiting for a COMMIT that will never come."""
+        db = self._db
+        if self._gate is None:
+            return
+        if db is not None and db.in_transaction:
+            self._gate_armed = True
+            return
+        self._release_write_gate()
 
     async def fetchone(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
         self.db.row_factory = aiosqlite.Row
@@ -126,6 +223,9 @@ class LocalDatabase:
         except sqlite3.OperationalError as exc:
             await self._discard_transaction_after(exc, "COMMIT")
             raise
+        finally:
+            # The transaction is over either way; never keep the gate past it.
+            self._release_write_gate()
 
     # Extended result codes meaning "another connection holds or held the
     # lock". The busy handler covers plain BUSY; BUSY_SNAPSHOT is the one
@@ -179,6 +279,8 @@ class LocalDatabase:
             "is not poisoned; the caller sees the original error",
             name or exc, head,
         )
+        # The transaction this gate was covering is gone with the rollback.
+        self._release_write_gate()
 
     # ------------------------------------------------------------------
     # Migrations

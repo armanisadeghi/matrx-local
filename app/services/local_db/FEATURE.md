@@ -95,6 +95,22 @@ phrase in the sync directories.
   `tests/unit/test_local_db_lock_race_rollback.py` (fails without the rollback).
   Top-level write spans still take `write_gate()`; the rollback is what stops
   a lost race from becoming permanent.
+- **EVERY writer is inside `write_gate()` — including the shared connection.**
+  The gate is taken at ONE seam: `LocalDatabase.execute/executemany` acquire it
+  before the first write of a transaction and `commit()`/the rollback release
+  it, which brings the ~70 write call sites that reach SQLite through this
+  class under the gate without touching them. Before 2026-09-14 only the
+  `coding_sessions` `BEGIN IMMEDIATE` connections took it, so the two parties
+  in the race the gate was written for were never mutually excluded: 328
+  `database is locked` tracebacks and 48 `SQLITE_BUSY_SNAPSHOT` in 72h. The
+  gate is therefore reentrant per task (the gated call sites call
+  `LocalDatabase.execute` from inside their own `async with write_gate():`),
+  and its wait is bounded — a hold whose transaction is already over is
+  reclaimed at once, and one that never ends is taken back after 30s with a
+  loud ERROR rather than hanging the app. A file that opens its OWN aiosqlite
+  connection onto `matrx.db` must take the gate itself. Guard:
+  `tests/unit/test_local_db_write_gate_covers_shared_connection.py` (10 tests;
+  6 fail on the pre-fix seam, and one is a census over `app/**`).
 - **Offline skips are LOUD and recorded** in `sync_meta.status`
   (`skipped`/`offline`); stale cache is served, never wiped. Agents sync needs
   a user JWT (from `auth_tokens`); no token ⇒ loud skip, cache kept.

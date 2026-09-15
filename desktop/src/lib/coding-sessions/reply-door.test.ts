@@ -119,6 +119,39 @@ describe("the desktop reply door renders the server's verdict, never its own", (
     );
   });
 
+  /**
+   * The payload below is VERBATIM from production on 2026-09-15: the response
+   * of `GET /api/coding-sessions/conversations/e812c501-…/responder` as
+   * admin@admin.com for admin's own mirrored Claude Code session. A door
+   * tested only against payloads its author invented proves nothing about the
+   * server's real words.
+   */
+  it("renders the real production report for admin's own mirrored session", () => {
+    const live: CodingReplyResponderReport = {
+      schema_version: 1,
+      conversation_id: "e812c501-d912-55be-af02-df08dc2ded74",
+      is_coding_session_mirror: true,
+      provider: "claude_code",
+      origin: "independent_hook",
+      composer_label:
+        "Coding Session Responder is answering — Claude Code will not see this reply.",
+      can_reply: true,
+      responder: {
+        agent_id: "5cf03c54-216f-4199-ab76-f6299c8a0030",
+        agent_name: "Coding Session Responder",
+        setting_key: "coding_session.conversation_responder",
+        used_platform_default: false,
+      },
+    };
+    const view = replyDoorView({ status: "ready", report: live, error: null });
+    expect(view.label).toBe(
+      "Coding Session Responder is answering — Claude Code will not see this reply.",
+    );
+    expect(view.inputBlocked).toBe(false);
+    expect(view.standInNotice).toBeNull();
+    expect(view.sourceFeature).toBe("coding_session_reply");
+  });
+
   it("leaves an ordinary chat conversation completely alone", () => {
     const view = replyDoorView({
       status: "ready",

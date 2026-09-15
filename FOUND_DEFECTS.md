@@ -30,6 +30,42 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ---
 
+## Test harness
+
+### MXL-D-091 — CS-19 removed the browser-mode login the whole E2E suite depends on, so no authenticated desktop UI can be verified
+- **Area:** `desktop/e2e/helpers.ts:79-101` (`loginViaUI` fills "Email"/"Password"
+  and clicks "Sign in"), consumed by every authenticated spec
+  (`auth.spec.ts`, `cloud-chat-live.spec.ts`, `coding-sessions-tabs.spec.ts`,
+  `claude-code-page.spec.ts`, `coding-sessions-diagnosis.spec.ts`,
+  `media-gen.spec.ts`); `desktop/src/lib/custodian.ts:117` is the reason —
+  the webview's session now comes only from the daemon through the Tauri
+  command `syncd_client_config`, which does not exist in a browser.
+- **Symptom:** On v1.4.126 the Login page renders "AI Matrx Sync is not running
+  on this computer, so there is no signed-in session. Choose Start sync to
+  start it." with a single "Sign in with AI Matrx" OAuth button and no email or
+  password field, so `loginViaUI` fails at `page.getByLabel("Email").fill(...)`
+  and every authenticated browser-mode spec is unrunnable. `playwright test`
+  on 2026-09-15 (XT-04) failed both of its captures this way before reaching
+  the surface under test.
+- **Consequence:** `docs/UI_TESTING.md`'s browser-mode rung — this repo's ONLY
+  way for an agent to verify an authenticated screen without touching Arman's
+  installed app — is gone, and nothing announced it. Lanes that need UI proof
+  are left with a choice between no evidence and the installed app they may
+  not touch.
+- **Status:** open — **needs a decision, not a patch.** Restoring browser-mode
+  authentication means giving the webview a session path that does not go
+  through Tauri, which is an auth-surface change (D17 put the only durable
+  credential in the daemon's keychain on purpose). Whoever owns custody should
+  choose between: a test-only daemon read-token handoff via a Vite env var, a
+  Tauri-hosted E2E driver, or declaring browser mode unauthenticated and moving
+  every authenticated spec to a driven Tauri build.
+- **Analysis stamp:** Analyzed 2026-09-15 — verified live: Playwright run against
+  the worktree at `4e926fb45`+XT-04, screenshot
+  `common-docs/projects/coding-agent-bridge/evidence/xt04-03-browser-login-removed.png`.
+- **Owner hint:** the custody/CS-19 lane (it closed the door) with the E2E harness.
+
+---
+
 ## Notes sync / data safety
 
 ### MXL-D-074 — Notes sync mass-deleted 2,600+ cloud notes across four waves; local trigger unidentified

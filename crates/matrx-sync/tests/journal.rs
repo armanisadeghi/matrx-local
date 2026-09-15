@@ -75,12 +75,11 @@ fn a_fresh_journal_migrates_to_the_binarys_max_version() {
     // The expected version is spelled out, not just compared with itself, so adding a migration —
     // or amending one in place — is a deliberate, visible change rather than a silent one.
     //
-    // 003 was amended IN PLACE on 2026-09-15 to add `mass_delete_window_open` (the breaker's frozen
-    // denominator). That is normally forbidden — migrations are forward-only and an edit leaves
-    // every already-migrated journal behind — and was acceptable only because 003 had shipped to no
-    // user: there is no daemon yet, the only journals carrying it are this crate's own tempdirs and
-    // in-memory databases, and matrx-local is pre-launch. The next schema change is 004.
-    const EXPECTED_VERSION: i64 = 3;
+    // 003 was briefly amended in place to add `mass_delete_window_open`, which was wrong: a journal
+    // already at version 3 never re-runs 003, so it never got the table and the next breaker read
+    // failed with `no such table`. 003 has been restored to its committed body and 004 carries the
+    // addition. `no_migration_file_changes_after_it_is_committed` now makes a repeat a failure.
+    const EXPECTED_VERSION: i64 = 4;
 
     let j = Journal::open_in_memory().expect("open");
     assert_eq!(
@@ -1018,4 +1017,118 @@ fn a_backwards_clock_cannot_shrink_the_deletion_window() {
         Some(0),
         "and the window it opened must stay inside the window too"
     );
+}
+
+/// J2: a journal that already reached `schema_version = 3` while `003` carried the in-place
+/// amendment — or, the case that actually bites, one that reached 3 **before** it did — must upgrade
+/// cleanly.
+///
+/// That is the whole reason migrations are forward-only, and the reason the suite could not see the
+/// bug: every other test opens a FRESH journal, where 003 and 004 both run. This one builds the old
+/// state by hand.
+#[test]
+fn a_journal_left_at_version_3_without_the_table_upgrades_cleanly() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("syncd.db");
+
+    // Build a journal exactly as a binary that shipped migrations 1..=3 would have left it.
+    {
+        let conn = rusqlite::Connection::open(&path).expect("open raw");
+        for m in matrx_sync::journal::MIGRATIONS.iter().filter(|m| m.version <= 3) {
+            conn.execute_batch(m.sql).expect("apply");
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?1, '2026-09-15T00:00:00Z')",
+                [m.version],
+            )
+            .expect("record");
+        }
+        let has_table: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='mass_delete_window_open'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert_eq!(
+            has_table, 0,
+            "this test proves nothing unless the old journal really lacks the table"
+        );
+    }
+
+    // The binary opens it and carries it forward.
+    let j = Journal::open(&path).expect("upgrade an existing journal");
+    assert_eq!(j.schema_version().expect("version"), matrx_sync::journal::max_version());
+
+    // And the breaker read that used to fail with `no such table` now works.
+    j.put_mapping(&mapping_row()).expect("mapping");
+    assert_eq!(
+        j.window_item_count(MAPPING, "2000-01-01T00:00:00Z").expect("read"),
+        None
+    );
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("read"),
+        0
+    );
+}
+
+/// A migration is FROZEN once committed. An edit is invisible to every journal that already applied
+/// it, which is how `mass_delete_window_open` went missing from upgraded journals while the whole
+/// suite stayed green.
+///
+/// `migrations/MANIFEST` records each file's length and FNV-1a fingerprint. This is a **change
+/// detector**, not a security control — FNV-1a is not cryptographic and is not trying to be, and
+/// nothing here stops someone who edits the manifest too. It stops the edit nobody meant to make
+/// permanent.
+#[test]
+fn no_migration_file_changes_after_it_is_committed() {
+    fn fingerprint(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    let manifest = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/MANIFEST"),
+    )
+    .expect("migrations/MANIFEST is checked in");
+
+    let recorded: Vec<(String, usize, u64)> = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            let mut parts = l.split_whitespace();
+            let name = parts.next().expect("name").to_string();
+            let len: usize = parts.next().expect("length").parse().expect("a number");
+            let fp = u64::from_str_radix(parts.next().expect("fingerprint"), 16).expect("hex");
+            (name, len, fp)
+        })
+        .collect();
+
+    assert_eq!(
+        recorded.len(),
+        matrx_sync::journal::MIGRATIONS.len(),
+        "MANIFEST lists {} migrations, the binary carries {}. Adding a migration means adding its \
+         file, its MIGRATIONS entry AND its MANIFEST line.",
+        recorded.len(),
+        matrx_sync::journal::MIGRATIONS.len()
+    );
+
+    for (m, (name, len, fp)) in matrx_sync::journal::MIGRATIONS.iter().zip(&recorded) {
+        assert_eq!(&m.name, name, "MANIFEST is out of order with MIGRATIONS");
+        let bytes = m.sql.as_bytes();
+        assert_eq!(
+            (bytes.len(), fingerprint(bytes)),
+            (*len, *fp),
+            "migration {name} has CHANGED since it was committed. A journal that already applied \
+             it will never see the edit — that is what forward-only means, and it is exactly how \
+             `mass_delete_window_open` went missing from upgraded journals while every test, which \
+             opens a fresh journal, stayed green. Write a NEW migration instead. If this change is \
+             genuinely intended and no journal anywhere has applied the old body, update MANIFEST \
+             in the same commit and say why."
+        );
+    }
 }

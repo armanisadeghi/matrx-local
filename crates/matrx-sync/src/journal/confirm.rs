@@ -215,6 +215,13 @@ impl Journal {
                 "op {id} has an unknown kind '{kind}'"
             )));
         };
+        // The window's frozen denominator is the mapping's item count at the START of the window,
+        // so it is read BEFORE this deletion's row leaves `tree_synced`.
+        let item_count_before: i64 = tx.query_row(
+            "SELECT count(*) FROM tree_synced WHERE mapping_id = ?1",
+            params![mapping_id],
+            |r| r.get(0),
+        )?;
         let guard = GuardRaised::raise(&tx, "confirm_delete_op")?;
         guard.write(
             "DELETE FROM tree_synced WHERE mapping_id = ?1 AND path_nfc = ?2",
@@ -226,10 +233,45 @@ impl Journal {
         // survives the restart an `rm -rf` frequently causes. Only the two ops that actually
         // destroy a user-visible copy count; `unindex` and the like are bookkeeping.
         if matches!(kind, OpKind::DeleteLocal | OpKind::DeleteRemote) {
+            // I2: a clock that jumps BACKWARDS between instalments would stamp later deletions
+            // earlier, and they would then fall out of the window on the next correct-clock plan —
+            // one of two counted, in the fourth seat's probe. The window is monotonic by
+            // construction instead: a stamp is never earlier than the last one this mapping
+            // recorded. A forward jump needs no clamp; a future-stamped row stays inside the
+            // window, which errs toward suspending.
+            let latest: Option<String> = tx
+                .query_row(
+                    "SELECT max(at) FROM mass_delete_window WHERE mapping_id = ?1",
+                    params![mapping_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            let at = match latest {
+                Some(previous) if previous.as_str() > now => previous,
+                _ => now.to_string(),
+            };
+            // The frozen denominator, recorded once, by the deletion that OPENS the window, from
+            // the count taken above — before this row left `tree_synced` — so it is the mapping's
+            // item count at the window's start, which is what the percentage arm divides by.
+            // Reading `tree_synced` at plan time instead let files ADDED during the window dilute
+            // the percentage, and 38 of 40 propagated with no suspension.
+            let opened: i64 = tx.query_row(
+                "SELECT count(*) FROM mass_delete_window_open WHERE mapping_id = ?1",
+                params![mapping_id],
+                |r| r.get(0),
+            )?;
+            if opened == 0 {
+                tx.execute(
+                    "INSERT INTO mass_delete_window_open (mapping_id, opened_at, item_count)
+                     VALUES (?1, ?2, ?3)",
+                    params![mapping_id, at, item_count_before],
+                )?;
+            }
             tx.execute(
                 "INSERT INTO mass_delete_window (mapping_id, at, kind, path_nfc)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![mapping_id, now, kind.as_str(), path_nfc],
+                params![mapping_id, at, kind.as_str(), path_nfc],
             )?;
         }
         tx.execute(

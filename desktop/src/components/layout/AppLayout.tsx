@@ -13,10 +13,11 @@ import type { EngineStatus } from "@/hooks/use-engine";
 import type { TranscriptionState, TranscriptionActions } from "@/hooks/use-transcription";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import type { AppNotification } from "@/hooks/use-notifications";
-import type { User } from "@supabase/supabase-js";
+
 import { recovery } from "@/lib/recovery";
 import { RecoveryCenter } from "@/components/recovery/RecoveryCenter";
 import { SurfaceErrorBoundary } from "@/components/recovery/SurfaceErrorBoundary";
+import type { MatrxUser } from "@/lib/custodian";
 
 const NOOP = () => {};
 
@@ -35,7 +36,7 @@ interface AppLayoutProps {
   onOpenMonitor?: () => void;
   /** Full engine restart (stop → start → reconnect) — powers the down-banner. */
   onRestartEngine: () => Promise<void> | void;
-  user: User | null;
+  user: MatrxUser | null;
   onSignOut: () => void;
   // QuickActionBar props
   isRecording: boolean;

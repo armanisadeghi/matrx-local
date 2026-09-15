@@ -46,6 +46,7 @@ import {
   reconcileHydratedChatMessages,
 } from "@/lib/cloud-chat-message-reconciliation";
 import supabase from "@/lib/supabase";
+import { getAuthedSession, getSession, subscribeSession } from "@/lib/custodian";
 import {
   GOOGLE_FILES_CONTEXT_KEY,
   MAX_ATTACHED_GOOGLE_FILES,
@@ -930,21 +931,22 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       );
     };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    // FS-C5b: the session lifecycle is the daemon's. `supabase.auth.onAuthStateChange` throws in
+    // this process by construction, and there is nothing for it to observe — the user identity
+    // this hook cares about now arrives on `session.changed`.
+    const unsubscribe = subscribeSession((snapshot) => {
       authHydration.noteAuthEvent();
-      applyUser(session?.user.id ?? null);
+      applyUser(snapshot.user_id);
     });
-    void supabase.auth.getSession().then(({ data }) => {
+    void getSession().then((snapshot) => {
       if (authHydration.acceptsInitialResult(initialRequest)) {
-        applyUser(data.session?.user.id ?? null);
+        applyUser(snapshot.user_id);
       }
     });
 
     return () => {
       active = false;
-      subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
 
@@ -1020,9 +1022,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       return null;
     }
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       const status = await fetchLocalLlmStatus(engineUrl, session?.access_token);
       setLocalLlmStatus(status);
       setLocalLlmError(null);
@@ -1508,9 +1508,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         const localMandateKey = mandateKeyFromAgentRef(options?.agentId);
         if (localMandateKey) {
           try {
-            const {
-              data: { session },
-            } = await supabase.auth.getSession();
+            const session = await getAuthedSession();
             if (!session?.access_token) {
               throw new Error("Sign in before starting a chat.");
             }
@@ -1751,9 +1749,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       let delegationAccessToken = "";
       try {
         const getFreshAccessToken = async (): Promise<string> => {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
+          const session = await getAuthedSession();
           if (session?.user.id !== ownerAtStart || !session.access_token) {
             throw new DOMException("Chat owner changed while the run was active.", "AbortError");
           }

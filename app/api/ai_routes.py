@@ -257,30 +257,21 @@ async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
         if expires_at <= int(time.time()):
             return
 
-        from app.services.auth_session import SessionFenceError, get_auth_session
         from app.services.ai.engine import set_jwt_cache
+        from app.services.sync_client import get_sync_client
 
-        coordinator = get_auth_session()
-        current = await coordinator.snapshot()
-        if current.subject != user_id:
+        # FS-C5b: this used to install the request's bearer into the engine's own credential
+        # store, fenced against whatever the UI had pushed. There is no store and no push any
+        # more. All that is still worth doing is refusing a token for a different owner than the
+        # one the daemon says is signed in, and warming the in-memory JWT cache.
+        signed_in = await get_sync_client().user_id()
+        if signed_in is not None and signed_in != user_id:
             logger.warning(
                 "[ai_routes] refused request JWT adoption for a different owner "
-                "(persisted_user_id=%s request_user_id=%s)",
-                current.subject,
+                "(signed_in_user_id=%s request_user_id=%s)",
+                signed_in,
                 user_id,
             )
-            return
-        try:
-            await coordinator.install(
-                generation=current.generation,
-                revision=current.credential_revision,
-                subject=user_id,
-                access_token=bearer,
-                refresh_token=None,
-                expires_at=expires_at,
-                allow_initialize=False,
-            )
-        except SessionFenceError:
             return
         set_jwt_cache(bearer)
         logger.info(

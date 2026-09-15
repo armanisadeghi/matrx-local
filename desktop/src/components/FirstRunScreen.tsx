@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { Button, Progress } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import { AppVersion } from "@/lib/app-version";
 
 // ---------------------------------------------------------------------------
@@ -163,9 +163,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
       // We use fetch + ReadableStream rather than EventSource so we can POST
       // and pass auth headers. The existing SetupWizard uses EventSource with
       // GET semantics — here we do a POST with proper auth.
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       const token = session?.access_token ?? null;
       const requestHeaders: Record<string, string> = {
         Accept: "text/event-stream",

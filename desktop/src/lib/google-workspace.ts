@@ -16,6 +16,7 @@
 import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
 
 import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import { getAIDreamServerUrl, getWebAppOrigin } from "@/lib/app-config";
 import { requireActiveOrganizationId } from "@/lib/org/active-org";
 
@@ -218,9 +219,7 @@ export interface ReviewedGmailDraft {
 export async function sendReviewedGmail(
   draft: ReviewedGmailDraft,
 ): Promise<string> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getAuthedSession();
   if (!session?.access_token) {
     throw new Error("Sign in to send from your connected Google account.");
   }

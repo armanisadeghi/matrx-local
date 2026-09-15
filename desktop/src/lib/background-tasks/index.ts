@@ -1,10 +1,8 @@
 import { orchestrator } from "./orchestrator";
-import { pushTokenToPython } from "./tasks/token-sync";
 import { cloudSettingsSync, cloudHeartbeat } from "./tasks/cloud-sync";
 import { hydrateSettings, syncSettings } from "./tasks/settings";
 import { prefetchRemoteAccess, prefetchDevices, prefetchHardware } from "./tasks/prefetch";
 
-orchestrator.register(pushTokenToPython);
 orchestrator.register(cloudSettingsSync);
 orchestrator.register(hydrateSettings);
 orchestrator.register(syncSettings);

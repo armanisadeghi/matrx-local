@@ -53,7 +53,7 @@ import type {
   AutoUpdateActions,
 } from "@/hooks/use-auto-update";
 import type { AppNotification } from "@/hooks/use-notifications";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import type { MatrxUser as SupabaseUser } from "@/lib/custodian";
 
 export interface QuickActionBarProps {
   isRecording: boolean;

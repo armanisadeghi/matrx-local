@@ -1,6 +1,5 @@
-import { useState } from "react";
 import { Loader2, Zap } from "lucide-react";
-import { Button, BasicInput as Input, Label, Separator } from "@ai-matrx/design-system";
+import { Button } from "@ai-matrx/design-system";
 import { Card, CardContent } from "@/components/ui/card";
 import type { useAuth } from "@/hooks/use-auth";
 import { AppVersion } from "@/lib/app-version";
@@ -11,7 +10,6 @@ interface LoginProps {
   auth: Pick<
     AuthActions,
     | "signInWithOAuth"
-    | "signInWithEmail"
     | "loading"
     | "error"
     | "retryAccountCleanup"
@@ -19,20 +17,17 @@ interface LoginProps {
 }
 
 export function Login({ auth }: LoginProps) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-
   const handleOAuth = async () => {
     await auth.signInWithOAuth();
     // App.tsx watches auth.oauthPending — as soon as signInWithOAuth() sets it,
     // App.tsx swaps to <OAuthPending> automatically. No local state needed.
   };
 
-  const handleEmailSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || !password) return;
-    await auth.signInWithEmail(email, password);
-  };
+  // Email/password sign-in is gone (FS-C5b). It ran through
+  // `supabase.auth.signInWithPassword`, which throws in this process now that the client is built
+  // with the `accessToken` option, and the sync daemon's contract is PKCE only. A form that could
+  // not submit would be a dead control; "Sign in with AI Matrx" reaches the same accounts through
+  // the same provider.
 
   // ── Normal login page ──────────────────────────────────────────────
   return (
@@ -85,56 +80,6 @@ export function Login({ auth }: LoginProps) {
               )}
               Sign in with AI Matrx
             </Button>
-
-            {/* Divider */}
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">
-                  or continue with email
-                </span>
-              </div>
-            </div>
-
-            {/* Email / password */}
-            <form onSubmit={handleEmailSignIn} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="email"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </div>
-              <Button
-                type="submit"
-                variant="outline"
-                className="w-full"
-                disabled={auth.loading || !email || !password}
-              >
-              {auth.loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                "Sign in"
-              )}
-              </Button>
-            </form>
 
             {auth.error && (
               <div className="space-y-2 text-center">

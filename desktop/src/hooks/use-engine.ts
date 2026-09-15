@@ -10,11 +10,10 @@ import {
 import { ENGINE_PORT_RANGE_LABEL } from "@/lib/engine-ports";
 import { initPlatformCtx } from "@/lib/platformCtx";
 import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-tasks";
-import supabase from "@/lib/supabase";
+import { getAuthedSession, getToken } from "@/lib/custodian";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { useWindowLeader } from "@/hooks/use-window-leader";
 import {
-  invalidateNativeVaultBeforeHostMutation,
   nativeVaultEngineTransitionContext,
   alignNativeVaultEngineForCurrentSubject,
   subscribeNativeVaultHostEvents,
@@ -73,7 +72,7 @@ export function useEngine() {
   // exists by returning null, which authHeaders() converts to no header.
   useEffect(() => {
     engine.setTokenProvider(async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       return session?.access_token && nativeVaultEngineTransitionContext(session.user?.id)
         ? session.access_token
         : null;
@@ -272,7 +271,7 @@ export function useEngine() {
       // credential custody agree on this exact session.
       let acceptedSessionForTasks = false;
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         if (session?.access_token) {
           await alignNativeVaultEngineForCurrentSubject(session.user?.id ?? null);
           if (!nativeVaultEngineTransitionContext(session.user?.id)) {
@@ -280,13 +279,9 @@ export function useEngine() {
           }
           const context = nativeVaultEngineTransitionContext(session.user?.id);
           if (!context) throw new Error("Native Vault account fence has not adopted this session");
-          await engine.syncTokenToPython(
-            session.access_token,
-            session.user.id,
-            context,
-            session.refresh_token ?? undefined,
-            session.expires_in ?? undefined,
-          );
+          // FS-C5b: nothing is pushed to the engine any more. It asks the sync daemon for its own
+          // token (app/services/sync_client), so there is no window in which the engine holds a
+          // credential this window handed it and nothing headless can renew — MXL-D-046's shape.
           await engine.connectWebSocket(context);
           acceptedSessionForTasks = true;
           update({ wsConnected: true });
@@ -356,7 +351,7 @@ export function useEngine() {
     if (!isLeader) return;
     void (async () => {
       if (statusRef.current !== "connected") return;
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       if (!session?.user?.id || !nativeVaultEngineTransitionContext(session.user.id)) return;
       emitClientLog("info", "Promoted to leader window — starting adopted background tasks", "engine");
       startBackgroundTasks();
@@ -368,7 +363,7 @@ export function useEngine() {
   // authenticated cloud resource. Start it as soon as this window mounts so
   // login, logout, and packaged smoke runs all have the same lifecycle. Cloud
   // configuration and the authenticated WebSocket remain gated below on an
-  // actual Supabase session.
+  // actual signed-in session.
   useEffect(() => {
     if (statusRef.current !== "connected") {
       void initialize();
@@ -385,135 +380,18 @@ export function useEngine() {
       update({ wsConnected: false })
     );
 
-    // Push the session to the engine; if the engine REJECTS it (revoked or
-    // otherwise unverifiable), self-heal instead of staying silently split:
-    // one forced refresh mints a genuinely new session and is re-pushed; if
-    // that is rejected too, the session is dead — sign out so the login
-    // screen appears rather than a UI that looks signed in while every
-    // engine cloud lane (sync, coding bridge, browser runtime) is down.
-    const pushSessionToEngine = async (
-      accessToken: string,
-      userId: string,
-      refreshToken?: string,
-      expiresIn?: number,
-      isRetryAfterRefresh = false,
-    ): Promise<void> => {
-      if (!nativeVaultEngineTransitionContext(userId)) {
-        console.warn("[engine] refusing to hand off a session before native account reconciliation");
-        return;
-      }
-      try {
-        const context = nativeVaultEngineTransitionContext(userId);
-        if (!context) return;
-        await engine.syncTokenToPython(accessToken, userId, context, refreshToken, expiresIn);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        // A generation/revision conflict is never permission to replay the
-        // captured JWT. Read the current Supabase session and obtain a fresh
-        // engine context once; a second conflict stays fenced.
-        if (message.includes("409") && !isRetryAfterRefresh) {
-          const { data } = await supabase.auth.getSession();
-          const fresh = data.session;
-          const freshContext = fresh?.user?.id ? nativeVaultEngineTransitionContext(fresh.user.id) : null;
-          if (fresh?.access_token && fresh.user.id === userId && freshContext?.isCurrent()) {
-            await pushSessionToEngine(
-              fresh.access_token,
-              fresh.user.id,
-              fresh.refresh_token ?? undefined,
-              fresh.expires_in ?? undefined,
-              true,
-            );
-          }
-          return;
-        }
-        if (!message.includes("invalid_supabase_session")) {
-          console.warn("[engine] syncTokenToPython failed:", e);
-          return;
-        }
-        if (!isRetryAfterRefresh) {
-          console.warn(
-            "[engine] engine rejected the session; forcing a token refresh",
-          );
-          const { data, error } = await supabase.auth.refreshSession();
-          const refreshed = data?.session;
-          if (!error && refreshed?.access_token && refreshed.user?.id) {
-            await pushSessionToEngine(
-              refreshed.access_token,
-              refreshed.user.id,
-              refreshed.refresh_token ?? undefined,
-              refreshed.expires_in ?? undefined,
-              true,
-            );
-            return;
-          }
-        }
-        console.error(
-          "[engine] session rejected by the engine even after refresh — " +
-            "signing out so a real login can mint a valid session",
-        );
-        try {
-          await invalidateNativeVaultBeforeHostMutation();
-        } catch (cleanupError) {
-          // A local cleanup failure fences engine work, never the real host
-          // sign-out mutation. Supabase remains the session source of truth.
-          console.error("[engine] forced sign-out cleanup failed:", cleanupError);
-        }
-        try {
-          const result = await supabase.auth.signOut();
-          if (result.error) console.error("[engine] forced sign-out rejected:", result.error);
-        } catch (signOutError) {
-          console.error("[engine] forced sign-out failed:", signOutError);
-        }
-      }
-    };
+    // The token-push path is gone (SPEC-CUSTODY §10 step 3, D17).
+    //
+    // `syncTokenToPython`, `pushSessionToEngine`, `pushFreshSessionToEngine` and the forced
+    // `refreshSession`/`signOut` self-heal that hung off them all existed to keep a copy of this
+    // window's Supabase session alive inside the Python engine. There is no such copy now: the
+    // engine asks `matrx-syncd` for a short-lived token whenever it needs one, and the daemon is
+    // the only holder of anything renewable on the machine. A window that is closed, asleep or
+    // never opened cannot leave the engine stranded, which is the whole of MXL-D-046.
 
-    // Push the CURRENT session to the engine, refreshing first when the copy
-    // we hold is already (or nearly) expired. INITIAL_SESSION hands back the
-    // persisted session before supabase-js has refreshed it, and on
-    // 2026-09-11 that stale token was pushed, rightly rejected by the engine,
-    // and never replaced — every engine cloud lane then sat on a three-day-old
-    // token with 143,982 deliveries queued. The engine now asks for a fresh
-    // session over the socket (`session_refresh_requested`); this is the
-    // answer to that ask as well as the startup path.
-    const pushFreshSessionToEngine = async (reason: string): Promise<void> => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        let session = data.session;
-        const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
-        if (!session || expiresAtMs - Date.now() < 60_000) {
-          const refreshed = await supabase.auth.refreshSession();
-          if (refreshed.error || !refreshed.data.session) {
-            console.error(
-              `[engine] cannot hand the engine a fresh session (${reason}):`,
-              refreshed.error?.message ?? "no session",
-            );
-            return;
-          }
-          session = refreshed.data.session;
-        }
-        if (session.access_token && session.user?.id) {
-          await pushSessionToEngine(
-            session.access_token,
-            session.user.id,
-            session.refresh_token ?? undefined,
-            session.expires_in ?? undefined,
-            true,
-          );
-        }
-      } catch (e) {
-        console.error(`[engine] session hand-off failed (${reason}):`, e);
-      }
-    };
-
-    // The engine found its stored session expired and is asking for the
-    // current one. It rate-limits to once a minute per lane.
-    const offSessionRefresh = engine.on("message", (data: unknown) => {
-      const msg = data as { type?: string; lane?: string; reason?: string };
-      if (msg?.type !== "session_refresh_requested") return;
-      void pushFreshSessionToEngine(
-        `engine asked: ${msg.lane ?? "unknown lane"} — ${msg.reason ?? ""}`,
-      );
-    });
+    // `session_refresh_requested` is no longer answered here, and the engine no longer sends it:
+    // it asks the daemon directly, which is the one process that can actually mint a token. A
+    // handler that logged and did nothing would be worse than none.
 
     // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
     const authSub = subscribeNativeVaultHostEvents(({ event, session, revision, completion }) => {
@@ -528,7 +406,8 @@ export function useEngine() {
           if (!accepted || nativeVaultEngineTransitionContext(session?.user?.id)?.revision !== revision) return;
           if (session?.user?.id && !nativeVaultEngineTransitionContext(session.user.id)) return;
           if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
-            if (session?.access_token && session?.user?.id) {
+            const accessToken = session?.user?.id ? await getToken() : null;
+            if (accessToken && session?.user?.id) {
               if (statusRef.current === "connected" && !wsConnectedRef.current) {
                 try {
                   const context = nativeVaultEngineTransitionContext(session.user.id);
@@ -541,10 +420,6 @@ export function useEngine() {
               } else if (statusRef.current !== "connected") {
                 void initialize();
               }
-              // Push the JWT to Python so it persists across restarts —
-              // refreshed first when the persisted copy is already stale.
-              void pushFreshSessionToEngine(event);
-
               // Skip if initialize() already sent configure within the last 10s
               // to avoid a duplicate call on the INITIAL_SESSION event.
               if (Date.now() - lastCloudConfigureRef.current < 10_000) return;
@@ -552,27 +427,21 @@ export function useEngine() {
                 lastCloudConfigureRef.current = Date.now();
                 const context = nativeVaultEngineTransitionContext(session.user.id);
                 if (!context) return;
-                await engine.configureCloudSync(session.access_token, session.user.id, context);
+                await engine.configureCloudSync(accessToken, session.user.id, context);
                 engine.cloudHeartbeat(context).catch((e) => console.warn("[engine] cloudHeartbeat failed:", e));
               } catch (e) {
                 console.warn("[engine] configureCloudSync failed (non-critical):", e);
               }
             }
           } else if (event === "TOKEN_REFRESHED") {
-            if (session?.access_token && session?.user?.id) {
-              // Push refreshed JWT to Python immediately. Already-refreshed:
-              // a rejection here goes straight to sign-out, no second refresh.
-              void pushSessionToEngine(
-                session.access_token,
-                session.user.id,
-                session.refresh_token ?? undefined,
-                session.expires_in ?? undefined,
-                true,
-              );
+            // The daemon rotated. Nothing is pushed anywhere; cloud sync is simply re-armed with
+            // the new token, which the daemon has already minted.
+            const rotated = session?.user?.id ? await getToken() : null;
+            if (rotated && session?.user?.id) {
               try {
                 const context = nativeVaultEngineTransitionContext(session.user.id);
                 if (!context) return;
-                await engine.reconfigureCloudSync(session.access_token, session.user.id, context);
+                await engine.reconfigureCloudSync(rotated, session.user.id, context);
               } catch (e) {
                 console.warn("[engine] reconfigureCloudSync failed (non-critical):", e);
               }
@@ -623,7 +492,7 @@ export function useEngine() {
     const heartbeatInterval = setInterval(() => {
       if (!isLeaderRef.current) return;
       void (async () => {
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         const context = nativeVaultEngineTransitionContext(session?.user?.id);
         if (context) await engine.cloudHeartbeat(context);
       })().catch((e) => console.warn("[engine] periodic heartbeat failed:", e));
@@ -634,7 +503,6 @@ export function useEngine() {
       offConnected();
       offDisconnected();
       authSub();
-      offSessionRefresh();
       clearInterval(healthInterval);
       clearInterval(heartbeatInterval);
       stopBackgroundTasks();

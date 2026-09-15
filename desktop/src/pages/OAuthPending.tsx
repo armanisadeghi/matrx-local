@@ -1,33 +1,28 @@
-import { useEffect, useRef, useState } from "react";
-import { isCurrentOAuthCallback } from "@/lib/oauth";
-import { Zap, ArrowLeft, ExternalLink, CheckCircle2, RefreshCw } from "lucide-react";
+/**
+ * The screen shown while the system browser has the sign-in (FS-C5b).
+ *
+ * It used to receive the OAuth callback and exchange the code itself, through two redundant
+ * channels (a Tauri event and a 500 ms poll of `get_pending_oauth_url`). It does neither now: the
+ * OS routes `aimatrx://auth/callback` to the Rust host, which forwards the code to `matrx-syncd`
+ * — the only process holding the PKCE verifier (SPEC-CUSTODY S1). The daemon exchanges it and
+ * emits `session.changed`; `useAuth` turns that into `isAuthenticated` and App.tsx swaps this
+ * screen for the workspace.
+ *
+ * So this screen waits, and says so. Its one active job is to show the daemon's own sentence when
+ * a sign-in cannot be completed — an expired transaction, or a link belonging to a different copy
+ * of AI Matrx (S14) — rather than spinning forever at a thing that already failed.
+ */
+
+import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { ArrowLeft, ExternalLink, Zap } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
 import { formatDurationSeconds } from "@ai-matrx/kit/format";
-
-// Production redirect URI — must exactly match the redirect_uri sent in the
-// authorization request (see use-auth.ts getRedirectUri()). The OS intercepts
-// the aimatrx:// scheme and routes it to the Rust on_open_url handler.
-const TAURI_REDIRECT_URI = "aimatrx://auth/callback";
 
 const BRAND_COLOR = "hsl(var(--primary))";
 
 interface OAuthPendingProps {
     onCancel: () => void;
-    completeOAuthExchange: (code: string, state: string, redirectUri: string) => Promise<boolean>;
-}
-
-function WaitingDots() {
-    return (
-        <span className="inline-flex gap-1 items-center ml-1">
-            {[0, 1, 2].map((i) => (
-                <span
-                    key={i}
-                    className="h-1.5 w-1.5 rounded-full bg-primary/70 animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s`, animationDuration: "1s" }}
-                />
-            ))}
-        </span>
-    );
 }
 
 function OrbitRing() {
@@ -46,250 +41,74 @@ function OrbitRing() {
     );
 }
 
-export function OAuthPending({ onCancel, completeOAuthExchange }: OAuthPendingProps) {
-    const handled = useRef(false);
-    const [completed, setCompleted] = useState(false);
+export function OAuthPending({ onCancel }: OAuthPendingProps) {
     const [elapsed, setElapsed] = useState(0);
+    const [failure, setFailure] = useState<string | null>(null);
 
     useEffect(() => {
-        const t = setInterval(() => setElapsed((e) => e + 1), 1000);
-        return () => clearInterval(t);
+        const timer = setInterval(() => setElapsed((e) => e + 1), 1000);
+        return () => clearInterval(timer);
     }, []);
 
-    // ── Callback receiver ──────────────────────────────────────────────────
-    //
-    // Tauri production path:
-    //   1. shell.open() sent the system browser to the Supabase authorize URL
-    //   2. User approved on aimatrx.com/oauth/consent
-    //   3. Supabase redirected the browser to aimatrx://auth/callback?code=XXX
-    //   4. OS intercepted the aimatrx:// scheme before any browser policy ran
-    //      → called Rust on_open_url handler
-    //   5a. Rust stored the URL in PendingOAuthUrl app state (for the race case)
-    //   5b. Rust emitted Tauri event "oauth-callback" with the full URL string
-    //   6. We receive via event listener OR via the 500ms polling loop (whichever wins)
-    //
-    // Why we need BOTH mechanisms:
-    //   - On second login (after logout on macOS), the window was visible when the deep
-    //     link arrived. Rust calls show_main_window() which can cause WebKit to briefly
-    //     lose focus and disrupt the JS event listener, silently dropping the event.
-    //   - The polling loop runs every 500ms as a parallel, defensive channel. It checks
-    //     get_pending_oauth_url() which Rust populates atomically regardless of whether
-    //     the event is delivered. Whichever channel delivers the code first wins;
-    //     the handled.current ref ensures exactly-once handling.
-    //
-    // On mount we consume an early callback only if its state matches the
-    // locally initiated transaction; stale callbacks never consume the new one.
     useEffect(() => {
-        if (handled.current) return;
-
-        let tauriUnlisten: (() => void) | null = null;
-        let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-        function extractCallback(urlStr: string): { code: string; state: string } | null {
-            try {
-                const url = new URL(urlStr);
-                if (`${url.protocol}//${url.host}${url.pathname}` !== TAURI_REDIRECT_URI) return null;
-                const code = url.searchParams.get("code");
-                const state = url.searchParams.get("state");
-                return code && state ? { code, state } : null;
-            } catch {
-                console.warn("[OAuthPending] invalid sign-in callback");
-                return null;
-            }
-        }
-
-        async function handleCode(code: string, state: string) {
-            if (handled.current || !isCurrentOAuthCallback(state, TAURI_REDIRECT_URI)) return;
-            handled.current = true;
-            tauriUnlisten?.();
-            if (pollTimer !== null) {
-                clearInterval(pollTimer);
-                pollTimer = null;
-            }
-
-            console.log("[OAuthPending] exchanging code for tokens...");
-            try {
-                const ok = await completeOAuthExchange(code, state, TAURI_REDIRECT_URI);
-                if (ok) {
-                    // auth.isAuthenticated will flip true → App.tsx re-renders to
-                    // the dashboard automatically. Show success briefly first.
-                    setCompleted(true);
-                    return;
-                }
-                console.error("[OAuthPending] completeOAuthExchange returned false");
-            } catch (err) {
-                console.error("[OAuthPending] unexpected error during exchange:", err);
-            }
-            // Exchange failed — clear pending state and return to login screen.
-            onCancel();
-        }
-
-        async function setup() {
-            let invokeAvailable = false;
-
-            try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                invokeAvailable = true;
-
-                // State binding distinguishes a current early callback from an old one.
-                const earlyUrl = await invoke<string | null>("get_pending_oauth_url");
-                if (earlyUrl) {
-                    const callback = extractCallback(earlyUrl);
-                    if (callback) await handleCode(callback.code, callback.state);
-                    if (handled.current) return;
-                }
-
-                // ── Step 2: Set up defensive polling loop ──────────────────
-                // Polls every 500ms for the URL stored by Rust's on_open_url handler.
-                // This is the primary fix for the second-login problem: if the deep link
-                // arrives while the window is visible, Rust's show_main_window() can cause
-                // WebKit to drop the event listener below. Polling always retrieves it.
-                pollTimer = setInterval(async () => {
-                    if (handled.current) {
-                        if (pollTimer !== null) clearInterval(pollTimer);
-                        return;
-                    }
-                    try {
-                        const pendingUrl = await invoke<string | null>("get_pending_oauth_url");
-                        if (pendingUrl) {
-                            console.log("[OAuthPending] sign-in callback received");
-                            const callback = extractCallback(pendingUrl);
-                            if (callback) handleCode(callback.code, callback.state);
-                        }
-                    } catch {
-                        // ignore — Tauri may transiently unavailable during focus change
-                    }
-                }, 500);
-
-            } catch {
-                // Not in Tauri (e.g., web dev) — skip invoke/polling
-            }
-
-            // ── Step 3: Set up event listener (primary path, may be disrupted) ──
-            // Listening for the Tauri event is faster than polling (instant delivery),
-            // so we keep it as the primary path. Polling is the backstop.
-            try {
-                const { listen } = await import("@tauri-apps/api/event");
-                const unlisten = await listen<string>("oauth-callback", (event) => {
-                    if (handled.current) return;
-                    console.log("[OAuthPending] sign-in callback event received");
-                    const callback = extractCallback(event.payload);
-                    if (callback) handleCode(callback.code, callback.state);
-                    else console.warn("[OAuthPending] incomplete sign-in callback");
-                });
-                tauriUnlisten = unlisten;
-            } catch {
-                // Not in Tauri or event API unavailable
-            }
-
-            // Suppress unused-variable warning if invoke wasn't available
-            void invokeAvailable;
-        }
-
-        setup();
-
-        return () => {
-            tauriUnlisten?.();
-            if (pollTimer !== null) clearInterval(pollTimer);
-        };
-    }, [completeOAuthExchange, onCancel]);
+        let unlisten: (() => void) | null = null;
+        void listen<string>("syncd-sign-in-failed", (event) => setFailure(event.payload))
+            .then((off) => {
+                unlisten = off;
+            })
+            .catch(() => undefined);
+        return () => unlisten?.();
+    }, []);
 
     return (
         <div className="relative flex h-screen w-full flex-col overflow-hidden bg-background">
-            {/* Ambient gradient */}
             <div className="pointer-events-none absolute inset-0 opacity-30 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,hsl(var(--primary)/0.4)_0%,transparent_70%)]" />
 
-            {/* Top bar */}
-            <header className="relative z-10 flex items-center justify-between px-6 py-4">
-                <Button variant="ghost" size="sm" onClick={onCancel} className="gap-2 text-muted-foreground hover:text-foreground" disabled={completed}>
-                    <ArrowLeft className="h-4 w-4" />
-                    Cancel
-                </Button>
-
+            <header className="relative z-10 flex items-center justify-between px-6 py-5">
                 <div className="flex items-center gap-2">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-                        <Zap className="h-4 w-4 text-primary" />
-                    </div>
-                    <span className="text-sm font-semibold tracking-tight">Matrx Local</span>
+                    <Zap className="h-5 w-5 text-primary" />
+                    <span className="text-sm font-semibold">AI Matrx</span>
                 </div>
-
-                <div className="w-24 text-right text-xs text-muted-foreground/50 tabular-nums">
+                <div className="text-xs tabular-nums text-muted-foreground">
                     {formatDurationSeconds(elapsed, { style: "clock" })}
                 </div>
             </header>
 
-            {/* Main content */}
-            <main className="relative z-10 flex flex-1 flex-col items-center justify-center gap-10 px-6 text-center">
-                {completed ? (
-                    <div className="flex flex-col items-center gap-4">
-                        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/10">
-                            <CheckCircle2 className="h-10 w-10 text-emerald-500" />
-                        </div>
+            <main className="relative z-10 flex flex-1 flex-col items-center justify-center gap-8 px-6 text-center">
+                {failure ? (
+                    <>
                         <div>
-                            <h2 className="text-xl font-semibold">Signed in!</h2>
-                            <p className="mt-1 text-sm text-muted-foreground">Taking you to your workspace…</p>
+                            <h2 className="text-xl font-semibold">That sign-in did not finish</h2>
+                            {/* The daemon's own sentence, verbatim. No surface invents its own
+                                wording for a state the daemon named (SPEC-ENGINE §3.1). */}
+                            <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{failure}</p>
                         </div>
-                    </div>
+                        <Button variant="outline" onClick={onCancel}>
+                            <ArrowLeft className="mr-2 h-4 w-4" />
+                            Back to sign in
+                        </Button>
+                    </>
                 ) : (
                     <>
-                        <div className="relative flex items-center justify-center">
-                            <OrbitRing />
-                            <div className="absolute flex h-16 w-16 items-center justify-center rounded-2xl shadow-lg bg-primary/10 border border-primary/20">
-                                <Zap className="h-7 w-7 text-primary" />
-                            </div>
-                        </div>
-
-                        <div className="max-w-xs space-y-2">
-                            <h1 className="text-2xl font-bold tracking-tight">
-                                Signing in with AI Matrx
-                                <WaitingDots />
-                            </h1>
-                            <p className="text-sm leading-relaxed text-muted-foreground">
-                                Complete sign-in in your browser window.
-                                <br />
-                                You'll be brought back here automatically.
+                        <OrbitRing />
+                        <div>
+                            <h2 className="text-xl font-semibold">Finish signing in in your browser</h2>
+                            <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+                                We opened AI Matrx in your browser. Approve the sign-in there and this
+                                window will pick it up on its own — you can leave it alone.
+                            </p>
+                            <p className="mx-auto mt-4 flex max-w-md items-center justify-center gap-1.5 text-xs text-muted-foreground/70">
+                                <ExternalLink className="h-3 w-3" />
+                                Nothing is typed into this window; your browser handles the sign-in.
                             </p>
                         </div>
-
-                        <div className="w-full max-w-xs rounded-2xl border border-border bg-card/50 px-5 py-4 text-left space-y-3">
-                            <Step number={1} done text="AI Matrx sign-in window opened" />
-                            <Step number={2} active text="Waiting for you to complete sign-in" />
-                            <Step number={3} text="You'll be returned here automatically" />
-                        </div>
-
-                        <p className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-                            <ExternalLink className="h-3 w-3" />
-                            Don't see the browser window? Check your taskbar.
-                        </p>
+                        <Button variant="ghost" size="sm" onClick={onCancel}>
+                            <ArrowLeft className="mr-2 h-4 w-4" />
+                            Cancel
+                        </Button>
                     </>
                 )}
             </main>
-
-            {/* Bottom bar */}
-            <footer className="relative z-10 flex items-center justify-center gap-2 px-6 py-4">
-                {!completed && (
-                    <Button variant="ghost" size="sm" className="gap-2 text-xs text-muted-foreground/60 hover:text-muted-foreground" onClick={onCancel}>
-                        <RefreshCw className="h-3 w-3" />
-                        Try a different method
-                    </Button>
-                )}
-            </footer>
-        </div>
-    );
-}
-
-function Step({ number, text, done = false, active = false }: { number: number; text: string; done?: boolean; active?: boolean }) {
-    return (
-        <div className="flex items-center gap-3">
-            <div className={[
-                "flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-all",
-                done ? "bg-primary text-primary-foreground" : active ? "bg-primary/20 text-primary ring-2 ring-primary/30 animate-pulse" : "bg-muted text-muted-foreground",
-            ].join(" ")}>
-                {done ? "✓" : number}
-            </div>
-            <span className={["text-sm", done ? "text-foreground/70 line-through" : active ? "text-foreground font-medium" : "text-muted-foreground/60"].join(" ")}>
-                {text}
-            </span>
         </div>
     );
 }

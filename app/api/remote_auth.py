@@ -188,7 +188,7 @@ def missing_supabase_config() -> list[str]:
 
 # The unconfigured check is purely local, so it can be reached on EVERY
 # authenticated request. Announce it loudly once per process (the persistent
-# action-needed card raised by token_routes is the surface that keeps saying
+# action-needed card raised on session verification is the surface that keeps saying
 # it), then stay at DEBUG so one broken build cannot bury the log file.
 _unconfigured_logged: set[str] = set()
 

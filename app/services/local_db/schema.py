@@ -123,16 +123,6 @@ CREATE INDEX IF NOT EXISTS idx_sync_queue_entity ON sync_queue(entity_type, crea
 # ------------------------------------------------------------------
 
 _V2_EXTENDED = """
--- Auth tokens: persists the user JWT so Python survives restarts.
--- Single row keyed by 'current_user'. Both Python and React keep this in sync.
-CREATE TABLE IF NOT EXISTS auth_tokens (
-    key           TEXT PRIMARY KEY,
-    access_token  TEXT NOT NULL,
-    refresh_token TEXT,
-    user_id       TEXT,
-    expires_at    INTEGER,
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
 
 -- Agent catalog: platform + user agents from AIDream /api/agents (JWT required).
 -- Formerly "prompt builtins" from the now-removed /api/prompts/builtins endpoint;
@@ -1436,6 +1426,17 @@ CREATE TABLE IF NOT EXISTS agent_execution_details (
 DROP TABLE IF EXISTS prompt_builtins;
 """
 
+
+# ── V34: the local auth_tokens row is gone (FS-C5b, SPEC-CUSTODY §10 step 4) ──
+# The React UI used to push a Supabase session into this table, refresh token and all. That was
+# the device's second rotating credential holder and nothing headless could renew it — MXL-D-046.
+# Under D17 the only durable credential on the machine is the sync daemon's OS-keychain item, so
+# this table is DROPPED rather than left unread: an encrypted refresh token sitting in a SQLite
+# row nobody reads is still a refresh token sitting in a SQLite row.
+_V34_DROP_AUTH_TOKENS = """
+DROP TABLE IF EXISTS auth_tokens;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1470,4 +1471,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (31, _V31_CLAUDE_SESSION_SYNCED),
     (32, _V32_AGENTS_PLATFORM_CATALOG),
     (33, _V33_CATALOG_SUPERSET_AND_EXECUTION_DETAIL),
+    (34, _V34_DROP_AUTH_TOKENS),
 ]

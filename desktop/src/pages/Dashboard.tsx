@@ -27,7 +27,7 @@ import { Badge, Button } from "@ai-matrx/design-system";
 import { engine } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { SystemInfo } from "@/lib/api";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import type { MatrxUser as SupabaseUser } from "@/lib/custodian";
 import { PermissionsModal } from "@/components/PermissionsModal";
 import { usePermissionsContext } from "@/contexts/PermissionsContext";
 import { useBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";

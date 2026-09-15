@@ -20,7 +20,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { isTauri } from "@/lib/sidecar";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";
 import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
@@ -689,7 +689,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
         }
 
         // ── Cloud / Engine Path ───────────────────────────────────────────
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         const token = session?.access_token ?? "";
 
         const allMessages = userMsg ? [...existingMessages, userMsg] : existingMessages;

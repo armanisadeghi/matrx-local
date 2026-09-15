@@ -18,7 +18,7 @@ import {
   mandateKeyFromAgentRef,
 } from "@/lib/mandates";
 import { requireActiveOrganizationId } from "@/lib/org/active-org";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import { loadSettings } from "@/lib/settings";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { PromptVariable } from "@/types/agents";
@@ -253,9 +253,7 @@ export function ChatPanel({
       const mandateKey = mandateKeyFromAgentRef(agentId);
       if (mandateKey) {
         try {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
+          const session = await getAuthedSession();
           if (!session?.access_token) {
             throw new Error("Sign in before starting a chat.");
           }

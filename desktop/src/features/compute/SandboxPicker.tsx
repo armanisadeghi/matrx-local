@@ -29,7 +29,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import {
   fetchComputeTargets,
   type ComputeTarget,
@@ -58,9 +58,7 @@ export function SandboxPicker({ thisDeviceInstanceId }: SandboxPickerProps) {
     setLoading(true);
     setError(null);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await getAuthedSession();
       const jwt = session?.access_token ?? null;
       // aidream refuses an authenticated request with no organization
       // before it routes — resolve THIS device's own choice (never a

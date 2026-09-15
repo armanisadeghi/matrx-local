@@ -30,7 +30,6 @@ from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
 from app.api.auth import AuthMiddleware
 from app.launcher import get_registry as _get_launcher_registry
-from app.api.token_routes import router as token_router
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
 from app.api.tunnel_routes import router as tunnel_router
 from app.api.setup_routes import router as setup_router
@@ -1453,7 +1452,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Mixed-reality wiring: at startup we look up the persisted user_id
     # from the auth_tokens SQLite row. If a session is already present
     # (user previously signed in), we subscribe immediately. If not,
-    # POST /auth/token / DELETE /auth/token (token_routes.py) handle the
+    # The engine asks the sync daemon for its token (app/services/sync_client); the old
     # login/logout path and call connect_broadcast / disconnect_broadcast
     # so the subscription tracks the live signed-in identity. The user
     # id latched here is stashed on app.state.broadcast_user_id so the
@@ -2163,7 +2162,6 @@ async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedErro
     )
 
 
-app.include_router(token_router)  # Token sync — React pushes JWT to Python
 # Admin endpoints (/admin/status, /admin/shutdown, /admin/diagnose) — used by
 # the Tauri shell to coordinate engine lifecycle without reaching across to
 # kill engine-owned children. Listed in _PUBLIC_PATHS in app/api/auth.py.

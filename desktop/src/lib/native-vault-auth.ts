@@ -2,14 +2,34 @@
  * One serialized bridge from host auth lifecycle into the provider's
  * non-secret generation fence. It intentionally treats host command failure
  * as a fence failure; callers must not adopt dependent state until it settles.
+ *
+ * **FS-C5b: the lifecycle it bridges is now the sync daemon's, not supabase-js's.**
+ * `supabase.auth.onAuthStateChange` no longer exists in this process — the client is built with
+ * the `accessToken` option, which makes `supabase.auth` throw by construction — so the single
+ * subscription below listens to the daemon's `session.changed` stream instead.
+ *
+ * **The fence keeps its exact semantics.** It never depended on supabase-js: it depends on
+ * (a) a synchronous `coordinator.fence()` taken the instant a session change is observed, before
+ * any listener can act on it, and (b) `session?.user.id` — the subject — to reconcile and adopt
+ * against. Both survive verbatim. What changed is only where the event comes from and what a
+ * "session" is: an identity (`{ user: { id, email } }`) rather than a credential, because there is
+ * no credential in this process any more. Ordering is preserved the same way it was before — the
+ * envelope is built and fanned out synchronously inside the callback, and the native I/O is
+ * deferred to a `setTimeout(0)` — so a subscriber still stops local work before adoption runs.
  */
 import {
   invalidateNativeVaultHostActor,
   reconcileNativeVaultHostActor,
 } from "@/lib/sidecar";
 import { engine } from "@/lib/api";
-import supabase from "@/lib/supabase";
-import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+import {
+  currentSession,
+  getSession,
+  sessionToMatrx,
+  subscribeSession,
+  type MatrxSession,
+  type SessionSnapshot,
+} from "@/lib/custodian";
 import {
   NativeVaultHostAuthCoordinator,
   type EngineAlignment,
@@ -21,22 +41,65 @@ const coordinator = new NativeVaultHostAuthCoordinator({
   reconcile: reconcileNativeVaultHostActor,
 }, (context) => engine.prepareSessionTransition(context));
 
+/** The lifecycle events this app actually has, now that the daemon owns the session. */
+export type CustodyAuthEvent =
+  | "INITIAL_SESSION"
+  | "SIGNED_IN"
+  | "SIGNED_OUT"
+  | "TOKEN_REFRESHED";
+
 export interface NativeVaultHostEventEnvelope {
-  readonly event: AuthChangeEvent;
-  readonly session: Session | null;
+  readonly event: CustodyAuthEvent;
+  readonly session: MatrxSession | null;
   readonly revision: number;
   readonly completion: Promise<{ accepted: boolean }>;
+  /** The daemon's full honest state, so a surface can say WHY there is no session. */
+  readonly snapshot: SessionSnapshot;
 }
 
 const eventSubscribers = new Set<(envelope: NativeVaultHostEventEnvelope) => void>();
 let subscriptionStarted = false;
 let latestEnvelope: NativeVaultHostEventEnvelope | null = null;
 
-/** The only Supabase lifecycle callback. It fences synchronously and fans out immutable work. */
+/** The only session-lifecycle callback. It fences synchronously and fans out immutable work. */
 function ensureHostSubscription(): void {
   if (subscriptionStarted) return;
   subscriptionStarted = true;
-  supabase.auth.onAuthStateChange((event, session) => {
+
+  let previousSubject: string | null = null;
+  let delivered = false;
+
+  const deliver = (snapshot: SessionSnapshot, rotated: boolean): void => {
+    const session = sessionToMatrx(snapshot);
+    const subject = session?.user.id ?? null;
+    // Name the transition the way the old supabase-js events named it, so every downstream
+    // branch that distinguished a first sign-in from a token refresh still can.
+    const event: CustodyAuthEvent = !delivered
+      ? "INITIAL_SESSION"
+      : subject && subject === previousSubject && rotated
+        ? "TOKEN_REFRESHED"
+        : subject
+          ? "SIGNED_IN"
+          : "SIGNED_OUT";
+    delivered = true;
+    previousSubject = subject;
+    handleSessionChange(event, session, snapshot);
+  };
+
+  // The state as of mount, before the first stream frame — the same job
+  // `INITIAL_SESSION` did.
+  void getSession().then((snapshot) => deliver(snapshot, false));
+  subscribeSession((snapshot, rotated) => deliver(snapshot, rotated));
+}
+
+/** Fences synchronously, then defers every piece of native I/O — unchanged from the Supabase
+ *  version, because that ordering is what the fence's correctness rests on. */
+function handleSessionChange(
+  event: CustodyAuthEvent,
+  session: MatrxSession | null,
+  snapshot: SessionSnapshot,
+): void {
+  {
     const revision = coordinator.fence();
     const completion = new Promise<{ accepted: boolean }>((resolve, reject) => {
       setTimeout(() => {
@@ -48,7 +111,7 @@ function ensureHostSubscription(): void {
     });
     // Listeners receive the envelope while the callback is still synchronous,
     // so they can stop local work before Supabase releases its own lock.
-    const envelope: NativeVaultHostEventEnvelope = Object.freeze({ event, session, revision, completion });
+    const envelope: NativeVaultHostEventEnvelope = Object.freeze({ event, session, revision, completion, snapshot });
     latestEnvelope = envelope;
     for (const listener of eventSubscribers) {
       try { listener(envelope); } catch { /* one subscriber cannot block another */ }
@@ -56,7 +119,12 @@ function ensureHostSubscription(): void {
     // A subscriber normally observes this promise; retaining this handler also
     // prevents an unmounted subscriber from creating an unhandled rejection.
     void completion.catch(() => undefined);
-  });
+  }
+}
+
+/** The daemon's current honest state, for a surface that must render before the stream opens. */
+export function currentCustodySnapshot(): SessionSnapshot {
+  return latestEnvelope?.snapshot ?? currentSession();
 }
 
 export function subscribeNativeVaultHostEvents(listener: (envelope: NativeVaultHostEventEnvelope) => void): () => void {

@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 
 const REVIEW_POLL_MS = 1500;
 
@@ -52,9 +52,7 @@ interface RawReview {
  * `/chat/delegation/ui-claim` — loopback is not a credential here.
  */
 async function authHeaders(): Promise<Record<string, string> | null> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getAuthedSession();
   if (!session?.access_token) return null;
   return {
     Authorization: `Bearer ${session.access_token}`,

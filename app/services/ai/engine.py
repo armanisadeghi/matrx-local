@@ -100,7 +100,7 @@ _queue_guard_installed = False
 # module-level string cache that is:
 #   1. Pre-loaded from SQLite during the async startup phase (warm_jwt_cache)
 #   2. Updated instantly whenever React pushes a new token via POST /auth/token
-#      (call set_jwt_cache from token_routes.py)
+#      (set_jwt_cache is called from the authenticated-request path in ai_routes.py)
 #   3. Cleared on logout (call clear_jwt_cache)
 #
 # This means matrx-ai always gets the latest known token with a simple

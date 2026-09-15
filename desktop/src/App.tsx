@@ -17,7 +17,6 @@ import { Chat } from "@/pages/Chat";
 import { CloudChat } from "@/pages/CloudChat";
 import { Login } from "@/pages/Login";
 import { OAuthPending } from "@/pages/OAuthPending";
-import { AuthCallback } from "@/pages/AuthCallback";
 import { AiMatrx } from "@/pages/AiMatrx";
 import { BrowserLab } from "@/pages/BrowserLab";
 import { Voice } from "@/pages/Voice";
@@ -88,7 +87,7 @@ import {
   stopEngineStreams,
   stopTauriStream,
 } from "@/hooks/use-unified-log";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import {
   ActionNeededNavigationBridge,
   ActionNeededSources,
@@ -344,9 +343,7 @@ function AppInner() {
   useEffect(() => {
     if (status === "connected" && url) {
       const getToken = async () => {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         return session?.access_token ?? null;
       };
       initUnifiedLog(url, getToken);
@@ -529,10 +526,7 @@ function AppInner() {
   if (auth.oauthPending) {
     return (
       <ErrorBoundary>
-        <OAuthPending
-          onCancel={auth.cancelOAuth}
-          completeOAuthExchange={auth.completeOAuthExchange}
-        />
+        <OAuthPending onCancel={auth.cancelOAuth} />
       </ErrorBoundary>
     );
   }
@@ -588,7 +582,6 @@ function AppInner() {
           <ActionNeededNavigationBridge />
           <Routes>
             <Route path="/overlay" element={<TranscriptOverlay />} />
-            <Route path="/auth/callback" element={<AuthCallback />} />
 
             {!auth.isAuthenticated ? (
               <Route path="*" element={<Login auth={auth} />} />

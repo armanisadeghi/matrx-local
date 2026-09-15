@@ -7,10 +7,9 @@ and synchronization between local and cloud storage.
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.services.cloud_sync.instance_manager import get_instance_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
@@ -20,12 +19,11 @@ router = APIRouter(prefix="/cloud", tags=["cloud-sync"])
 
 
 class ConfigureRequest(BaseModel):
+    # FS-C5b: `expected_generation` / `expected_credential_revision` are gone with the engine-side
+    # credential store they fenced. The engine holds no credential to be superseded, so there is
+    # nothing for a caller to assert about it (SPEC-CUSTODY §10 step 4, D17).
     jwt: str
     user_id: str
-    expected_generation: UUID | None = None
-    expected_credential_revision: int | None = Field(
-        default=None, ge=0, le=9_007_199_254_740_991
-    )
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -74,11 +72,11 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 
     Called by the frontend after user authentication.
     """
-    from app.services.auth_session import get_auth_session, SessionFenceError
-    try:
-        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
-    except SessionFenceError as error:
-        raise HTTPException(status_code=409, detail={"code": error.code})
+    # FS-C5b: the generation/credential fence is gone with the thing it fenced. It existed because
+    # the React UI pushed a session into this engine and two windows could race to install
+    # different ones. Nothing is pushed now — every token comes from the one sync daemon — so
+    # there is no rival credential to compare against, and a fence over a single source would only
+    # be able to refuse the truth.
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
@@ -109,11 +107,11 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 @router.post("/reconfigure")
 async def reconfigure_sync(req: ConfigureRequest) -> dict:
     """Re-configure with a fresh JWT (e.g. after token refresh)."""
-    from app.services.auth_session import get_auth_session, SessionFenceError
-    try:
-        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
-    except SessionFenceError as error:
-        raise HTTPException(status_code=409, detail={"code": error.code})
+    # FS-C5b: the generation/credential fence is gone with the thing it fenced. It existed because
+    # the React UI pushed a session into this engine and two windows could race to install
+    # different ones. Nothing is pushed now — every token comes from the one sync daemon — so
+    # there is no rival credential to compare against, and a fence over a single source would only
+    # be able to refuse the truth.
     sync = get_settings_sync()
     mgr = get_instance_manager()
 

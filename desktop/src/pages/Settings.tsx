@@ -53,7 +53,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
+import { Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { APP_VERSION } from "@/lib/app-version";
 import {
   Select,
@@ -4467,27 +4467,25 @@ export function Settings({
                 <CardContent className="space-y-4">
                   {auth.user ? (
                     <>
+                      {/* FS-C5b: this window no longer holds a Supabase session, so it has no
+                          `user_metadata` to read an avatar or a display name out of. The account's
+                          email is what the daemon's session contract carries
+                          (SPEC-CUSTODY §6), and it is shown rather than a name we would have to
+                          invent. Adding a field to that contract is an amendment, not a patch. */}
                       <div className="flex items-center gap-3">
                         <Avatar className="h-10 w-10">
-                          <AvatarImage
-                            src={auth.user.user_metadata?.avatar_url}
-                          />
                           <AvatarFallback>
                             {(auth.user.email?.[0] ?? "U").toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">
-                            {auth.user.user_metadata?.full_name ??
-                              auth.user.email}
+                            {auth.user.email ?? "Signed in"}
                           </p>
                           <p className="truncate text-xs text-muted-foreground">
-                            {auth.user.email}
+                            Signed in on this computer
                           </p>
                         </div>
-                        <Badge variant="success" className="shrink-0">
-                          {auth.user.app_metadata?.provider ?? "email"}
-                        </Badge>
                       </div>
                       <Separator />
                       <Button

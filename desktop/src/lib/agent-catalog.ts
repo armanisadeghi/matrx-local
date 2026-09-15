@@ -63,6 +63,7 @@ import { getAIDreamServerUrl } from "@/lib/app-config";
 import { logError, logWarn } from "@/lib/error-reporting";
 import { requireActiveOrganizationId } from "@/lib/org/active-org";
 import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 
 /** The one RPC the offline mirror replays. Mirrors `client.py::CATALOG_RPC`. */
 const OFFLINE_RPC = "agx_get_list_full";
@@ -107,9 +108,7 @@ const identity = { requireUserId };
 const aidreamTransport: AgentCatalogTransport = {
   async fetch(path, init) {
     const base = await getAIDreamServerUrl();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = await getAuthedSession();
     if (!session?.access_token) {
       throw new Error(
         "Sign in before the picker can resolve the platform default agent.",

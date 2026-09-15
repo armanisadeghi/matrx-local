@@ -29,6 +29,9 @@ fail on the OLD mechanic rather than on a missing import.
 
 from __future__ import annotations
 
+import ast
+import copy
+import os
 import socket
 import sys
 from pathlib import Path
@@ -70,6 +73,34 @@ def _claim(base: int, scan: int) -> tuple[int, socket.socket | None]:
     return binder()
 
 
+def _exception_fallback_binder() -> object:
+    """Extract only run.py's preflight-exception fallback without importing it.
+
+    The fallback exists precisely for an unavailable/broken preflight import, so
+    importing application modules would not exercise that branch honestly.
+    """
+    module = ast.parse((REPO_ROOT / "run.py").read_text(), filename="run.py")
+    main = next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    fallback = next(
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.FunctionDef) and node.name == "bind_engine_port"
+    )
+    extracted = ast.Module(body=[copy.deepcopy(fallback)], type_ignores=[])
+    ast.fix_missing_locations(extracted)
+    namespace = {
+        "DEFAULT_PORT": _free_port(),
+        "MAX_PORT_SCAN": 1,
+        "os": os,
+        "socket": socket,
+        "sys": sys,
+    }
+    exec(compile(extracted, "run.py:fallback", "exec"), namespace)
+    return namespace["bind_engine_port"]
+
+
 @pytest.fixture
 def scan_range(monkeypatch: pytest.MonkeyPatch) -> tuple[int, int]:
     """Point the scan at a real, unused pair of ports on this machine."""
@@ -97,6 +128,29 @@ def test_the_chosen_port_is_held_so_a_rival_cannot_take_it(
         rival.close()
         if held is not None:
             held.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux SO_REUSEADDR contract")
+def test_preflight_exception_fallback_keeps_an_exclusive_listening_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The recovery path must retain the same real socket claim as preflight.
+
+    Before this repair, this exact extracted function bound but did not listen;
+    a same-host rival with SO_REUSEADDR could bind the returned port on Linux.
+    """
+    monkeypatch.delenv("MATRX_PORT", raising=False)
+    binder = _exception_fallback_binder()
+    assert callable(binder)
+    port, held = binder()
+    rival = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    rival.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        with pytest.raises(OSError):
+            rival.bind(("127.0.0.1", port))
+    finally:
+        rival.close()
+        held.close()
 
 
 def test_a_second_engine_gets_a_different_port_and_holds_that(

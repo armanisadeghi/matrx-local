@@ -1019,6 +1019,11 @@ def main() -> None:
                     sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
                     sk.bind(("127.0.0.1", p))
+                    # Match app.preflight._try_bind: on Linux, a bound socket
+                    # with SO_REUSEADDR is not an exclusive claim until it is
+                    # listening. This exception-only fallback must not reopen
+                    # the startup port race that the normal path prevents.
+                    sk.listen(socket.SOMAXCONN)
                 except OSError:
                     sk.close()
                     continue

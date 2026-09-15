@@ -524,3 +524,126 @@ fn the_marker_tells_an_unmounted_drive_from_an_emptied_folder() {
     let report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
     assert!(report.tree.paths().all(|p| !p.starts_with(".matrx-sync")));
 }
+
+// ---------------------------------- unit 1c: the symlink knob, and locked-file deferral
+
+#[test]
+fn following_symlinks_is_opt_in_and_still_cannot_loop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("real")).expect("mkdir");
+    std::fs::write(dir.path().join("real/inside.txt"), b"x").expect("write");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("linked")).expect("ln");
+        // And a link back to the root, the shape that eats a disk.
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("real/up")).expect("ln");
+    }
+    #[cfg(not(unix))]
+    return;
+
+    let mut opts = opts_settled();
+    opts.follow_symlinks = true;
+    let report = scan_root(dir.path(), &LocalTree::new(), &opts);
+
+    assert!(
+        report.tree.get("linked/inside.txt").is_some(),
+        "with the knob on, the link's target is synced: {:?}",
+        report.tree.paths().collect::<Vec<_>>()
+    );
+    assert!(
+        report.tree.len() < 50,
+        "the walk must terminate, not follow the cycle until the disk fills: {} entries",
+        report.tree.len()
+    );
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.reason == matrx_sync::scan::SkipReason::DirectoryCycle),
+        "and the cycle is reported by identity, not guessed at from names: {:?}",
+        report.skipped
+    );
+}
+
+#[test]
+fn a_locked_file_backs_off_and_eventually_gives_up_with_a_remedy() {
+    use matrx_sync::scan::{next_attempt, Deferral, RetryPolicy, RetryVerdict};
+    let policy = RetryPolicy::default();
+    assert_eq!((policy.base_s, policy.max_s, policy.giveup_h), (5, 900, 24));
+
+    let start = 1_700_000_000_i64;
+    let mut deferral = Deferral::first("report.docx", start, "os error 32");
+
+    // The first retry is soon: a file locked for a second should be picked up almost at once.
+    assert_eq!(next_attempt(&policy, &deferral, start), RetryVerdict::RetryAt(start + 5));
+
+    // The wait doubles and is capped, so an afternoon-long lock is not hammered.
+    let mut waits = Vec::new();
+    for _ in 0..12 {
+        deferral.failed_again("os error 32");
+        if let RetryVerdict::RetryAt(at) = next_attempt(&policy, &deferral, start) {
+            waits.push(at - start);
+        }
+    }
+    assert!(waits.windows(2).all(|w| w[1] >= w[0]), "monotonic: {waits:?}");
+    assert_eq!(*waits.last().expect("some waits"), 900, "capped at max_s");
+
+    // The give-up clock runs from the FIRST failure, not the last, so a file that keeps failing
+    // does stop rather than resetting its own deadline every time.
+    assert_eq!(
+        next_attempt(&policy, &deferral, start + 24 * 3600 - 1),
+        RetryVerdict::RetryAt(start + 24 * 3600 - 1 + 900)
+    );
+    assert_eq!(
+        next_attempt(&policy, &deferral, start + 24 * 3600),
+        RetryVerdict::GiveUp
+    );
+
+    // And giving up is a state with a remedy, not a silence.
+    let remedy = matrx_sync::scan::giveup_remedy(&deferral.path_nfc, &deferral.last_error);
+    assert!(remedy.contains("report.docx") && remedy.to_lowercase().contains("close the app"));
+}
+
+#[test]
+fn a_file_the_os_refuses_is_deferred_with_its_reason_not_hashed_as_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("private.txt");
+    std::fs::write(&path, b"secret").expect("write");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    }
+
+    // Probe rather than guess: root, and some filesystems, read a mode-000 file happily, and then
+    // the assertions below would be testing nothing.
+    #[cfg(unix)]
+    let enforced = std::fs::File::open(&path).is_err();
+    #[cfg(not(unix))]
+    let enforced = false;
+
+    let mut report = scan_root(dir.path(), &LocalTree::new(), &opts_settled());
+    let outcomes = matrx_sync::scan::hash_files(&report.hash_requests(), 2);
+    report.apply_hashes(outcomes);
+
+    #[cfg(unix)]
+    if enforced {
+        let node = report.tree.get("private.txt").expect("still known to exist");
+        assert_eq!(
+            node.content_hash, None,
+            "an unreadable file is 'not yet known' — never hashed as if it were empty, which \
+             would make every unreadable file look like the same file"
+        );
+        assert!(
+            report
+                .failed_hashes
+                .iter()
+                .any(|(p, e)| p == "private.txt" && matches!(e, matrx_sync::scan::HashError::Locked(_))),
+            "and it is recorded with the OS's own words: {:?}",
+            report.failed_hashes
+        );
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    }
+}
+

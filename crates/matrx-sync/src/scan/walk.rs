@@ -21,6 +21,9 @@ pub enum SkipReason {
     NotAFileOrDirectory,
     /// The OS refused to read it (permissions, a TCC denial, a lock).
     Unreadable,
+    /// A directory already walked, reached again by identity: a symlink or bind mount back to an
+    /// ancestor. Walking it again would not terminate.
+    DirectoryCycle,
 }
 
 impl SkipReason {
@@ -30,6 +33,7 @@ impl SkipReason {
             SkipReason::Symlink => "symlink",
             SkipReason::NotAFileOrDirectory => "not_a_file_or_directory",
             SkipReason::Unreadable => "unreadable",
+            SkipReason::DirectoryCycle => "directory_cycle",
         }
     }
 }
@@ -179,6 +183,7 @@ pub fn scan_root(root: &Path, previous: &LocalTree, opts: &ScanOptions) -> ScanR
         normalisation_collisions: Vec::new(),
     };
     let mut queue: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut seen_dirs: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
 
     while let Some(dir) = queue.pop() {
         let relative_dir = relative(root, &dir);
@@ -225,15 +230,32 @@ pub fn scan_root(root: &Path, previous: &LocalTree, opts: &ScanOptions) -> ScanR
                 }
             };
 
-            if meta.file_type().is_symlink() && !opts.follow_symlinks {
-                report.skipped.push(SkippedEntry {
-                    path: rel,
-                    reason: SkipReason::Symlink,
-                    detail: std::fs::read_link(&path)
-                        .ok()
-                        .map(|t| t.to_string_lossy().into_owned()),
-                });
-                continue;
+            let mut meta = meta;
+            if meta.file_type().is_symlink() {
+                if !opts.follow_symlinks {
+                    report.skipped.push(SkippedEntry {
+                        path: rel,
+                        reason: SkipReason::Symlink,
+                        detail: std::fs::read_link(&path)
+                            .ok()
+                            .map(|t| t.to_string_lossy().into_owned()),
+                    });
+                    continue;
+                }
+                // `sync.follow_symlinks` is opt-in and off by default. When it IS on, the link's
+                // target is what gets synced — and the loop guard below is what stops a link back
+                // to an ancestor from walking the same subtree until the disk fills.
+                match std::fs::metadata(&path) {
+                    Ok(m) => meta = m,
+                    Err(e) => {
+                        report.skipped.push(SkippedEntry {
+                            path: rel,
+                            reason: SkipReason::Unreadable,
+                            detail: Some(format!("broken symlink: {e}")),
+                        });
+                        continue;
+                    }
+                }
             }
 
             if meta.is_dir() {
@@ -243,6 +265,25 @@ pub fn scan_root(root: &Path, previous: &LocalTree, opts: &ScanOptions) -> ScanR
                     .unwrap_or_default();
                 if opts.skip_dir_names.contains(&name) {
                     continue;
+                }
+                // Loop guard: a directory reached twice by identity is a cycle. It only fires when
+                // `follow_symlinks` is on, because nothing else can make one, but it is here and
+                // not in the symlink branch so a bind mount or a hard-linked directory cannot
+                // produce an infinite walk either.
+                let dir_identity = file_identity(&path, &meta);
+                if dir_identity.is_complete() {
+                    let key = (
+                        dir_identity.volume_id.clone().unwrap_or_default(),
+                        dir_identity.file_id.clone().unwrap_or_default(),
+                    );
+                    if !seen_dirs.insert(key) {
+                        report.skipped.push(SkippedEntry {
+                            path: rel,
+                            reason: SkipReason::DirectoryCycle,
+                            detail: Some("already walked this directory by identity".to_string()),
+                        });
+                        continue;
+                    }
                 }
                 report.tree.insert(
                     rel.clone(),

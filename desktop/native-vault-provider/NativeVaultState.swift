@@ -21,13 +21,15 @@ final class ProviderStore {
         guard rootFD >= 0 else { throw filesystemFailure() }
         defer { close(rootFD) }
         var rootInfo = stat()
-        guard fstat(rootFD, &rootInfo) == 0, rootInfo.st_uid == getuid(), (rootInfo.st_mode & S_IFMT) == S_IFDIR else { throw unavailable() }
+        guard fstat(rootFD, &rootInfo) == 0, rootInfo.st_uid == geteuid(), (rootInfo.st_mode & S_IFMT) == S_IFDIR else { throw unavailable() }
         if mode == .explicitConnect, mkdirat(rootFD, "NativeVault", 0o700) != 0 && errno != EEXIST { throw filesystemFailure() }
         let fd = openat(rootFD, "NativeVault", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         if fd < 0 && mode == .existingOnly && errno == ENOENT { throw unavailable() }
         guard fd >= 0 else { throw filesystemFailure() }
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_uid == getuid(), (info.st_mode & S_IFMT) == S_IFDIR, (info.st_mode & 0o777) == 0o700 else { close(fd); throw unavailable() }
+        if mode == .explicitConnect, isOwnedDirectory(fd, permissions: 0o755) {
+            guard fchmod(fd, 0o700) == 0, fsync(fd) == 0, isOwnedDirectory(fd, permissions: 0o700) else { close(fd); throw unavailable() }
+        }
+        guard isOwnedDirectory(fd, permissions: 0o700) else { close(fd); throw unavailable() }
         directoryFD = fd
         self.mode = mode
     }
@@ -106,6 +108,14 @@ final class ProviderStore {
         remove = false
     }
 
+}
+
+private func isOwnedDirectory(_ fd: Int32, permissions: mode_t) -> Bool {
+    var info = stat()
+    return fstat(fd, &info) == 0
+        && info.st_uid == geteuid()
+        && (info.st_mode & S_IFMT) == S_IFDIR
+        && (info.st_mode & 0o7777) == permissions
 }
 
 private enum StateJSON {

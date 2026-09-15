@@ -16,12 +16,19 @@ import Foundation
         try FileManager.default.createSymbolicLink(atPath: vault.path, withDestinationPath: "/tmp")
         try expectCorrupt { _ = try ProviderStore(testRoot: root, mode: .explicitConnect) }
         try FileManager.default.removeItem(at: vault)
-        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
+        try expectUnavailable { _ = try ProviderStore(testRoot: root, mode: .existingOnly) }
+        guard try permissions(of: vault) == 0o755 else { throw Failure.changedReadOnlyRoot }
+        let store = try ProviderStore(testRoot: root, mode: .explicitConnect)
+        guard try permissions(of: vault) == 0o700 else { throw Failure.legacyModeNotMigrated }
+        try setPermissions(0o4755, of: vault)
+        try expectUnavailable { _ = try ProviderStore(testRoot: root, mode: .explicitConnect) }
+        guard try permissions(of: vault) == 0o4755 else { throw Failure.changedSpecialMode }
+        try setPermissions(0o700, of: vault)
         let readOnly = try ProviderStore(testRoot: root, mode: .existingOnly)
         do { _ = try readOnly.read(); throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
         do { try readOnly.locked { _ in () }; throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }
         guard try FileManager.default.contentsOfDirectory(atPath: vault.path).isEmpty else { throw Failure.changedReadOnlyRoot }
-        let store = try ProviderStore(testRoot: root, mode: .explicitConnect)
         let initialized = try store.initializeExplicitConnect(invalidatePrivate: {})
         let reopened = try ProviderStore(testRoot: root, mode: .explicitConnect)
         guard try reopened.read().generation == initialized.generation else { throw Failure.missingStateGenerationChanged }
@@ -50,5 +57,20 @@ import Foundation
             guard error.errorDescription == "Vault status is corrupt. Reconnect the provider." else { throw Failure.wrongErrorCategory }
         }
     }
-    enum Failure: Error { case expectedRefusal, changedReadOnlyRoot, badRoundTrip, missingStateGenerationChanged, wrongErrorCategory }
+    static func expectUnavailable(_ operation: () throws -> Void) throws {
+        do { try operation(); throw Failure.expectedRefusal }
+        catch Failure.expectedRefusal { throw Failure.expectedRefusal }
+        catch let error as EnrollmentError {
+            guard error.errorDescription == "Vault setup is unavailable. Try again." else { throw Failure.wrongErrorCategory }
+        }
+    }
+    static func permissions(of url: URL) throws -> mode_t {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { throw Failure.statFailed }
+        return info.st_mode & 0o7777
+    }
+    static func setPermissions(_ permissions: mode_t, of url: URL) throws {
+        guard chmod(url.path, permissions) == 0 else { throw Failure.chmodFailed }
+    }
+    enum Failure: Error { case expectedRefusal, changedReadOnlyRoot, badRoundTrip, missingStateGenerationChanged, wrongErrorCategory, legacyModeNotMigrated, changedSpecialMode, statFailed, chmodFailed }
 }

@@ -231,6 +231,15 @@ export function buildCloudChatRequest(
          * pass `"auto"` rather than inherit the human default.
          */
         initiation?: RequestInitiation;
+        /**
+         * What this send files itself as. Defaults to the Cloud Chat surface;
+         * the coding-session reply door passes `"coding_session_reply"`, which
+         * is how aidream knows to resolve the responder Mandate and stamp
+         * `metadata.origin=ai_matrx_reply` + the answering agent onto both
+         * rows (`@/lib/coding-sessions/reply-door`). A reply that kept the
+         * default would land as an unattributed chat turn.
+         */
+        sourceFeature?: string;
       }
     | undefined,
   allMessages: ChatMessage[],
@@ -258,6 +267,7 @@ export function buildCloudChatRequest(
   // and local. Omitting it on any one of them silently files that run as an
   // unattested API caller instead of the person who sent it.
   const initiation: RequestInitiation = options?.initiation ?? "user";
+  const sourceFeature = options?.sourceFeature ?? CLOUD_SOURCE_FEATURE;
   const conversationId =
     target === "local"
       ? conversation.localConversationId
@@ -308,7 +318,7 @@ export function buildCloudChatRequest(
         user_input: userInput,
         stream: true,
         source_app: CLOUD_SOURCE_APP,
-        source_feature: CLOUD_SOURCE_FEATURE,
+        source_feature: sourceFeature,
         initiation,
         ...(configOverrides ? { config_overrides: configOverrides } : {}),
         ...clientEnvelope,
@@ -325,7 +335,7 @@ export function buildCloudChatRequest(
     const body: Record<string, unknown> = {
       stream: true,
       source_app: CLOUD_SOURCE_APP,
-      source_feature: CLOUD_SOURCE_FEATURE,
+      source_feature: sourceFeature,
       initiation,
       ...organizationField,
       ...(configOverrides ? { config_overrides: configOverrides } : {}),
@@ -358,7 +368,7 @@ export function buildCloudChatRequest(
     stream: true,
     max_iterations: 20,
     source_app: CLOUD_SOURCE_APP,
-    source_feature: CLOUD_SOURCE_FEATURE,
+    source_feature: sourceFeature,
     initiation,
     ...organizationField,
     ...(configOverrides ? { config_overrides: configOverrides } : {}),
@@ -1396,6 +1406,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
          * submit are the only callers, and both are direct human gestures.
          */
         initiation?: RequestInitiation;
+        /** See `buildCloudChatRequest`: the coding-session reply door's marker. */
+        sourceFeature?: string;
       },
     ) => {
       const trimmed = content.trim();

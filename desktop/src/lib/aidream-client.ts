@@ -262,3 +262,129 @@ export async function fetchMandateResolution(
     ...(signal ? { signal } : {}),
   });
 }
+
+// ---------------------------------------------------------------------------
+// The reply door for a coding-session conversation
+// ---------------------------------------------------------------------------
+
+/** One AI Matrx agent, as the responder report names it. */
+export interface CodingReplyResponder {
+  agent_id: string;
+  agent_name?: string | null;
+  setting_key: string;
+  used_platform_default: boolean;
+}
+
+/**
+ * GET /api/coding-sessions/conversations/{conversation_id}/responder.
+ *
+ * THE SAME door the web app opens (matrx-frontend
+ * `features/ai-work/conversations/components/useCodingReplyResponder.ts`).
+ * The server assembles `composer_label` and decides `can_reply` from the very
+ * predicate the reply POST gates on, so this client renders the server's
+ * sentence and never writes its own: a local copy of "X is answering" would
+ * drift the day the responder Mandate is rebound. Matrx Local is never an
+ * exception — same endpoint, same shapes, same words as the web.
+ */
+export interface CodingReplyResponderReport {
+  schema_version?: number;
+  conversation_id: string;
+  is_coding_session_mirror: boolean;
+  provider?: string | null;
+  origin?: string | null;
+  composer_label: string;
+  can_reply: boolean;
+  reason?: string | null;
+  responder?: CodingReplyResponder | null;
+  stand_in_notice?: string | null;
+}
+
+export async function fetchCodingReplyResponder(
+  conversationId: string,
+  jwt: string,
+  organizationId: string,
+  signal?: AbortSignal,
+): Promise<CodingReplyResponderReport> {
+  return aidreamGet<CodingReplyResponderReport>(
+    `/coding-sessions/conversations/${encodeURIComponent(conversationId)}/responder`,
+    { jwt, organizationId, ...(signal ? { signal } : {}) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The bridge's capability verdict (provider × origin)
+// ---------------------------------------------------------------------------
+
+/** One operation's answer. `reason` is mandatory when `supported` is false. */
+export interface BridgeCapabilityVerdict {
+  operation: string;
+  supported: boolean;
+  reason?: string | null;
+  live_probe?: string | null;
+}
+
+export interface BridgeCapabilityReport {
+  provider: string;
+  origin?: string | null;
+  runtime?: string | null;
+  available: boolean;
+  reason?: string | null;
+  operations: BridgeCapabilityVerdict[];
+  fidelity: Record<string, unknown>;
+  supported_actions: string[];
+}
+
+/**
+ * POST /api/coding-sessions/bridge with `action=capabilities`.
+ *
+ * The ONE place any client may learn what it can do with a provider on an
+ * origin (lane XT-01). This app asks it instead of deciding locally whether a
+ * "Continue in Claude Code" control belongs on a row: a Codex row gets the
+ * server's real sentence about why no Codex runtime exists, and the day one
+ * lands the same control lights up with no desktop release.
+ */
+export async function fetchBridgeCapabilities(
+  provider: string,
+  origin: string | null,
+  jwt: string,
+  organizationId: string,
+  signal?: AbortSignal,
+): Promise<BridgeCapabilityReport> {
+  const url = `${await getAIDreamServerUrl()}/api/coding-sessions/bridge`;
+  let headers: Record<string, string> = { "Content-Type": "application/json" };
+  headers["Authorization"] = `Bearer ${jwt}`;
+  headers = applyOrganizationContextHeader(headers, organizationId);
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      schema_version: 1,
+      action: "capabilities",
+      provider,
+      ...(origin ? { origin } : {}),
+    }),
+    signal: signal ?? null,
+  });
+  if (!response.ok) {
+    // The server's refusal envelope names the reason; surface it verbatim
+    // rather than an HTTP number nobody can act on.
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (body?.detail) detail = JSON.stringify(body.detail);
+    } catch {
+      // Body was not JSON; the status line stays the reason.
+    }
+    throw new Error(`[aidream-client] coding-sessions/bridge capabilities → ${detail}`);
+  }
+  const body = (await response.json()) as {
+    dispatch?: { capabilities?: BridgeCapabilityReport | null } | null;
+  };
+  const report = body.dispatch?.capabilities ?? null;
+  if (report === null) {
+    throw new Error(
+      "[aidream-client] the bridge answered the capabilities action with no report",
+    );
+  }
+  return report;
+}

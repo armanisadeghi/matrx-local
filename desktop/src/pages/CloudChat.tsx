@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  AlertTriangle,
   ArrowLeft,
   Cloud,
   Cpu,
@@ -27,7 +28,12 @@ import {
   type CloudChatExecutionTarget,
   useCloudChat,
 } from "@/hooks/use-cloud-chat";
+import { useCodingReplyResponder } from "@/hooks/use-coding-reply-responder";
 import type { EngineStatus } from "@/hooks/use-engine";
+import {
+  replyDoorErrorSentence,
+  replyDoorView,
+} from "@/lib/coding-sessions/reply-door";
 import { DEFAULT_CHAT_MANDATE_KEY, DEFAULT_CHAT_MANDATE_REF } from "@/lib/mandates";
 import { cn } from "@/lib/utils";
 import type { PromptVariable } from "@/types/agents";
@@ -144,6 +150,23 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
   const messages = activeConversation?.messages ?? [];
   const hasMessages = messages.length > 0;
 
+  /**
+   * THE REPLY DOOR. A conversation mirrored from Claude Code or Codex is a
+   * real AI Matrx conversation the server has always accepted new turns on —
+   * it just had no composer anywhere ("there's no way to send messages",
+   * Arman 2026-09-14). The server says who answers and whether a reply is
+   * allowed; this surface renders that verdict and sends through the same
+   * continuation the web door uses, so the reply and the answer land with the
+   * same origin and agent attribution.
+   */
+  const replyDoor = useCodingReplyResponder(
+    cloudChat.activeConversation?.cloudConversationId ??
+      cloudChat.activeConversation?.serverConversationId ??
+      null,
+    executionTarget === "cloud",
+  );
+  const door = replyDoorView(replyDoor);
+
   const handleReferencePaths = useCallback((paths: string[]) => {
     const text = paths.length === 1
       ? `Use this local path: ${paths[0]}`
@@ -243,14 +266,21 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
       setVariableValues({});
       setAttachments([]);
       await sendMessage(content, {
-        ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+        // A mirrored coding-session conversation answers through the responder
+        // Mandate, never the picked agent: naming an agent here would bypass
+        // the platform's choice and lose the reply's attribution.
+        ...(door.sourceFeature
+          ? { sourceFeature: door.sourceFeature }
+          : selectedAgentId
+            ? { agentId: selectedAgentId }
+            : {}),
         variables: submittedVariables,
         ...(submittedAttachments.length > 0
           ? { attachments: submittedAttachments }
           : {}),
       });
     },
-    [attachments, selectedAgentId, sendMessage, variableValues],
+    [attachments, door.sourceFeature, selectedAgentId, sendMessage, variableValues],
   );
 
   const handleAddAttachments = useCallback((files: ChatAttachment[]) => {
@@ -411,6 +441,48 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
           </div>
         )}
 
+        {/* Who answers here — the server's own sentence, never ours. It is
+            shown whenever this conversation is a mirrored coding session, so a
+            person always knows their reply is answered by AI Matrx and that
+            the coding tool will not see it. */}
+        {(door.label ||
+          door.refusalSentence ||
+          replyDoor.status === "loading" ||
+          replyDoor.status === "error") && (
+          <div className="shrink-0 px-4 pt-1">
+            <div className="mx-auto max-w-3xl">
+              {replyDoor.status === "loading" ? (
+                <p
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                  data-testid="reply-door-checking"
+                >
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  Checking who answers here…
+                </p>
+              ) : replyDoor.status === "error" ? (
+                <p
+                  className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400"
+                  data-testid="reply-door-error"
+                >
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{replyDoorErrorSentence(replyDoor.error ?? "no reason given")}</span>
+                </p>
+              ) : (
+                <p
+                  className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400"
+                  data-testid="reply-door-label"
+                >
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {door.label ?? door.refusalSentence}
+                    {door.standInNotice ? ` ${door.standInNotice}` : ""}
+                  </span>
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className={cn("shrink-0 px-4 pb-3", showVariables ? "pt-0" : "pt-1")}>
           <ChatInput
             onSend={handleSend}
@@ -422,7 +494,11 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
             onModelChange={setModel}
             onModeChange={setMode}
             engineReady={engineReady}
-            sendBlockedReason={executionError}
+            sendBlockedReason={
+              replyDoor.status === "loading"
+                ? "Checking who answers here…"
+                : (door.refusalSentence ?? executionError)
+            }
             selectedAgentId={selectedAgentId}
             showModelSelector={false}
             showModeSelector={false}

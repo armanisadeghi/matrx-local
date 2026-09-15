@@ -354,3 +354,61 @@ describe("Cloud Chat provenance attestation", () => {
     ).toBe("auto");
   });
 });
+
+/**
+ * The reply door's half of the contract (lane XT-04). A reply typed into a
+ * mirrored coding-session conversation must reach aidream as the coding-session
+ * reply, or the server never resolves the responder Mandate and the turn lands
+ * unattributed — indistinguishable from an ordinary chat message. This is the
+ * one place the marker can be dropped, so it is asserted on the wire body.
+ */
+describe("a coding-session reply files itself as one", () => {
+  const mirrored = conversation({
+    id: "mirror-1",
+    cloudConversationId: "3f1b7c2e-0000-4000-8000-000000000001",
+  } as Partial<Conversation>);
+
+  it("carries source_feature=coding_session_reply on the continuation", () => {
+    const request = buildCloudChatRequest(
+      mirrored,
+      "what did this session change?",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      { sourceFeature: "coding_session_reply" },
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+    );
+
+    expect(request.url).toBe(
+      "https://api.example.test/api/v2/ai/conversations/3f1b7c2e-0000-4000-8000-000000000001",
+    );
+    expect(request.body.source_feature).toBe("coding_session_reply");
+    expect(request.body.initiation).toBe("user");
+    // No agent is named: the responder is the server's decision, per Mandate.
+    expect(request.body.agent_id).toBeUndefined();
+  });
+
+  it("leaves an ordinary Cloud Chat continuation filed as the chat surface", () => {
+    const request = buildCloudChatRequest(
+      mirrored,
+      "hello",
+      "test-model",
+      "cloud",
+      null,
+      "http://127.0.0.1:22240",
+      "https://api.example.test",
+      undefined,
+      [],
+      null,
+      RUN_CONTROLS,
+      [],
+    );
+
+    expect(request.body.source_feature).toBe("chat-route");
+  });
+});

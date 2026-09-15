@@ -3217,6 +3217,38 @@ class EngineAPI {
     return this.request("/coding-session/runtime/status");
   }
 
+  /**
+   * GET /coding-session/runtime/status?runtime_id= — ONE run's live state.
+   * The desktop polls this while a native continue is running so a person
+   * sees turns land and can cancel; the rpc has existed since the runtime
+   * shipped and had no caller (audit XT-04).
+   */
+  async getRuntimeRun(runtimeId: string): Promise<LocalRuntimeRun> {
+    return this.request(
+      `/coding-session/runtime/status?runtime_id=${encodeURIComponent(runtimeId)}`,
+    );
+  }
+
+  /**
+   * GET /coding-session/runtime/resumable — the native-resume verdict from
+   * Claude's OWN local store. `resumable: false` always carries the reason
+   * (`transcript_not_on_this_machine`, `workspace_missing`, …), which is what
+   * a refusing control shows instead of looking dead.
+   */
+  async getRuntimeResumable(providerSessionId: string): Promise<{
+    resumable: boolean;
+    reason?: string;
+    session_id?: string;
+    workspace?: string;
+    transcript_present?: boolean;
+  }> {
+    return this.request(
+      `/coding-session/runtime/resumable?provider_session_id=${encodeURIComponent(
+        providerSessionId,
+      )}`,
+    );
+  }
+
   async cancelRuntimeSession(
     runtimeId: string,
   ): Promise<{ runtime_id: string; cancelled: boolean; status: string }> {

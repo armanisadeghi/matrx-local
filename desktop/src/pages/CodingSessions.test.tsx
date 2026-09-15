@@ -78,6 +78,13 @@ vi.mock("@/components/coding-sessions/SessionDiagnosisDialog", () => ({
     unknown: "",
   },
 }));
+// The native-continue dialog owns three server reads of its own; its logic is
+// tested at `@/lib/coding-sessions/continue-door`. Here it only has to prove
+// the row's Continue control opens it and hands it the row.
+vi.mock("@/components/coding-sessions/ContinueSessionDialog", () => ({
+  ContinueSessionDialog: ({ row }: { row: { session_id: string } | null }) =>
+    row ? <div data-testid="continue-open">{row.session_id}</div> : null,
+}));
 vi.mock("@/components/coding-sessions/SessionArtifactsDialog", () => ({
   ArtifactsCell: () => <span>—</span>,
   SessionArtifactsDialog: () => null,
@@ -341,14 +348,24 @@ describe("A row is a door", () => {
     expect(container.querySelector("[data-testid='diagnosis-open']")?.textContent).toBe("session-0");
   });
 
-  it("offers the engine's own continuation command as a copy action", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  /**
+   * Continue was a clipboard copy and nothing else (CS-11). It now opens the
+   * native-continue door for THAT row: the dialog asks AI Matrx and this Mac
+   * whether the session can really be resumed here, runs the turn when it
+   * can, and still hands over the same resume command when it cannot. The
+   * assertion is that the control reaches the door carrying the right row —
+   * a Continue that opened an empty dialog, or someone else's session, is the
+   * failure this guards.
+   */
+  it("opens the native continue door for the row it was clicked on", async () => {
     await render("/coding-sessions");
+    expect(container.querySelector("[data-testid='continue-open']")).toBeNull();
     await act(async () => {
       findButton("Continue").click();
     });
-    expect(writeText).toHaveBeenCalledWith("claude --resume session-0");
+    expect(container.querySelector("[data-testid='continue-open']")?.textContent).toBe(
+      "session-0",
+    );
   });
 });
 

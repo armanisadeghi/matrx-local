@@ -16,10 +16,10 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
-  Copy,
   ExternalLink,
   Loader2,
   Pin,
+  Play,
   RefreshCw,
   Search,
   Stethoscope,
@@ -30,6 +30,7 @@ import {
   ArtifactsCell,
   SessionArtifactsDialog,
 } from "@/components/coding-sessions/SessionArtifactsDialog";
+import { ContinueSessionDialog } from "@/components/coding-sessions/ContinueSessionDialog";
 import {
   SESSION_STATE_HINT,
   SESSION_STATE_LABEL,
@@ -127,6 +128,9 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
   const [filter, setFilter] = useState<ListFilter>("all");
   const [provider, setProvider] = useState<CodingSessionProvider | null>(null);
   const [artifactsDialogId, setArtifactsDialogId] = useState<string | null>(null);
+  // The row whose native continue is open. A real continue needs a prompt and
+  // shows live status, so it is a dialog, not a one-click copy (lane XT-04).
+  const [continueRow, setContinueRow] = useState<ClaudeConversation | null>(null);
   const [blocked, setBlocked] = useState<{ title: string; reason: string; sessionId: string } | null>(
     null,
   );
@@ -484,12 +488,19 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
                       />
                     )}
                     {continuation && (
-                      <RowAction
-                        label="Continue"
-                        title={`${continuation.command} — ${continuation.note}`}
-                        icon={<Copy className="h-3.5 w-3.5" />}
-                        onRun={() => navigator.clipboard.writeText(continuation.command)}
-                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        title="Continue this session with a new turn on this Mac — or see exactly why that is not possible here, with the resume command to copy."
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setContinueRow(row);
+                        }}
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        <span className="ml-1.5 hidden text-xs xl:inline">Continue</span>
+                      </Button>
                     )}
                     <Button
                       type="button"
@@ -599,6 +610,8 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         sessionId={artifactsDialogId}
         onClose={() => setArtifactsDialogId(null)}
       />
+
+      <ContinueSessionDialog row={continueRow} onClose={() => setContinueRow(null)} />
     </div>
   );
 }

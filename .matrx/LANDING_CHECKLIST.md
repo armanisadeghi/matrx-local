@@ -48,6 +48,13 @@ production regression, not a hypothetical.
     is what crashed the app on every single release (17 in 72 h).
     Guards: `shutdown_exit_tests`, `successor_spawn_tests`,
     `relaunch_target_tests` in `desktop/src-tauri/src/lib.rs`.
+    **And the bypass on tauri's event loop is only half the class**: tao
+    implements no `applicationShouldTerminate:`, so `-[NSApplication
+    terminate:]` (menu-bar Quit, Cmd+Q, Dock Quit, AppleEvent quit, OS logout)
+    runs libc `exit()` with no tauri frame at all — SR-01 went on crashing
+    through 1.4.115 for exactly that reason. That path is swizzled in
+    `desktop/src-tauri/src/appkit_terminate.rs`; guard:
+    `appkit_terminate::tests`.
 11. **Any engine spawn/exit handling, or a surface that reports the engine
     down?** → a dead engine must come back on its own (bounded, backed off,
     `supervise_engine_exit`), and the user must SEE it with the engine's own
@@ -60,3 +67,13 @@ production regression, not a hypothetical.
     calling it present made the one-click repair skip the only download that
     could fix it (18.6+ hours of silently dead browser scraping).
     Guard: `tests/unit/test_browser_build_mismatch.py`.
+13. **Any page, hook, or poller that fetches from the engine at mount?** → it
+    must never render a red failure for "auth has not resolved yet". The one
+    seam is `EngineAPI.request()` + `resolveNativeVaultEngineAccessToken()`:
+    the provider waits for the session daemon's first answer before reporting
+    no token, and a 401 we sent with no Authorization header is re-asked once
+    before it becomes an error or arms the signed-out fence. Five Coding
+    Sessions reads 401'd at mount on installed 1.4.115 and a signed-in Arman
+    read "Couldn't read your conversations" until he clicked Refresh.
+    Guards: `desktop/src/lib/api-mount-auth-readiness.test.ts`,
+    `desktop/src/lib/native-vault-auth-readiness.test.ts`.

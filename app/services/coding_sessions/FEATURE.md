@@ -426,6 +426,15 @@ cloud lane sat on a three-day-old token, and the publisher's `no_active_user_jwt
 branch deferred the head row and said nothing (`publisher.blocker` was null while
 148,764 deliveries queued at ~100/min). Now:
 
+> **STALE since the FS-C5b custody cutover (note added 2026-09-15, lane CS-14).** This section still
+> describes the engine asking UI sockets for a session and
+> `use-engine.ts::pushFreshSessionToEngine` answering. Neither exists any more: the sync daemon is
+> the device's only session holder, `session_freshness.py::request_session_grant` now reads the
+> grant directly with `get_sync_client().access_grant()`, and there is no renderer handler and no
+> `session_refresh_requested` socket message left in the tree. The TWO-STATE contract below
+> (`session_refreshing` -> `no_active_user_jwt`) is unchanged and still correct; only the "who
+> answers the ask" half is wrong. Whoever next owns this file should rewrite these bullets.
+
 - **The desktop's Supabase client OWNS the session.** The engine never calls the
   refresh grant: Supabase rotates refresh tokens on use and detects reuse, so an
   engine-side refresh would consume the token the desktop still holds and sign the

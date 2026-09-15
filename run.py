@@ -183,6 +183,7 @@ import logging
 import os
 import re
 import signal
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -491,7 +492,16 @@ class _UvicornLogForwarder(logging.Handler):
 _uvicorn_server: uvicorn.Server | None = None
 _server_thread: threading.Thread | None = None
 _server_stopped_event = threading.Event()
-def start_server(port: int) -> None:
+def start_server(port: int, sock: "socket.socket | None" = None) -> None:
+    """Serve on ``sock`` — the socket the port scan bound and never let go.
+
+    🚨 THE PROCESS IS LISTENING BEFORE THIS FUNCTION IS CALLED. uvicorn runs
+    the app's lifespan BEFORE it binds, which is how an engine that lost a
+    port race printed "Startup complete" while bound to nothing (2026-09-14,
+    two engines 3s apart, both claiming 22241). Handing it an already-bound
+    socket makes that sequence impossible: the claim can no longer outrun the
+    bind, and no rival can take the port in between.
+    """
     global _uvicorn_server
     config = uvicorn.Config(
         app,
@@ -517,7 +527,39 @@ def start_server(port: int) -> None:
     server = uvicorn.Server(config)
     _uvicorn_server = server
     try:
-        server.run()
+        # Only pass `sockets` when we actually hold one: a socket-less call
+        # must reach uvicorn exactly as it did before this change (that is the
+        # contract tests/unit/test_run_shutdown_barrier.py exercises with a
+        # fake server, and passing sockets=None would change the call shape
+        # for no reason).
+        if sock is not None:
+            server.run(sockets=[sock])
+        else:
+            server.run()
+    except BaseException:
+        # A server thread that dies is FATAL and must be loud. Before this,
+        # uvicorn's bind failure called sys.exit(1) inside this thread: the
+        # SystemExit died with the thread, the tray kept running, the
+        # discovery file kept advertising a port nobody was listening on, and
+        # the log's last word was "Startup complete". Never again — say so,
+        # stop advertising, and take the process down.
+        logger.critical(
+            "[startup] FATAL: the engine's server thread died on port %d — this "
+            "process is NOT serving anything. Removing the discovery file and "
+            "exiting so nothing keeps talking to a dead engine.",
+            port, exc_info=True,
+        )
+        print(
+            f"[phase:server] FATAL — server thread died on port {port}; exiting",
+            flush=True,
+        )
+        try:
+            remove_discovery_file()
+        except Exception:
+            logger.debug("[startup] discovery cleanup failed", exc_info=True)
+        _server_stopped_event.set()
+        _shutdown_event.set()
+        os._exit(1)
     finally:
         # Explicit completion barrier for the main thread. Thread.join()
         # remained blocked in a packaged one-file process even after this
@@ -935,7 +977,7 @@ def main() -> None:
         flush=True,
     )
     try:
-        from app.preflight import clean_orphans, assign_engine_port
+        from app.preflight import clean_orphans, bind_engine_port
         if os.environ.get("MATRX_SKIP_ORPHAN_SCAN") == "1":
             # Test/isolated mode: this instance must NEVER touch other
             # processes on the machine. The pytest engine fixture sets this
@@ -956,38 +998,47 @@ def main() -> None:
         # and rely on the port scan below if the orphan sweep failed.
         logger.exception("Preflight clean_orphans failed — continuing anyway")
 
-        def assign_engine_port() -> int:  # type: ignore[no-redef]
-            import socket as _s
+        def bind_engine_port() -> tuple[int, socket.socket]:  # type: ignore[no-redef]
+            # Same contract as app.preflight.bind_engine_port: the socket that
+            # wins the scan is KEPT and handed to the server, so nothing can
+            # take the port between choosing it and serving on it.
             env = os.environ.get("MATRX_PORT")
-            if env:
-                return int(env)
-            for offset in range(MAX_PORT_SCAN):
-                p = DEFAULT_PORT + offset
-                with _s.socket(_s.AF_INET, _s.SOCK_STREAM) as sk:
-                    # Windows: SO_REUSEADDR binds over live listeners — see
-                    # app/preflight.py _is_port_free for the full rationale.
-                    if sys.platform == "win32":
-                        if hasattr(_s, "SO_EXCLUSIVEADDRUSE"):
-                            sk.setsockopt(_s.SOL_SOCKET, _s.SO_EXCLUSIVEADDRUSE, 1)
-                    else:
-                        sk.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
-                    try:
-                        sk.bind(("127.0.0.1", p))
-                        return p
-                    except OSError:
-                        continue
+            candidates = [int(env)] if env else [
+                DEFAULT_PORT + offset for offset in range(MAX_PORT_SCAN)
+            ]
+            for p in candidates:
+                sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                # Windows: SO_REUSEADDR binds over live listeners — see
+                # app/preflight.py _is_port_free for the full rationale.
+                if sys.platform == "win32":
+                    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                        sk.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:
+                    sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sk.bind(("127.0.0.1", p))
+                except OSError:
+                    sk.close()
+                    continue
+                sk.set_inheritable(True)
+                return p, sk
             raise SystemExit("No free port in scan range")
 
     print("[phase:port] Finding available port...", flush=True)
-    port = assign_engine_port()
-    logger.info("Starting Matrx Local on port %d", port)
-    print(f"[phase:port] Engine will bind to port {port}", flush=True)
+    # The scan HOLDS the port it picks (bind_engine_port) — the discovery file
+    # below, and every lifespan line after it, now describe a port this
+    # process is already bound to.
+    port, engine_socket = bind_engine_port()
+    logger.info("Starting Matrx Local on port %d (socket already bound)", port)
+    print(f"[phase:port] Engine bound to port {port} (holding the socket)", flush=True)
 
     write_discovery_file(port)
 
     print("[phase:server] Starting server...", flush=True)
     global _server_thread
-    server_thread = threading.Thread(target=start_server, args=(port,), daemon=True)
+    server_thread = threading.Thread(
+        target=start_server, args=(port, engine_socket), daemon=True
+    )
     _server_thread = server_thread
     server_thread.start()
 

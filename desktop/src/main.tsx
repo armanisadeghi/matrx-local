@@ -5,6 +5,10 @@ import { windowRole } from "./lib/window-role";
 import { TranscriptOverlay } from "./components/TranscriptOverlay";
 import { PanelApp } from "./panels/PanelApp";
 import { startAppRuntimeConfig } from "./lib/app-config";
+import {
+  initConsoleCapture,
+  installGlobalErrorCapture,
+} from "./hooks/use-unified-log";
 import "./index.css";
 
 /**
@@ -16,6 +20,8 @@ import "./index.css";
  *               (panels/manifest.tsx).
  *   • main / peers / browser dev → full App.
  */
+installGlobalErrorCapture();
+initConsoleCapture();
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
 // Start the public admin-config refresh without delaying application windows.

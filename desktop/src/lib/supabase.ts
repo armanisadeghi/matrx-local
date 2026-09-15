@@ -43,4 +43,19 @@ subscribeSession(() => {
     });
 });
 
+/** A request-only client whose Authorization header cannot follow later auth
+ * state changes on the shared application client. */
+export function createAccessTokenBoundSupabaseClient(accessToken: string) {
+    return createClient(supabaseUrl ?? '', supabaseKey ?? '', {
+        auth: {
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+            persistSession: false,
+        },
+        global: {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        },
+    });
+}
+
 export default supabase;

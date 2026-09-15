@@ -10,12 +10,13 @@ import {
 import { ENGINE_PORT_RANGE_LABEL } from "@/lib/engine-ports";
 import { initPlatformCtx } from "@/lib/platformCtx";
 import { startBackgroundTasks, stopBackgroundTasks } from "@/lib/background-tasks";
-import { getAuthedSession, getToken } from "@/lib/custodian";
+import { getAuthedSession } from "@/lib/custodian";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { useWindowLeader } from "@/hooks/use-window-leader";
 import {
   nativeVaultEngineTransitionContext,
-  alignNativeVaultEngineForCurrentSubject,
+  resolveNativeVaultEngineAccessToken,
+  isNativeVaultHostRevisionCurrent,
   subscribeNativeVaultHostEvents,
 } from "@/lib/native-vault-auth";
 
@@ -65,18 +66,16 @@ export function useEngine() {
   // the configure call that fires from onAuthStateChange(INITIAL_SESSION) when
   // initialize() has already done it within the last 10 seconds.
   const lastCloudConfigureRef = useRef<number>(0);
+  const accountConnectionChainRef = useRef<Promise<void>>(Promise.resolve());
+  const configuredAccountRef = useRef<{ subject: string; generation: string | undefined; origin: string | undefined; revision: number } | null>(null);
+  const completedConnectionRef = useRef<{ subject: string; revision: number; token: string; generation: string | undefined; origin: string | undefined } | null>(null);
 
   // Wire up the token provider immediately so all authenticated calls have
   // access to the current JWT. This must happen before initialize() runs.
   // We always register it — the provider handles the case where no session
   // exists by returning null, which authHeaders() converts to no header.
   useEffect(() => {
-    engine.setTokenProvider(async () => {
-      const session = await getAuthedSession();
-      return session?.access_token && nativeVaultEngineTransitionContext(session.user?.id)
-        ? session.access_token
-        : null;
-    });
+    engine.setTokenProvider(resolveNativeVaultEngineAccessToken);
   }, []);
 
   const update = useCallback((partial: Partial<EngineState>) => {
@@ -92,6 +91,38 @@ export function useEngine() {
       });
     }
   }, []);
+
+  const reconnectAccount = useCallback(async (_reason: string, expectedRevision?: number): Promise<void> => {
+    const connect = async () => {
+      if (expectedRevision !== undefined && !isNativeVaultHostRevisionCurrent(expectedRevision)) return;
+      const observed = await getAuthedSession();
+      if (!observed) return;
+      const token = await resolveNativeVaultEngineAccessToken();
+      const current = await getAuthedSession();
+      if (!token || !current || current.user.id !== observed.user.id) return;
+      const context = nativeVaultEngineTransitionContext(current.user.id);
+      if (!context || !context.isCurrent() || (expectedRevision !== undefined && context.revision !== expectedRevision)) return;
+      const completed = completedConnectionRef.current;
+      if (completed?.subject === current.user.id && completed.revision === context.revision && completed.token === token && completed.generation === context.engineGeneration && completed.origin === context.engineOrigin) return;
+      const configured = configuredAccountRef.current;
+      const sameConfiguration = configured?.subject === current.user.id && configured.generation === context.engineGeneration && configured.origin === context.engineOrigin;
+      // A previous configure can be valid even when its socket failed. Keep
+      // that configuration and retry only the missing WebSocket connection.
+      if (!sameConfiguration) await engine.configureCloudSync(token, current.user.id, context);
+      else if (configured.revision !== context.revision) await engine.reconfigureCloudSync(token, current.user.id, context);
+      if (!context.isCurrent()) return;
+      configuredAccountRef.current = { subject: current.user.id, generation: context.engineGeneration, origin: context.engineOrigin, revision: context.revision };
+      lastCloudConfigureRef.current = Date.now();
+      await engine.connectWebSocket(context);
+      if (!context.isCurrent()) return;
+      completedConnectionRef.current = { subject: current.user.id, revision: context.revision, token, generation: context.engineGeneration, origin: context.engineOrigin };
+      update({ wsConnected: true, error: null });
+      if (isLeaderRef.current) startBackgroundTasks();
+    };
+    const operation = accountConnectionChainRef.current.then(connect, connect);
+    accountConnectionChainRef.current = operation.catch(() => undefined);
+    await operation;
+  }, [update]);
 
   /**
    * Core engine initialization.
@@ -259,56 +290,13 @@ export function useEngine() {
         emitClientLog("warn", "Could not load system info (non-critical)", "engine");
       }
 
-      // Establish the full engine session before starting any authenticated
-      // work.  A WebSocket can authenticate its own handshake, but it does
-      // not populate the engine's persisted JWT.  Previously startup treated
-      // a successful WebSocket as sufficient and started the idle queue; the
-      // first queued token hand-off could then be fenced by an auth event,
-      // leaving every REST request from the running desktop unauthenticated.
-      //
-      // The persisted hand-off is deliberately before the WebSocket: the
-      // local API is usable only once both current-account fencing and engine
-      // credential custody agree on this exact session.
-      let acceptedSessionForTasks = false;
-      try {
-        const session = await getAuthedSession();
-        if (session?.access_token) {
-          await alignNativeVaultEngineForCurrentSubject(session.user?.id ?? null);
-          if (!nativeVaultEngineTransitionContext(session.user?.id)) {
-            throw new Error("Native Vault account fence has not adopted this session");
-          }
-          const context = nativeVaultEngineTransitionContext(session.user?.id);
-          if (!context) throw new Error("Native Vault account fence has not adopted this session");
-          // FS-C5b: nothing is pushed to the engine any more. It asks the sync daemon for its own
-          // token (app/services/sync_client), so there is no window in which the engine holds a
-          // credential this window handed it and nothing headless can renew — MXL-D-046's shape.
-          await engine.connectWebSocket(context);
-          acceptedSessionForTasks = true;
-          update({ wsConnected: true });
-          emitClientLog("success", "WebSocket connected", "engine");
-        } else {
-          emitClientLog("warn", "No session token — skipping WebSocket (REST still works)", "engine");
-        }
-      } catch (err) {
-        emitClientLog("warn", `WebSocket connection failed (non-critical): ${err}`, "engine");
-      }
-
-      // The queue reads tokens itself, so it starts only after the exact
-      // current subject has passed native reconciliation. A failed/anonymous
-      // initialization must leave the queue stopped.
-      if (isLeaderRef.current && acceptedSessionForTasks) {
-        lastCloudConfigureRef.current = Date.now();
-        startBackgroundTasks();
-        emitClientLog("success", "Engine initialization complete — background tasks queued", "engine");
-      } else {
-        stopBackgroundTasks();
-        emitClientLog("success", "Engine initialization complete without an adopted leader session — background tasks skipped", "engine");
-      }
+      try { await reconnectAccount("engine initialized"); }
+      catch (error) { stopBackgroundTasks(); update({ wsConnected: false, error: `Your account connection to the engine needs recovery: ${String(error)}` }); }
     } finally {
       // Always release the mutex so future retries are possible
       initializingRef.current = false;
     }
-  }, [update]);
+  }, [update, reconnectAccount]);
 
   /**
    * Full restart: stop → start → wait → discover → init.
@@ -376,87 +364,22 @@ export function useEngine() {
     const offConnected = engine.on("connected", () =>
       update({ wsConnected: true })
     );
-    const offDisconnected = engine.on("disconnected", () =>
-      update({ wsConnected: false })
-    );
+    const offDisconnected = engine.on("disconnected", () => {
+      completedConnectionRef.current = null;
+      update({ wsConnected: false });
+    });
 
-    // The token-push path is gone (SPEC-CUSTODY §10 step 3, D17).
-    //
-    // `syncTokenToPython`, `pushSessionToEngine`, `pushFreshSessionToEngine` and the forced
-    // `refreshSession`/`signOut` self-heal that hung off them all existed to keep a copy of this
-    // window's Supabase session alive inside the Python engine. There is no such copy now: the
-    // engine asks `matrx-syncd` for a short-lived token whenever it needs one, and the daemon is
-    // the only holder of anything renewable on the machine. A window that is closed, asleep or
-    // never opened cannot leave the engine stranded, which is the whole of MXL-D-046.
-
-    // `session_refresh_requested` is no longer answered here, and the engine no longer sends it:
-    // it asks the daemon directly, which is the one process that can actually mint a token. A
-    // handler that logged and did nothing would be worse than none.
-
-    // Re-configure cloud sync and sync JWT to Python whenever auth state changes.
-    const authSub = subscribeNativeVaultHostEvents(({ event, session, revision, completion }) => {
-        // Fence synchronously in Supabase's callback; the native command and
-        // all engine I/O run after its lock is released.
-        // Cancel idle work before clearing the engine token. Each cloud task
-        // also rechecks its exact subject in case it already left the queue.
-        stopBackgroundTasks();
-        engine.disconnect();
-        update({ wsConnected: false });
-        void completion.then(async ({ accepted }) => {
-          if (!accepted || nativeVaultEngineTransitionContext(session?.user?.id)?.revision !== revision) return;
-          if (session?.user?.id && !nativeVaultEngineTransitionContext(session.user.id)) return;
-          if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
-            const accessToken = session?.user?.id ? await getToken() : null;
-            if (accessToken && session?.user?.id) {
-              if (statusRef.current === "connected" && !wsConnectedRef.current) {
-                try {
-                  const context = nativeVaultEngineTransitionContext(session.user.id);
-                  if (!context) return;
-                  await engine.connectWebSocket(context);
-                  update({ wsConnected: true });
-                } catch (error) {
-                  emitClientLog("warn", `Deferred WebSocket connection failed: ${error}`, "engine");
-                }
-              } else if (statusRef.current !== "connected") {
-                void initialize();
-              }
-              // Skip if initialize() already sent configure within the last 10s
-              // to avoid a duplicate call on the INITIAL_SESSION event.
-              if (Date.now() - lastCloudConfigureRef.current < 10_000) return;
-              try {
-                lastCloudConfigureRef.current = Date.now();
-                const context = nativeVaultEngineTransitionContext(session.user.id);
-                if (!context) return;
-                await engine.configureCloudSync(accessToken, session.user.id, context);
-                engine.cloudHeartbeat(context).catch((e) => console.warn("[engine] cloudHeartbeat failed:", e));
-              } catch (e) {
-                console.warn("[engine] configureCloudSync failed (non-critical):", e);
-              }
-            }
-          } else if (event === "TOKEN_REFRESHED") {
-            // The daemon rotated. Nothing is pushed anywhere; cloud sync is simply re-armed with
-            // the new token, which the daemon has already minted.
-            const rotated = session?.user?.id ? await getToken() : null;
-            if (rotated && session?.user?.id) {
-              try {
-                const context = nativeVaultEngineTransitionContext(session.user.id);
-                if (!context) return;
-                await engine.reconfigureCloudSync(rotated, session.user.id, context);
-              } catch (e) {
-                console.warn("[engine] reconfigureCloudSync failed (non-critical):", e);
-              }
-            }
-          }
-          // A fence accepted this exact session above. Restart only now; a
-          // failure returned before any queued task can observe the session.
-          if (session?.user?.id && isLeaderRef.current && nativeVaultEngineTransitionContext(session.user.id)) {
-            startBackgroundTasks();
-          }
-        }).catch((error) => {
-          emitClientLog("warn", `Native Vault account fence failed: ${error}`, "auth");
-          engine.disconnect();
-          update({ wsConnected: false });
-        });
+    const authSub = subscribeNativeVaultHostEvents(({ session, revision, completion }) => {
+      const completed = completedConnectionRef.current;
+      if (session && completed?.subject === session.user.id && completed.revision === revision) return;
+      completedConnectionRef.current = null;
+      stopBackgroundTasks(); engine.disconnect(); update({ wsConnected: false });
+      void completion.then(async ({ accepted }) => {
+        if (!accepted || !session || !isNativeVaultHostRevisionCurrent(revision)) return;
+        await reconnectAccount("daemon session changed", revision);
+      }).catch((error) => {
+        if (isNativeVaultHostRevisionCurrent(revision)) update({ wsConnected: false, error: `Your account connection to the engine needs recovery: ${String(error)}` });
+      });
     });
 
     // Periodic health check — runs every 10s, but suppresses false "disconnected"
@@ -511,5 +434,6 @@ export function useEngine() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { ...state, refresh, restartEngine, engine };
+  const retryAccountConnection = useCallback(async () => { await reconnectAccount("manual retry"); }, [reconnectAccount]);
+  return { ...state, refresh, restartEngine, retryAccountConnection, engine };
 }

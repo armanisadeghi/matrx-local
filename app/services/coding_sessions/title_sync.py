@@ -53,6 +53,7 @@ Deliberate boundaries:
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 from app.services.local_db.write_gate import write_gate
 import base64
@@ -72,8 +73,8 @@ from app.services.coding_sessions.claude_label_writer import (
 from app.services.coding_sessions.claude_session_index import (
     MAX_INDEX_FILES,
     ClaudeSessionIndexEntry,
-    read_session_index,
 )
+from app.services.coding_sessions.claude_overview import read_session_index_async
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
@@ -363,13 +364,16 @@ class ClaudeSessionMetadataReconciler:
         db: LocalDatabase | None = None,
         outbox: CodingSessionBridgeOutbox | None = None,
         client: AIDreamClient | None = None,
-        index_reader: Any = read_session_index,
+        index_reader: Any | None = None,
         writer: ClaudeSessionIndexWriter | None = None,
     ) -> None:
         self._db = db or get_db()
         self._outbox = outbox
         self._client = client
-        self._index_reader = index_reader
+        # The complete desktop index can contain tens of thousands of JSON
+        # files.  Its canonical reader isolates that scan in a helper process;
+        # never call the synchronous parser in this engine task.
+        self._index_reader = index_reader or read_session_index_async
         self._writer = writer or ClaudeSessionIndexWriter()
         self._tokens = TokenRepo(self._db)
         self._sync_meta = SyncMetaRepo(self._db)
@@ -377,6 +381,15 @@ class ClaudeSessionMetadataReconciler:
         self._recovery_checked = False
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
+
+    async def _read_index(
+        self,
+    ) -> tuple[dict[str, ClaudeSessionIndexEntry], dict[str, int]]:
+        """Use the async production reader while retaining synchronous test seams."""
+        result = await asyncio.to_thread(self._index_reader)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     async def _sent_digests(self) -> dict[str, str]:
         rows = await self._db.fetchall(
@@ -723,6 +736,7 @@ class ClaudeSessionMetadataReconciler:
         identities: list[dict[str, Any]] = []
         index: dict[str, ClaudeSessionIndexEntry] = {}
         index_totals = {"files": 0, "records": 0, "unreadable": 0}
+        index_writable = False
         matched = no_labels = unchanged = queued = already_queued = 0
         unreadable_identity = failed = acknowledged = 0
         unmatched: list[str] = []
@@ -733,8 +747,8 @@ class ClaudeSessionMetadataReconciler:
         refusal_reasons: dict[str, int] = {}
         try:
             identities = await self._identities()
-            index, index_totals = self._index_reader()
-            index_writable = _record_paths_writable(index)
+            index, index_totals = await self._read_index()
+            index_writable = await asyncio.to_thread(_record_paths_writable, index)
             if not dry_run and _index_incomplete(index_totals):
                 raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             sent = await self._sent_digests()
@@ -1065,7 +1079,7 @@ class ClaudeSessionMetadataReconciler:
                 verified_sessions=0,
                 failed_sessions=max(1, failed),
                 index_totals=index_totals,
-                index_writable=_record_paths_writable(index),
+                index_writable=index_writable,
                 error_message=str(exc),
             )
             raise
@@ -1085,7 +1099,7 @@ class ClaudeSessionMetadataReconciler:
             "index_records": index_totals["records"],
             "index_unreadable": index_totals.get("unreadable", 0),
             "index_limit_reached": _index_truncated(index_totals),
-            "index_writable": _record_paths_writable(index),
+            "index_writable": index_writable,
             "matched": matched,
             "unmatched": len(unmatched),
             "unmatched_session_ids": unmatched[:50],
@@ -1127,7 +1141,8 @@ class ClaudeSessionMetadataReconciler:
                 for item in identities
                 if isinstance(item.get("provider_session_id"), str)
             }
-            index, index_totals = self._index_reader()
+            index, index_totals = await self._read_index()
+            index_writable = await asyncio.to_thread(_record_paths_writable, index)
             if _index_incomplete(index_totals):
                 raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             sent = await self._sent_digests()
@@ -1262,7 +1277,7 @@ class ClaudeSessionMetadataReconciler:
                 verified_sessions=verified,
                 failed_sessions=failed,
                 index_totals=index_totals,
-                index_writable=_record_paths_writable(index),
+                index_writable=index_writable,
             )
             return await self.operation(verification_id)
 
@@ -1300,7 +1315,8 @@ class ClaudeSessionMetadataReconciler:
             )
             if identity is None:
                 raise ClaudeTitleSyncBlocked("binding_no_longer_available")
-            index, index_totals = self._index_reader()
+            index, index_totals = await self._read_index()
+            index_writable = await asyncio.to_thread(_record_paths_writable, index)
             if _index_incomplete(index_totals):
                 raise ClaudeTitleSyncBlocked("claude_index_incomplete")
             entry = index.get(str(intent["cli_session_id"]))
@@ -1414,7 +1430,7 @@ class ClaudeSessionMetadataReconciler:
                 verified_sessions=0,
                 failed_sessions=int(state != "enqueued"),
                 index_totals=index_totals,
-                index_writable=_record_paths_writable(index),
+                index_writable=index_writable,
             )
             return await self.operation(retry_id)
 
@@ -1515,7 +1531,8 @@ class ClaudeSessionMetadataReconciler:
 
     async def status(self) -> dict[str, Any]:
         await self._recover_interrupted_operations()
-        index, index_totals = self._index_reader()
+        index, index_totals = await self._read_index()
+        index_writable = await asyncio.to_thread(_record_paths_writable, index)
         sync = await self._sync_meta.get_last_sync("claude_session_metadata")
         row = await self._db.fetchone(
             "SELECT count(*) AS n FROM claude_session_metadata_sent"
@@ -1540,7 +1557,7 @@ class ClaudeSessionMetadataReconciler:
             "auto_sync_enabled": is_auto_label_sync_enabled(),
             "auto_sync_running": self.active,
             "auto_sync_interval_seconds": auto_label_sync_interval_seconds(),
-            "index_writable": _record_paths_writable(index),
+            "index_writable": index_writable,
             "pushed_sessions": int(pushed["n"]) if pushed else 0,
             "index_available": index_totals["files"] > 0,
             "index_files": index_totals["files"],

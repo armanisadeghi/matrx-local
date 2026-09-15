@@ -2715,37 +2715,38 @@ class EngineAPI {
     context: NativeVaultTransitionContext,
   ): Promise<CloudConfigResult> {
     const origin = context.engineOrigin ?? this.baseUrl;
-    if (!origin || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     // FS-C5b: no engine-side credential fence to read — the engine holds no credential. The
     // context's own binding to this origin, checked either side of every await, is the fence.
     const headers = { "Content-Type": "application/json", ...(await this.authHeaders()) };
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const resp = await fetch(`${origin}/cloud/configure`, {
       method: "POST",
       headers,
       body: JSON.stringify({ jwt, user_id: userId }),
     });
     if (!resp.ok) throw new Error(`Cloud configure failed: ${resp.status}`);
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     return resp.json();
   }
 
   /** Reconfigure cloud sync with fresh JWT. */
   async reconfigureCloudSync(jwt: string, userId: string, context: NativeVaultTransitionContext): Promise<void> {
     const origin = context.engineOrigin ?? this.baseUrl;
-    if (!origin || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const headers = {
       "Content-Type": "application/json",
       ...(await this.authHeaders()),
     };
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const response = await fetch(`${origin}/cloud/reconfigure`, {
       method: "POST",
       headers,
       body: JSON.stringify({ jwt, user_id: userId }),
     });
     if (!response.ok) throw new Error(`Cloud reconfigure failed: ${response.status}`);
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
   }
 
   /** Get cloud-synced settings. */
@@ -3454,13 +3455,17 @@ class EngineAPI {
     if (!this.baseUrl) return { status: "unavailable" };
     const origin = this.baseUrl;
     if (!context.isCurrent()) return { status: "superseded" };
-    // Re-read after the await point the caller may have crossed.
-    await Promise.resolve();
+    // The process generation survives token rotation but changes even when a
+    // restarted engine reuses its port. /health is intentionally unauthenticated.
+    const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return { status: "unavailable" };
+    const health = await response.json() as { boot_id?: string };
     if (!context.isCurrent() || origin !== this.baseUrl) return { status: "superseded" };
+    if (!health.boot_id) throw new Error("The local engine did not identify its running instance.");
     return {
       status: "aligned",
       origin,
-      generation: String(context.revision),
+      generation: health.boot_id,
       credentialRevision: context.revision,
       subject: context.nextSubject,
     };

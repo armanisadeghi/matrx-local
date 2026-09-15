@@ -4328,7 +4328,7 @@ export function Settings({
                     <Badge
                       variant={auth.isAuthenticated ? "success" : "secondary"}
                     >
-                      {auth.isAuthenticated ? "Connected" : "Not Signed In"}
+                      {auth.isAuthenticated ? "Signed in" : "Not signed in"}
                     </Badge>
                   </div>
 

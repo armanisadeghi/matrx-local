@@ -1,31 +1,11 @@
-/**
- * Authentication — a **view onto the sync daemon's session** (FS-C5b, SPEC-CUSTODY D17/§10).
- *
- * This hook used to run the OAuth 2.1 PKCE transaction itself: it generated the verifier into
- * `localStorage`, exchanged the authorization code in the webview, and called
- * `supabase.auth.setSession()`, which persisted a **refresh token in webview localStorage**. That
- * was the device's second rotating credential holder, and nothing headless could renew it — the
- * MXL-D-046 class.
- *
- * Now: `POST /v1/sign-in` asks the daemon to open a transaction (the verifier is generated inside
- * it and never leaves), the system browser does the consent, the OS hands the callback to the
- * Rust host, and **the daemon exchanges the code**. This hook only renders what the daemon
- * reports and asks it to sign in or out. There is no verifier, no code, and no refresh token in
- * this process — `supabase.auth` throws by construction.
- *
- * Email/password sign-in is gone with it. It ran through `supabase.auth.signInWithPassword`, which
- * now throws, and the daemon's contract is PKCE only; leaving the form on screen would be a dead
- * control, which law 4 forbids as firmly as a lie. "Sign in with AI Matrx" reaches the same
- * accounts through the same provider.
- */
-
 import { resetContentIr, warmContentIr } from "@/features/content-ir/runtime/registry";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   currentSession,
-  getToken,
+  getSession,
   signIn as custodianSignIn,
   signOut as custodianSignOut,
+  sessionToMatrx,
   type MatrxSession,
   type MatrxUser,
   type SessionSnapshot,
@@ -33,6 +13,7 @@ import {
 import { emitClientLog } from "@/hooks/use-client-log";
 import {
   invalidateNativeVaultBeforeHostMutation,
+  isNativeVaultHostRevisionCurrent,
   nativeVaultAdoptedHostGeneration,
   retryNativeVaultAccountCleanup,
   subscribeNativeVaultHostEvents,
@@ -44,171 +25,103 @@ export interface AuthState {
   isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
-  /** True between opening the system browser and the daemon reporting a session. */
+  /** Native reconciliation, cleanup, or session verification needs an explicit retry. */
+  accountConnectionUnavailable: boolean;
   oauthPending: boolean;
-  /** The daemon's full honest state — what a surface shows when there is no session. */
   snapshot: SessionSnapshot;
 }
 
 export function useAuth() {
   const [state, setState] = useState<AuthState>(() => ({
-    user: null,
-    session: null,
-    isAuthenticated: false,
-    loading: true,
-    error: null,
-    oauthPending: false,
-    snapshot: currentSession(),
+    user: null, session: null, isAuthenticated: false, loading: true, error: null,
+    accountConnectionUnavailable: false, oauthPending: false, snapshot: currentSession(),
   }));
-
   const mountedRef = useRef(true);
   const isAuthenticatedRef = useRef(false);
-
+  const authenticatedSubjectRef = useRef<string | null>(null);
   const update = useCallback((partial: Partial<AuthState>) => {
-    if (mountedRef.current) {
-      setState((prev) => {
-        const next = { ...prev, ...partial };
-        isAuthenticatedRef.current = next.isAuthenticated;
-        return next;
-      });
-    }
+    if (!mountedRef.current) return;
+    setState((previous) => {
+      const next = { ...previous, ...partial };
+      isAuthenticatedRef.current = next.isAuthenticated;
+      authenticatedSubjectRef.current = next.isAuthenticated ? next.user?.id ?? null : null;
+      return next;
+    });
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
-
     const unsubscribe = subscribeNativeVaultHostEvents(({ event, session, revision, completion, snapshot }) => {
-      // Revoke all dependent use synchronously while the fence still holds. Native I/O stays
-      // deferred below, exactly as it did under supabase-js.
+      // Do not leave prior-account cached surfaces visible while a daemon account switch settles.
+      if (authenticatedSubjectRef.current && (session === null || authenticatedSubjectRef.current !== session.user.id)) {
+        update({ isAuthenticated: false, loading: true, error: null, accountConnectionUnavailable: false });
+      }
       void completion.then(({ accepted }) => {
-          if (!accepted) return;
-          // A signed-out session has no actor to adopt, but its exact lifecycle revision still
-          // settles the loading state. Signed-in sessions must additionally hold the actor-bound
-          // adoption fence.
-          if (session && nativeVaultAdoptedHostGeneration(session.user.id) !== revision) return;
-          if (
-            (event === "TOKEN_REFRESHED" || event === "SIGNED_IN") &&
-            session !== null &&
-            isAuthenticatedRef.current
-          ) {
-            update({ session, user: session.user, snapshot });
-            return;
-          }
+        if (!accepted || (session && nativeVaultAdoptedHostGeneration(session.user.id) !== revision)) return;
+        if ((event === "TOKEN_REFRESHED" || event === "SIGNED_IN") && session && isAuthenticatedRef.current) {
+          update({ session, user: session.user, snapshot, error: null, accountConnectionUnavailable: false, oauthPending: false });
+          return;
+        }
+        resetContentIr();
+        if (session) warmContentIr();
+        update({ session, user: session?.user ?? null, isAuthenticated: !!session, loading: false, error: null,
+          accountConnectionUnavailable: false, oauthPending: false, snapshot });
+      }).catch(async (error) => {
+        emitClientLog("warn", String(error), "auth");
+        if (!isNativeVaultHostRevisionCurrent(revision)) return;
+        const currentSnapshot = await getSession();
+        if (!isNativeVaultHostRevisionCurrent(revision)) return;
+        const current = sessionToMatrx(currentSnapshot);
+        // A daemon event for another account will publish its own envelope.
+        if (session && !current) {
           resetContentIr();
-          if (session) warmContentIr();
-          update({
-            session,
-            user: session?.user ?? null,
-            isAuthenticated: !!session,
-            loading: false,
-            error: null,
-            snapshot,
-            // The browser round trip is over the moment the daemon reports ANY session change:
-            // either it exchanged the code, or it told us why it could not.
-            oauthPending: false,
-          });
-      }).catch((error) => {
-          emitClientLog("warn", String(error), "auth");
-          resetContentIr();
-          update({
-            session: null,
-            user: null,
-            isAuthenticated: false,
-            loading: false,
-            oauthPending: false,
-            error: "Native Vault account check failed. Retry sign-in.",
-          });
+          update({ session: null, user: null, isAuthenticated: false, loading: false, error: null,
+            accountConnectionUnavailable: false, oauthPending: false, snapshot: currentSnapshot });
+          return;
+        }
+        if ((current?.user.id ?? null) !== (session?.user.id ?? null)) return;
+        resetContentIr();
+        if (!current) {
+          update({ session: null, user: null, isAuthenticated: false, loading: false,
+            error: "Matrx Local could not finish account cleanup. Retry account connection.",
+            accountConnectionUnavailable: true, oauthPending: false, snapshot: currentSnapshot });
+          return;
+        }
+        update({ session: current, user: current.user, isAuthenticated: false, loading: false,
+          error: "Your account is signed in, but its connection to Matrx Local is unavailable. Retry account connection.",
+          accountConnectionUnavailable: true, oauthPending: false, snapshot: currentSnapshot });
       });
-
-      emitClientLog(
-        session ? "success" : event === "INITIAL_SESSION" || event === "SIGNED_OUT" ? "info" : "warn",
-        `Auth state: ${event}${session ? ` (${session.user.email ?? session.user.id})` : ""}`,
-        "auth",
-      );
     });
-
-    return () => {
-      mountedRef.current = false;
-      unsubscribe();
-    };
+    return () => { mountedRef.current = false; unsubscribe(); };
   }, [update]);
 
-  /**
-   * Ask the daemon to start a sign-in and open the system browser.
-   *
-   * The daemon returns the authorize URL; the verifier stays inside it. The callback comes back
-   * through the OS to the Rust host, which forwards the code to the daemon — this webview never
-   * sees it.
-   */
   const signInWithOAuth = useCallback(async () => {
-    emitClientLog("cmd", "OAuth sign-in initiated", "auth");
-    update({ loading: true, error: null, oauthPending: true });
-    try {
-      await invalidateNativeVaultBeforeHostMutation();
-      await custodianSignIn();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[auth] signInWithOAuth error:", message);
-      update({ loading: false, oauthPending: false, error: message });
-    }
+    update({ loading: true, error: null, oauthPending: true, accountConnectionUnavailable: false });
+    try { await invalidateNativeVaultBeforeHostMutation(); await custodianSignIn(); }
+    catch (error) { update({ loading: false, oauthPending: false, error: String(error) }); }
   }, [update]);
-
-  const cancelOAuth = useCallback(() => {
-    // Only this screen is cancelled. The daemon's transaction expires on its own ten-minute TTL,
-    // and a second sign-in cancels it — nothing here needs to reach across and do that.
-    update({ loading: false, oauthPending: false, error: null });
-  }, [update]);
-
+  const cancelOAuth = useCallback(() => update({ loading: false, oauthPending: false, error: null }), [update]);
   const signOut = useCallback(async () => {
-    emitClientLog("cmd", "Sign-out initiated", "auth");
     update({ loading: true, error: null });
-    let cleanupError: string | null = null;
+    let cleanupFailed = false;
+    try { await invalidateNativeVaultBeforeHostMutation(); } catch { cleanupFailed = true; }
     try {
-      await invalidateNativeVaultBeforeHostMutation();
-    } catch (err) {
-      cleanupError = err instanceof Error ? err.message : String(err);
-    }
-    try {
-      // The daemon wipes the keychain item, writes `signed_out` to this device's rows, and emits
-      // `session.changed` — which is what actually updates this hook. It revokes nothing
-      // server-side (S20): a grant is per account, not per device.
       await custodianSignOut();
-      update({
-        loading: false,
-        oauthPending: false,
-        session: null,
-        user: null,
-        isAuthenticated: false,
-        error: cleanupError ? "Signed out, but engine account cleanup needs retry." : null,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[auth] signOut error:", message);
-      update({ loading: false, error: message });
-    }
+      const snapshot = await getSession();
+      update({ loading: false, oauthPending: false, session: null, user: null, isAuthenticated: false, snapshot,
+        accountConnectionUnavailable: cleanupFailed,
+        error: cleanupFailed ? "Matrx Local could not finish account cleanup. Retry account connection." : null });
+    } catch (error) { update({ loading: false, error: String(error) }); }
   }, [update]);
-
-  const getAccessToken = useCallback(async (): Promise<string | null> => getToken(), []);
-
   const retryAccountCleanup = useCallback(async () => {
-    const subject = currentSession().user_id;
-    if (!subject) return false;
-    update({ loading: true, error: null });
-    const alignment = await retryNativeVaultAccountCleanup(subject);
-    const complete = alignment?.status === "aligned";
-    update({ loading: false, error: complete ? null : "Account cleanup still needs retry." });
-    return complete;
+    const snapshot = await getSession();
+    const subject = snapshot.user_id;
+    update({ loading: true, error: null, accountConnectionUnavailable: false });
+    const recovered = await retryNativeVaultAccountCleanup(subject);
+    if (!recovered) update({ loading: false, accountConnectionUnavailable: true,
+      error: subject ? "Your account is signed in, but its connection to Matrx Local is unavailable. Retry account connection." : "Matrx Local could not finish account cleanup. Retry account connection." });
+    return recovered;
   }, [update]);
-
-  return useMemo(
-    () => ({
-      ...state,
-      signInWithOAuth,
-      cancelOAuth,
-      signOut,
-      retryAccountCleanup,
-      getAccessToken,
-    }),
-    [state, signInWithOAuth, cancelOAuth, signOut, retryAccountCleanup, getAccessToken],
-  );
+  return useMemo(() => ({ ...state, signInWithOAuth, cancelOAuth, signOut, retryAccountCleanup }),
+    [state, signInWithOAuth, cancelOAuth, signOut, retryAccountCleanup]);
 }

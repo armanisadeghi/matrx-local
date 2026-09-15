@@ -21,6 +21,7 @@ The fix is a short-lived helper process. These pin what makes it a fix:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -243,3 +244,44 @@ async def test_a_broken_helper_falls_back_loudly_instead_of_losing_the_index(
     # A stand-in that does not name its remedy is a silent failure with extra
     # words (CLAUDE.md § nothing fails silently).
     assert "Remedy" in logged
+
+
+@pytest.mark.anyio
+async def test_cancelled_helper_scan_reaps_its_child(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping the reconciler must not leave a Claude index helper behind."""
+    from app.services.coding_sessions import claude_overview
+
+    entered = asyncio.Event()
+
+    class HangingProcess:
+        returncode: int | None = None
+
+        async def communicate(self):
+            entered.set()
+            await asyncio.Event().wait()
+            return b"", b""
+
+        def terminate(self) -> None:
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            assert self.returncode is not None
+            return self.returncode
+
+    process = HangingProcess()
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    task = asyncio.create_task(claude_overview._read_index_in_helper(sessions_root))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.returncode == -15

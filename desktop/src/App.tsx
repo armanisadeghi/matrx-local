@@ -178,6 +178,7 @@ function AppInner() {
     systemInfo,
     engineVersion,
     error: engineError,
+    retryAccountConnection,
     refresh,
     restartEngine,
   } = useEngine();
@@ -474,7 +475,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
-      { path: "/coding-sessions", element: <CodingSessions /> },
+      { path: "/coding-sessions", requiresEngine: true, element: <CodingSessions /> },
       {
         // Usage was a second top-level nav item until 2026-09-14. The old link
         // keeps working and lands on the tab that replaced it.
@@ -606,6 +607,8 @@ function AppInner() {
                       engineStatus={status}
                       engineUrl={url}
                       engineVersion={engineVersion}
+                      accountConnectionError={engineError}
+                      onRetryAccountConnection={retryAccountConnection}
                       onRefresh={refresh}
                       onRestartEngine={restartEngine}
                       user={auth.user}

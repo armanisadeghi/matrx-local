@@ -1,43 +1,45 @@
 import { beforeEach, expect, it, vi } from "vitest";
-
 import { engine } from "./api";
 
 const api = engine as any;
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-
 const context = {
-  revision: 1,
-  nextSubject: "actor-a",
-  isCurrent: () => true,
-  engineOrigin: "http://engine.test",
-  engineGeneration: "generation-a",
-  engineCredentialRevision: 0,
+  revision: 1, nextSubject: "actor-a", isCurrent: () => true,
+  engineOrigin: "http://engine.test", engineGeneration: "1", engineCredentialRevision: 1,
 };
-
 beforeEach(() => {
   api.baseUrl = "http://engine.test";
-  api.acceptedSessionFence = null;
-  vi.stubGlobal("fetch", vi.fn());
+  engine.setTokenProvider(async () => "current-access");
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }))));
 });
+for (const method of ["configureCloudSync", "reconfigureCloudSync"] as const) {
+  it(`${method} refuses another account without network I/O`, async () => {
+    await expect(engine[method]("current-access", "actor-b", context)).rejects.toThrow("no longer current");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it(`${method} rechecks authority after resolving the daemon token`, async () => {
+    let current = true;
+    engine.setTokenProvider(async () => { current = false; return "current-access"; });
+    await expect(engine[method]("current-access", "actor-a", { ...context, isCurrent: () => current })).rejects.toThrow("no longer current");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it(`${method} sends the current access token without installing a session`, async () => {
+    await engine[method]("current-access", "actor-a", context);
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(String(url)).toMatch(/\/cloud\/(re)?configure$/);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer current-access");
+  });
+}
 
-it("preserves an invalid-session code so startup can perform its defined recovery", async () => {
-  const fetchMock = vi.mocked(fetch);
-  fetchMock
-    .mockResolvedValueOnce(json({
-      generation: "generation-a",
-      credential_revision: 0,
-      subject: null,
-      cleanup: null,
-    }))
-    .mockResolvedValueOnce(json({
-      detail: { code: "invalid_supabase_session" },
-    }, 401));
-
-  await expect(
-    api.syncTokenToPython("access-token", "actor-a", context),
-  ).rejects.toThrow("Token hand-off failed: 401 (invalid_supabase_session)");
+it("keeps engine generation across token rotation and changes it on a same-port restart", async () => {
+  const { engine } = await import("./api");
+  await engine.discover("http://engine.test");
+  let instance = "process-a";
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ boot_id: instance })));
+  const first = await engine.prepareSessionTransition({ revision: 1, nextSubject: "user-a", isCurrent: () => true });
+  const refresh = await engine.prepareSessionTransition({ revision: 2, nextSubject: "user-a", isCurrent: () => true });
+  expect(first).toMatchObject({ generation: "process-a", credentialRevision: 1 });
+  expect(refresh).toMatchObject({ generation: "process-a", credentialRevision: 2 });
+  instance = "process-b";
+  expect(await engine.prepareSessionTransition({ revision: 3, nextSubject: "user-a", isCurrent: () => true })).toMatchObject({ generation: "process-b" });
 });

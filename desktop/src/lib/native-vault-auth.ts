@@ -24,6 +24,8 @@ import {
 import { engine } from "@/lib/api";
 import {
   currentSession,
+  getAuthedSession,
+  getToken,
   getSession,
   sessionToMatrx,
   subscribeSession,
@@ -60,66 +62,38 @@ export interface NativeVaultHostEventEnvelope {
 const eventSubscribers = new Set<(envelope: NativeVaultHostEventEnvelope) => void>();
 let subscriptionStarted = false;
 let latestEnvelope: NativeVaultHostEventEnvelope | null = null;
+let engineAlignmentInFlight: { subject: string; revision: number; promise: Promise<EngineAlignment | null> } | null = null;
+
+function publishHostReconciliation(event: CustodyAuthEvent, session: MatrxSession | null, snapshot: SessionSnapshot): NativeVaultHostEventEnvelope {
+  const revision = coordinator.fence();
+  const completion = new Promise<{ accepted: boolean }>((resolve, reject) => {
+    setTimeout(() => void coordinator.reconcileAndAdopt(session?.user.id ?? null, undefined, revision).then(
+      () => resolve({ accepted: coordinator.adoptedGeneration(session?.user.id ?? null) === revision }), reject,
+    ), 0);
+  });
+  const envelope: NativeVaultHostEventEnvelope = Object.freeze({ event, session, revision, completion, snapshot });
+  latestEnvelope = envelope;
+  for (const listener of eventSubscribers) { try { listener(envelope); } catch { /* isolated */ } }
+  void completion.catch(() => undefined);
+  return envelope;
+}
 
 /** The only session-lifecycle callback. It fences synchronously and fans out immutable work. */
 function ensureHostSubscription(): void {
   if (subscriptionStarted) return;
   subscriptionStarted = true;
-
   let previousSubject: string | null = null;
   let delivered = false;
-
   const deliver = (snapshot: SessionSnapshot, rotated: boolean): void => {
     const session = sessionToMatrx(snapshot);
     const subject = session?.user.id ?? null;
-    // Name the transition the way the old supabase-js events named it, so every downstream
-    // branch that distinguished a first sign-in from a token refresh still can.
-    const event: CustodyAuthEvent = !delivered
-      ? "INITIAL_SESSION"
-      : subject && subject === previousSubject && rotated
-        ? "TOKEN_REFRESHED"
-        : subject
-          ? "SIGNED_IN"
-          : "SIGNED_OUT";
+    const event: CustodyAuthEvent = !delivered ? "INITIAL_SESSION" : subject && subject === previousSubject && rotated ? "TOKEN_REFRESHED" : subject ? "SIGNED_IN" : "SIGNED_OUT";
     delivered = true;
     previousSubject = subject;
-    handleSessionChange(event, session, snapshot);
+    publishHostReconciliation(event, session, snapshot);
   };
-
-  // The state as of mount, before the first stream frame — the same job
-  // `INITIAL_SESSION` did.
   void getSession().then((snapshot) => deliver(snapshot, false));
   subscribeSession((snapshot, rotated) => deliver(snapshot, rotated));
-}
-
-/** Fences synchronously, then defers every piece of native I/O — unchanged from the Supabase
- *  version, because that ordering is what the fence's correctness rests on. */
-function handleSessionChange(
-  event: CustodyAuthEvent,
-  session: MatrxSession | null,
-  snapshot: SessionSnapshot,
-): void {
-  {
-    const revision = coordinator.fence();
-    const completion = new Promise<{ accepted: boolean }>((resolve, reject) => {
-      setTimeout(() => {
-        void coordinator.reconcileAndAdopt(session?.user.id ?? null, undefined, revision).then(
-          () => resolve({ accepted: coordinator.adoptedGeneration(session?.user.id ?? null) === revision }),
-          reject,
-        );
-      }, 0);
-    });
-    // Listeners receive the envelope while the callback is still synchronous,
-    // so they can stop local work before Supabase releases its own lock.
-    const envelope: NativeVaultHostEventEnvelope = Object.freeze({ event, session, revision, completion, snapshot });
-    latestEnvelope = envelope;
-    for (const listener of eventSubscribers) {
-      try { listener(envelope); } catch { /* one subscriber cannot block another */ }
-    }
-    // A subscriber normally observes this promise; retaining this handler also
-    // prevents an unmounted subscriber from creating an unhandled rejection.
-    void completion.catch(() => undefined);
-  }
 }
 
 /** The daemon's current honest state, for a surface that must render before the stream opens. */
@@ -180,12 +154,57 @@ export function nativeVaultEngineAlignment(): EngineAlignment | null {
   return coordinator.engineAlignment();
 }
 
+export function isNativeVaultHostRevisionCurrent(revision: number): boolean { return coordinator.isCurrentRevision(revision); }
+
+/** Wait for daemon identity, the current envelope, and the engine fence before releasing a token. */
+export async function resolveNativeVaultEngineAccessToken(): Promise<string | null> {
+  ensureHostSubscription();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const observed = await getAuthedSession();
+    if (!observed) return null;
+    const envelope = latestEnvelope;
+    if (envelope) await envelope.completion;
+    if (envelope !== latestEnvelope) continue;
+    let context = nativeVaultEngineTransitionContext(observed.user.id);
+    // Initial host adoption may run before engine discovery and deliberately
+    // records `unavailable`. Once a consumer reaches a discovered engine, one
+    // serialized alignment is allowed to establish its origin-bound context.
+    if (!context && coordinator.isAdopted(observed.user.id)) {
+      const revision = nativeVaultAdoptedHostGeneration(observed.user.id);
+      if (revision === null) continue;
+      if (!engineAlignmentInFlight || engineAlignmentInFlight.subject !== observed.user.id || engineAlignmentInFlight.revision !== revision) {
+        const promise = coordinator.alignEngineForAdopted(observed.user.id).finally(() => {
+          if (engineAlignmentInFlight?.promise === promise) engineAlignmentInFlight = null;
+        });
+        engineAlignmentInFlight = { subject: observed.user.id, revision, promise };
+      }
+      await engineAlignmentInFlight.promise;
+      context = nativeVaultEngineTransitionContext(observed.user.id);
+    }
+    if (!context) throw new Error("Your account is signed in, but its connection to this engine needs recovery. Retry account connection.");
+    const token = await getToken();
+    const current = await getAuthedSession();
+    if (!token || !current || current.user.id !== observed.user.id || envelope !== latestEnvelope || !context.isCurrent()) continue;
+    return token;
+  }
+  throw new Error("Your account connection changed while this request was waiting. Retry account connection.");
+}
+
 /** Engine discovery reuses the current host revision; it never promotes an old callback. */
 export function alignNativeVaultEngineForCurrentSubject(subject: string | null): Promise<EngineAlignment | null> {
   return coordinator.alignEngineForAdopted(subject);
 }
 
-/** Retry uses the current coordinator authority, never a retained auth callback. */
-export function retryNativeVaultAccountCleanup(subject: string): Promise<EngineAlignment | null> {
-  return coordinator.alignEngineForAdopted(subject);
+/** Retry publishes a new daemon lifecycle envelope; a rejected envelope cannot be re-adopted. */
+export async function retryNativeVaultAccountCleanup(subject: string | null): Promise<boolean> {
+  ensureHostSubscription();
+  const snapshot = await getSession();
+  const session = sessionToMatrx(snapshot);
+  if ((session?.user.id ?? null) !== subject) return false;
+  const envelope = publishHostReconciliation("TOKEN_REFRESHED", session, snapshot);
+  try {
+    const { accepted } = await envelope.completion;
+    const current = await getSession();
+    return accepted && latestEnvelope === envelope && isNativeVaultHostRevisionCurrent(envelope.revision) && (current.user_id ?? null) === subject;
+  } catch { return false; }
 }

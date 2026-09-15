@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from types import MethodType
 from typing import Any
 
@@ -94,6 +95,34 @@ async def _settle(iterations: int = 40) -> None:
     """Yield to the loop task enough times for several ticks to complete."""
     for _ in range(iterations):
         await asyncio.sleep(0)
+
+
+@pytest.mark.anyio
+async def test_synchronous_custom_index_reader_yields_to_the_event_loop() -> None:
+    """A synchronous reader seam must not freeze unrelated engine requests."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    expected = ({}, {"files": 0, "records": 0, "unreadable": 0})
+    release_thread = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def slow_reader():
+        loop.call_soon_threadsafe(entered.set)
+        assert release_thread.wait(timeout=2)
+        return expected
+
+    reconciler = ClaudeSessionMetadataReconciler(db=object(), index_reader=slow_reader)
+    task = asyncio.create_task(reconciler._read_index())
+    await entered.wait()
+
+    # If this were the old direct parser, the task would have blocked before
+    # this other task could run.
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    release.set()
+    release_thread.set()
+    assert await task == expected
 
 
 # --------------------------------------------------------------------- knobs

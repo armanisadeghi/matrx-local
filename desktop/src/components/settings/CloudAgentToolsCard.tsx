@@ -14,19 +14,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Wrench } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge, Label, Switch } from "@ai-matrx/design-system";
-
-interface LocalToolItem {
-  name: string;
-  description: string;
-  category: string;
-  advertised: boolean;
-  enabled: boolean;
-  platforms: string[] | null;
-}
-
-interface LocalToolsResponse {
-  tools?: Array<Partial<LocalToolItem> & { name: string }>;
-}
+import {
+  fetchLocalTools,
+  setLocalToolExposure,
+  type LocalToolItem,
+} from "@/lib/local-tool-exposure";
 
 const CATEGORY_LABELS: Record<string, string> = {
   desktop: "Desktop",
@@ -52,11 +44,7 @@ export function CloudAgentToolsCard({
   const refresh = useCallback(async () => {
     if (!engineUrl) return;
     try {
-      const response = await fetch(`${engineUrl}/chat/local-tools`, {
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = (await response.json()) as LocalToolsResponse;
+      const payload = await fetchLocalTools(engineUrl);
       const items = (payload.tools ?? [])
         .filter((t) => t.advertised)
         .map((t) => ({
@@ -98,16 +86,7 @@ export function CloudAgentToolsCard({
       setSaving(true);
       try {
         const disabled = next.filter((t) => !t.enabled).map((t) => t.name);
-        const response = await fetch(
-          `${engineUrl}/chat/local-tools/exposure`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ disabled_tools: disabled }),
-            signal: AbortSignal.timeout(6000),
-          },
-        );
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await setLocalToolExposure(engineUrl, disabled);
         setLoadError(null);
       } catch (error) {
         setLoadError(

@@ -114,10 +114,17 @@ export class NativeVaultHostAuthCoordinator {
     };
   }
   engineAlignment(): EngineAlignment | null { return this.aligned; }
+  private alignmentFlight: { revision: number; subject: string | null; promise: Promise<EngineAlignment | null> } | null = null;
   alignEngineForAdopted(subject: string | null): Promise<EngineAlignment | null> {
     if (!this.isAdopted(subject)) return Promise.resolve(null);
     const context = this.currentContext(subject);
-    return this.serialize(async () => {
+    if (this.alignmentFlight?.revision === context.revision && this.alignmentFlight.subject === subject) {
+      return this.alignmentFlight.promise;
+    }
+    // Every protected caller can arrive together after discovery. One account
+    // alignment serves them all; queuing a network probe per caller starves
+    // the connection and can exhaust the token lookup deadline.
+    const promise = this.serialize(async () => {
       if (!context.isCurrent() || !this.isAdopted(subject)) return null;
       const alignment = await this.prepareEngine(context);
       if (!context.isCurrent() || !this.isAdopted(subject)) return null;
@@ -129,5 +136,11 @@ export class NativeVaultHostAuthCoordinator {
       this.aligned = alignment;
       return alignment;
     });
+    const flight = { revision: context.revision, subject, promise };
+    this.alignmentFlight = flight;
+    void promise.finally(() => {
+      if (this.alignmentFlight === flight) this.alignmentFlight = null;
+    }).catch(() => undefined);
+    return promise;
   }
 }

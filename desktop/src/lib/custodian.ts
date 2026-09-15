@@ -152,6 +152,8 @@ async function request(path: string, signal?: AbortSignal): Promise<Response | n
 
 let cachedToken: string | null = null;
 let cachedUntil = 0;
+let cachedSubject: string | null = null;
+let tokenGeneration = 0;
 let inFlight: Promise<string | null> | null = null;
 
 /**
@@ -163,21 +165,30 @@ let inFlight: Promise<string | null> | null = null;
  */
 export async function getToken(): Promise<string | null> {
   if (cachedToken && Date.now() < cachedUntil) return cachedToken;
-  inFlight ??= fetchToken().finally(() => {
-    inFlight = null;
-  });
+  if (!inFlight) {
+    const operation = fetchToken(tokenGeneration).finally(() => {
+      if (inFlight === operation) inFlight = null;
+    });
+    inFlight = operation;
+  }
   return inFlight;
 }
 
-async function fetchToken(): Promise<string | null> {
+async function fetchToken(generation: number): Promise<string | null> {
   const response = await request("/v1/token");
+  if (generation !== tokenGeneration) return null;
   if (!response) {
     lastSnapshot = DAEMON_DOWN;
     cachedToken = null;
     return null;
   }
   if (response.status === 200) {
-    const body = (await response.json()) as { access_token: string; expires_at: string };
+    const body = (await response.json()) as { access_token: string; expires_at: string; user_id: string };
+    if (generation !== tokenGeneration) return null;
+    // Pair identity and bearer from the same grant, never from separate stale caches.
+    if (!body.user_id || claimsOf(body.access_token).sub !== body.user_id) return null;
+    if (lastSnapshot.signed_in && lastSnapshot.user_id !== body.user_id) return null;
+    cachedSubject = body.user_id;
     cachedToken = body.access_token;
     const expiresAt = Date.parse(body.expires_at);
     // An expiry we cannot read means "do not cache" — never "cache forever". MXL-D-046 was
@@ -190,6 +201,7 @@ async function fetchToken(): Promise<string | null> {
   cachedToken = null;
   if (response.status === 409) {
     const body = (await response.json()) as Partial<SessionSnapshot>;
+    if (generation !== tokenGeneration) return null;
     lastSnapshot = {
       ...DAEMON_DOWN,
       state: (body.state as SessionState) ?? "signed_out",
@@ -203,8 +215,20 @@ async function fetchToken(): Promise<string | null> {
 
 /** Drop the cached token — used when a consumer's 401 says ours is no longer good. */
 export function forgetToken(): void {
+  tokenGeneration += 1;
   cachedToken = null;
+  cachedSubject = null;
   cachedUntil = 0;
+  inFlight = null;
+}
+
+function acceptSnapshot(snapshot: SessionSnapshot, rotated = false): void {
+  if (rotated || !snapshot.signed_in ||
+      (cachedSubject !== null && cachedSubject !== snapshot.user_id) ||
+      (lastSnapshot.user_id !== null && lastSnapshot.user_id !== snapshot.user_id)) {
+    forgetToken();
+  }
+  lastSnapshot = snapshot;
 }
 
 // ------------------------------------------------------------------- session
@@ -218,12 +242,15 @@ export function currentSession(): SessionSnapshot {
 
 /** `GET /v1/session`. */
 export async function getSession(): Promise<SessionSnapshot> {
+  const generation = tokenGeneration;
   const response = await request("/v1/session");
+  if (generation !== tokenGeneration) return lastSnapshot;
   if (!response || response.status !== 200) {
     lastSnapshot = DAEMON_DOWN;
     return lastSnapshot;
   }
-  lastSnapshot = (await response.json()) as SessionSnapshot;
+  const snapshot = (await response.json()) as SessionSnapshot;
+  if (generation === tokenGeneration) acceptSnapshot(snapshot);
   return lastSnapshot;
 }
 
@@ -323,11 +350,7 @@ function handleFrame(frame: string): void {
   } catch {
     return;
   }
-  lastSnapshot = parsed.session;
-  if (parsed.rotated) {
-    // The daemon minted a new access token. Drop ours so the next call takes the new one.
-    forgetToken();
-  }
+  acceptSnapshot(parsed.session, parsed.rotated);
   for (const listener of listeners) {
     try {
       listener(parsed.session, parsed.rotated);
@@ -383,8 +406,9 @@ export async function getAuthedSession(): Promise<AuthedSession | null> {
   const token = await getToken();
   if (!token) return null;
   const snapshot = lastSnapshot.user_id ? lastSnapshot : await getSession();
-  if (!snapshot.user_id) return null;
+  if (!snapshot.signed_in || !snapshot.user_id) return null;
   const claims = claimsOf(token);
+  if (claims.sub !== snapshot.user_id || cachedSubject !== snapshot.user_id || cachedToken !== token) return null;
   return {
     access_token: token,
     user: {

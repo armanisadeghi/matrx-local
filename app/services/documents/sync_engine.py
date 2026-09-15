@@ -1407,7 +1407,8 @@ class SyncEngine:
     # so a user who never visited the Documents page got NO pulls, NO watcher,
     # and pending pushes stranded for months. This loop makes the engine
     # self-sufficient: credentials come from the persisted auth_tokens row
-    # (kept fresh by POST /auth/token on every login/refresh), the watcher is
+    # (kept fresh by the sync daemon's session grant, not a direct write
+    # route — see app/services/session_freshness.py), the watcher is
     # ensured, and an incremental pull + pending push runs every tick, with a
     # full reconcile when the last one is older than _FULL_SYNC_MAX_AGE_S.
 
@@ -1471,9 +1472,12 @@ class SyncEngine:
             return
         if repo.is_expired(row):
             if self._auto_last_skip_reason != "expired":
+                from app.services.session_freshness import session_blocker
+
+                blocker = session_blocker(lane="documents_sync")
                 logger.warning(
-                    "Notes auto-sync idle — stored JWT is expired; waiting for the "
-                    "frontend to refresh it via POST /auth/token"
+                    "Notes auto-sync idle — stored JWT is expired; %s",
+                    blocker["remedy"] or blocker["message"],
                 )
                 self._auto_last_skip_reason = "expired"
             return

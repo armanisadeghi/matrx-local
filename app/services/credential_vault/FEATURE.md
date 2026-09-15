@@ -97,6 +97,11 @@ Vault-supplied key.
 | `provider_keys.py` | Item → provider matching (`build_candidates`), `fetch_provider_snapshot`, `resolve_one`. |
 | `key_manager.refresh_vault_keys()` | Populates tier 2. Startup (fire-and-forget), sign-in (`POST /auth/token`), and the refresh route. |
 | `key_manager.clear_vault_keys()` | Sign-out (`DELETE /auth/token`). |
+
+> **Correction (2026-09-15, lane CS-18):** `POST /auth/token` and `DELETE /auth/token`
+> were removed in the FS-C5b custody cutover (commit 7faafcff2); sign-in and sign-out
+> now flow through the sync daemon's session grant (`app/services/session_freshness.py`),
+> and these two rows' real triggers need re-establishing by whoever next owns this file.
 | `GET /settings/api-keys` | Adds `source: local\|vault\|none` and `vault_item_name`. `configured` still means "saved locally" and still drives Remove. |
 | `GET /settings/api-keys/vault` | Which Vault credentials map to AI providers (metadata only). |
 | `POST /settings/api-keys/vault/refresh` | Re-read and re-activate now. |

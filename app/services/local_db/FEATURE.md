@@ -146,6 +146,9 @@ conversation, not a test edit.
   can call a gated repository helper without deadlocking itself; this closes
   the direct `POST /auth/token` and chat-sync bypasses that could still lose
   the coding-session durable writer's lock.
+  > **Correction (2026-09-15, lane CS-18):** `POST /auth/token` no longer exists — it
+  > was removed in the FS-C5b custody cutover (commit 7faafcff2); the historical bypass
+  > this entry closed is unaffected, this note only flags the dead route name.
 - 2026-09-12 — Lock errors on the shared connection roll the open transaction
   back (was: one lost race poisoned every later write with
   `SQLITE_BUSY_SNAPSHOT` until restart — catalog/tools sync, token save,

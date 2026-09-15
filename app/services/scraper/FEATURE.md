@@ -62,6 +62,11 @@ never from the background loop.
 `POST /auth/token` calls `sync_after_sign_in()`, because signing in is
 literally the blocker clearing for every auth-deferred row.
 
+> **Correction (2026-09-15, lane CS-18):** `POST /auth/token` was removed in the FS-C5b
+> custody cutover (commit 7faafcff2); the engine now gets its session from the sync
+> daemon (`app/services/sync_client/client.py`), and `sync_after_sign_in()`'s real
+> trigger needs re-establishing by whoever next owns this file.
+
 ---
 
 ## States, not errors — what the user sees

@@ -76,6 +76,11 @@ daemon, service, or database.
   session is the explicit resume signal. `POST /auth/token` verifies the token
   against the configured Supabase Auth project before persisting it, so a token
   issued by another project cannot silently enter the engine.
+  > **Correction (2026-09-15, lane CS-18):** `POST /auth/token` was removed in the
+  > FS-C5b custody cutover (commit 7faafcff2); the engine no longer verifies a
+  > posted token, it reads the session grant from the sync daemon
+  > (`app/services/session_freshness.py`). This bullet's real verification path
+  > needs re-establishing by whoever next owns this file.
 - The task is registered as `coding_session_bridge` in the existing launcher
   registry and stops before SQLite closes. It owns no subprocess.
 
@@ -486,6 +491,10 @@ branch deferred the head row and said nothing (`publisher.blocker` was null whil
   engine custody (`DELETE /auth/token`) and the new account's sign-in landed 27 s
   and 34 s later; for that whole window every lane screamed "this Mac has no valid
   signed-in session" with a sign-out remedy at a person who had done nothing wrong.
+  > **Correction (2026-09-15, lane CS-18):** `POST /auth/token` and `DELETE /auth/token`
+  > were removed in the FS-C5b custody cutover (commit 7faafcff2); `session_restored()`
+  > and custody revocation are now driven by the sync daemon's session grant, not these
+  > routes. Whoever next owns this file should re-trace the real call sites.
   The desktop dresses the two states apart in ONE place too —
   `desktop/src/lib/lane-blocker.ts::laneBlockerTone`, used by every surface that
   renders a lane blocker. Guards: `tests/unit/test_session_freshness.py` (quiet

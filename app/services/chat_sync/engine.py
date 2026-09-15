@@ -1195,9 +1195,12 @@ class ChatSyncEngine:
             return
         if repo.is_expired(row):
             if self._auto_last_skip_reason != "expired":
+                from app.services.session_freshness import session_blocker
+
+                blocker = session_blocker(lane="chat_sync")
                 logger.warning(
-                    "[chat_sync] idle — stored JWT is expired; waiting for the "
-                    "frontend to refresh it via POST /auth/token"
+                    "[chat_sync] idle — stored JWT is expired; %s",
+                    blocker["remedy"] or blocker["message"],
                 )
                 self._auto_last_skip_reason = "expired"
             return

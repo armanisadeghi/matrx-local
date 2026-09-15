@@ -435,7 +435,13 @@ async def trigger_chat_mirror_sync() -> dict[str, Any]:
     if not row or not row.get("access_token") or not row.get("user_id"):
         raise HTTPException(status_code=401, detail="No signed-in user — sign in first")
     if token_repo.is_expired(row):
-        raise HTTPException(status_code=401, detail="Stored JWT expired — refresh via POST /auth/token")
+        from app.services.session_freshness import session_blocker
+
+        blocker = session_blocker(lane="chat_mirror_sync")
+        raise HTTPException(
+            status_code=401,
+            detail=blocker["remedy"] or blocker["message"],
+        )
     engine.configure(row["user_id"], row["access_token"])
     logger.info("[chat_routes /mirror/sync] Manual chat mirror sync triggered")
     summary = await engine.sync_cycle()

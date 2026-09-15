@@ -185,14 +185,14 @@ impl Journal {
             )));
         }
         let tx = self.conn.transaction()?;
-        let found: Option<(String, String, String, Option<String>)> = tx
+        let found: Option<(String, String, String, String, Option<String>)> = tx
             .query_row(
-                "SELECT mapping_id, path_nfc, state, lease_owner FROM ops WHERE id = ?1",
+                "SELECT mapping_id, path_nfc, kind, state, lease_owner FROM ops WHERE id = ?1",
                 params![id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?;
-        let Some((mapping_id, path_nfc, state, lease_owner)) = found else {
+        let Some((mapping_id, path_nfc, kind, state, lease_owner)) = found else {
             return Err(SyncError::SyncedWriteRefused(format!("op {id} does not exist")));
         };
         if state != OpState::Leased.as_str() || lease_owner.as_deref() != Some(owner) {
@@ -200,12 +200,28 @@ impl Journal {
                 "op {id} is not leased by {owner:?} (state '{state}')"
             )));
         }
+        let Some(kind) = OpKind::parse(&kind) else {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} has an unknown kind '{kind}'"
+            )));
+        };
         raise_guard(&tx, "confirm_delete_op")?;
         tx.execute(
             "DELETE FROM tree_synced WHERE mapping_id = ?1 AND path_nfc = ?2",
             params![mapping_id, path_nfc],
         )?;
         lower_guard(&tx)?;
+        // H1: the breaker's rolling window is recorded in the SAME transaction that removes the
+        // synced row, so a crash between the delete and its accounting is impossible and the count
+        // survives the restart an `rm -rf` frequently causes. Only the two ops that actually
+        // destroy a user-visible copy count; `unindex` and the like are bookkeeping.
+        if matches!(kind, OpKind::DeleteLocal | OpKind::DeleteRemote) {
+            tx.execute(
+                "INSERT INTO mass_delete_window (mapping_id, at, kind, path_nfc)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![mapping_id, now, kind.as_str(), path_nfc],
+            )?;
+        }
         tx.execute(
             "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
              WHERE id = ?1",

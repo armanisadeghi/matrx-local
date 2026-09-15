@@ -14,6 +14,15 @@ use crate::Result;
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 
+/// A comparable timestamp for a simulation tick.
+///
+/// The journal compares timestamps as strings — RFC3339 UTC's lexicographic order is its
+/// chronological order — so the harness's stamps must be ordered too. `tick-9` sorts after
+/// `tick-10`, which would have made the rolling window count the wrong rows; zero-padding fixes it.
+fn stamp(tick: i64) -> String {
+    format!("t{tick:012}")
+}
+
 /// What happened during one executed op — enough for a test to assert on, nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepOutcome {
@@ -48,6 +57,8 @@ pub struct Device {
     pub hash_on_scan: bool,
     /// The last suspension the planner asked for, if any.
     pub suspended: Option<SuspendReason>,
+    /// The most recent tick this device acted on, so `current_plan` can measure the window.
+    pub last_tick: i64,
     /// The plan currently being drained.
     ///
     /// A plan is enqueued **whole** and drained in order — which is precisely why SPEC-ENGINE §4
@@ -92,8 +103,8 @@ impl Device {
                 folder_cursor: None,
                 cloud_row_version: None,
                 marker_uuid: format!("marker-{name}"),
-                created_at: Some("tick-0".to_string()),
-                updated_at: Some("tick-0".to_string()),
+                created_at: Some(stamp(0)),
+                updated_at: Some(stamp(0)),
                 last_sync_at: None,
                 last_full_rescan_at: None,
             })?;
@@ -117,6 +128,7 @@ impl Device {
             cursor,
             hash_on_scan: true,
             suspended: None,
+            last_tick: 0,
             pending: VecDeque::new(),
             seq,
         })
@@ -195,11 +207,28 @@ impl Device {
         Ok(())
     }
 
+    /// The start of the breaker's rolling window, as a comparable timestamp (H1).
+    fn window_start(&self, now: i64) -> String {
+        // One simulation tick models one second.
+        let span = i64::from(self.knobs.mass_delete_window_hours) * 3_600;
+        stamp(now.saturating_sub(span))
+    }
+
     /// The current plan, from the journal's own three trees.
     pub fn current_plan(&self) -> Result<Plan> {
+        self.current_plan_at(self.last_tick)
+    }
+
+    /// The current plan, with the rolling window measured as of `now`.
+    pub fn current_plan_at(&self, now: i64) -> Result<Plan> {
         let ctx = crate::planner::PlanContext {
             device_name: self.name.clone(),
             today: "2026-09-13".to_string(),
+            // H1: the breaker counts the window, not the plan. The daemon — not the pure
+            // planner — reads the journal for it.
+            recent_deletions: self
+                .journal
+                .deletions_since(&self.mapping_id, &self.window_start(now))?,
             open_conflicts: self
                 .journal
                 .open_conflicts(&self.mapping_id)?
@@ -227,8 +256,9 @@ impl Device {
         now: i64,
         inject: Option<&'static str>,
     ) -> Result<StepOutcome> {
+        self.last_tick = now;
         if self.pending.is_empty() {
-            let p = self.current_plan()?;
+            let p = self.current_plan_at(now)?;
             if let Some(reason) = p.suspended {
                 self.suspended = Some(reason);
                 return Ok(StepOutcome::Idle);
@@ -290,14 +320,14 @@ impl Device {
             expected_version,
             expected_local_hash,
             idempotency_key: key,
-            created_at: format!("tick-{now}"),
+            created_at: stamp(now),
         })?;
         // The op may already be `done` from an earlier identical plan (I5) — leasing it again is
         // the replay path, and it simply finds nothing ready.
         self.journal.connection().execute(
             "UPDATE ops SET state='leased', lease_owner=?2, lease_expires_at=?3
              WHERE id = ?1 AND state IN ('ready','leased')",
-            rusqlite::params![id, self.name, format!("tick-{}", now + 900)],
+            rusqlite::params![id, self.name, stamp(now + 900)],
         )?;
         Ok(id)
     }
@@ -392,8 +422,8 @@ impl Device {
                             id,
                             "precondition_failed",
                             "another device wrote first",
-                            Some(&format!("tick-{now}")),
-                            &format!("tick-{now}"),
+                            Some(&stamp(now)),
+                            &stamp(now),
                         )?;
                         self.refresh_remote(server)?;
                         Ok(StepOutcome::Raced)
@@ -403,8 +433,8 @@ impl Device {
                             id,
                             "server_error",
                             &format!("{e:?}"),
-                            Some(&format!("tick-{now}")),
-                            &format!("tick-{now}"),
+                            Some(&stamp(now)),
+                            &stamp(now),
                         )?;
                         Ok(StepOutcome::Failed("server error"))
                     }
@@ -446,8 +476,8 @@ impl Device {
                         id,
                         "unexpected_local_file",
                         "a different file already exists at this path",
-                        Some(&format!("tick-{now}")),
-                        &format!("tick-{now}"),
+                        Some(&stamp(now)),
+                        &stamp(now),
                     )?;
                     self.scan(now)?;
                     return Ok(StepOutcome::Raced);
@@ -458,8 +488,8 @@ impl Device {
                             id,
                             "pre_image_mismatch",
                             "the file on disk changed under us",
-                            Some(&format!("tick-{now}")),
-                            &format!("tick-{now}"),
+                            Some(&stamp(now)),
+                            &stamp(now),
                         )?;
                         self.scan(now)?;
                         return Ok(StepOutcome::Raced);
@@ -473,8 +503,8 @@ impl Device {
                         id,
                         "gone",
                         "the cloud row disappeared mid-download",
-                        Some(&format!("tick-{now}")),
-                        &format!("tick-{now}"),
+                        Some(&stamp(now)),
+                        &stamp(now),
                     )?;
                     return Ok(StepOutcome::Raced);
                 };
@@ -511,8 +541,8 @@ impl Device {
                             id,
                             "pre_image_mismatch",
                             "the file changed before we deleted it",
-                            Some(&format!("tick-{now}")),
-                            &format!("tick-{now}"),
+                            Some(&stamp(now)),
+                            &stamp(now),
                         )?;
                         self.scan(now)?;
                         return Ok(StepOutcome::Raced);
@@ -521,7 +551,7 @@ impl Device {
                 self.fs.remove(&path, to_trash);
                 self.scan(now)?;
                 self.journal
-                    .confirm_delete_op(id, &self.name.clone(), true, true, &format!("tick-{now}"))?;
+                    .confirm_delete_op(id, &self.name.clone(), true, true, &stamp(now))?;
                 Ok(StepOutcome::Done)
             }
             PlanOp::DeleteRemoteTombstone {
@@ -547,7 +577,7 @@ impl Device {
                             &self.name.clone(),
                             true,
                             true,
-                            &format!("tick-{now}"),
+                            &stamp(now),
                         )?;
                         Ok(StepOutcome::Done)
                     }
@@ -557,7 +587,7 @@ impl Device {
                             &self.name.clone(),
                             true,
                             true,
-                            &format!("tick-{now}"),
+                            &stamp(now),
                         )?;
                         Ok(StepOutcome::Done)
                     }
@@ -566,8 +596,8 @@ impl Device {
                             id,
                             "precondition_failed",
                             "another device wrote first",
-                            Some(&format!("tick-{now}")),
-                            &format!("tick-{now}"),
+                            Some(&stamp(now)),
+                            &stamp(now),
                         )?;
                         self.refresh_remote(server)?;
                         Ok(StepOutcome::Raced)
@@ -604,7 +634,7 @@ impl Device {
                                 &self.name.clone(),
                                 true,
                                 true,
-                                &format!("tick-{now}"),
+                                &stamp(now),
                             )?;
                             let id2 = self.enqueue_and_lease(
                                 OpKind::MoveRemote,
@@ -632,8 +662,8 @@ impl Device {
                                 id,
                                 "precondition_failed",
                                 "the rename raced",
-                                Some(&format!("tick-{now}")),
-                                &format!("tick-{now}"),
+                                Some(&stamp(now)),
+                                &stamp(now),
                             )?;
                             self.refresh_remote(server)?;
                             Ok(StepOutcome::Raced)
@@ -663,10 +693,10 @@ impl Device {
                     remote_file_id: server.live(&path).map(|f| f.id.clone()),
                     remote_checksum: server.live(&path).and_then(|f| f.checksum.clone()),
                     conflict_copy_path: Some(copy_path),
-                    detected_at: format!("tick-{now}"),
+                    detected_at: stamp(now),
                     // D7 resolves this class on the spot: both copies reach the cloud, so the
                     // user is told, not asked.
-                    resolved_at: Some(format!("tick-{now}")),
+                    resolved_at: Some(stamp(now)),
                     resolution: Some("both_kept".to_string()),
                 })?;
                 Ok(StepOutcome::Done)
@@ -726,7 +756,7 @@ impl Device {
                         remote_version: remote.remote_version.unwrap_or(1),
                         checksum,
                     },
-                    &format!("tick-{now}"),
+                    &stamp(now),
                 )?;
                 Ok(StepOutcome::Done)
             }
@@ -740,7 +770,7 @@ impl Device {
                     remote_file_id: None,
                     remote_checksum: None,
                     conflict_copy_path: None,
-                    detected_at: format!("tick-{now}"),
+                    detected_at: stamp(now),
                     resolved_at: None,
                     resolution: Some(detail),
                 })?;
@@ -797,7 +827,7 @@ impl Device {
                     now,
                 )?;
                 self.journal
-                    .confirm_delete_op(id, &self.name.clone(), true, true, &format!("tick-{now}"))?;
+                    .confirm_delete_op(id, &self.name.clone(), true, true, &stamp(now))?;
                 Ok(StepOutcome::Done)
             }
         }
@@ -834,12 +864,21 @@ impl Device {
                 remote_version,
                 checksum: if is_dir { None } else { checksum },
             },
-            &format!("tick-{now}"),
+            &stamp(now),
         )
     }
 
     /// Read-only access to the journal, for assertions.
     pub fn journal(&self) -> &Journal {
         &self.journal
+    }
+
+    /// Resume a suspended mapping, as the user's one-click remedy does: the window that stopped
+    /// the work is forgotten, so the same deletions are not refused again (H1).
+    pub fn resume_after_suspension(&mut self) -> Result<()> {
+        self.journal.clear_deletion_window(&self.mapping_id)?;
+        self.suspended = None;
+        self.pending.clear();
+        Ok(())
     }
 }

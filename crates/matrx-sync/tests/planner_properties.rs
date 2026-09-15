@@ -176,6 +176,9 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            // H1: every run of the loop is one rolling window, so what this world has already
+            // deleted counts against the plan being built.
+            recent_deletions: world.executed_deletions,
             open_conflicts: world.open_conflicts(),
         };
         let local = world.local.clone();
@@ -209,6 +212,20 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         // plan is data loss the moment it executes on a real volume — and a mock filesystem with
         // no name limits can never notice.
         no_unprotected_overwrite(&local, &remote, &synced, &p, knobs)?;
+        // H1, as a property over every run: no SEQUENCE of plans inside one window may delete more
+        // than the thresholds allow without a suspension. Counting one plan at a time let 38 of 40
+        // files through in two instalments.
+        if p.suspended.is_none() {
+            let would_delete = world.executed_deletions
+                + p.ops.iter().filter(|o| o.is_destructive()).count();
+            let denominator = world.synced.len() + world.executed_deletions;
+            if breaker_should_trip(would_delete, denominator, knobs) {
+                return Err(format!(
+                    "{would_delete} cumulative deletions of {denominator} tracked were planned \
+                     across this window with no suspension"
+                ));
+            }
+        }
         if p.is_empty() {
             return Ok(RunOutcome {
                 world,
@@ -228,6 +245,18 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         world.apply(&p);
         rounds += 1;
     }
+}
+
+/// The breaker's rule, restated independently of the planner so the property is a real check and
+/// not the implementation compared with itself.
+fn breaker_should_trip(deleted: usize, tracked: usize, knobs: &Knobs) -> bool {
+    if deleted == 0 || tracked == 0 {
+        return false;
+    }
+    let absolute = deleted >= knobs.mass_delete_count as usize;
+    let proportional = deleted * 100 >= tracked * knobs.mass_delete_percent as usize
+        && deleted >= knobs.mass_delete_min_count as usize;
+    absolute || proportional
 }
 
 /// Every `Download` that replaces locally-changed bytes must be accompanied, in the SAME plan, by
@@ -463,6 +492,7 @@ proptest! {
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            recent_deletions: outcome.world.executed_deletions,
             open_conflicts: outcome.world.open_conflicts(),
         };
         let again = plan(
@@ -1025,6 +1055,7 @@ fn the_planner_is_deterministic() {
     let ctx = PlanContext {
         device_name: "device-a".to_string(),
         today: "2026-09-13".to_string(),
+        recent_deletions: 0,
         open_conflicts: BTreeSet::new(),
     };
     let a = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &Knobs::default(), &ctx);
@@ -1146,6 +1177,9 @@ fn drive(world: &mut World, direction: Direction, knobs: &Knobs, rounds: usize) 
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            // H1: every run of the loop is one rolling window, so what this world has already
+            // deleted counts against the plan being built.
+            recent_deletions: world.executed_deletions,
             open_conflicts: world.open_conflicts(),
         };
         let p = plan(
@@ -1203,6 +1237,7 @@ fn nfc_and_nfd_twins_become_a_unicode_collision_not_a_silent_clobber() {
     let ctx = PlanContext {
         device_name: "device-a".to_string(),
         today: "2026-09-13".to_string(),
+        recent_deletions: 0,
         open_conflicts: BTreeSet::new(),
     };
     let p = plan(
@@ -1354,6 +1389,7 @@ fn a_conflict_copy_is_never_planned_at_a_name_no_filesystem_can_create() {
         &PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            recent_deletions: 0,
             open_conflicts: BTreeSet::new(),
         },
     );
@@ -1436,6 +1472,7 @@ fn a_conflict_copy_does_not_land_on_an_earlier_one_that_differs_only_in_case() {
         &PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            recent_deletions: 0,
             open_conflicts: BTreeSet::new(),
         },
     );
@@ -1604,4 +1641,132 @@ fn every_planned_rename_carries_its_precondition() {
         (Some(1), Some("c1".to_string())),
         "the rename must carry the source's version and checksum"
     );
+}
+
+/// H1, from the third hostile pass — **data loss**. The re-verifier's exact case: forty synced
+/// files, nineteen deleted in one plan (47.5%, below the percentage arm; 19, below the floor of
+/// 20), applied; then nineteen of the twenty-one survivors deleted in the next. Counting one plan
+/// at a time, neither round trips either arm, and **38 of 40 files propagate to the cloud with no
+/// suspension and no user-visible event of any kind**.
+///
+/// This is not exotic: the daemon plans on a `sync.watcher_debounce_ms` timer and the scanner walks
+/// a large tree incrementally, so an `rm -rf`, a drive unmounting under the sync root, or
+/// ransomware working alphabetically all reach the planner as a stream of small deletions. That
+/// stream is the scenario the breaker exists for.
+#[test]
+fn a_wipe_split_across_two_plans_still_trips_the_breaker() {
+    let knobs = Knobs::default();
+    let mut w = deletion_world(40, 19);
+
+    // Round one: nineteen gone. Below both arms on its own, so it is allowed — and executed.
+    let ctx = PlanContext {
+        recent_deletions: w.executed_deletions,
+        ..PlanContext::default()
+    };
+    let first = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &knobs, &ctx);
+    assert!(
+        first.suspended.is_none(),
+        "nineteen of forty is below both arms and must not suspend on its own"
+    );
+    assert_eq!(
+        first.ops.iter().filter(|o| o.is_destructive()).count(),
+        19,
+        "{:?}",
+        first.ops
+    );
+    w.apply(&first);
+    assert_eq!(w.executed_deletions, 19);
+
+    // Round two: nineteen of the twenty-one survivors disappear.
+    let survivors: Vec<String> = w.local.paths().cloned().collect();
+    for path in survivors.iter().take(19) {
+        w.local.remove(path);
+    }
+    let ctx = PlanContext {
+        recent_deletions: w.executed_deletions,
+        ..PlanContext::default()
+    };
+    let second = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &knobs, &ctx);
+
+    let reason = second
+        .suspended
+        .clone()
+        .expect("38 of 40 across one window is a mass delete, however it was split");
+    assert_eq!(reason.honest_state(), "suspended_mass_delete");
+    assert!(
+        second.ops.is_empty(),
+        "a suspended plan carries nothing else: {:?}",
+        second.ops
+    );
+    match reason {
+        matrx_sync::planner::SuspendReason::MassDelete {
+            recent_deletions,
+            window_hours,
+            ..
+        } => {
+            assert_eq!(recent_deletions, 19, "the surface must be able to say why");
+            assert_eq!(window_hours, 24);
+        }
+    }
+
+    // And the cloud still holds the 21 the first round left, because round two executed nothing.
+    w.apply(&second);
+    assert_eq!(
+        w.remote.iter().filter(|(_, n)| n.is_live()).count(),
+        21,
+        "the suspension must stop the second instalment"
+    );
+}
+
+/// Resuming a suspended mapping forgets the window — otherwise the user's "yes, go on" would be
+/// refused again on the very next plan, and a legitimate large cleanup could never complete.
+#[test]
+fn resuming_a_suspended_mapping_resets_the_window() {
+    let knobs = Knobs::default();
+    let mut w = deletion_world(40, 19);
+    let first = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext::default(),
+    );
+    w.apply(&first);
+
+    let survivors: Vec<String> = w.local.paths().cloned().collect();
+    for path in survivors.iter().take(19) {
+        w.local.remove(path);
+    }
+    let suspended = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            recent_deletions: w.executed_deletions,
+            ..PlanContext::default()
+        },
+    );
+    assert!(suspended.suspended.is_some());
+
+    // The user looks at it and says go on. The window is cleared; the same work now proceeds.
+    w.executed_deletions = 0;
+    let resumed = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            recent_deletions: 0,
+            ..PlanContext::default()
+        },
+    );
+    assert!(
+        resumed.suspended.is_none(),
+        "after a resume the same deletions must go through"
+    );
+    assert!(resumed.ops.iter().any(|o| o.is_destructive()));
 }

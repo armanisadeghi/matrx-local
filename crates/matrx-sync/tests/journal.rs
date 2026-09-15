@@ -718,3 +718,109 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
          into tree_synced, and it must be argued, not added."
     );
 }
+
+/// H1: the breaker's rolling window is durable, because the wipe it exists to stop frequently
+/// takes the process down with it.
+#[test]
+fn the_deletion_window_is_recorded_on_confirmation_and_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("syncd.db");
+    {
+        let mut j = Journal::open(&path).expect("open");
+        j.put_mapping(&mapping_row()).expect("mapping");
+
+        // A deletion is recorded only when it is CONFIRMED — never on enqueue.
+        let mut del = upload_op();
+        del.kind = OpKind::DeleteRemote;
+        del.idempotency_key = "key-del-1".to_string();
+        let id = j.enqueue_op(&del).expect("enqueue");
+        assert_eq!(
+            j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+            0,
+            "an enqueued deletion has not happened yet"
+        );
+
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+            .expect("confirm");
+        assert_eq!(
+            j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+            1
+        );
+        // The window is a window: anything before it does not count.
+        assert_eq!(
+            j.deletions_since(MAPPING, "2026-09-14T00:00:00Z").expect("count"),
+            0
+        );
+    }
+
+    // The restart an `rm -rf` frequently causes must not erase the breaker's memory.
+    let j = Journal::open(&path).expect("reopen");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+        1,
+        "the window must survive a restart"
+    );
+
+    // Resuming a suspended mapping forgets it, so the user's "go on" is not refused again.
+    assert_eq!(j.clear_deletion_window(MAPPING).expect("clear"), 1);
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+        0
+    );
+}
+
+/// A non-destructive op does not count against the window, and the window is per mapping (I7).
+#[test]
+fn only_real_deletions_count_and_only_against_their_own_mapping() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let mut other = mapping_row();
+    other.id = "44444444-4444-4444-4444-444444444444".to_string();
+    j.put_mapping(&other).expect("second mapping");
+
+    // `unindex` removes a synced row but destroys no user-visible copy.
+    let mut bookkeeping = upload_op();
+    bookkeeping.kind = OpKind::Unindex;
+    bookkeeping.idempotency_key = "key-unindex".to_string();
+    let id = j.enqueue_op(&bookkeeping).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+        .expect("confirm");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+        0,
+        "bookkeeping is not a deletion"
+    );
+
+    // A real deletion on the OTHER mapping does not count against this one.
+    let mut del = upload_op();
+    del.mapping_id = other.id.clone();
+    del.kind = OpKind::DeleteLocal;
+    del.idempotency_key = "key-del-other".to_string();
+    let id = j.enqueue_op(&del).expect("enqueue");
+    j.lease_next_op(&other.id, "y", "2026-09-13T00:00:02Z", "2026-09-13T00:15:02Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "y", true, true, "2026-09-13T12:00:01Z")
+        .expect("confirm");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+        0
+    );
+    assert_eq!(
+        j.deletions_since(&other.id, "2000-01-01T00:00:00Z").expect("count"),
+        1
+    );
+
+    // Housekeeping outside the window is not the user's decision inside it.
+    assert_eq!(j.prune_deletion_window("2026-09-14T00:00:00Z").expect("prune"), 1);
+    assert_eq!(
+        j.deletions_since(&other.id, "2000-01-01T00:00:00Z").expect("count"),
+        0
+    );
+}

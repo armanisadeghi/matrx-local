@@ -3181,6 +3181,13 @@ class EngineAPI {
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const authHdrs = await this.authHeaders();
+    // The signed-out fence: a path the engine already refused for "no
+    // credential" is not asked again until a token exists (SR-05).
+    assertNotFencedWhileSignedOut(
+      init?.method ?? "GET",
+      path,
+      authHdrs.Authorization ? "present" : null,
+    );
     // A caller-supplied signal takes over timeout responsibility entirely;
     // otherwise apply the default timeout ceiling.
     const timeoutMs = EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
@@ -3220,6 +3227,9 @@ class EngineAPI {
       init?.body,
     );
     if (!resp.ok) {
+      if (resp.status === 401 && !authHdrs.Authorization) {
+        fenceForSignedOut(init?.method ?? "GET", path);
+      }
       const payload = await resp.json().catch(() => null);
       await reportActionNeededErrorPayload(payload, operationKey);
       const errorBody =
@@ -6062,12 +6072,97 @@ function mediaGenTimeoutError(
   return new Error(msg);
 }
 
+/**
+ * THE SIGNED-OUT REQUEST FENCE — never re-ask a question the engine has
+ * already refused for a reason only signing in can change.
+ *
+ * WHY (SR-05, measured 2026-09-11 -> 2026-09-14): with no Supabase session,
+ * `authHeaders()` correctly attaches nothing, and the engine's auth
+ * middleware correctly answers 401. What nothing did was stop asking. Two
+ * pollers gated only on "is the engine connected" — the prompt-matrix library
+ * load (a 2s retry with no backoff and no ceiling) and access-health (60s /
+ * 10s) — produced roughly 37,000 rejected requests in 72 hours on
+ * /prompt-matrix/paths, /prompt-matrix/templates and /prompt-matrix/library
+ * alone, plus /cloud/debug, /downloads/stream, /filesystem/status and
+ * /scrapes/sync-status. Every one was answered, logged and thrown away.
+ *
+ * Fixing the two pollers would have left the other routes and the next poller
+ * anybody writes. So the rule lives in the ONE place every authenticated
+ * engine call passes through: when a path has already answered "authorization
+ * required" and we still hold no token, the call fails locally with
+ * `EngineSignedOutError` and no request leaves the app. The moment a token
+ * exists the fence clears completely — signing in is the event that changes
+ * the answer, and nothing else is.
+ *
+ * It never fences a public route: those do not 401, so they never enter it.
+ */
+const signedOutPaths = new Set<string>();
+
+/** A call refused because nobody is signed in — a STATE, not a failure. */
+export class EngineSignedOutError extends Error {
+  readonly path: string;
+  constructor(path: string) {
+    super(
+      "You are signed out, so the engine refused this request. Sign in to AI Matrx and it will work.",
+    );
+    this.name = "EngineSignedOutError";
+    this.path = path;
+  }
+}
+
+/** Stable fence key: method + path, query stripped (…/stream?cursor=… is the
+ * same question), so one signed-out poll fences its own repeats only. */
+function signedOutKey(method: string, url: string): string {
+  let path = url;
+  try {
+    path = new URL(url, "http://engine.local").pathname;
+  } catch {
+    path = url.split("?")[0] ?? url;
+  }
+  return `${method.toUpperCase()} ${path}`;
+}
+
+function fenceForSignedOut(method: string, url: string): void {
+  signedOutPaths.add(signedOutKey(method, url));
+}
+
+function assertNotFencedWhileSignedOut(
+  method: string,
+  url: string,
+  token: string | null,
+): void {
+  if (token) {
+    // Signed in: every earlier refusal is stale by definition.
+    if (signedOutPaths.size > 0) signedOutPaths.clear();
+    return;
+  }
+  if (signedOutPaths.has(signedOutKey(method, url))) {
+    throw new EngineSignedOutError(signedOutKey(method, url));
+  }
+}
+
+/** For tests: the fence is module state, so a suite must be able to reset it. */
+export function __resetSignedOutFence(): void {
+  signedOutPaths.clear();
+}
+
+/** For tests and diagnostics: what is currently fenced. */
+export function __fencedWhileSignedOut(): string[] {
+  return [...signedOutPaths].sort();
+}
+
 async function imageGenFetch<T>(
   url: string,
   options?: RequestInit,
   timeoutMs: number | null = MEDIA_GEN_TIMEOUT_MS,
 ): Promise<T> {
   const auth = await engine.getEngineAuthHeaders();
+  const methodForFence = options?.method ?? "GET";
+  assertNotFencedWhileSignedOut(
+    methodForFence,
+    url,
+    auth.Authorization ? "present" : null,
+  );
   const mergedHeaders = new Headers({
     "Content-Type": "application/json",
     ...auth,
@@ -6092,6 +6187,9 @@ async function imageGenFetch<T>(
     throw e;
   }
   if (!resp.ok) {
+    if (resp.status === 401 && !auth.Authorization) {
+      fenceForSignedOut(methodForFence, url);
+    }
     const body = await resp.text().catch(() => "");
     let detail = body;
     try {

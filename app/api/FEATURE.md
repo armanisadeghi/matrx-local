@@ -105,3 +105,21 @@ Chrome-profile WS sessions, and independent engine→browser `read_page`
 reverse invokes. Remote pair-token HTTP auth is covered by the real-engine
 smoke suite and must be re-proved against the released build whenever this
 middleware contract changes.
+
+## Auth rejection logging — ONE throttle for every surface
+
+`app/api/auth_rejection_log.py` is the only place an auth-rejected request is
+logged, on both `AuthMiddleware` (`auth.py`, everything) and
+`extension_auth.py` (`/extension/*`). First rejection of a
+`(surface, path, reason)` tuple = WARNING, repeats = DEBUG, one INFO summary a
+minute with the rate, a resumed stream is news again. Never add a bare
+`logger.warning` to a reject path: the throttle lived only in
+`extension_auth.py` until 2026-09-14, so a signed-out desktop poller wrote
+~37,000 unthrottled WARNINGs in 72h on `/prompt-matrix/*` alone (SR-05).
+Guard: `tests/unit/test_auth_rejection_log_throttle.py` (it reads the
+middleware's own source).
+
+The client half of that defect is the signed-out request fence in
+`desktop/src/lib/api.ts`: a path the engine already refused for "no
+credential" is not asked again until a token exists. Guard:
+`desktop/src/lib/api-signed-out-fence.test.ts`.

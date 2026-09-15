@@ -10,7 +10,7 @@
 //! debounce each of those is a plan, an upload and a new remote version.
 
 use notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, DebouncedEvent, Debouncer, FileIdMap};
+use notify_debouncer_full::{new_debouncer, DebouncedEvent, Debouncer, RecommendedCache};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
@@ -102,7 +102,7 @@ pub fn classify(error: &notify::Error) -> WatcherError {
 ///
 /// Dropping it stops watching. The daemon holds one per running mapping.
 pub struct FolderWatcher {
-    _debouncer: Debouncer<notify::RecommendedWatcher, FileIdMap>,
+    _debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
     events: Receiver<Result<Vec<DebouncedEvent>, Vec<notify::Error>>>,
     root: PathBuf,
     /// The root with every symlink resolved.

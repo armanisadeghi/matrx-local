@@ -36,25 +36,45 @@ pub(crate) fn identity_of(metadata: &Metadata) -> FileIdentity {
     }
 }
 
-/// Windows exposes the volume serial and file index through stable `MetadataExt` accessors. Keep
-/// this path in safe Rust: the crate forbids unsafe code, and the standard library already owns
-/// the platform-specific handle work.
+/// Windows file identity is read through the `file-id` crate. It owns the platform handle work,
+/// keeping this crate's `forbid(unsafe_code)` guarantee intact while still returning the volume
+/// and NTFS identity pair required for rename detection.
 #[cfg(windows)]
 pub(crate) fn identity_of_path(path: &std::path::Path) -> FileIdentity {
-    let Ok(metadata) = std::fs::metadata(path) else {
+    let Ok(identity) = file_id::get_file_id(path) else {
         return FileIdentity {
             volume_id: None,
             file_id: None,
         };
     };
-    identity_of(&metadata)
+
+    match identity {
+        file_id::FileId::LowRes {
+            volume_serial_number,
+            file_index,
+        } => FileIdentity {
+            volume_id: Some(volume_serial_number.to_string()),
+            file_id: Some(file_index.to_string()),
+        },
+        file_id::FileId::HighRes {
+            volume_serial_number,
+            file_id,
+        } => FileIdentity {
+            volume_id: Some(volume_serial_number.to_string()),
+            file_id: Some(file_id.to_string()),
+        },
+        file_id::FileId::Inode { .. } => FileIdentity {
+            volume_id: None,
+            file_id: None,
+        },
+    }
 }
 
 #[cfg(windows)]
-pub(crate) fn identity_of(metadata: &Metadata) -> FileIdentity {
-    use std::os::windows::fs::MetadataExt;
+pub(crate) fn identity_of(_metadata: &Metadata) -> FileIdentity {
+    // The Windows walker calls `identity_of_path`, because file identity requires opening the path.
     FileIdentity {
-        volume_id: metadata.volume_serial_number().map(|value| value.to_string()),
-        file_id: metadata.file_index().map(|value| value.to_string()),
+        volume_id: None,
+        file_id: None,
     }
 }

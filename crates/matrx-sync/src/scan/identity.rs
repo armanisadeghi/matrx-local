@@ -36,48 +36,25 @@ pub(crate) fn identity_of(metadata: &Metadata) -> FileIdentity {
     }
 }
 
-/// Windows: `volume_serial_number` and `file_index` are `MetadataExt` methods behind the unstable
-/// `windows_by_handle` feature, so they are read through `GetFileInformationByHandle` instead —
-/// the API SPEC-ENGINE §5 names `windows-sys` for.
-///
-/// **Written, not run.** There is no Windows machine in this lane; this path is compiled only on
-/// Windows and is unproven until the Windows leg of FS-V2 exercises it. It is written rather than
-/// left as `None` because `None` would silently turn every Windows rename into a delete plus a
-/// full re-upload — a real product defect disguised as graceful degradation.
+/// Windows exposes the volume serial and file index through stable `MetadataExt` accessors. Keep
+/// this path in safe Rust: the crate forbids unsafe code, and the standard library already owns
+/// the platform-specific handle work.
 #[cfg(windows)]
 pub(crate) fn identity_of_path(path: &std::path::Path) -> FileIdentity {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-
-    let Ok(file) = std::fs::File::open(path) else {
+    let Ok(metadata) = std::fs::metadata(path) else {
         return FileIdentity {
             volume_id: None,
             file_id: None,
         };
     };
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
-    if ok == 0 {
-        return FileIdentity {
-            volume_id: None,
-            file_id: None,
-        };
-    }
-    let file_id = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    FileIdentity {
-        volume_id: Some(info.dwVolumeSerialNumber.to_string()),
-        file_id: Some(file_id.to_string()),
-    }
+    identity_of(&metadata)
 }
 
 #[cfg(windows)]
-pub(crate) fn identity_of(_metadata: &Metadata) -> FileIdentity {
-    // Windows needs the path, not the metadata; the walker calls `identity_of_path` directly.
+pub(crate) fn identity_of(metadata: &Metadata) -> FileIdentity {
+    use std::os::windows::fs::MetadataExt;
     FileIdentity {
-        volume_id: None,
-        file_id: None,
+        volume_id: metadata.volume_serial_number().map(|value| value.to_string()),
+        file_id: metadata.file_index().map(|value| value.to_string()),
     }
 }

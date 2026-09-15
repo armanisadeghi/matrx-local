@@ -29,7 +29,8 @@ function requireApplied(result: NativeVaultTransition | null, operation: string)
 export class NativeVaultHostAuthCoordinator {
   private chain: Promise<void> = Promise.resolve();
   private revision = 0;
-  private adoptedSubject: string | null = null;
+  /** `null` is fenced; an object with `subject: null` is an accepted anonymous host state. */
+  private adopted: { revision: number; subject: string | null } | null = null;
   private aligned: EngineAlignment | null = null;
 
   constructor(private readonly commands: NativeVaultCommands, private readonly prepareEngine: EngineTransitionParticipant) {}
@@ -48,10 +49,17 @@ export class NativeVaultHostAuthCoordinator {
     this.chain = next.then(() => undefined, () => undefined);
     return next;
   }
-  fence(_subject?: string | null): number { this.adoptedSubject = null; this.aligned = null; this.revision += 1; return this.revision; }
+  fence(_subject?: string | null): number { this.adopted = null; this.aligned = null; this.revision += 1; return this.revision; }
   isCurrentRevision(revision: number): boolean { return this.revision === revision; }
   currentContext(nextSubject: string | null, revision = this.revision): NativeVaultTransitionContext {
     return { revision, nextSubject, isCurrent: () => this.revision === revision };
+  }
+  private refuseSuperseded(context: NativeVaultTransitionContext, clearAdoption: boolean): void {
+    // Callers have already established currentness. Never let an old queued
+    // participant erase a newer cycle's authority.
+    if (!context.isCurrent()) return;
+    this.aligned = null;
+    if (clearAdoption && this.adopted?.revision === context.revision) this.adopted = null;
   }
   async invalidateBeforeHostMutation(): Promise<void> {
     const context = this.currentContext(null, this.fence());
@@ -61,6 +69,10 @@ export class NativeVaultHostAuthCoordinator {
       if (!context.isCurrent()) throw new Error("Account transition is no longer current.");
       const alignment = await this.prepareEngine(context);
       if (!context.isCurrent()) throw new Error("Account transition is no longer current.");
+      if (alignment.status === "superseded") {
+        this.refuseSuperseded(context, true);
+        throw new Error("Account transition is no longer current.");
+      }
       this.aligned = alignment;
       if (alignment.status === "cleanup_failed") throw new Error("Engine account cleanup failed. Retry account cleanup before signing in.");
     });
@@ -74,16 +86,25 @@ export class NativeVaultHostAuthCoordinator {
       if (!context.isCurrent()) return undefined;
       const alignment = await this.prepareEngine(context);
       if (!context.isCurrent()) return undefined;
+      // A participant can explicitly supersede this transition without a host
+      // revision changing. It is not safe to publish or reuse this adoption.
+      if (alignment.status === "superseded") {
+        this.refuseSuperseded(context, true);
+        return undefined;
+      }
       this.aligned = alignment;
-      this.adoptedSubject = subject;
+      this.adopted = { revision: context.revision, subject };
       return adopt?.();
     });
     return this.boundedCallerWait(operation);
   }
-  isAdopted(subject: string | null | undefined): boolean { return subject !== null && subject !== undefined && this.adoptedSubject === subject; }
+  isAdopted(subject: string | null | undefined): boolean {
+    return subject !== undefined && this.adopted !== null && this.adopted.revision === this.revision && this.adopted.subject === subject;
+  }
   adoptedGeneration(subject: string | null | undefined): number | null { return this.isAdopted(subject) ? this.revision : null; }
   engineContext(subject: string | null | undefined): NativeVaultTransitionContext | null {
-    if (!this.isAdopted(subject) || !this.aligned || this.aligned.status !== "aligned") return null;
+    // Anonymous host adoption is valid, but never confers engine authority.
+    if (subject === null || subject === undefined || !this.isAdopted(subject) || !this.aligned || this.aligned.status !== "aligned") return null;
     if (this.aligned.subject !== null && this.aligned.subject !== subject) return null;
     return {
       ...this.currentContext(subject ?? null),
@@ -100,6 +121,11 @@ export class NativeVaultHostAuthCoordinator {
       if (!context.isCurrent() || !this.isAdopted(subject)) return null;
       const alignment = await this.prepareEngine(context);
       if (!context.isCurrent() || !this.isAdopted(subject)) return null;
+      if (alignment.status === "superseded") {
+        // Keep host adoption so discovery may try again, but remove all engine authority.
+        this.refuseSuperseded(context, false);
+        return null;
+      }
       this.aligned = alignment;
       return alignment;
     });

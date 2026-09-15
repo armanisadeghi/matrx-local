@@ -95,15 +95,75 @@ it("gives consecutive lifecycle events distinct revisions", async () => {
   expect(coordinator.isAdopted("actor-b")).toBe(true);
 });
 
-it("settles the current signed-out revision without manufacturing an adopted actor", async () => {
+it("adopts an accepted anonymous host state while keeping engine authority fenced", async () => {
   const coordinator = new NativeVaultHostAuthCoordinator({
     invalidate: async () => "applied",
     reconcile: async () => "applied",
   }, unavailable);
   const revision = coordinator.fence(null);
   await coordinator.reconcileAndAdopt(null, undefined, revision);
-  expect(coordinator.isCurrentRevision(revision)).toBe(true);
-  expect(coordinator.adoptedGeneration(null)).toBeNull();
+  expect(coordinator.isAdopted(undefined)).toBe(false);
+  expect(coordinator.isAdopted(null)).toBe(true);
+  expect(coordinator.adoptedGeneration(null)).toBe(revision);
+  expect(coordinator.engineContext(null)).toBeNull();
+});
+
+it("drops a deferred same-actor transition when E2 fences E1", async () => {
+  let releaseFirst!: () => void;
+  const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let calls = 0;
+  const adopt = vi.fn();
+  const coordinator = new NativeVaultHostAuthCoordinator({
+    invalidate: async () => "applied",
+    reconcile: async () => { calls += 1; if (calls === 1) await firstPending; return "applied"; },
+  }, unavailable);
+  const e1 = coordinator.reconcileAndAdopt("44444444-4444-4444-8444-444444444444", adopt, coordinator.fence());
+  await Promise.resolve();
+  const e2 = coordinator.reconcileAndAdopt("44444444-4444-4444-8444-444444444444", adopt, coordinator.fence());
+  releaseFirst();
+  await Promise.all([e1, e2]);
+  expect(adopt).toHaveBeenCalledOnce();
+  expect(coordinator.isAdopted("44444444-4444-4444-8444-444444444444")).toBe(true);
+});
+
+it("never publishes an explicit engine supersession", async () => {
+  const adopt = vi.fn();
+  const coordinator = new NativeVaultHostAuthCoordinator({ invalidate: async () => "applied", reconcile: async () => "applied" }, async () => ({ status: "superseded" }));
+  await expect(coordinator.invalidateBeforeHostMutation()).rejects.toThrow("no longer current");
+  await expect(coordinator.reconcileAndAdopt("55555555-5555-4555-8555-555555555555", adopt)).resolves.toBeUndefined();
+  expect(adopt).not.toHaveBeenCalled();
+  expect(coordinator.isAdopted("55555555-5555-4555-8555-555555555555")).toBe(false);
+  expect(await coordinator.alignEngineForAdopted("55555555-5555-4555-8555-555555555555")).toBeNull();
+});
+
+it("removes prior engine authority on current realignment supersession while retaining host adoption", async () => {
+  let calls = 0;
+  const subject = "77777777-7777-4777-8777-777777777777";
+  const coordinator = new NativeVaultHostAuthCoordinator({ invalidate: async () => "applied", reconcile: async () => "applied" }, async () => {
+    calls += 1;
+    return calls === 1
+      ? { status: "aligned" as const, origin: "http://engine.test", generation: "generation", credentialRevision: 1, subject }
+      : { status: "superseded" as const };
+  });
+  await coordinator.reconcileAndAdopt(subject);
+  expect(coordinator.engineContext(subject)).not.toBeNull();
+  await expect(coordinator.alignEngineForAdopted(subject)).resolves.toBeNull();
+  expect(coordinator.isAdopted(subject)).toBe(true);
+  expect(coordinator.engineContext(subject)).toBeNull();
+});
+
+it("removes a prior same-revision adoption when reconciliation is explicitly superseded", async () => {
+  let calls = 0;
+  const subject = "88888888-8888-4888-8888-888888888888";
+  const coordinator = new NativeVaultHostAuthCoordinator({ invalidate: async () => "applied", reconcile: async () => "applied" }, async () => {
+    calls += 1;
+    return calls === 1 ? { status: "unavailable" as const } : { status: "superseded" as const };
+  });
+  const revision = coordinator.fence();
+  await coordinator.reconcileAndAdopt(subject, undefined, revision);
+  expect(coordinator.isAdopted(subject)).toBe(true);
+  await coordinator.reconcileAndAdopt(subject, undefined, revision);
+  expect(coordinator.isAdopted(subject)).toBe(false);
 });
 
 it("times out the caller while retaining the hung native operation in the serialized queue", async () => {

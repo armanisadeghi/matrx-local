@@ -41,7 +41,7 @@ function ensureHostSubscription(): void {
     const completion = new Promise<{ accepted: boolean }>((resolve, reject) => {
       setTimeout(() => {
         void coordinator.reconcileAndAdopt(session?.user.id ?? null, undefined, revision).then(
-          () => resolve({ accepted: coordinator.isCurrentRevision(revision) }),
+          () => resolve({ accepted: coordinator.adoptedGeneration(session?.user.id ?? null) === revision }),
           reject,
         );
       }, 0);
@@ -95,12 +95,12 @@ export function reconcileNativeVaultAndAdopt<T>(
 
 /** Token and engine paths must not use a session observed before reconciliation. */
 export function isNativeVaultHostSessionAdopted(subject: string | null | undefined): boolean {
-  return coordinator.isAdopted(subject ?? null);
+  return coordinator.isAdopted(subject);
 }
 
 /** A background task snapshots this and rechecks it immediately before I/O. */
 export function nativeVaultAdoptedHostGeneration(subject: string | null | undefined): number | null {
-  return coordinator.adoptedGeneration(subject ?? null);
+  return coordinator.adoptedGeneration(subject);
 }
 
 /** Engine/background callers must hold an origin-bound current alignment. */

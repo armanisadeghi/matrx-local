@@ -27,8 +27,11 @@ mode this ownership boundary exists to prevent.
 
 Three call paths:
 
-    1. Python (run.py) — `from app.preflight import clean_orphans, assign_engine_port`
-       Runs at engine startup, before binding the uvicorn port.
+    1. Python (run.py) — `from app.preflight import clean_orphans, bind_engine_port`
+       Runs at engine startup. `bind_engine_port` does not just choose a port,
+       it BINDS and keeps it, and run.py hands that socket to uvicorn — so
+       nothing can take the port between choosing it and serving on it
+       (`assign_engine_port` is the reporting-only variant; see its docstring).
 
     2. Rust (lib.rs, future) — `python -m app.preflight clean`
        Runs before spawning the bundled sidecar binary.
@@ -1308,11 +1311,60 @@ def _is_port_free(port: int) -> bool:
             return False
 
 
-def assign_engine_port(*, env_override: str | None = None) -> int:
-    """Find a port for the engine, honoring MATRX_PORT if set.
+def _open_listen_socket() -> socket.socket:
+    """An unbound TCP socket with this platform's correct reuse semantics."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if sys.platform == "win32":
+        # SO_REUSEADDR on Windows lets a bind SUCCEED over a live foreign
+        # listener; SO_EXCLUSIVEADDRUSE gives the semantics we actually want.
+        # Same reasoning as _is_port_free above.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    return sock
 
-    Behavior matches the existing `run.py::find_available_port` so swapping in
-    this implementation is observationally identical.
+
+def _try_bind(port: int) -> socket.socket | None:
+    """Bind, LISTEN, and KEEP localhost:port, or None if someone else has it.
+
+    A bound-but-not-listening socket with ``SO_REUSEADDR`` does not exclusively
+    reserve the address on Linux. Listening here makes the claim atomic on every
+    supported platform; uvicorn can adopt an already-listening socket.
+    """
+    sock = _open_listen_socket()
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(socket.SOMAXCONN)
+    except OSError:
+        sock.close()
+        return None
+    # uvicorn hands this socket to asyncio's create_server. Already listening is
+    # the portable contract required to reserve the address on Linux too.
+    sock.set_inheritable(True)
+    return sock
+
+
+def bind_engine_port(*, env_override: str | None = None) -> tuple[int, socket.socket]:
+    """Claim a port for the engine and RETURN THE BOUND SOCKET with it.
+
+    🚨 THE SCAN MUST NOT LET GO OF THE PORT (fixed 2026-09-15).
+    `_is_port_free()` binds a probe socket, closes it, and reports a number.
+    Everything after that — the orphan sweep's drain, the discovery-file
+    write, and the whole of uvicorn's lifespan startup, which runs BEFORE
+    uvicorn binds — happens with the port held by nobody. Two engines started
+    3s apart on 2026-09-14 both probed 22241 free, both wrote a discovery file
+    claiming 22241, both logged "Startup complete", and only one of them had a
+    listening socket; the loser sat there serving nothing.
+
+    Holding the socket from the moment it is chosen closes that window
+    completely: the winner cannot be overtaken, and a rival bind fails at
+    ITS bind, during ITS scan, which simply moves on to the next candidate.
+    The socket is handed to uvicorn (`Server.run(sockets=[sock])`), so the
+    process is listening before a single lifespan line is printed.
+
+    Raises SystemExit — loudly, never a silent fallback — when nothing in the
+    range can be claimed.
     """
     if env_override is None:
         env_override = os.environ.get("MATRX_PORT")
@@ -1322,14 +1374,16 @@ def assign_engine_port(*, env_override: str | None = None) -> int:
             port = int(env_override)
         except ValueError:
             raise SystemExit(f"MATRX_PORT={env_override!r} is not a valid integer")
-        if _is_port_free(port):
-            _ok("engine", f"port {port} (MATRX_PORT override)")
-            return port
+        sock = _try_bind(port)
+        if sock is not None:
+            _ok("engine", f"port {port} (MATRX_PORT override, socket held)")
+            return port, sock
         raise SystemExit(f"Port {port} (from MATRX_PORT) is already in use")
 
-    if _is_port_free(DEFAULT_ENGINE_PORT):
-        _ok("engine", f"port {DEFAULT_ENGINE_PORT} (default)")
-        return DEFAULT_ENGINE_PORT
+    sock = _try_bind(DEFAULT_ENGINE_PORT)
+    if sock is not None:
+        _ok("engine", f"port {DEFAULT_ENGINE_PORT} (default, socket held)")
+        return DEFAULT_ENGINE_PORT, sock
 
     # L3: the default port is taken. Probe the incumbent so the log says WHY we
     # fell back. A live Matrx engine there is now expected (two intentional
@@ -1342,27 +1396,44 @@ def assign_engine_port(*, env_override: str | None = None) -> int:
 
     for offset in range(1, ENGINE_PORT_SCAN):
         candidate = DEFAULT_ENGINE_PORT + offset
-        if _is_port_free(candidate):
-            if incumbent_is_matrx:
-                _warn(
-                    "engine",
-                    f"default port {DEFAULT_ENGINE_PORT} already served by a LIVE "
-                    f"Matrx engine ({pid_str}) — running a SECOND instance on "
-                    f"{candidate}. This is allowed; both instances coexist.",
-                )
-            else:
-                _warn(
-                    "engine",
-                    f"default port {DEFAULT_ENGINE_PORT} held by foreign process "
-                    f"({pid_str}) — falling back to {candidate}",
-                )
-            return candidate
+        sock = _try_bind(candidate)
+        if sock is None:
+            # Either a long-lived listener or a rival engine that claimed it a
+            # millisecond ago. Identical handling: try the next one.
+            continue
+        if incumbent_is_matrx:
+            _warn(
+                "engine",
+                f"default port {DEFAULT_ENGINE_PORT} already served by a LIVE "
+                f"Matrx engine ({pid_str}) — running a SECOND instance on "
+                f"{candidate}. This is allowed; both instances coexist.",
+            )
+        else:
+            _warn(
+                "engine",
+                f"default port {DEFAULT_ENGINE_PORT} held by foreign process "
+                f"({pid_str}) — falling back to {candidate}",
+            )
+        return candidate, sock
 
     raise SystemExit(
         f"No free port in range {DEFAULT_ENGINE_PORT}-"
         f"{DEFAULT_ENGINE_PORT + ENGINE_PORT_SCAN - 1}. "
         f"Set MATRX_PORT to a specific open port."
     )
+
+
+def assign_engine_port(*, env_override: str | None = None) -> int:
+    """The port an engine WOULD claim — reporting only.
+
+    🚨 Never decide where a server binds with this. It closes the socket
+    before returning, so the answer is stale the instant it is given; that is
+    precisely the race `bind_engine_port` exists to end. The one honest use is
+    telling a human or a script a number (`preflight.py ports`).
+    """
+    port, sock = bind_engine_port(env_override=env_override)
+    sock.close()
+    return port
 
 
 # ──────────────────────────────────────────────────────────────────────────────

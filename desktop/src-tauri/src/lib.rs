@@ -21,6 +21,8 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 mod lifecycle_log;
+#[cfg(target_os = "macos")]
+mod appkit_terminate;
 // FS-C5b: the app's side of the sync daemon — it holds the control token so the webview never
 // can, forwards the OAuth deep link to the daemon that owns the PKCE verifier, and performs
 // SPEC-ENGINE §1.2's detached first-run spawn. The daemon is NOT in this process's tree and is
@@ -2506,6 +2508,26 @@ pub fn run() {
             syncd::syncd_session,
         ])
         .setup(|app| {
+            // THE APPKIT TERMINATION GUARD (SR-01) — install before anything
+            // else, because from here on any menu-bar Quit, ⌘Q, Dock Quit,
+            // AppleEvent quit or OS logout would otherwise reach libc's
+            // `exit()` inside `-[NSApplication terminate:]` without tauri's
+            // event loop ever seeing it, and run GGML's aborting static
+            // destructors. See src/appkit_terminate.rs for the crash stack.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                if let Err(reason) = appkit_terminate::install(Box::new(move || {
+                    shutdown_for_appkit_quit(&handle);
+                })) {
+                    // Law 4: a guard that did not install says so, with the
+                    // consequence, instead of pretending the quit is safe.
+                    lifecycle_log::log(&format!(
+                        "[appkit-terminate] GUARD NOT INSTALLED: {reason} — a menu-bar Quit will run GGML's atexit destructors and macOS will record the quit as a crash"
+                    ));
+                }
+            }
+
             // POSIX SIGTERM has a default action of terminating the process
             // immediately; Tauri does not translate it into ExitRequested for
             // us. Consume it on Tokio's signal stream and request a normal
@@ -2998,8 +3020,22 @@ pub fn run() {
                     }
                 }
 
-                // RunEvent::ExitRequested fires for native application quit
-                // requests. The SIGTERM path registered in setup performs the
+                // RunEvent::ExitRequested fires for quit requests that reach
+                // TAURI: our own `app.exit(0)`, `request_restart()` (update
+                // relaunch), and the SIGTERM path registered in setup.
+                //
+                // It does NOT fire for an AppKit quit. tao implements only
+                // `applicationWillTerminate:`, never
+                // `applicationShouldTerminate:`, so `-[NSApplication
+                // terminate:]` (menu-bar Quit, Cmd+Q, Dock Quit, AppleEvent
+                // quit, OS logout) runs libc's `exit()` itself and the event
+                // loop never sees it — which is how SR-01 kept crashing after
+                // this branch was fixed. That path is intercepted in
+                // `appkit_terminate.rs`; tao's own exit is `process::exit`
+                // after `run_return`, never `terminate:`, so the two paths do
+                // not overlap and the relaunch branch below still runs.
+                //
+                // The SIGTERM path performs the
                 // same graceful cleanup before requesting exit, so this handler
                 // observes SHUTDOWN_COMPLETE and lets that request proceed. Without
                 // these paths the app can exit without child-process cleanup,
@@ -3319,6 +3355,58 @@ fn post_cleanup_exit(code: Option<i32>) -> PostCleanupExit {
     } else {
         PostCleanupExit::BypassAtexit
     }
+}
+
+/// Hard cap on an AppKit-quit cleanup. A person who chose Quit gets a quit:
+/// past this, the process ends even if a child refuses to die, because the
+/// alternative is an app that will not close.
+#[cfg(target_os = "macos")]
+const APPKIT_QUIT_CLEANUP_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Graceful shutdown for a quit AppKit delivered, which tauri never sees.
+///
+/// Runs on a background thread (`appkit_terminate`'s hook), so the main thread
+/// stays answerable to macOS's NSApplication watchdog exactly as on the
+/// `RunEvent::ExitRequested` path. The caller `_exit(0)`s when this returns —
+/// the watchdog below covers the case where it never does.
+#[cfg(target_os = "macos")]
+fn shutdown_for_appkit_quit(app: &tauri::AppHandle) {
+    std::thread::spawn(|| {
+        std::thread::sleep(APPKIT_QUIT_CLEANUP_CAP);
+        lifecycle_log::log(
+            "[appkit-terminate] cleanup exceeded its cap - ending the process anyway",
+        );
+        unsafe { libc::_exit(0) };
+    });
+    if !SHUTDOWN_COMPLETE.load(Ordering::SeqCst) {
+        if let (Some(sidecar), Some(transcription), Some(llm_proc)) = (
+            app.try_state::<SidecarState>(),
+            app.try_state::<TranscriptionState>(),
+            app.try_state::<llm::commands::LlmProcessHandle>(),
+        ) {
+            let llm_srv = app.try_state::<llm::commands::LlmServerState>();
+            let ww = app.try_state::<WakeWordAppState>();
+            let rec = app.try_state::<RecordingState>();
+            graceful_shutdown_sync(
+                "-[NSApplication terminate:] - menu-bar Quit / Cmd+Q / Dock Quit / AppleEvent quit / OS logout",
+                &sidecar,
+                &transcription,
+                &llm_proc,
+                llm_srv.as_deref(),
+                ww.as_deref(),
+                rec.as_deref(),
+            );
+        } else {
+            lifecycle_log::log(
+                "[appkit-terminate] app state unavailable - no graceful shutdown was possible for this quit",
+            );
+        }
+    }
+    // RunEvent::Exit will never fire on this path either.
+    save_window_geometry_before_bypass(app);
+    lifecycle_log::log(
+        "[appkit-terminate] cleanup complete - terminating with _exit(0) to bypass GGML atexit destructors",
+    );
 }
 
 /// End this process the one safe way, whatever asked it to end.

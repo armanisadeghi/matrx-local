@@ -26,6 +26,7 @@ unicode-normalization = "0.1"
 # "adopt a release candidate", and the frozen spec picked the stable line deliberately.
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+file-id = "0.2.3"
 
 # ---- FS-C5 custody (SPEC-CUSTODY). The planner, the journal and the harness stay pure; `custody`
 # is the one module in this crate that speaks HTTP, reads a clock and touches the OS keychain, and

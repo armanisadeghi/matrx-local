@@ -1278,12 +1278,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info(
                 "[app/main.py] Phase 4: Starting proxy on 127.0.0.1:%d...", proxy_port
             )
-            await proxy.start(port=proxy_port)
+            # The port the proxy ACTUALLY bound — it retries forward when the
+            # requested one was taken, and everything downstream (registry,
+            # /admin/status, the console line) must name the real one, never
+            # the one we asked for.
+            bound_port = await proxy.start(port=proxy_port)
+            if bound_port != proxy_port:
+                logger.warning(
+                    "[app/main.py] Phase 4: HTTP proxy bound %d, not the %d it was "
+                    "asked for (that one was taken) — reporting the bound port",
+                    bound_port, proxy_port,
+                )
             logger.info(
-                "[app/main.py] Phase 4: HTTP proxy started ✓ on port %d", proxy_port
+                "[app/main.py] Phase 4: HTTP proxy started ✓ on port %d", bound_port
             )
-            print(f"[phase:proxy] HTTP proxy ready on port {proxy_port}", flush=True)
-            _registry.ready("proxy", port=proxy_port)
+            print(f"[phase:proxy] HTTP proxy ready on port {bound_port}", flush=True)
+            _registry.ready("proxy", port=bound_port)
         except OSError as exc:
             logger.error(
                 "[app/main.py] Phase 4: HTTP proxy FAILED to start — port %d is already in use. "

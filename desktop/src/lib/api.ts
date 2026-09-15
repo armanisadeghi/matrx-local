@@ -3170,7 +3170,7 @@ class EngineAPI {
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
-    const authHdrs = await this.authHeaders();
+    let authHdrs = await this.authHeaders();
     // The signed-out fence: a path the engine already refused for "no
     // credential" is not asked again until a token exists (SR-05).
     assertNotFencedWhileSignedOut(
@@ -3181,35 +3181,58 @@ class EngineAPI {
     // A caller-supplied signal takes over timeout responsibility entirely;
     // otherwise apply the default timeout ceiling.
     const timeoutMs = EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
-    const signal =
-      init?.signal ??
-      (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
-        ? AbortSignal.timeout(timeoutMs)
-        : undefined);
-    let resp: Response;
-    try {
-      resp = await fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        signal: signal ?? null,
-        headers: {
-          ...authHdrs,
-          ...(init?.headers as Record<string, string> | undefined),
-        },
-      });
-    } catch (e) {
-      // A default-timeout abort surfaces as a TimeoutError; turn it into an
-      // actionable message. A caller-signal abort is re-thrown untouched so
-      // the caller can distinguish its own cancellation.
-      if (
-        !init?.signal &&
-        e instanceof DOMException &&
-        (e.name === "TimeoutError" || e.name === "AbortError")
-      ) {
-        throw new Error(
-          `Engine request timed out after ${formatDurationMs(timeoutMs, { style: "long" })}: ${path}`,
-        );
+    const send = async (headers: Record<string, string>): Promise<Response> => {
+      // One fresh timeout per attempt: an AbortSignal.timeout() is spent once
+      // it has been handed to a fetch.
+      const signal =
+        init?.signal ??
+        (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+          ? AbortSignal.timeout(timeoutMs)
+          : undefined);
+      try {
+        return await fetch(`${this.baseUrl}${path}`, {
+          ...init,
+          signal: signal ?? null,
+          headers: {
+            ...headers,
+            ...(init?.headers as Record<string, string> | undefined),
+          },
+        });
+      } catch (e) {
+        // A default-timeout abort surfaces as a TimeoutError; turn it into an
+        // actionable message. A caller-signal abort is re-thrown untouched so
+        // the caller can distinguish its own cancellation.
+        if (
+          !init?.signal &&
+          e instanceof DOMException &&
+          (e.name === "TimeoutError" || e.name === "AbortError")
+        ) {
+          throw new Error(
+            `Engine request timed out after ${formatDurationMs(timeoutMs, { style: "long" })}: ${path}`,
+          );
+        }
+        throw e;
       }
-      throw e;
+    };
+    let resp = await send(authHdrs);
+    if (resp.status === 401 && !authHdrs.Authorization) {
+      // THE MOUNT-TIME RE-ASK — a 401 we caused by sending no credential is
+      // never the person's answer until we have asked for one again.
+      //
+      // Measured 2026-09-15 on installed 1.4.115: a page mounting during app
+      // start sent five reads before the session daemon had answered, every
+      // one came back 401, and the screen told a signed-in person "Couldn't
+      // read your conversations" until they clicked Refresh by hand. The
+      // readiness gate in `resolveNativeVaultEngineAccessToken` closes that
+      // window at the source; this is the seam's own guarantee, so ANY token
+      // provider that answers null too early costs one retry and not an
+      // error — and the signed-out fence is armed only when the second ask
+      // also comes back empty, which is the one thing only signing in changes.
+      const retryHdrs = await this.authHeaders();
+      if (retryHdrs.Authorization) {
+        authHdrs = retryHdrs;
+        resp = await send(authHdrs);
+      }
     }
     const operationKey = httpOperationKey(
       init?.method ?? "GET",

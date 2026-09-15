@@ -1574,7 +1574,16 @@ export function Configurations() {
                     onCheckedChange={(v) => set("proxyEnabled", v)}
                   />
                 </SettingRow>
-                <SettingRow label="Proxy port">
+                {/* The engine derives this from the port it actually bound
+                    while the value is left at the default, so a second engine
+                    on this machine gets its own proxy instead of failing to
+                    bind (derive_proxy_port in app/services/proxy/server.py).
+                    Saying so here keeps the screen honest when the running
+                    port is not the number in this box. */}
+                <SettingRow
+                  label="Proxy port"
+                  description="Left at the default, the proxy follows this engine's own port (engine port + 40), so a second engine on this machine gets its own proxy. Type a port to pin it."
+                >
                   <NumberInput
                     value={draft.proxyPort}
                     onChange={(v) => set("proxyPort", v)}

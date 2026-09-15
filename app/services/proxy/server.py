@@ -26,8 +26,38 @@ logger = logging.getLogger(__name__)
 # live 22140 → 22180, dev 22240 → 22280 (MXL-D-043 dev/live isolation).
 # Same formula as DEFAULT_SETTINGS["proxy_port"] in cloud_sync/settings_sync.py
 # and DEFAULTS.proxyPort in desktop/src/lib/settings.ts.
-DEFAULT_PROXY_PORT = int(os.environ.get("MATRX_PORT_BASE", "22140")) + 40
+PROXY_PORT_OFFSET = 40
+DEFAULT_PROXY_PORT = int(os.environ.get("MATRX_PORT_BASE", "22140")) + PROXY_PORT_OFFSET
 MAX_PORT_SCAN = 10
+
+
+def derive_proxy_port(engine_port: int, configured: int | None = None) -> int:
+    """The proxy port for the engine that actually bound ``engine_port``.
+
+    🚨 THE OFFSET IS OFF THE BOUND PORT, NOT OFF THE PORT BASE (fixed
+    2026-09-15). The engine's port is dynamic: it scans its world's block
+    (dev 22240–22259) and takes the first free one, so a second dev engine
+    lives on 22241. The proxy port was computed from the static PORT BASE
+    instead, so every dev engine wanted 22280 and every engine after the first
+    booted with ``failed: ["proxy"]`` — observed live on 2026-09-14 with two
+    source engines running, the second reporting
+
+        proxy → ✗ FAILED — port 22280 in use: [errno 48] address already in use
+
+    while `_find_available_port` (which would have scanned) sat unused because
+    Phase 4 passes an explicit port. Deriving from the bound port gives each
+    engine its own proxy (22240→22280, 22241→22281) and keeps it inside the
+    world's block, which is what the +40 was for.
+
+    A port the user actually chose still wins: only a stored value equal to
+    this world's static default is treated as "nobody picked this", because
+    that is exactly what a shipped default looks like.
+    """
+    if configured is not None and configured != DEFAULT_PROXY_PORT:
+        return configured
+    if engine_port > 0:
+        return engine_port + PROXY_PORT_OFFSET
+    return DEFAULT_PROXY_PORT
 BUFFER_SIZE = 65536
 CONNECT_TIMEOUT = 15
 

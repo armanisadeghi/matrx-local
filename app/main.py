@@ -73,7 +73,12 @@ import uuid as _uuid
 from fastapi.responses import JSONResponse as _JSONResponse
 from app.common.platform_ctx import refresh_capabilities
 from app.services.scraper.engine import get_scraper_engine
-from app.services.proxy.server import DEFAULT_PROXY_PORT, get_proxy_server
+from app.services.proxy.server import (
+    DEFAULT_PROXY_PORT,
+    PROXY_PORT_OFFSET,
+    derive_proxy_port,
+    get_proxy_server,
+)
 from app.services.tunnel.manager import get_tunnel_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.ai.engine import (
@@ -1254,7 +1259,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if proxy_enabled:
         print("[phase:proxy] Starting local HTTP proxy...", flush=True)
         _registry.starting("proxy")
-        proxy_port = settings_sync.get("proxy_port", DEFAULT_PROXY_PORT)
+        configured_proxy_port = settings_sync.get("proxy_port", DEFAULT_PROXY_PORT)
+        # The offset is taken off the port this engine actually bound, not off
+        # the static port base — a second dev engine lives on 22241 and needs
+        # 22281, or it boots with failed:["proxy"] (see derive_proxy_port).
+        proxy_port = derive_proxy_port(main_server_port, configured_proxy_port)
+        if proxy_port != configured_proxy_port:
+            logger.info(
+                "[app/main.py] Phase 4: proxy port %d derived from this engine's "
+                "own port %d (the shipped default %d belongs to the engine on "
+                "port %d) — nothing is misconfigured, this is how a second "
+                "engine in the same world gets its own proxy",
+                proxy_port, main_server_port, configured_proxy_port,
+                configured_proxy_port - PROXY_PORT_OFFSET,
+            )
         try:
             proxy = get_proxy_server()
             # Guard against port collision with the main server

@@ -23,6 +23,7 @@ import type { DeliveryEvidenceFilter } from "@/components/coding-sessions/Delive
 import { QueueCount, RevealButton, formatStamp } from "@/components/coding-sessions/shared";
 import { engine } from "@/lib/api";
 import type { CodingSessionProvider } from "@/lib/api";
+import { laneBlockerTone } from "@/lib/lane-blocker";
 import { PROVIDER_LABELS } from "@/lib/coding-sessions/providers";
 import type { CodingSessionsSnapshot } from "@/lib/coding-sessions/overview-store";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
@@ -230,13 +231,21 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
           <>
             {snapshot.artifacts.blocker && (
               <div
-                className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 p-4 text-sm"
-                role="alert"
+                className={`flex items-start gap-3 border-b p-4 text-sm ${laneBlockerTone(snapshot.artifacts.blocker.code).container}`}
+                role={laneBlockerTone(snapshot.artifacts.blocker.code).role}
                 data-testid="artifacts-blocker"
               >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                {laneBlockerTone(snapshot.artifacts.blocker.code).quiet ? (
+                  <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                )}
                 <div className="flex-1">
-                  <p className="font-medium">Artifact publishing to AI Matrx is paused</p>
+                  <p className="font-medium">
+                    {laneBlockerTone(snapshot.artifacts.blocker.code).quiet
+                      ? "Artifact publishing resumes as soon as your session is back"
+                      : "Artifact publishing to AI Matrx is paused"}
+                  </p>
                   <p className="mt-1">{snapshot.artifacts.blocker.message}</p>
                   {snapshot.artifacts.blocker.remedy && (
                     <p className="mt-1 text-muted-foreground">{snapshot.artifacts.blocker.remedy}</p>

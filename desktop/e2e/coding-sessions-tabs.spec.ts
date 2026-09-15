@@ -31,9 +31,19 @@ test("one feature, three tabs, and a row that opens its conversation", async ({ 
   await expect(page.getByRole("link", { name: "Coding Sessions" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Codex Usage" })).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Coding Sessions" }).click();
+  // Land on the feature's default tab deterministically: the app can still be
+  // settling its own navigation right after sign-in, so assert the URL rather
+  // than trusting one click.
+  await expect(async () => {
+    await page.getByRole("link", { name: "Coding Sessions" }).click();
+    await dismissEngineMonitorIfOpen(page);
+    await expect(page.getByTestId("coding-sessions-tab-sessions")).toHaveAttribute(
+      "aria-selected",
+      "true",
+      { timeout: 5_000 },
+    );
+  }).toPass({ timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Coding Sessions" })).toBeVisible();
-  await dismissEngineMonitorIfOpen(page);
 
   // Sessions tab: the list, with the provider facet above it.
   const rows = page.getByTestId("conversation-row");
@@ -134,8 +144,15 @@ test("a coding-session conversation opens with its messages", async ({ page }) =
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await loginViaUI(page, creds!);
 
-  await page.goto(`/#/cloud-chat?conversation=${conversationId}&from=coding-sessions`);
-  await expect(page.getByRole("link", { name: /Back to coding sessions/ })).toBeVisible();
+  // Same retry reason as above: the shell may still be settling its own
+  // navigation when the deep link is set.
+  const backLink = page.getByRole("link", { name: /Back to coding sessions/ });
+  await expect(async () => {
+    await page.evaluate((id) => {
+      window.location.hash = `#/cloud-chat?conversation=${id}&from=coding-sessions`;
+    }, conversationId!);
+    await expect(backLink).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
   // Real messages, not an empty surface and not an error.
   await expect(page.getByTestId("chat-message").first()).toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: shot("cs11-conversation-messages.png"), fullPage: false });

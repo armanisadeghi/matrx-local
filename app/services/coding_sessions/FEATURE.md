@@ -441,6 +441,28 @@ branch deferred the head row and said nothing (`publisher.blocker` was null whil
   condition gone. Order: credentials rejected > no session > configuration >
   organization. The overview's cloud check reports the same state and asks the
   same way.
+- **A missing session has TWO states, and only the older one is a fault.**
+  `session_freshness.py::session_blocker` is the ONE producer of both, and every
+  lane in the engine builds its payload there (publisher, artifacts, label sync,
+  overview, and the capture-reconciler's 409 at the route boundary) — a lane that
+  writes its own text drifts out of one of the states. While the engine has a
+  delivered ask outstanding, the code is `session_refreshing`, the message is
+  "Refreshing your AI Matrx session…" and there is NO remedy: nothing for the
+  person to do about a gap the desktop is already closing. `_REFRESH_GRACE_SECONDS`
+  (90 s) after that FIRST ask — never re-armed by retries, or a signed-out Mac
+  would claim "refreshing" forever — it escalates to `no_active_user_jwt` with the
+  sign-out remedy. `POST /auth/token` calls `session_restored()`, which closes the
+  window immediately. Measured 2026-09-14: an account switch legitimately revokes
+  engine custody (`DELETE /auth/token`) and the new account's sign-in landed 27 s
+  and 34 s later; for that whole window every lane screamed "this Mac has no valid
+  signed-in session" with a sign-out remedy at a person who had done nothing wrong.
+  The desktop dresses the two states apart in ONE place too —
+  `desktop/src/lib/lane-blocker.ts::laneBlockerTone`, used by every surface that
+  renders a lane blocker. Guards: `tests/unit/test_session_freshness.py` (quiet
+  inside the window, honest after it, and a retry that must not re-arm it) and
+  `desktop/src/lib/session-transition-alignment.test.ts` (a same-subject
+  transition — every renderer reload — never revokes; an account switch still
+  does).
 
 Guard: `tests/unit/test_session_freshness.py` (rate limit per lane; expired token →
 visible blocker → clears).

@@ -731,3 +731,41 @@ async fn a_keychain_that_shows_a_dialog_becomes_a_state_instead_of_hanging_the_d
         refusal.state_reason
     );
 }
+
+#[tokio::test]
+async fn a_refusals_sentence_always_belongs_to_the_state_it_reports() {
+    // Observed live on 2026-09-15: `GET /v1/token` answered
+    // {"state":"signed_out","state_reason":"Signed in and syncing."} — a refusal wearing the
+    // sentence of the state it was refusing to be. Law 4 forbids a screen that lies as firmly as
+    // one that is dead. Proven failing before the fix.
+    let rig = Rig::new();
+    rig.sign_in("u", "admin@admin.com", "r1", 3600).await;
+    assert_eq!(rig.row().state, SessionState::SignedIn);
+
+    // The journal still says `signed_in`; the live session is gone (a restart that could not
+    // adopt the keychain item is exactly this shape).
+    let stranded = Custodian::new(
+        CustodyConfig {
+            world: World::Dev,
+            supabase_url: "https://db.matrxserver.com".into(),
+            publishable_key: "k".into(),
+            client_id: DESKTOP_CLIENT_ID.into(),
+        },
+        Arc::clone(&rig.journal),
+        Arc::clone(&rig.auth) as Arc<_>,
+        Arc::clone(&rig.keychain) as Arc<_>,
+        Arc::clone(&rig.cloud) as Arc<_>,
+        Arc::clone(&rig.notifier) as Arc<_>,
+        Arc::clone(&rig.clock) as Arc<_>,
+    )
+    .expect("stranded custodian");
+
+    let refusal = stranded.token().await.expect_err("no live session");
+    assert_eq!(refusal.state, SessionState::SignedOut);
+    assert!(
+        !refusal.state_reason.contains("Signed in"),
+        "the sentence must describe the refusal, not the state it is refusing to be: {}",
+        refusal.state_reason
+    );
+    assert!(refusal.state_reason.contains("Sign in on this computer"));
+}

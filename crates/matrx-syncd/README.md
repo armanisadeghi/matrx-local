@@ -175,10 +175,127 @@ $ cargo test -p matrx-syncd                   # 15 passed
 $ cargo clippy -p matrx-syncd --all-targets -- -D warnings   # clean
 ```
 
+### The real sign-in, as `admin@admin.com`
+
+S3's two loopback redirect URIs were the "remaining task for FS-C5 (small)" the spec names. They
+are now registered on OAuth client `af37ec97-…` (additively; nothing was removed):
+
+```
+http://localhost:22161/oauth/callback      (live)
+http://localhost:22261/oauth/callback      (dev)
+```
+
+The flow, run end to end against the **live** authorization server:
+
+```
+POST /v1/sign-in            → authorize_url with the S256 challenge, redirect_kind "loopback"
+GET  <authorize_url>        → 302 to the consent UI with an authorization_id
+(consent granted as admin@admin.com)
+GET  http://localhost:22261/oauth/callback?code=…&state=…      ← the daemon's OWN listener
+[syncd/custody] loopback sign-in completed
+
+GET /v1/session
+{"signed_in":true,"user_id":"87a6e699-3622-4869-8843-d0867456c0dd","email":"admin@admin.com",
+ "state":"signed_in","state_reason":"Signed in and syncing.","since":"2026-09-15T06:52:42Z",
+ "cloud_state_write_pending":false}
+```
+
+**The daemon exchanged the code.** The verifier never left it, and nothing but the daemon ever saw
+a refresh token.
+
+### The token, handed to both consumers
+
+```
+# as the Python engine, control scope, over the Unix socket
+GET /v1/token → {"token_type":"Bearer","user_id":"87a6e699-…","expires_at":"2026-09-22T06:52:42Z"}
+  decoded JWT: sub=87a6e699-…  email=admin@admin.com  role=authenticated  (1442 chars)
+
+# as the webview, READ scope, over the loopback listener with Origin: tauri://localhost
+GET /v1/token → the same user_id, the same expiry
+```
+
+One holder, two consumers, and the webview's token authorises nothing else (`POST /v1/sign-out`
+with it is `403 forbidden_scope`, proven above).
+
+### Custody
+
+```
+$ security find-generic-password -s com.aimatrx.syncd.dev
+  "svce"<blob>="com.aimatrx.syncd.dev"
+  "acct"<blob>="87a6e699-3622-4869-8843-d0867456c0dd"
+```
+
+Service is the **dev** world's; the account is the Supabase user id, so **no item name contains an
+email address** (§4). The journal's `session_state` row holds the state, the email and the expiry —
+and no token:
+
+```
+$ sqlite3 ~/.matrx-dev/syncd.db 'select state, email, last_refresh_at from session_state'
+signed_in|admin@admin.com|2026-09-15T06:52:42Z
+```
+
+### What the access token's lifetime actually is — a spec fact that did not hold
+
+SPEC-CUSTODY §3.1 records "default access-token lifetime 3600 s" as VERIFIED from Supabase's docs,
+and S9's worked example is "with 3600 s, T+36 m". **On this project the access token lives
+604 800 s (7 days)** — `exp − iat` on the real token, matching the `expires_in` the token endpoint
+returned:
+
+```
+daemon says expires_at : 2026-09-22T06:52:42Z
+JWT exp claim          : 2026-09-22T06:52:42Z
+JWT iat claim          : 2026-09-15T06:52:42Z   → 604800 s
+```
+
+Two consequences, both recorded rather than worked around:
+
+1. Nothing in the implementation assumed 3600 — the schedule is computed from the token, so S9
+   still holds; it simply lands at ~4.2 days here instead of 36 minutes.
+2. **The timer-driven rotation cannot be observed in an afternoon**, so this file does not claim
+   it. What *is* proven below is the rotation that matters most and that MXL-D-046 never had: the
+   daemon renewing the session **from the keychain, with nothing else running**.
+
+This is an amendment-worthy observation for SPEC-CUSTODY §3.1/S9 and is reported, not edited in.
+
+### Five defects the live run found, each fixed and each with a test proven failing first
+
+Unit tests did not find these. Running the thing did.
+
+1. **A cancelled sign-in leaked its loopback listener.** S5 says a second `POST /v1/sign-in`
+   cancels the first, and S3 *fixes* the redirect port, so every later sign-in failed
+   `loopback_port_unavailable` until the daemon restarted. Releasing it needs `abort()` **and the
+   await** — abort only requests cancellation, and the task still owns the socket until it stops.
+2. **The loopback task aborted itself mid-exchange.** Completing a sign-in released the listener,
+   and the completion ran *inside* that very task, so the token exchange was cancelled and the
+   sign-in vanished with no log line at all.
+3. **The loopback page claimed success before the exchange happened.** It said "You are signed in
+   to AI Matrx" while the daemon had not yet asked for a token — and on the run above it said that
+   while the sign-in was in fact being lost. It now says only that the sign-in was received.
+4. **A keychain approval dialog hung the daemon forever.** macOS binds an item's ACL to the
+   creating binary's designated requirement, so a rebuilt binary prompts — and a login-time daemon
+   has no window to answer in. S15 names this shape exactly. Every credential-store call is now
+   bounded, and the bound must stay well under the hand-out budget or the caller is told `offline`,
+   a true refusal with a false cause.
+5. **A refusal wore the wrong sentence.** `GET /v1/token` answered
+   `{"state":"signed_out","state_reason":"Signed in and syncing."}` — the state came from the live
+   session and the sentence from a journal row that had not caught up. A refusal's sentence now
+   always belongs to the state it reports.
+
+A sixth, found while stopping the daemon: **`POST /v1/shutdown` answered `202 accepted` and then
+did nothing** when it arrived before the run loop reached its `select!` — which is precisely the
+window in which the daemon is adopting its session and most likely to be stuck. The notification
+now leaves a permit for the next waiter, and adoption runs as a task so the daemon is controllable
+from its first moment.
+
 ### Still to prove
 
-The end-to-end sign-in as `admin@admin.com`, the hand-out to both consumers, rotation with the app
-dead, and the sign-out keychain wipe are the remaining real-machine proofs, and they need S3's two
-loopback redirect URIs registered on OAuth client `af37ec97-…` first — SPEC-CUSTODY S3 names that
-registration as FS-C5's own remaining task. Until they are recorded here, **nothing in this file
-claims them.**
+* **The timer-driven rotation** (§13 proof 1's shape) — not observable in an afternoon on this
+  project, for the reason recorded above.
+* **Sign-out wiping the keychain item on this machine** — proven in the battery against
+  `FakeKeychain`; the live-machine repeat is recorded below when it runs.
+* **Windows and Linux** — written and reasoned, never run; see the section above.
+* **The webview and the engine actually consuming the token** — `desktop/src/lib/supabase.ts` still
+  constructs its client with its own session, and `TokenRepo` still reads the local `auth_tokens`
+  row. SPEC-CUSTODY §10 makes that switch one atomic release across 43 `supabase.auth.*` call
+  sites in 21 files; it is **not** landed here, and until it is, this daemon is an additional
+  holder rather than the only one. Nothing in this file claims otherwise.

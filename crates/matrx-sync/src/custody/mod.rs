@@ -1176,12 +1176,22 @@ impl Custodian {
             SessionState::SignedIn => fallback,
             other => other,
         };
-        SessionRefusal {
-            state_reason: snapshot
+        // **The sentence must belong to the state being reported.** Taking the state from one
+        // place and the reason from another produced a real refusal that read
+        // `{"state":"signed_out","state_reason":"Signed in and syncing."}` — a screen that lies
+        // (law 4), observed live on 2026-09-15. When the row has not caught up, its sentence is
+        // about the state it still thinks it is in, so the state's own sentence is used instead.
+        let state_reason = if snapshot.state == state {
+            snapshot
                 .state_reason
                 .clone()
-                .unwrap_or_else(|| default_reason(state).to_string()),
+                .unwrap_or_else(|| default_reason(state).to_string())
+        } else {
+            default_reason(state).to_string()
+        };
+        SessionRefusal {
             state,
+            state_reason,
             since: snapshot.since,
             email: snapshot.email,
         }

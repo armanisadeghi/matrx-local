@@ -1,0 +1,94 @@
+; Seatbelt outer boundary for the reliability-isolation bootstrap.
+; Values are supplied only by scripts/reliability-isolation.py.  This profile
+; deliberately supports a small Python subprocess, not a desktop application.
+(version 1)
+
+(deny default)
+
+; The Python interpreter may execute and create children.  Seatbelt confinement
+; is inherited by those children; the launcher proves that in its probe.
+(allow process-exec)
+(allow process-fork)
+(allow process-info* (target same-sandbox))
+(allow sysctl-read)
+
+; macOS system runtime files and the exact Xcode-selected Python runtime.
+; Do not permit /System itself: /System/Volumes/Data aliases user data.
+(allow file-read* (subpath "/System/Library"))
+(allow file-read* (subpath "/usr/lib"))
+(allow file-read* (subpath "/usr/bin"))
+(allow file-read* (subpath "/bin"))
+(allow file-read* (subpath "/sbin"))
+(allow file-read* (literal "/dev/null"))
+(allow file-write* (literal "/dev/null"))
+; CPython -I ignores PYTHONHASHSEED and seeds hash randomization from this
+; kernel entropy device before executing any probe code.
+(allow file-read* (literal "/dev/urandom"))
+(allow file-read* (literal "/Library"))
+(allow file-read* (literal "/Library/Developer"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9"))
+(allow file-read* (literal (param "PYTHON_RUNTIME")))
+(allow file-read* (literal (param "PYTHON_BIN_DIR")))
+(allow file-read* (subpath (param "PYTHON_RUNTIME")))
+; Current xcrun selection, retained as a literal because dyld's realpath
+; request targets the directory vnode rather than a descendant file.
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin"))
+(allow file-read* (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9"))
+
+; dyld reaches CacheFinder before CPython starts.  The observed crash is an
+; executable-map denial in that bootstrap path, so map only the selected Python
+; runtime and macOS system images.  No user cache path is granted.
+(allow file-map-executable (subpath "/System/Library"))
+(allow file-map-executable (subpath "/usr/lib"))
+(allow file-map-executable (subpath "/usr/bin"))
+(allow file-map-executable (literal (param "PYTHON_RUNTIME")))
+(allow file-map-executable (literal (param "PYTHON_BIN_DIR")))
+(allow file-map-executable (subpath (param "PYTHON_RUNTIME")))
+(allow file-map-executable (literal "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9"))
+(allow file-read* (subpath "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld"))
+(allow file-map-executable (subpath "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld"))
+
+; dyld's CacheFinder must traverse these directory entries before it can choose
+; the already-allowed system cache/images.  Metadata access does not grant file
+; contents and deliberately stops before any user-home directory.
+(allow file-read-metadata (literal "/"))
+(allow file-read-metadata (literal "/System"))
+(allow file-read-metadata (literal "/System/Volumes"))
+(allow file-read-metadata (literal "/System/Volumes/Preboot"))
+(allow file-read-metadata (literal "/System/Volumes/Preboot/Cryptexes"))
+(allow file-read-metadata (literal "/System/Volumes/Preboot/Cryptexes/OS"))
+(allow file-read-metadata (literal "/usr"))
+(allow file-read-metadata (literal "/Library"))
+(allow file-read-metadata (literal "/Library/Developer"))
+(allow file-read-metadata (literal "/Library/Developer/CommandLineTools"))
+(allow file-read-metadata (literal (param "PYTHON_RUNTIME")))
+(allow file-read-metadata (literal (param "PYTHON_BIN_DIR")))
+(allow file-read-metadata (literal (param "PYTHON_RUNTIME_PARENT")))
+(allow file-read-metadata (literal (param "PYTHON_RUNTIME_GRANDPARENT")))
+
+; A tracked git archive is the only project input.  The run root is the only
+; writable filesystem location available to the confined process tree.
+(allow file-read* (subpath (param "SNAPSHOT")))
+(allow file-read* (literal (param "RUN_ROOT")))
+(allow file-read* (subpath (param "RUN_ROOT")))
+(allow file-write* (literal (param "RUN_ROOT")))
+(allow file-write* (subpath (param "RUN_ROOT")))
+
+; Be explicit about the protected Mac identity.  Default deny already blocks
+; these locations and all Mach services, including securityd/Keychain IPC.
+(deny file-read* (subpath (param "LIVE_HOME")))
+(deny file-write* (subpath (param "LIVE_HOME")))
+(deny file-read* (subpath (param "KEYCHAIN_DIR")))
+(deny file-write* (subpath (param "KEYCHAIN_DIR")))
+
+; macOS dyld aborts before exec if the root vnode itself is denied.  This
+; literal rule exposes only `ls /` entry names; it grants no subtree contents.
+; It appears after the protected-path denies so they remain effective.
+(allow file-read* (literal "/"))
+
+; No network rule is present: default deny blocks inbound and outbound traffic.

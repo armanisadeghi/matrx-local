@@ -40,6 +40,7 @@ import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 // `ConfirmDialogHost`, mounted in App/PanelApp). Never `window.confirm`.
 import { confirm } from "@ai-matrx/kit/confirm-opener";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
+import { laneBlockerTone } from "@/lib/lane-blocker";
 
 export const SESSION_STATE_LABEL: Record<ClaudeSessionState, string> = {
   in_cloud: "In AI Matrx",
@@ -258,8 +259,19 @@ export function SessionDiagnosisDialog({
 
             <Section title="Delivery from this Mac">
               {blocker && (
-                <div className="my-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm">
-                  <p className="font-medium">Everything is paused: {blocker.message}</p>
+                <div
+                  className={
+                    laneBlockerTone(blocker.code).quiet
+                      ? "my-2 rounded-md border border-border bg-muted/50 p-2 text-sm"
+                      : "my-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm"
+                  }
+                  role={laneBlockerTone(blocker.code).role}
+                >
+                  <p className="font-medium">
+                    {laneBlockerTone(blocker.code).quiet
+                      ? blocker.message
+                      : `Everything is paused: ${blocker.message}`}
+                  </p>
                   {blocker.remedy && <p className="text-muted-foreground">{blocker.remedy}</p>}
                 </div>
               )}

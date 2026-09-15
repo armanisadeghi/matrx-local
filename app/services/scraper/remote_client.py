@@ -38,6 +38,19 @@ API_PREFIX = "/api/scraper"
 HEALTH_PATH = "/health/ready"
 
 
+class RemoteScraperOrganizationError(Exception):
+    """No organization could be named for a user-scoped scraper call.
+
+    Permanent for this user until they are given (or choose) an organization —
+    never a transient failure to retry forever. Carries ``remedy``, a
+    plain-language sentence a UI or a registry state can show verbatim.
+    """
+
+    def __init__(self, message: str, *, remedy: str) -> None:
+        super().__init__(message)
+        self.remedy = remedy
+
+
 class RemoteScraperClient:
     """HTTP client for the remote scraper server API."""
 
@@ -66,10 +79,67 @@ class RemoteScraperClient:
         return bool(self._server_url)
 
     def _headers(self, auth_token: str | None = None) -> dict[str, str]:
+        """Identity headers WITHOUT the organization — public calls only.
+
+        Every call that carries a user JWT must use ``_auth_headers`` instead;
+        see its docstring for why.
+        """
         token = auth_token or self._api_key
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _auth_headers(self, auth_token: str | None = None) -> dict[str, str]:
+        """The ONE place an authenticated scraper-server request is assembled.
+
+        🚨 THE ORGANIZATION IS A TRANSPORT FACT, NOT A CALL-SITE FACT.
+        The scraper service runs matrx-connect's ``AuthMiddleware``, which
+        refuses every authenticated request that names no organization with
+        400 ``organization_required`` BEFORE it routes, and never picks one
+        for the caller. This client sent ``Authorization`` and nothing else,
+        so EVERY user-scoped call to scraper.app.matrxserver.com has been
+        rejected — measured live 2026-09-14:
+
+            GET /api/scraper/queue/pending?tier=desktop&limit=5
+              Bearer <user jwt>                      -> 400 organization_required
+              Bearer <user jwt> + X-Organization-Id  -> 200 {"total_pending": 1}
+
+        That is the whole of SR-04: the retry queue's backoff-then-recover
+        logic is correct and could never fire, because a contract rejection is
+        not a transient outage. It is the SAME class already fixed for
+        ``app/services/aidream/client.py`` (2026-08-30: four call sites
+        remembered the header, three did not), so the fix is the same shape —
+        attached HERE, on the same line as the bearer, never per call site.
+
+        A user whose organization cannot be resolved raises rather than
+        sending a request that is a guaranteed 400; the refusal names the
+        remedy so the caller can show it.
+        """
+        headers = self._headers(auth_token)
+        if not auth_token:
+            # The API-key lane: an approved-server call that names no acting
+            # user (``X-Matrx-User-Id`` absent) is never user- or org-scoped,
+            # and ``matrx_connect.service_auth`` requires nothing of it. Every
+            # caller in this repo passes the signed-in user's Supabase JWT
+            # (``scraper/auth_helper.py``), so an ``auth_token`` present IS
+            # the user lane — no token-shape sniffing needed.
+            return headers
+
+        from app.services.aidream.organization import (
+            OrganizationNotResolvedError,
+            resolve_active_organization_id,
+        )
+
+        try:
+            headers["X-Organization-Id"] = await resolve_active_organization_id(
+                auth_token
+            )
+        except OrganizationNotResolvedError as exc:
+            raise RemoteScraperOrganizationError(
+                f"Cannot name an organization for this scraper request: {exc}",
+                remedy=exc.remedy,
+            ) from exc
         return headers
 
     async def health(self) -> dict[str, Any]:
@@ -104,7 +174,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/batch",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json=body,
             )
             resp.raise_for_status()
@@ -120,7 +190,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/search",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json={"keywords": keywords, "count": count, "country": country},
             )
             resp.raise_for_status()
@@ -136,7 +206,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/search-and-scrape",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json={
                     "keywords": keywords,
                     "total_results_per_keyword": total_results_per_keyword,
@@ -161,7 +231,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/search-and-scrape",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json={
                     "keywords": [query],
                     "country": country,
@@ -184,7 +254,7 @@ class RemoteScraperClient:
         `/api/scraper/quick-scrape` (the new streaming default for scrape) or
         `/api/scraper/search-and-scrape`.
         """
-        headers = self._headers(auth_token)
+        headers = await self._auth_headers(auth_token)
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
             async with client.stream(
                 "POST",
@@ -200,7 +270,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(
                 f"{self._server_url}{API_PREFIX}/config/domains",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
             )
             resp.raise_for_status()
             return resp.json()
@@ -244,7 +314,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/content/save",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json=body,
             )
             resp.raise_for_status()
@@ -262,7 +332,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(
                 f"{self._server_url}{API_PREFIX}/queue/pending",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 params={"tier": tier, "limit": limit},
             )
             resp.raise_for_status()
@@ -279,7 +349,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/queue/claim",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json={
                     "item_ids": item_ids,
                     "client_id": client_id,
@@ -310,7 +380,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/queue/submit",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json=body,
             )
             resp.raise_for_status()
@@ -327,7 +397,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._server_url}{API_PREFIX}/queue/fail",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
                 json={
                     "queue_item_id": queue_item_id,
                     "error": error,
@@ -342,7 +412,7 @@ class RemoteScraperClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(
                 f"{self._server_url}{API_PREFIX}/queue/stats",
-                headers=self._headers(auth_token),
+                headers=await self._auth_headers(auth_token),
             )
             resp.raise_for_status()
             return resp.json()

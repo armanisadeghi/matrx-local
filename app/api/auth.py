@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.common.system_logger import get_logger
+from app.api.auth_rejection_log import log_rejection
 from app.api.remote_auth import (
     headers_indicate_tunnel,
     is_instance_owner,
@@ -231,11 +232,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
             token = (request.query_params.get("token") or "").strip() or None
 
         if not token:
-            logger.warning(
-                "[auth] rejected %s %s — missing bearer token or ?token= query (tunnel=%s)",
-                request.method,
+            # Rate-limited: a signed-out desktop poller made this exact line
+            # ~37,000 entries in 72h on /prompt-matrix/* alone (SR-05).
+            log_rejection(
+                "auth",
+                "http",
                 path,
-                via_tunnel,
+                "missing_bearer_token_or_token_query",
+                method=request.method,
+                detail=f"tunnel={via_tunnel}",
             )
             return _auth_error_response(
                 path,
@@ -257,10 +262,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         ):
             user = await verify_supabase_token(token)
             if user is None:
-                logger.warning(
-                    "[auth] rejected %s %s — unverified token over tunnel",
-                    request.method,
+                log_rejection(
+                    "auth",
+                    "http",
                     path,
+                    "unverified_token_over_tunnel",
+                    method=request.method,
                 )
                 return _auth_error_response(
                     path,
@@ -272,10 +279,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Owner-only: a valid token from a *different* AI Matrx user must
             # not control this machine remotely.
             if not await is_instance_owner(user.user_id):
-                logger.warning(
-                    "[auth] rejected %s %s — token user is not this instance's owner",
-                    request.method,
+                log_rejection(
+                    "auth",
+                    "http",
                     path,
+                    "token_user_is_not_this_instances_owner",
+                    method=request.method,
                 )
                 return _auth_error_response(
                     path,

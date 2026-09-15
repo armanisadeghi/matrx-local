@@ -44,6 +44,19 @@ order by table_schema, table_name, ordinal_position;
 CI/parity: `python scripts/generate_mirror_schema.py --check` fails when the
 generated module is stale relative to the snapshot.
 
+**Staleness of the SNAPSHOT itself** (the `--check` above cannot see it — it
+only compares the module to the snapshot) is caught by
+`python scripts/check_mirror_snapshot_drift.py`, which asks the live cloud for
+one real row per mirrored relation and exits 1 listing every column the
+snapshot has never heard of. `--self-test` proves the detector still works
+without touching the network. `release.sh` runs both (self-test blocking,
+live check loud and non-blocking). Why it exists: the snapshot sat at
+2026-08-13 while the cloud grew `chat.request_snapshot.{pinned_at, pin_reason,
+deleted_at, agent_definition_version, workflow_definition_version}` and
+`deleted_at` on four more chat tables, and `chat_sync` dropped every one of
+those values on every pulled row — 8,566 rows in 72 hours, announced only as
+one WARNING per row in a log file (SR-10).
+
 ## Design rules (see also docs/SYNC_CONTRACT.md)
 
 - Mirror tables live in per-schema SQLite files (`~/.matrx/mirror/<schema>.db`)

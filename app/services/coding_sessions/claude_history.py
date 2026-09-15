@@ -27,6 +27,10 @@ from app.services.coding_sessions.claude_session_index import (
     ClaudeSessionIndexEntry,
     read_session_index,
 )
+from app.services.coding_sessions.continuation import (
+    CONTINUATION_NOTE,
+    continuation_hint,
+)
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.history_inventory import (
     HistoryChangeType,
@@ -1127,7 +1131,8 @@ class ClaudeHistoryImporter:
             "duplicate_pending_batches": transcript_duplicates,
             "pending_outbox": queued["pending"],
             "native_restore_available": False,
-            "continuation": "Open the original local Claude transcript with claude --resume <session-id> only while that local file, workspace, and login remain available.",
+            "continuation": CONTINUATION_NOTE,
+            "continuation_hint": continuation_hint(),
         }
 
     @staticmethod

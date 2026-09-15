@@ -40,6 +40,10 @@ test("one feature, three tabs, and a row that opens its conversation", async ({ 
   await expect(rows.first()).toBeVisible({ timeout: 120_000 });
   await expect(page.getByTestId("provider-chips")).toContainText("Claude Code");
   await expect(page.getByTestId("provider-chips")).toContainText("Codex");
+  // Both secondary doors stay reachable on the row itself: the delivery
+  // evidence, and the engine's own continuation command.
+  await expect(rows.first().getByRole("button", { name: /Delivery/ })).toBeVisible();
+  await expect(rows.first().getByRole("button", { name: /Continue/ })).toBeVisible();
   await page.screenshot({ path: shot("cs11-sessions-tab.png"), fullPage: false });
 
   // Refresh announces itself instead of staring back.
@@ -68,6 +72,7 @@ test("one feature, three tabs, and a row that opens its conversation", async ({ 
     await expect(page.getByRole("heading", { name: "Coding Sessions" })).toBeVisible();
   } else {
     await expect(refused).toContainText("is not in AI Matrx yet");
+    await refused.scrollIntoViewIfNeeded();
     await page.screenshot({ path: shot("cs11-session-opened.png"), fullPage: false });
     await page.getByRole("button", { name: /See every delivery fact/ }).click();
     await expect(page.getByRole("dialog")).toContainText(
@@ -106,4 +111,37 @@ test("the retired Codex Usage route lands on the usage tab", async ({ page }) =>
   await page.goto("/#/codex-usage");
   await expect(page).toHaveURL(/coding-sessions\?tab=usage/);
   await expect(page.getByRole("heading", { name: "Coding Sessions" })).toBeVisible();
+});
+
+/**
+ * The conversation itself, with real messages.
+ *
+ * On this Mac the local transcripts belong to a different account than the
+ * canonical admin test account, so a row here has no binding to click through
+ * (the list says so honestly, which the test above proves). This test takes
+ * the same code path with real data the admin account DOES own: one coding-
+ * session conversation, opened by id the way a row opens it.
+ *
+ * Pass CS11_CONVERSATION_ID=<a conversation the signed-in account owns>.
+ */
+test("a coding-session conversation opens with its messages", async ({ page }) => {
+  const creds = loadTestCreds();
+  test.skip(!creds, "desktop/.env.test missing — see docs/UI_TESTING.md");
+  const conversationId = process.env.CS11_CONVERSATION_ID;
+  test.skip(!conversationId, "set CS11_CONVERSATION_ID to a conversation this account owns");
+
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await loginViaUI(page, creds!);
+
+  await page.goto(`/#/cloud-chat?conversation=${conversationId}&from=coding-sessions`);
+  await expect(page.getByRole("link", { name: /Back to coding sessions/ })).toBeVisible();
+  // Real messages, not an empty surface and not an error.
+  await expect(page.getByTestId("chat-message").first()).toBeVisible({ timeout: 60_000 });
+  await page.screenshot({ path: shot("cs11-conversation-messages.png"), fullPage: false });
+
+  await page.getByRole("link", { name: /Back to coding sessions/ }).click();
+  await expect(page.getByRole("heading", { name: "Coding Sessions" })).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
 });

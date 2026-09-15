@@ -1,10 +1,10 @@
 import type { BackgroundTask } from "../orchestrator";
 import { engine } from "@/lib/api";
 import { nativeVaultEngineTransitionContext } from "@/lib/native-vault-auth";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 
 async function adoptedSession() {
-  const { data: { session } } = await supabase.auth.getSession();
+  const session = await getAuthedSession();
   if (!session?.access_token || !session.user?.id) return null;
   const context = nativeVaultEngineTransitionContext(session.user.id);
   return context === null ? null : { session, context };
@@ -21,7 +21,7 @@ export const cloudSettingsSync: BackgroundTask = {
   async fn() {
     const adopted = await adoptedSession();
     if (!adopted || !remainsAdopted(adopted)) return;
-    await engine.configureCloudSync(adopted.session.access_token, adopted.session.user.id, adopted.context);
+    await engine.configureCloudSync(adopted.session.user.id, adopted.context);
   },
 };
 

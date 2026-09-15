@@ -10,7 +10,8 @@ AIDream transport in this app.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import inspect
+from typing import Any, Awaitable, Callable
 
 from app.services.aidream.client import AIDreamClient
 
@@ -23,7 +24,7 @@ class OrganizationAwareToolSource:
         *,
         server_url: str,
         source_app: str,
-        get_jwt: Callable[[], str | None],
+        get_jwt: Callable[[], str | None | Awaitable[str | None]],
         client_factory: Callable[[str], AIDreamClient] = AIDreamClient,
     ) -> None:
         self._server_url = server_url
@@ -37,13 +38,13 @@ class OrganizationAwareToolSource:
     async def list_tools(self) -> list[dict[str, Any]]:
         """Return server definitions, or no rows while this host is anonymous.
 
-        An unauthenticated engine startup is normal: React has not handed over
-        a session yet.  Treating that as a public discovery request would
-        either leak an unnecessary request or make the server log a guaranteed
-        context failure.  ``refresh_server_tool_definitions`` runs after the
-        verified token is installed.
+        An unauthenticated engine startup is normal. The provider reads the
+        daemon's current grant for each discovery request; no token is retained
+        by this source and no anonymous cloud discovery is attempted.
         """
         jwt = self._get_jwt()
+        if inspect.isawaitable(jwt):
+            jwt = await jwt
         if not jwt:
             self._rows = []
             self._fetched = True

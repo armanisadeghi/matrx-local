@@ -45,14 +45,15 @@ import { MediaGeneration } from "@/pages/MediaGeneration";
 import { MediaGalleryPanel } from "@/panels/pages/MediaGalleryPanel";
 
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { User } from "@supabase/supabase-js";
+import type { MatrxUser } from "@/lib/custodian";
+
 
 /** Engine/auth context handed to each panel's render function. */
 export interface PanelRenderCtx {
   status: EngineStatus;
   url: string | null;
   tools: string[];
-  user: User | null;
+  user: MatrxUser | null;
 }
 
 /**

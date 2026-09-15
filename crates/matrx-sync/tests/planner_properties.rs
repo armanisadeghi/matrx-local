@@ -37,7 +37,32 @@ const PATHS: &[&str] = &[
     "x (conflicted copy from device-a 2026-09-13).txt",
     "cafe\u{301}.txt",
     "caf\u{e9}.txt",
+    LONG_SEGMENT,
+    LONG_PATH,
 ];
+
+/// A single name of 250 characters — legal (`sync.max_segment_chars` is 255), but its conflict copy
+/// would render at 293 and must be shortened to fit. H3: without a path like this in the pool, the
+/// G1 length property had nothing to bite on, and disabling the stem-shortening loop left all 18
+/// property tests green through 500,000 cases.
+const LONG_SEGMENT: &str = concat!(
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllllllllll",
+    "llllllllllllllllllllllllllllllllllllllllllll",
+    ".txt"
+);
+
+/// A path of 396 characters across four segments — legal (`files.max_path_chars` is 400) and each
+/// segment short, so only the WHOLE-path limit is near. Its copy overruns on the path limit rather
+/// than the segment limit, which is the other half of the class.
+const LONG_PATH: &str = concat!(
+    "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp/",
+    "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq/",
+    "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr/",
+    "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.txt"
+);
 
 /// Content ids. Small on purpose: collisions between generated contents are the interesting cases.
 const CONTENTS: &[&str] = &["c0", "c1", "c2"];
@@ -176,6 +201,10 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            // H1: every run of the loop is one rolling window, so what this world has already
+            // deleted counts against the plan being built.
+            recent_deletions: world.executed_deletions,
+            window_item_count: world.window_item_count,
             open_conflicts: world.open_conflicts(),
         };
         let local = world.local.clone();
@@ -209,6 +238,22 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         // plan is data loss the moment it executes on a real volume — and a mock filesystem with
         // no name limits can never notice.
         no_unprotected_overwrite(&local, &remote, &synced, &p, knobs)?;
+        // H1, as a property over every run: no SEQUENCE of plans inside one window may delete more
+        // than the thresholds allow without a suspension. Counting one plan at a time let 38 of 40
+        // files through in two instalments.
+        if p.suspended.is_none() {
+            let would_delete = world.executed_deletions
+                + p.ops.iter().filter(|o| o.is_destructive()).count();
+            let denominator = world
+                .window_item_count
+                .unwrap_or(world.synced.len() + world.executed_deletions);
+            if breaker_should_trip(would_delete, denominator, knobs) {
+                return Err(format!(
+                    "{would_delete} cumulative deletions of {denominator} tracked were planned \
+                     across this window with no suspension"
+                ));
+            }
+        }
         if p.is_empty() {
             return Ok(RunOutcome {
                 world,
@@ -228,6 +273,18 @@ fn run(mut world: World, direction: Direction, knobs: &Knobs) -> Result<RunOutco
         world.apply(&p);
         rounds += 1;
     }
+}
+
+/// The breaker's rule, restated independently of the planner so the property is a real check and
+/// not the implementation compared with itself.
+fn breaker_should_trip(deleted: usize, tracked: usize, knobs: &Knobs) -> bool {
+    if deleted == 0 || tracked == 0 {
+        return false;
+    }
+    let absolute = deleted >= knobs.mass_delete_count as usize;
+    let proportional = deleted * 100 >= tracked * knobs.mass_delete_percent as usize
+        && deleted >= knobs.mass_delete_min_count as usize;
+    absolute || proportional
 }
 
 /// Every `Download` that replaces locally-changed bytes must be accompanied, in the SAME plan, by
@@ -463,6 +520,8 @@ proptest! {
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            recent_deletions: outcome.world.executed_deletions,
+            window_item_count: outcome.world.window_item_count,
             open_conflicts: outcome.world.open_conflicts(),
         };
         let again = plan(
@@ -1025,6 +1084,8 @@ fn the_planner_is_deterministic() {
     let ctx = PlanContext {
         device_name: "device-a".to_string(),
         today: "2026-09-13".to_string(),
+        window_item_count: None,
+        recent_deletions: 0,
         open_conflicts: BTreeSet::new(),
     };
     let a = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &Knobs::default(), &ctx);
@@ -1146,6 +1207,10 @@ fn drive(world: &mut World, direction: Direction, knobs: &Knobs, rounds: usize) 
         let ctx = PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            // H1: every run of the loop is one rolling window, so what this world has already
+            // deleted counts against the plan being built.
+            recent_deletions: world.executed_deletions,
+            window_item_count: world.window_item_count,
             open_conflicts: world.open_conflicts(),
         };
         let p = plan(
@@ -1203,6 +1268,8 @@ fn nfc_and_nfd_twins_become_a_unicode_collision_not_a_silent_clobber() {
     let ctx = PlanContext {
         device_name: "device-a".to_string(),
         today: "2026-09-13".to_string(),
+        window_item_count: None,
+        recent_deletions: 0,
         open_conflicts: BTreeSet::new(),
     };
     let p = plan(
@@ -1354,6 +1421,8 @@ fn a_conflict_copy_is_never_planned_at_a_name_no_filesystem_can_create() {
         &PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            window_item_count: None,
+            recent_deletions: 0,
             open_conflicts: BTreeSet::new(),
         },
     );
@@ -1436,6 +1505,8 @@ fn a_conflict_copy_does_not_land_on_an_earlier_one_that_differs_only_in_case() {
         &PlanContext {
             device_name: "device-a".to_string(),
             today: "2026-09-13".to_string(),
+            window_item_count: None,
+            recent_deletions: 0,
             open_conflicts: BTreeSet::new(),
         },
     );
@@ -1604,4 +1675,316 @@ fn every_planned_rename_carries_its_precondition() {
         (Some(1), Some("c1".to_string())),
         "the rename must carry the source's version and checksum"
     );
+}
+
+/// H1, from the third hostile pass — **data loss**. The re-verifier's exact case: forty synced
+/// files, nineteen deleted in one plan (47.5%, below the percentage arm; 19, below the floor of
+/// 20), applied; then nineteen of the twenty-one survivors deleted in the next. Counting one plan
+/// at a time, neither round trips either arm, and **38 of 40 files propagate to the cloud with no
+/// suspension and no user-visible event of any kind**.
+///
+/// This is not exotic: the daemon plans on a `sync.watcher_debounce_ms` timer and the scanner walks
+/// a large tree incrementally, so an `rm -rf`, a drive unmounting under the sync root, or
+/// ransomware working alphabetically all reach the planner as a stream of small deletions. That
+/// stream is the scenario the breaker exists for.
+#[test]
+fn a_wipe_split_across_two_plans_still_trips_the_breaker() {
+    let knobs = Knobs::default();
+    let mut w = deletion_world(40, 19);
+
+    // Round one: nineteen gone. Below both arms on its own, so it is allowed — and executed.
+    let ctx = PlanContext {
+        recent_deletions: w.executed_deletions,
+        window_item_count: w.window_item_count,
+        ..PlanContext::default()
+    };
+    let first = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &knobs, &ctx);
+    assert!(
+        first.suspended.is_none(),
+        "nineteen of forty is below both arms and must not suspend on its own"
+    );
+    assert_eq!(
+        first.ops.iter().filter(|o| o.is_destructive()).count(),
+        19,
+        "{:?}",
+        first.ops
+    );
+    w.apply(&first);
+    assert_eq!(w.executed_deletions, 19);
+
+    // Round two: nineteen of the twenty-one survivors disappear.
+    let survivors: Vec<String> = w.local.paths().cloned().collect();
+    for path in survivors.iter().take(19) {
+        w.local.remove(path);
+    }
+    let ctx = PlanContext {
+        recent_deletions: w.executed_deletions,
+        window_item_count: w.window_item_count,
+        ..PlanContext::default()
+    };
+    let second = plan(&w.local, &w.remote, &w.synced, Direction::TwoWay, &knobs, &ctx);
+
+    let reason = second
+        .suspended
+        .clone()
+        .expect("38 of 40 across one window is a mass delete, however it was split");
+    assert_eq!(reason.honest_state(), "suspended_mass_delete");
+    assert!(
+        second.ops.is_empty(),
+        "a suspended plan carries nothing else: {:?}",
+        second.ops
+    );
+    match reason {
+        matrx_sync::planner::SuspendReason::MassDelete {
+            recent_deletions,
+            window_hours,
+            ..
+        } => {
+            assert_eq!(recent_deletions, 19, "the surface must be able to say why");
+            assert_eq!(window_hours, 24);
+        }
+    }
+
+    // And the cloud still holds the 21 the first round left, because round two executed nothing.
+    w.apply(&second);
+    assert_eq!(
+        w.remote.iter().filter(|(_, n)| n.is_live()).count(),
+        21,
+        "the suspension must stop the second instalment"
+    );
+}
+
+/// Resuming a suspended mapping forgets the window — otherwise the user's "yes, go on" would be
+/// refused again on the very next plan, and a legitimate large cleanup could never complete.
+#[test]
+fn resuming_a_suspended_mapping_resets_the_window() {
+    let knobs = Knobs::default();
+    let mut w = deletion_world(40, 19);
+    let first = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext::default(),
+    );
+    w.apply(&first);
+
+    let survivors: Vec<String> = w.local.paths().cloned().collect();
+    for path in survivors.iter().take(19) {
+        w.local.remove(path);
+    }
+    let suspended = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            recent_deletions: w.executed_deletions,
+            window_item_count: w.window_item_count,
+            ..PlanContext::default()
+        },
+    );
+    assert!(suspended.suspended.is_some());
+
+    // The user looks at it and says go on. The window is cleared; the same work now proceeds.
+    w.executed_deletions = 0;
+    let resumed = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            window_item_count: None,
+            recent_deletions: 0,
+            ..PlanContext::default()
+        },
+    );
+    assert!(
+        resumed.suspended.is_none(),
+        "after a resume the same deletions must go through"
+    );
+    assert!(resumed.ops.iter().any(|o| o.is_destructive()));
+}
+
+/// H3: the pool's two long paths really do exercise the stem-shortening branch — the property is
+/// only as strong as what the generator can reach, and the previous pool could reach nothing over
+/// 47 characters.
+#[test]
+fn the_generator_pool_reaches_the_stem_shortening_branch() {
+    let knobs = Knobs::default();
+    let mut shortened = 0;
+    let mut checked = 0;
+
+    for path in PATHS {
+        let naive = matrx_sync::naming::conflict_copy_path(path, "device-a", "2026-09-13", &knobs);
+        let fitted =
+            matrx_sync::naming::unique_conflict_copy_path(path, "device-a", "2026-09-13", &knobs, |_| false);
+        let matrx_sync::naming::CopyName::Ok(fitted) = fitted else {
+            panic!("{path}: every pool path must have SOME representable copy name");
+        };
+        checked += 1;
+        assert_eq!(
+            matrx_sync::naming::check_name(&fitted, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "{path}: the fitted copy name is not creatable: {fitted}"
+        );
+        if fitted != naive {
+            // The naive render must genuinely have been illegal — otherwise "shortened" would just
+            // mean the uniquifier fired and this count would prove nothing.
+            assert_ne!(
+                matrx_sync::naming::check_name(&naive, &knobs),
+                matrx_sync::naming::NameVerdict::Ok,
+                "{path}: shortened a name that was already fine"
+            );
+            shortened += 1;
+        }
+    }
+
+    assert_eq!(checked, PATHS.len());
+    assert!(
+        shortened >= 2,
+        "the pool must reach the shortening branch, or G1's length property is unreachable and \
+         only the hand-written unit test carries that class; shortened {shortened} of {checked}"
+    );
+
+    // And the two long paths are legal themselves — the class is "a legal name whose COPY is not".
+    for path in [LONG_SEGMENT, LONG_PATH] {
+        assert_eq!(
+            matrx_sync::naming::check_name(path, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "{path} must itself be legal"
+        );
+        let naive = matrx_sync::naming::conflict_copy_path(path, "device-a", "2026-09-13", &knobs);
+        assert_ne!(
+            matrx_sync::naming::check_name(&naive, &knobs),
+            matrx_sync::naming::NameVerdict::Ok,
+            "its unshortened copy name must overrun, or it proves nothing"
+        );
+    }
+}
+
+/// I1, from the fourth-seat re-check — **data loss**. Their exact input: 40 files synced, 19
+/// deleted and executed, **200 files added** and synced, then 19 more of the original 40 deleted.
+///
+/// Reading the denominator from `tree_synced` at plan time made it `221 + 19 = 240`, so 38
+/// deletions read as **15.8%** instead of 95%, cleared neither arm, and 38 of the original 40
+/// propagated with no suspension and no user-visible event. SPEC-ENGINE §2 amendment 3 freezes the
+/// denominator at the mapping's item count when the window opened, precisely so neither a
+/// shrinking nor a growing mapping can dilute its own percentage.
+#[test]
+fn files_added_during_the_window_cannot_dilute_the_percentage() {
+    let knobs = Knobs::default();
+    let mut w = deletion_world(40, 19);
+
+    let first = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext::default(),
+    );
+    assert!(first.suspended.is_none(), "19 of 40 is below both arms");
+    w.apply(&first);
+    assert_eq!(w.executed_deletions, 19);
+    assert_eq!(
+        w.window_item_count,
+        Some(40),
+        "the window must freeze the count it opened with"
+    );
+
+    // 200 files arrive — a download, an import, a restore — and sync.
+    for i in 0..200 {
+        let path = format!("added{i}.txt");
+        let hash = format!("a{i}");
+        w.local.insert(
+            path.clone(),
+            LocalNode {
+                path_nfc: path.clone(),
+                is_dir: false,
+                size: Some(1),
+                mtime_ns: Some(3),
+                volume_id: Some("vol-local".to_string()),
+                file_id: Some(format!("inode-add-{i}")),
+                content_hash: Some(hash.clone()),
+                scanned_at: None,
+            },
+        );
+        w.remote.insert(
+            path.clone(),
+            RemoteNode {
+                path_nfc: path.clone(),
+                is_dir: false,
+                size: Some(1),
+                remote_file_id: Some(format!("file-add-{i}")),
+                remote_folder_id: None,
+                remote_version: Some(1),
+                checksum: Some(hash.clone()),
+                client_modified_at: None,
+                origin_device_id: None,
+                deleted_at: None,
+                seen_at: None,
+            },
+        );
+        w.synced.insert(
+            path.clone(),
+            SyncedNode {
+                path_nfc: path.clone(),
+                is_dir: false,
+                size: Some(1),
+                mtime_ns: Some(3),
+                volume_id: Some("vol-local".to_string()),
+                file_id: Some(format!("inode-add-{i}")),
+                content_hash: Some(hash.clone()),
+                remote_file_id: format!("file-add-{i}"),
+                remote_version: 1,
+                checksum: Some(hash),
+                local_edit_flagged: false,
+                synced_at: "t".to_string(),
+            },
+        );
+    }
+    assert!(w.synced.len() >= 221, "the mapping really did grow");
+
+    // 19 more of the ORIGINAL forty disappear.
+    let originals: Vec<String> = (0..40)
+        .map(|i| format!("f{i}.txt"))
+        .filter(|p| w.local.contains(p))
+        .take(19)
+        .collect();
+    assert_eq!(originals.len(), 19);
+    for path in &originals {
+        w.local.remove(path);
+    }
+
+    let second = plan(
+        &w.local,
+        &w.remote,
+        &w.synced,
+        Direction::TwoWay,
+        &knobs,
+        &PlanContext {
+            recent_deletions: w.executed_deletions,
+            window_item_count: w.window_item_count,
+            ..PlanContext::default()
+        },
+    );
+    let reason = second
+        .suspended
+        .clone()
+        .expect("38 of the 40 the window opened with is 95%, whatever arrived since");
+    assert_eq!(reason.honest_state(), "suspended_mass_delete");
+    let matrx_sync::planner::SuspendReason::MassDelete { tracked_items, .. } = reason;
+    assert_eq!(
+        tracked_items, 40,
+        "the denominator must be the frozen window count, not the live one"
+    );
+    assert!(second.ops.is_empty(), "a suspended plan carries nothing else");
+
+    // The 200 added files are untouched by the suspension — nothing was destroyed to protect them.
+    w.apply(&second);
+    assert!(w.synced.len() >= 221);
 }

@@ -41,7 +41,7 @@ from app.services.coding_sessions.models import (
     LocalBridgeReceipt,
 )
 from app.services.session_freshness import (
-    request_ui_session_refresh,
+    request_session_grant,
     session_blocker,
     session_refresh_pending,
 )
@@ -1947,7 +1947,7 @@ class CodingSessionBridgeOutbox:
                     self._session_blocker_since = _utc_now_iso()
                 # Ask BEFORE reading the state: a gap the desktop is already
                 # answering must never be logged or shown as an error.
-                await request_ui_session_refresh(
+                await request_session_grant(
                     lane="coding_session_bridge",
                     reason=(
                         "stored access token missing or expired"

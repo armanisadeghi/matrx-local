@@ -86,21 +86,25 @@ class _FakeClient:
 
 
 @pytest.fixture
-async def env(tmp_path: Path):
+async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db = LocalDatabase(tmp_path / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
-    config_dir = tmp_path / ".claude"
-    outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
-    importer = ClaudeHistoryImporter(
-        db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
-    )
     try:
+        from app.services import sync_client
+
+        class _Daemon:
+            async def access_grant(self) -> tuple[str, str]:
+                return (
+                    "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                    "00000000-0000-4000-8000-000000000001",
+                )
+
+        monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
+        config_dir = tmp_path / ".claude"
+        outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
+        importer = ClaudeHistoryImporter(
+            db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
+        )
         yield config_dir, db, importer
     finally:
         await db.close()
@@ -345,10 +349,15 @@ async def test_more_local_writing_reopens_the_retry_budget(env) -> None:
 
 
 @pytest.mark.anyio
-async def test_signed_out_is_blocked_not_crashed(env) -> None:
+async def test_signed_out_is_blocked_not_crashed(env, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, db, importer = env
-    await db.execute("DELETE FROM auth_tokens")
-    await db.commit()
+    from app.services import sync_client
+
+    class _SignedOutDaemon:
+        async def access_grant(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_client, "get_sync_client", _SignedOutDaemon)
 
     with pytest.raises(CaptureReconcileBlocked) as excinfo:
         await _reconciler(db, importer, []).reconcile()

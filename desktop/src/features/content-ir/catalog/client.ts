@@ -20,7 +20,7 @@ import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
 import type { components } from "@/types/python-generated/api-types";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { getActiveOrganizationId } from "@/lib/org/active-org";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 
 /** Generated wire types are the source of truth — never hand-mirrored. */
 export type KindDescriptor = components["schemas"]["KindDescriptor"];
@@ -48,8 +48,8 @@ export interface CatalogFetch {
  * client-side guess.
  */
 async function authHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const session = await getAuthedSession();
+  const token = session?.access_token;
   if (!token) return {};
   const organizationId = await getActiveOrganizationId();
   if (!organizationId) return {};

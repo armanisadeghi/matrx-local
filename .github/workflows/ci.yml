@@ -111,6 +111,17 @@ jobs:
       - name: the archive guard can still fail (self-test)
         run: pnpm check:archived-items-law:self-test
 
+      # A SIGN-OUT ENDS ONLY THE DEVICE THAT ASKED. A bare supabase-js
+      # signOut() is scope "global": it deletes every session the account
+      # holds, including the OAuth session Claude Code / claude.ai / Codex use
+      # for the AI Dream MCP. This app's account switch did exactly that on
+      # 2026-09-15 (auth log 00:43:39Z, 02:01:19Z) and every agent lost its
+      # MCP tools. Fixed in 4f6fe85be; this keeps it fixed. ~1s static scan.
+      - name: A SIGN-OUT ENDS ONLY THE DEVICE THAT ASKED
+        run: pnpm check:signout-scope
+      - name: the sign-out scope guard can still fail (self-test)
+        run: pnpm check:signout-scope:self-test
+
       # v1.3.104 shipped a crash that killed the app on boot for every user.
       # Typecheck passed and the bundle built — nothing here ever RENDERED the
       # app. This step does: it boots the real production bundle in Chromium
@@ -118,22 +129,19 @@ jobs:
       # The authenticated half of boot.spec.ts self-skips without a test
       # account (desktop/.env.test), so no test-account secret is needed.
       #
-      # But the SUPABASE vars ARE required: Vite inlines them at build time and
-      # the Login page cannot render without them, so a bundle built without
-      # them fails this step for a reason that has nothing to do with the app
-      # being broken. They are the same two values release.yml already injects
-      # (and the same ones that ship inside every binary — publishable, not
-      # secret). Locally these come from desktop/.env, which is gitignored;
-      # that is why this passes on a dev machine and failed the first time it
-      # ran in CI.
+      # The unauthenticated smoke never contacts Supabase, but createClient
+      # validates its constructor inputs before React can render. Use explicit
+      # inert test values here so this deterministic boot gate does not depend
+      # on repository secrets. Release builds inject the real publishable
+      # values separately and validate them in release.yml.
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Boot smoke (production bundle must render)
         run: SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: test-publishable-key
 
   native-vault-core:
     runs-on: ubuntu-22.04

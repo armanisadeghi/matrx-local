@@ -427,6 +427,7 @@ async fn invalid_grant_writes_the_cloud_state_first_on_the_still_valid_token() {
     // (2) the journal row.
     let row = rig.row();
     assert_eq!(row.state, SessionState::SignInNeeded);
+    assert!(row.next_attempt_at.is_none(), "a terminal refusal schedules no retry");
     assert!(!row.cloud_state_write_pending);
     assert!(row.cloud_state_written_at.is_some());
     assert_eq!(row.email.as_deref(), Some("admin@admin.com"));
@@ -436,6 +437,21 @@ async fn invalid_grant_writes_the_cloud_state_first_on_the_still_valid_token() {
     assert!(rig.notifier.posted()[0].1.contains("admin@admin.com"));
 
     // (4) the worthless refresh token is gone.
+    assert!(!rig.keychain.contains("u"));
+}
+
+#[tokio::test]
+async fn refresh_token_not_found_is_terminal_without_a_retry_loop() {
+    let rig = Rig::new();
+    rig.sign_in("u", "admin@admin.com", "r1", 3600).await;
+    rig.auth.push_err(FakeFailure::RefreshTokenNotFound);
+    rig.clock.advance(Duration::from_secs(3600));
+
+    let refusal = rig.custodian.token().await.expect_err("terminal");
+    assert_eq!(refusal.state, SessionState::SignInNeeded);
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignInNeeded);
+    assert!(row.next_attempt_at.is_none());
     assert!(!rig.keychain.contains("u"));
 }
 

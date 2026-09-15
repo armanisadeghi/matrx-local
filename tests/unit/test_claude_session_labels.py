@@ -106,17 +106,21 @@ class _BridgeAckClient:
 
 
 @pytest.fixture
-async def env(tmp_path: Path):
+async def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db = LocalDatabase(tmp_path / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
-    outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
     try:
+        from app.services import sync_client
+
+        class _Daemon:
+            async def access_grant(self) -> tuple[str, str]:
+                return (
+                    "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                    "00000000-0000-4000-8000-000000000001",
+                )
+
+        monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
+        outbox = CodingSessionBridgeOutbox(db=db, cloud_enabled=False)
         yield db, outbox, tmp_path
     finally:
         await db.close()
@@ -415,7 +419,9 @@ async def test_dry_run_reports_without_enqueueing(env) -> None:
 
 
 @pytest.mark.anyio
-async def test_sync_blocks_loudly_instead_of_half_running(env) -> None:
+async def test_sync_blocks_loudly_instead_of_half_running(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db, outbox, tmp_path = env
     root = tmp_path / "claude-code-sessions"
     for error in (AIDreamOfflineError("down"), AIDreamError(500, "boom")):
@@ -428,8 +434,13 @@ async def test_sync_blocks_loudly_instead_of_half_running(env) -> None:
         with pytest.raises(ClaudeTitleSyncBlocked):
             await reconciler.sync()
 
-    await db.execute("DELETE FROM auth_tokens")
-    await db.commit()
+    from app.services import sync_client
+
+    class _SignedOutDaemon:
+        async def access_grant(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_client, "get_sync_client", _SignedOutDaemon)
     reconciler = ClaudeSessionMetadataReconciler(
         db=db,
         outbox=outbox,

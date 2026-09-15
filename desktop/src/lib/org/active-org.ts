@@ -33,6 +33,7 @@
  */
 
 import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 
 const STORAGE_KEY = "matrx-local.active-organization.v1";
 const CHANGE_EVENT = "matrx-local.active-organization.change";
@@ -178,9 +179,7 @@ async function persistSelection(org: MemberOrganization): Promise<void> {
  * rejection the user cannot interpret.
  */
 export async function resolveActiveOrganization(): Promise<MemberOrganization | null> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getAuthedSession();
   const userId = session?.user?.id;
   if (!userId) return null;
 

@@ -48,7 +48,6 @@ Auth model:
 from __future__ import annotations
 
 import os
-import time
 import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -243,58 +242,6 @@ class DesktopOwnerMismatchError(Exception):
     """A request JWT belongs to someone other than this desktop owner."""
 
 
-async def _adopt_request_jwt(bearer: str | None, user_id: str) -> None:
-    """Refresh engine-owned auth state from a valid JWT already in use."""
-    if not bearer or user_id == "local-user":
-        return
-    try:
-        import jwt as pyjwt
-
-        claims = pyjwt.decode(bearer, options={"verify_signature": False})
-        if str(claims.get("sub") or "") != user_id:
-            return
-        expires_at = int(claims.get("exp") or 0)
-        if expires_at <= int(time.time()):
-            return
-
-        from app.services.auth_session import SessionFenceError, get_auth_session
-        from app.services.ai.engine import set_jwt_cache
-
-        coordinator = get_auth_session()
-        current = await coordinator.snapshot()
-        if current.subject != user_id:
-            logger.warning(
-                "[ai_routes] refused request JWT adoption for a different owner "
-                "(persisted_user_id=%s request_user_id=%s)",
-                current.subject,
-                user_id,
-            )
-            return
-        try:
-            await coordinator.install(
-                generation=current.generation,
-                revision=current.credential_revision,
-                subject=user_id,
-                access_token=bearer,
-                refresh_token=None,
-                expires_at=expires_at,
-                allow_initialize=False,
-            )
-        except SessionFenceError:
-            return
-        set_jwt_cache(bearer)
-        logger.info(
-            "[ai_routes] refreshed engine auth state from authenticated AI request "
-            "(user_id=%s)",
-            user_id,
-        )
-    except Exception:
-        logger.warning(
-            "[ai_routes] could not refresh engine auth state from request JWT",
-            exc_info=True,
-        )
-
-
 class AIContextMiddleware:
     """Sets the matrx-connect AppContext (emitter + identity) per request.
 
@@ -344,7 +291,6 @@ class AIContextMiddleware:
             )
             await response(scope, receive, send)
             return
-        await _adopt_request_jwt(bearer, user_id)
 
         ctx = AppContext(
             emitter=StreamEmitter(debug=False, heartbeat_interval=_HEARTBEAT_INTERVAL),

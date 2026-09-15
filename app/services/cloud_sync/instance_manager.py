@@ -365,6 +365,7 @@ class InstanceManager:
                 tunnel_ws_url = tunnel_url.replace("https://", "wss://") + "/ws"
 
             now = datetime.now(timezone.utc).isoformat()
+            user_id, headers = await sync._request_context()
             payload = {
                 "tunnel_url": tunnel_url,
                 "tunnel_ws_url": tunnel_ws_url,
@@ -374,10 +375,10 @@ class InstanceManager:
             }
             url = (
                 f"{sync._supabase_url}/rest/v1/app_instances"
-                f"?instance_id=eq.{self.instance_id}&user_id=eq.{sync._user_id}"
+                f"?instance_id=eq.{self.instance_id}&user_id=eq.{user_id}"
             )
             headers = {
-                **sync._headers(),
+                **headers,
                 "Prefer": "return=minimal",
             }
             async with httpx.AsyncClient(timeout=10) as client:

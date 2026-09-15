@@ -12,49 +12,36 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
 });
 
-/**
- * A renderer reload re-runs the whole auth lifecycle with the SAME person
- * signed in. That transition is ALIGNED: the engine already holds exactly that
- * subject's credential, so nothing is revoked and no cloud lane ever sees a
- * gap. Only a real host mutation (sign-out, or an account switch, which
- * arrives as a null incoming subject) may clear engine custody.
- */
-it("a same-subject transition is aligned and sends no DELETE", async () => {
+it("a same-subject daemon transition aligns to the running engine process", async () => {
   const f = vi.mocked(fetch);
-  f.mockResolvedValueOnce(
-    json({ generation: "g-a", credential_revision: 3, subject: "actor-a", cleanup: null }),
-  );
+  f.mockResolvedValueOnce(json({ boot_id: "process-a" }));
   await expect(
     api.prepareSessionTransition({ revision: 1, nextSubject: "actor-a", isCurrent: () => true }),
   ).resolves.toEqual({
     status: "aligned",
     origin: "http://engine-a",
-    generation: "g-a",
-    credentialRevision: 3,
+    generation: "process-a",
+    credentialRevision: 1,
     subject: "actor-a",
   });
-  expect(f).toHaveBeenCalledTimes(1);
-  expect(f.mock.calls.map((c) => String(c[1] && (c[1] as RequestInit).method))).not.toContain("DELETE");
-  expect(api.acceptedSessionFence).toBeNull();
+  expect(f).toHaveBeenCalledOnce();
+  expect(String(f.mock.calls[0]?.[0])).toBe("http://engine-a/health");
+  expect((f.mock.calls[0]?.[1] as RequestInit).method).toBeUndefined();
 });
 
-it("an account switch (null incoming subject) still revokes engine custody", async () => {
+it("an anonymous daemon transition aligns but never deletes an engine credential", async () => {
   const f = vi.mocked(fetch);
-  f.mockResolvedValueOnce(
-    json({ generation: "g-a", credential_revision: 3, subject: "actor-a", cleanup: null }),
-  )
-    .mockResolvedValueOnce(json({ status: "ok", generation: "g-next", credential_revision: 0 }))
-    .mockResolvedValueOnce(json({ generation: "g-next", credential_revision: 0, subject: null, cleanup: null }))
-    .mockResolvedValueOnce(json({ generation: "g-next", credential_revision: 0, subject: null, cleanup: null }));
-  const result = await api.prepareSessionTransition({
-    revision: 2,
-    nextSubject: null,
-    isCurrent: () => true,
+  f.mockResolvedValueOnce(json({ boot_id: "process-a" }));
+  const result = await api.prepareSessionTransition({ revision: 2, nextSubject: null, isCurrent: () => true });
+  expect(result).toEqual({
+    status: "aligned",
+    origin: "http://engine-a",
+    generation: "process-a",
+    credentialRevision: 2,
+    subject: null,
   });
-  expect(result.status).toBe("aligned");
-  const deletes = f.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method === "DELETE");
-  expect(deletes).toHaveLength(1);
-  expect(String(deletes[0]?.[0])).toContain("/auth/token?expected_generation=g-a");
+  expect(f).toHaveBeenCalledOnce();
+  expect(f.mock.calls.map((c) => (c[1] as RequestInit | undefined)?.method)).not.toContain("DELETE");
 });
 
 it("a lane the desktop is already fixing is a status, never an alarm", () => {

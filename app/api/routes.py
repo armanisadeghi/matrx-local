@@ -44,6 +44,8 @@ def _read_version() -> str:
     return "0.0.0"
 
 _APP_VERSION = _read_version()
+# Process identity, distinct from the durable device/app instance.
+_ENGINE_BOOT_ID = str(uuid.uuid4())
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -140,6 +142,7 @@ async def health():
         "service": "matrx-local",
         "version": _APP_VERSION,
         "instance_id": _health_instance_id,
+        "boot_id": _ENGINE_BOOT_ID,
         # Explicit protocol gates for callers that may route paid/executable
         # work here. Reachability alone never implies saved-agent parity.
         "capabilities": execution_capabilities,

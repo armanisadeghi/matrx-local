@@ -43,7 +43,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import type { MatrxUser as SupabaseUser } from "@/lib/custodian";
 import { saveSetting, broadcastSettingsChanged } from "@/lib/settings";
 import { triggerPageRefresh } from "@/lib/page-refresh";
 import { isTauri, invokeTauri } from "@/lib/sidecar";

@@ -11,24 +11,34 @@ from app.services.local_db.repositories import TokenRepo
 from app.tools import tool_schemas
 
 
-def test_real_token_write_refuses_plaintext_when_encryption_is_missing(
+def test_token_repo_reads_the_daemon_grant_without_local_credential_persistence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def exercise() -> None:
+        from app.services import sync_client
+
+        class _Daemon:
+            async def access_grant(self) -> tuple[str, str]:
+                return (
+                    "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                    "00000000-0000-4000-8000-000000000001",
+                )
+
+        monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
         db = LocalDatabase(tmp_path / "matrx.db")
         await db.connect()
-        monkeypatch.setattr(secret_store, "_fernet", None)
-        monkeypatch.setattr(secret_store, "_fernet_unavailable_until", float("inf"))
-        monkeypatch.setattr(secret_store, "_fernet_last_cause", "forced unavailable")
         try:
-            with pytest.raises(secret_store.SecretEncryptionUnavailableError) as exc:
-                await TokenRepo(db).save("access-secret", "user-1", "refresh-secret")
-            assert "OS keychain" in str(exc.value)
-            assert "plaintext storage is refused" in str(exc.value)
-            row = await db.fetchone("SELECT count(*) AS n FROM auth_tokens")
-            assert row and row["n"] == 0
+            row = await TokenRepo(db).get()
+            assert row is not None
+            assert row["user_id"] == "00000000-0000-4000-8000-000000000001"
+            assert not hasattr(TokenRepo, "save")
+            credential_table = await db.fetchone(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='auth_tokens'"
+            )
+            assert credential_table is None
         finally:
             await db.close()
+
     asyncio.run(exercise())
 
 

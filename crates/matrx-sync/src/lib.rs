@@ -12,6 +12,9 @@
 //! | [`naming`] | Conflict-copy naming (D7) and client-side name safety — pure, values injected. |
 //! | [`custody`] | FS-C5. Credential custody: PKCE in the daemon, the keychain item, rotation, the session state. **The one module here that speaks HTTP and reads a clock** — every such seam is a trait. |
 //! | [`sim`] | FS-C4. The deterministic simulation harness. **A mock — never product evidence.** |
+//! | [`scan`] | FS-L1. The real-filesystem scanner: identity, the size/mtime fast path, the walk. The first module here that touches a disk. |
+//! | [`feed`] | FS-L1. The remote side: the change feed is the only truth; Realtime is only a trigger. |
+//! | [`watch`] | FS-L1. Local change detection: the watcher is an optimisation, the periodic rescan is the mechanism. |
 //! | [`planner`] | FS-C3. `plan()` — a pure function of three trees, a direction and knobs. No IO, no clock, no randomness. |
 //! | [`journal`] | FS-C2. The SQLite journal: the three trees, the per-mapping op queues, conflicts, migrations, and the synced-tree write guard (invariant I1). |
 //! | [`model`] | The typed rows and trees every other module speaks in. |
@@ -37,11 +40,14 @@
 
 pub mod custody;
 pub mod error;
+pub mod feed;
 pub mod journal;
 pub mod knobs;
 pub mod model;
 pub mod naming;
 pub mod planner;
+pub mod scan;
+pub mod watch;
 pub mod sim;
 pub mod states;
 

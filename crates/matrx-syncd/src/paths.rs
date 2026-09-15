@@ -30,8 +30,9 @@ pub struct Paths {
     pub tokens: PathBuf,
     /// `<home>/run` — the socket's parent, mode 0700 on Unix.
     pub run_dir: PathBuf,
-    /// `<home>/run/syncd.sock` on Unix. On Windows the control endpoint is [`Paths::pipe_name`]
-    /// instead and this path is never created.
+    /// `<home>/run/syncd.sock` on Unix. On Windows the control endpoint is the named pipe that
+    /// `Paths::pipe_name` builds — a `cfg(windows)` method, so it is named here in prose rather
+    /// than as an intra-doc link, which would not resolve when the docs are built on Unix.
     pub socket: PathBuf,
     /// `<home>/logs` — where the supervisor redirects stdout/stderr (SPEC-ENGINE §1.4).
     pub logs: PathBuf,
@@ -128,6 +129,19 @@ fn set_dir_mode_0700(_dir: &Path) -> io::Result<()> {
     // alone, and from the named pipe's own DACL. There is no mode bit to set, and pretending to
     // set one would be the false sentence law 4 forbids.
     Ok(())
+}
+
+/// Remove a file, treating "it was already gone" as success.
+///
+/// Used for the teardown of `syncd.token`: a daemon that stopped gracefully must not leave live
+/// credentials behind, and a second daemon's file is never this one's to delete (the discovery
+/// file's pid check covers that case, and the token file is rewritten at every start regardless).
+pub fn remove_quietly(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Write a file only this user can read (0600 on Unix).

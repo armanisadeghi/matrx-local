@@ -2,7 +2,7 @@
 // H1). `long` is the prose voice this stream-timeout sentence is written in.
 import { formatDurationMs } from "@ai-matrx/kit/format";
 import { engine } from "@/lib/api";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import {
   STREAM_TAG_CHUNK,
   STREAM_TAG_END,
@@ -77,9 +77,7 @@ function ttsUrl(base: string, path: string): string {
 
 async function authHeaders(): Promise<Record<string, string>> {
   try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = await getAuthedSession();
     if (session?.access_token) {
       return { Authorization: `Bearer ${session.access_token}` };
     }

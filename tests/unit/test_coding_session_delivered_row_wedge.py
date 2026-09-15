@@ -77,13 +77,18 @@ class _CountingClient:
         }
 
 
-async def _seed_user(db: LocalDatabase) -> None:
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, updated_at)
-           VALUES ('current_user', 'test-token', ?, datetime('now'))""",
-        ("00000000-0000-4000-8000-000000000001",),
-    )
-    await db.commit()
+def _install_daemon_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use the daemon's atomic grant instead of a retired SQLite token row."""
+    from app.services import sync_client
+
+    class _Daemon:
+        async def access_grant(self) -> tuple[str, str]:
+            return (
+                "eyJhbGciOiJub25lIn0.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJleHAiOjQxMDI0NDQ4MDB9.signature",
+                "00000000-0000-4000-8000-000000000001",
+            )
+
+    monkeypatch.setattr(sync_client, "get_sync_client", _Daemon)
 
 
 @pytest.mark.anyio
@@ -99,7 +104,6 @@ async def test_retirement_does_not_depend_on_the_shared_connection(
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
 
     client = _CountingClient()
     outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)
@@ -143,7 +147,7 @@ async def test_a_delivered_row_that_cannot_be_deleted_is_never_resent(
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
+    _install_daemon_grant(monkeypatch)
 
     client = _CountingClient()
     outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)
@@ -182,12 +186,14 @@ async def test_a_delivered_row_that_cannot_be_deleted_is_never_resent(
 
 
 @pytest.mark.anyio
-async def test_the_row_retires_once_the_lock_clears(tmp_path: Path) -> None:
+async def test_the_row_retires_once_the_lock_clears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The stuck delete is retried on a later tick, without a second upload."""
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
+    _install_daemon_grant(monkeypatch)
 
     client = _CountingClient()
     outbox = CodingSessionBridgeOutbox(db=db, client=client, cloud_enabled=True)
@@ -210,7 +216,7 @@ async def test_the_row_retires_once_the_lock_clears(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_a_raw_transport_error_defers_the_row_instead_of_killing_the_tick(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The third wedge: an exception the client did not classify.
 
@@ -225,7 +231,7 @@ async def test_a_raw_transport_error_defers_the_row_instead_of_killing_the_tick(
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
+    _install_daemon_grant(monkeypatch)
 
     class _RawSSLFailure:
         def __init__(self) -> None:
@@ -288,7 +294,7 @@ async def test_a_failed_failure_write_does_not_kill_the_tick(
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
+    _install_daemon_grant(monkeypatch)
 
     class _Offline:
         async def post(self, path: str, payload: dict, jwt: str, timeout: float) -> Any:  # noqa: ARG002
@@ -311,14 +317,16 @@ async def test_a_failed_failure_write_does_not_kill_the_tick(
 
 
 @pytest.mark.anyio
-async def test_quarantine_is_atomic(tmp_path: Path) -> None:
+async def test_quarantine_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Copy-then-delete in one transaction, or a crash between loses the row."""
     from app.services.aidream.client import AIDreamError
 
     path = tmp_path / "matrx.db"
     db = LocalDatabase(path)
     await db.connect()
-    await _seed_user(db)
+    _install_daemon_grant(monkeypatch)
 
     mutated = (
         '[aidream_client] /coding-sessions/bridge \u2192 HTTP 409: '

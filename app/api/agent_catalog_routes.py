@@ -114,13 +114,19 @@ def _is_stale(fetched_at: str) -> bool:
     return age >= EXECUTION_CACHE_TTL_SECONDS
 
 
+def _status_header(value: Any) -> str:
+    """Keep diagnostics within HTTP field-value character constraints."""
+    safe = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in str(value))
+    return safe.encode("latin-1", "replace").decode("latin-1")[:400]
+
+
 def _execution_response(
     row: dict[str, Any], *, stale: bool, reason: str | None
 ) -> JSONResponse:
     """The RPC row verbatim; staleness lives in headers, never in the payload."""
     headers = {"X-Matrx-Agent-Detail-Stale": "true" if stale else "false"}
     if stale and reason:
-        headers["X-Matrx-Agent-Detail-Stale-Reason"] = str(reason)[:400]
+        headers["X-Matrx-Agent-Detail-Stale-Reason"] = _status_header(reason)
     return JSONResponse(content=row, headers=headers)
 
 
@@ -180,7 +186,7 @@ async def _catalog_rows(response: Response) -> list[dict[str, Any]]:
     if status != "success" and error_message:
         # The rows are real but the last refresh did not land: say so on every
         # response so a stale catalog can never look current.
-        response.headers["X-Matrx-Catalog-Sync-Error"] = str(error_message)[:400]
+        response.headers["X-Matrx-Catalog-Sync-Error"] = _status_header(error_message)
     return rows
 
 

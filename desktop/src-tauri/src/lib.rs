@@ -21,6 +21,12 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 mod lifecycle_log;
+// FS-C5b: the app's side of the sync daemon — it holds the control token so the webview never
+// can, forwards the OAuth deep link to the daemon that owns the PKCE verifier, and performs
+// SPEC-ENGINE §1.2's detached first-run spawn. The daemon is NOT in this process's tree and is
+// deliberately absent from the engine supervisor and from every kill sweep (rules 9 and 10).
+mod syncd;
+mod error_outbox;
 mod native_vault;
 mod tcc;
 
@@ -48,7 +54,7 @@ mod menu;
 // matching run.py's dev/live isolation guard for source-run engines. Release
 // builds use the live world (~/.matrx, 22140-22159). A debug build must never
 // read the installed app's discovery file or adopt/kill its engine.
-const DEFAULT_MATRX_HOME_DIRNAME: &str = if cfg!(debug_assertions) {
+pub(crate) const DEFAULT_MATRX_HOME_DIRNAME: &str = if cfg!(debug_assertions) {
     ".matrx-dev"
 } else {
     ".matrx"
@@ -79,23 +85,26 @@ fn global_process_sweeps_allowed(isolated: bool) -> bool {
     !isolated
 }
 
-/// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
-fn matrx_discovery_file() -> Option<std::path::PathBuf> {
-    if !global_process_sweeps_allowed(isolated_test_run()) {
+/// This build's data boundary. Debug, installed, and isolated smoke worlds
+/// must never share discovery, settings, or diagnostic transport state.
+pub(crate) fn matrx_home_dir() -> Option<std::path::PathBuf> {
+    if isolated_test_run() {
         return std::env::var("MATRX_HOME_DIR")
             .ok()
-            .map(std::path::PathBuf::from)
-            .map(|path| path.join("local.json"));
+            .map(std::path::PathBuf::from);
     }
     #[cfg(unix)]
     let home = std::env::var("HOME").ok();
     #[cfg(windows)]
     let home = std::env::var("USERPROFILE").ok();
-    home.map(|h| {
-        std::path::PathBuf::from(h)
-            .join(DEFAULT_MATRX_HOME_DIRNAME)
-            .join("local.json")
+    home.map(|base| {
+        std::path::PathBuf::from(base).join(DEFAULT_MATRX_HOME_DIRNAME)
     })
+}
+
+/// Path to this build's discovery file: <home>/<.matrx|.matrx-dev>/local.json.
+fn matrx_discovery_file() -> Option<std::path::PathBuf> {
+    matrx_home_dir().map(|path| path.join("local.json"))
 }
 
 // ── proxy_fetch types ────────────────────────────────────────────────────────
@@ -2337,7 +2346,20 @@ pub fn run() {
                 if let Some(state) = app.try_state::<PendingOAuthUrl>() {
                     *state.0.lock().unwrap() = Some(url_str.clone());
                 }
-                let _ = app.emit("oauth-callback", url_str.clone());
+                // FS-C5b: the code goes to the DAEMON, which holds the PKCE verifier. It is never
+                // emitted to the webview — a code the webview cannot use is a code an XSS cannot
+                // steal (SPEC-CUSTODY S1).
+                let forwarded = url_str.clone();
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match syncd::syncd_sign_in_callback(forwarded).await {
+                        Ok(_) => println!("[deep-link] sign-in forwarded to the sync daemon"),
+                        Err(error) => {
+                            println!("[deep-link] the sync daemon refused the callback: {error}");
+                            let _ = handle.emit("syncd-sign-in-failed", error);
+                        }
+                    }
+                });
             } else {
                 show_main_window(app);
             }
@@ -2410,6 +2432,9 @@ pub fn run() {
             sidecar_status,
             engine_supervisor_status,
             get_sidecar_logs,
+            error_outbox::enqueue_error_outbox_event,
+            error_outbox::read_error_outbox_events,
+            error_outbox::acknowledge_error_outbox_events,
             check_engine_health,
             discover_engine_port,
             set_close_to_tray,
@@ -2474,6 +2499,11 @@ pub fn run() {
             dm_cancel,
             dm_list,
             dm_get,
+            syncd::syncd_client_config,
+            syncd::syncd_sign_in,
+            syncd::syncd_sign_in_callback,
+            syncd::syncd_sign_out,
+            syncd::syncd_session,
         ])
         .setup(|app| {
             // POSIX SIGTERM has a default action of terminating the process
@@ -2545,6 +2575,15 @@ pub fn run() {
             if let Err(e) = menu::setup_app_menu(app) {
                 eprintln!("Failed to set up application menu: {e}");
             }
+
+            // ── The sync daemon (FS-C5b, SPEC-ENGINE §1.2) ─────────────────
+            // The app cannot sign in, list mappings or render the Sync page without it, and the
+            // PKCE verifier is generated inside it — so it is ensured at every launch, before the
+            // webview asks for a token. Idempotent: it returns immediately when a daemon is
+            // already publishing, and the daemon's own clobber rule refuses a second instance.
+            // Deliberately NOT under the engine supervisor: the daemon is outside this process's
+            // tree (rule 10) and nothing here may kill it by name (rule 9).
+            syncd::ensure_running();
 
             // Kill orphaned LLM server immediately before the JS frontend has
             // a chance to issue commands to start it. This prevents the race condition
@@ -2812,10 +2851,21 @@ pub fn run() {
                         *state.0.lock().unwrap() = Some(url_str.clone());
                     }
 
-                    // Also emit the event for the case where OAuthPending IS
-                    // already mounted and listening — whichever wins, the other
-                    // is ignored via the handled.current guard.
-                    let _ = handle.emit("oauth-callback", url_str);
+                    // FS-C5b: forward to the DAEMON rather than emitting the code to the
+                    // webview. The daemon holds the verifier (SPEC-CUSTODY S1), so the webview
+                    // never receives a code, a verifier, or a refresh token. A refusal is
+                    // announced — `unknown_transaction` is a real answer the UI must show, not a
+                    // silence (law 4).
+                    let forward_handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match syncd::syncd_sign_in_callback(url_str).await {
+                            Ok(_) => println!("[deep-link] sign-in forwarded to the sync daemon"),
+                            Err(error) => {
+                                println!("[deep-link] the sync daemon refused the callback: {error}");
+                                let _ = forward_handle.emit("syncd-sign-in-failed", error);
+                            }
+                        }
+                    });
                 }
             });
 

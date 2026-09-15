@@ -9,19 +9,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * asking it to bootstrap the header would be circular.
  */
 
-const { rpc, from, getSession } = vi.hoisted(() => ({
+const { rpc, from, getAuthedSession } = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
-  getSession: vi.fn(),
+  getAuthedSession: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase", () => ({
   default: {
     rpc,
     schema: vi.fn(() => ({ from })),
-    auth: { getSession },
   },
 }));
+
+vi.mock("@/lib/custodian", () => ({ getAuthedSession }));
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -48,7 +49,7 @@ beforeEach(() => {
   (globalThis as unknown as { window: { dispatchEvent: (e: unknown) => void } }).window = {
     dispatchEvent: vi.fn(),
   };
-  getSession.mockResolvedValue({ data: { session: { user: { id: "user-1" } } } });
+  getAuthedSession.mockResolvedValue({ user: { id: "user-1" } });
 });
 
 function mockMemberships(containerIds: string[]) {
@@ -154,7 +155,7 @@ describe("resolveActiveOrganization", () => {
       { id: "org-2", name: "Second Org" },
     ]);
     mockPreference("user-1", "org-2");
-    getSession.mockResolvedValue({ data: { session: { user: { id: "user-1" } } } });
+    getAuthedSession.mockResolvedValue({ user: { id: "user-1" } });
 
     const { resolveActiveOrganization } = await import("./active-org");
     const result = await resolveActiveOrganization();

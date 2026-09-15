@@ -17,7 +17,6 @@ import { Chat } from "@/pages/Chat";
 import { CloudChat } from "@/pages/CloudChat";
 import { Login } from "@/pages/Login";
 import { OAuthPending } from "@/pages/OAuthPending";
-import { AuthCallback } from "@/pages/AuthCallback";
 import { AiMatrx } from "@/pages/AiMatrx";
 import { BrowserLab } from "@/pages/BrowserLab";
 import { Voice } from "@/pages/Voice";
@@ -84,11 +83,21 @@ import { isTauri } from "@/lib/sidecar";
 import {
   initUnifiedLog,
   initTauriLogStream,
-  initConsoleCapture,
   stopEngineStreams,
   stopTauriStream,
 } from "@/hooks/use-unified-log";
-import supabase from "@/lib/supabase";
+import { getAuthedSession, subscribeSession } from "@/lib/custodian";
+import { createAccessTokenBoundSupabaseClient } from "@/lib/supabase";
+import {
+  createErrorOutboxIdentityCoordinator,
+  installErrorOutboxPersistence,
+  uploadIdentityBoundErrorBatch,
+} from "@/lib/error-outbox";
+import {
+  ACTIVE_ORGANIZATION_CHANGE_EVENT,
+  getActiveOrganizationId,
+} from "@/lib/org/active-org";
+import { isWindowLeader } from "@/lib/window-role";
 import {
   ActionNeededNavigationBridge,
   ActionNeededSources,
@@ -179,6 +188,7 @@ function AppInner() {
     systemInfo,
     engineVersion,
     error: engineError,
+    retryAccountConnection,
     refresh,
     restartEngine,
   } = useEngine();
@@ -333,10 +343,75 @@ function AppInner() {
   // Unified log streams
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    const restoreConsole = initConsoleCapture();
     initTauriLogStream();
+    const identityCoordinator = createErrorOutboxIdentityCoordinator();
+    const stopErrorPersistence = installErrorOutboxPersistence(async (events) => {
+      if (!isWindowLeader()) return [];
+      const identityGeneration = identityCoordinator.currentGeneration();
+      const identityBound = events.filter(
+        (event) => event.userId && event.organizationId,
+      );
+      if (identityBound.length === 0) return [];
+      const session = await getAuthedSession();
+      if (!session) return [];
+      const activeOrganizationId = await getActiveOrganizationId();
+      if (!activeOrganizationId || !identityCoordinator.isCurrent(identityGeneration)) {
+        return [];
+      }
+      identityCoordinator.commit(identityGeneration, {
+        userId: session.user.id,
+        organizationId: activeOrganizationId,
+      });
+      const pinnedClient = createAccessTokenBoundSupabaseClient(
+        session.access_token,
+      );
+      return uploadIdentityBoundErrorBatch(
+        identityBound,
+        {
+          userId: session.user.id,
+          organizationId: activeOrganizationId,
+          accessToken: session.access_token,
+        },
+        (args) => pinnedClient.rpc("log_client_error", args),
+        () => identityCoordinator.isCurrent(identityGeneration),
+      );
+    });
+
+    const resolveCaptureContext = async (generation: number) => {
+      try {
+        const session = await getAuthedSession();
+        const organizationId = session ? await getActiveOrganizationId() : null;
+        identityCoordinator.commit(
+          generation,
+          session && organizationId
+            ? { userId: session.user.id, organizationId }
+            : null,
+        );
+      } catch {
+        identityCoordinator.commit(generation, null);
+      }
+    };
+    const refreshCaptureContext = () => {
+      const generation = identityCoordinator.beginTransition();
+      queueMicrotask(() => void resolveCaptureContext(generation));
+    };
+    refreshCaptureContext();
+    const onOrganizationChange = () => refreshCaptureContext();
+    window.addEventListener(
+      ACTIVE_ORGANIZATION_CHANGE_EVENT,
+      onOrganizationChange,
+    );
+    const stopSessionListener = subscribeSession(() => {
+      refreshCaptureContext();
+    });
     return () => {
-      restoreConsole();
+      stopSessionListener();
+      window.removeEventListener(
+        ACTIVE_ORGANIZATION_CHANGE_EVENT,
+        onOrganizationChange,
+      );
+      identityCoordinator.beginTransition();
+      stopErrorPersistence();
       stopTauriStream();
     };
   }, []);
@@ -344,9 +419,7 @@ function AppInner() {
   useEffect(() => {
     if (status === "connected" && url) {
       const getToken = async () => {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const session = await getAuthedSession();
         return session?.access_token ?? null;
       };
       initUnifiedLog(url, getToken);
@@ -477,7 +550,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
-      { path: "/coding-sessions", element: <CodingSessions /> },
+      { path: "/coding-sessions", requiresEngine: true, element: <CodingSessions /> },
       {
         // Usage was a second top-level nav item until 2026-09-14. The old link
         // keeps working and lands on the tab that replaced it.
@@ -529,10 +602,7 @@ function AppInner() {
   if (auth.oauthPending) {
     return (
       <ErrorBoundary>
-        <OAuthPending
-          onCancel={auth.cancelOAuth}
-          completeOAuthExchange={auth.completeOAuthExchange}
-        />
+        <OAuthPending onCancel={auth.cancelOAuth} />
       </ErrorBoundary>
     );
   }
@@ -588,7 +658,6 @@ function AppInner() {
           <ActionNeededNavigationBridge />
           <Routes>
             <Route path="/overlay" element={<TranscriptOverlay />} />
-            <Route path="/auth/callback" element={<AuthCallback />} />
 
             {!auth.isAuthenticated ? (
               <Route path="*" element={<Login auth={auth} />} />
@@ -613,6 +682,8 @@ function AppInner() {
                       engineStatus={status}
                       engineUrl={url}
                       engineVersion={engineVersion}
+                      accountConnectionError={engineError}
+                      onRetryAccountConnection={retryAccountConnection}
                       onRefresh={refresh}
                       onRestartEngine={restartEngine}
                       user={auth.user}

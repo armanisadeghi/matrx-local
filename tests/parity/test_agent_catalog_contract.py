@@ -476,3 +476,14 @@ def test_a_read_during_a_refresh_never_sees_a_half_written_catalog(
             await db.close()
 
     asyncio.run(main())
+
+
+def test_catalog_diagnostic_headers_survive_unicode_and_line_breaks():
+    from app.api.agent_catalog_routes import _execution_response, _status_header
+    reason = "Session unavailable — retry\r\nInjected: value\x00\x01\x1f\x7f"
+    header = _status_header(reason)
+    assert "\r" not in header and "\n" not in header
+    assert all(ord(char) >= 32 and ord(char) != 127 for char in header)
+    header.encode("latin-1")
+    response = _execution_response({"id": "test"}, stale=True, reason=reason)
+    assert response.status_code == 200

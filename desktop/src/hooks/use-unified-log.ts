@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { formatConsoleArguments } from "@/lib/log-serialization";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -186,6 +187,39 @@ export function emitClientLog(
     ...(accessEntry !== undefined ? { accessEntry } : {}),
   };
   _push(line);
+  if (level === "warn" || level === "error") {
+    enqueueDurableClientError({
+      level,
+      message,
+      ...(source !== undefined ? { source } : {}),
+    });
+  }
+}
+
+let _globalErrorCaptureInstalled = false;
+
+/** Capture failures that escape feature code before React mounts. */
+export function installGlobalErrorCapture(): void {
+  if (_globalErrorCaptureInstalled || typeof window === "undefined") return;
+  _globalErrorCaptureInstalled = true;
+  window.addEventListener("error", (event) => {
+    if (!event.message && !event.error) return;
+    const message =
+      event.error instanceof Error
+        ? `${event.error.name}: ${event.error.message}`
+        : event.message || "Uncaught renderer error";
+    emitClientLog("error", message, "runtime-exception");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    const message =
+      reason instanceof Error
+        ? `${reason.name}: ${reason.message}`
+        : typeof reason === "string"
+          ? reason
+          : "Unhandled promise rejection";
+    emitClientLog("error", message, "unhandled-rejection");
+  });
 }
 
 export function getClientLogBuffer(): ClientLogLine[] {

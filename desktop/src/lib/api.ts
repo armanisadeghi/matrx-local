@@ -1135,7 +1135,6 @@ class EngineAPI {
   private websocketContext: NativeVaultTransitionContext | null = null;
   // Last server receipt accepted for this engine process. DELETE may use only
   // this captured outgoing fence; it must never fetch a newer actor to clear.
-  private acceptedSessionFence: { origin: string; generation: string; credential_revision: number; subject: string | null } | null = null;
   private static readonly TOKEN_PROVIDER_TIMEOUT_MS = 10_000;
   // Self-healing re-discovery guards: prevent concurrent scans and rate-limit
   // how often we re-run discovery when the engine URL goes null or stale.
@@ -2710,67 +2709,43 @@ class EngineAPI {
   }
 
   // ---- Cloud Sync API ----
-  private async sessionFence(origin = this.baseUrl, signal?: AbortSignal): Promise<{ generation: string; credential_revision: number; subject: string | null; cleanup: null | { retired_generation: string; status: "running" | "failed" } }> {
-    if (!origin) throw new Error("Engine not discovered");
-    const response = signal
-      ? await fetch(`${origin}/auth/session-state`, { signal })
-      : await fetch(`${origin}/auth/session-state`);
-    if (!response.ok) throw new Error(`Engine session state failed: ${response.status}`);
-    const value: unknown = await response.json();
-    if (!value || typeof value !== "object") throw new Error("Engine session state is malformed");
-    const state = value as Record<string, unknown>;
-    const keys = Object.keys(state).sort();
-    if (keys.join(",") !== "cleanup,credential_revision,generation,subject") throw new Error("Engine session state is malformed");
-    const cleanup = state.cleanup;
-    if (typeof state.generation !== "string" || state.generation.length === 0 || !Number.isSafeInteger(state.credential_revision) || Number(state.credential_revision) < 0 || (state.subject !== null && typeof state.subject !== "string")) throw new Error("Engine session state is malformed");
-    if (cleanup !== null) {
-      if (!cleanup || typeof cleanup !== "object") throw new Error("Engine session state is malformed");
-      const pending = cleanup as Record<string, unknown>;
-      if (Object.keys(pending).sort().join(",") !== "retired_generation,status" || typeof pending.retired_generation !== "string" || !["running", "failed"].includes(String(pending.status)) || state.subject !== null || Number(state.credential_revision) !== 0) throw new Error("Engine session state is malformed");
-    }
-    return state as { generation: string; credential_revision: number; subject: string | null; cleanup: null | { retired_generation: string; status: "running" | "failed" } };
-  }
-
-
-  /** Configure cloud sync with user credentials. */
   async configureCloudSync(
-    jwt: string,
     userId: string,
     context: NativeVaultTransitionContext,
   ): Promise<CloudConfigResult> {
     const origin = context.engineOrigin ?? this.baseUrl;
-    if (!origin || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const fence = await this.sessionFence(origin);
-    if (!context.isCurrent() || origin !== this.baseUrl || fence.generation !== context.engineGeneration || fence.credential_revision < (context.engineCredentialRevision ?? 0)) throw new Error("Engine transition is no longer current.");
+    if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    // FS-C5b: no engine-side credential fence to read — the engine holds no credential. The
+    // context's own binding to this origin, checked either side of every await, is the fence.
     const headers = { "Content-Type": "application/json", ...(await this.authHeaders()) };
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const resp = await fetch(`${origin}/cloud/configure`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ jwt, user_id: userId, expected_generation: fence.generation, expected_credential_revision: fence.credential_revision }),
+      body: JSON.stringify({ user_id: userId }),
     });
     if (!resp.ok) throw new Error(`Cloud configure failed: ${resp.status}`);
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     return resp.json();
   }
 
-  /** Reconfigure cloud sync with fresh JWT. */
-  async reconfigureCloudSync(jwt: string, userId: string, context: NativeVaultTransitionContext): Promise<void> {
+  /** Reconcile cloud sync against the daemon-owned session. */
+  async reconfigureCloudSync(userId: string, context: NativeVaultTransitionContext): Promise<void> {
     const origin = context.engineOrigin ?? this.baseUrl;
-    if (!origin || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const fence = await this.sessionFence(origin);
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const headers = {
       "Content-Type": "application/json",
       ...(await this.authHeaders()),
     };
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     const response = await fetch(`${origin}/cloud/reconfigure`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ jwt, user_id: userId, expected_generation: fence.generation, expected_credential_revision: fence.credential_revision }),
+      body: JSON.stringify({ user_id: userId }),
     });
     if (!response.ok) throw new Error(`Cloud reconfigure failed: ${response.status}`);
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
+    if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
   }
 
   /** Get cloud-synced settings. */
@@ -3462,143 +3437,37 @@ class EngineAPI {
   }
 
   /**
-   * Push the current Supabase JWT to Python so it persists in SQLite across restarts.
-   * Called automatically on every auth state change (login, token refresh).
-   * Python reads this on startup so it can make authenticated API calls without
-   * waiting for React to boot.
+   * Bind a native-vault transition context to THIS engine process (FS-C5b).
+   *
+   * This used to read the engine's own credential fence over `GET /auth/session-state`, and
+   * retire a stale credential over `DELETE /auth/token`, because the UI had pushed a session into
+   * the engine and two windows could install different ones. **The engine holds no credential
+   * now** — it asks the sync daemon for a short-lived token when it needs one — so there is
+   * nothing to observe, retire, or race over, and both routes are gone.
+   *
+   * What still means something, and is all this does: an alignment is bound to this engine origin
+   * and this subject, so a context made for one engine process is refused after a restart moves
+   * the port. The fence's revision is the coordinator's own, which is what actually orders
+   * account transitions now.
    */
-  async syncTokenToPython(
-    accessToken: string,
-    userId: string,
-    context: NativeVaultTransitionContext,
-    refreshToken?: string,
-    expiresIn?: number,
-  ): Promise<void> {
-    const origin = context.engineOrigin ?? this.baseUrl;
-    if (!origin || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const fence = await this.sessionFence(origin);
-    if (fence.cleanup !== null || fence.subject !== null || fence.generation !== context.engineGeneration || fence.credential_revision < (context.engineCredentialRevision ?? 0) || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const response = await fetch(`${origin}/auth/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        access_token: accessToken,
-        refresh_token: refreshToken ?? null,
-        user_id: userId,
-        expires_in: expiresIn ?? null,
-        expected_generation: fence.generation,
-        expected_credential_revision: fence.credential_revision,
-      }),
-    });
-    if (!response.ok) {
-      // Keep the server's stable code in the client error.  The auth
-      // lifecycle distinguishes a rejected Supabase session (which must be
-      // refreshed/sign-out) from a transient transport failure; reducing the
-      // response to an HTTP number made that recovery path unreachable.
-      const failed: unknown = await response.json().catch(() => null);
-      const detail = failed && typeof failed === "object"
-        ? (failed as { detail?: unknown }).detail
-        : null;
-      const code = detail && typeof detail === "object"
-        && typeof (detail as { code?: unknown }).code === "string"
-        ? (detail as { code: string }).code
-        : null;
-      throw new Error(`Token hand-off failed: ${response.status}${code ? ` (${code})` : ""}`);
-    }
-    const receipt: unknown = await response.json().catch(() => null);
-    if (!receipt || typeof receipt !== "object") throw new Error("Token hand-off receipt is malformed.");
-    const acceptedReceipt = receipt as Record<string, unknown>;
-    if (Object.keys(acceptedReceipt).sort().join(",") !== "credential_revision,generation,status,user_id" || acceptedReceipt.status !== "ok" || acceptedReceipt.user_id !== userId || typeof acceptedReceipt.generation !== "string" || !Number.isSafeInteger(acceptedReceipt.credential_revision) || (acceptedReceipt.credential_revision as number) <= fence.credential_revision) throw new Error("Token hand-off receipt is malformed.");
-    if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    this.acceptedSessionFence = { origin, generation: acceptedReceipt.generation as string, credential_revision: acceptedReceipt.credential_revision as number, subject: userId };
-  }
-
-  /** Align engine custody for an exact host revision; no callback can mint this context. */
   async prepareSessionTransition(context: NativeVaultTransitionContext): Promise<EngineAlignment> {
     if (!this.baseUrl) return { status: "unavailable" };
     const origin = this.baseUrl;
     if (!context.isCurrent()) return { status: "superseded" };
-    let observed: { generation: string; credential_revision: number; subject: string | null; cleanup: null | { retired_generation: string; status: "running" | "failed" } };
-    try { observed = await this.sessionFence(origin); } catch (error) {
-      // Discovery absence is the only unavailable condition; a reachable bad
-      // response is a fenced cleanup failure.
-      return this.baseUrl === null ? { status: "unavailable" } : { status: "cleanup_failed" };
-    }
+    // The process generation survives token rotation but changes even when a
+    // restarted engine reuses its port. /health is intentionally unauthenticated.
+    const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return { status: "unavailable" };
+    const health = await response.json() as { boot_id?: string };
     if (!context.isCurrent() || origin !== this.baseUrl) return { status: "superseded" };
-    if (observed.cleanup?.status === "running" || observed.cleanup?.status === "failed") {
-      this.acceptedSessionFence = { origin, generation: observed.generation, credential_revision: observed.credential_revision, subject: null };
-      try { await this.clearPythonToken(context); } catch { return { status: "cleanup_failed" }; }
-      observed = await this.sessionFence(origin);
-      if (!context.isCurrent() || origin !== this.baseUrl || observed.cleanup !== null) return { status: "cleanup_failed" };
-    }
-    if (observed.subject === null || observed.subject === context.nextSubject) {
-      return { status: "aligned", origin, generation: observed.generation, credentialRevision: observed.credential_revision, subject: observed.subject };
-    }
-    this.acceptedSessionFence = { origin, generation: observed.generation, credential_revision: observed.credential_revision, subject: observed.subject };
-    try {
-      await this.clearPythonToken(context);
-      if (!context.isCurrent() || origin !== this.baseUrl) return { status: "superseded" };
-      const settled = await this.sessionFence();
-      if (!context.isCurrent() || origin !== this.baseUrl) return { status: "superseded" };
-      if (settled.cleanup !== null || (settled.subject !== null && settled.subject !== context.nextSubject)) return { status: "cleanup_failed" };
-      return { status: "aligned", origin, generation: settled.generation, credentialRevision: settled.credential_revision, subject: settled.subject };
-    } catch {
-      return { status: "cleanup_failed" };
-    }
-  }
-
-  /** Clear only the captured outgoing JWT fence under an injected transition context. */
-  async clearPythonToken(context: NativeVaultTransitionContext): Promise<void> {
-    const outgoing = this.acceptedSessionFence;
-    if (!this.baseUrl || !outgoing) return;
-    if (outgoing.origin !== this.baseUrl) throw new Error("Engine cleanup origin changed. Retry sign-out.");
-    const current = () => context.isCurrent() && outgoing.origin === this.baseUrl;
-    let generation = outgoing.generation;
-    let revision = outgoing.credential_revision;
-    const deadline = Date.now() + 5_000;
-    const waitForPendingCleanup = async (): Promise<{ generation: string; credential_revision: number; subject: string | null; cleanup: null | { retired_generation: string; status: "running" | "failed" } }> => {
-      let polls = 0;
-      while (polls < 10 && Date.now() < deadline) {
-        if (!current()) throw new Error("Engine cleanup is no longer current. Retry sign-out.");
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-        const snapshot = await this.sessionFence(outgoing.origin);
-        if (!snapshot.cleanup || snapshot.cleanup.status !== "running") return snapshot;
-        if (snapshot.cleanup.retired_generation !== outgoing.generation) throw new Error("Engine cleanup was superseded. Retry sign-out.");
-        polls += 1;
-      }
-      throw new Error("Engine credential cleanup timed out. Retry account cleanup.");
+    if (!health.boot_id) throw new Error("The local engine did not identify its running instance.");
+    return {
+      status: "aligned",
+      origin,
+      generation: health.boot_id,
+      credentialRevision: context.revision,
+      subject: context.nextSubject,
     };
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (Date.now() >= deadline) throw new Error("Engine credential cleanup timed out. Retry account cleanup.");
-      if (!current()) throw new Error("Engine cleanup is no longer current. Retry sign-out.");
-      const response = await fetch(`${this.baseUrl}/auth/token?expected_generation=${encodeURIComponent(generation)}&expected_credential_revision=${revision}`, { method: "DELETE" }).catch(() => null);
-      if (response?.ok) {
-        const receipt: unknown = await response.json().catch(() => null);
-        if (!receipt || typeof receipt !== "object") throw new Error("Engine cleanup receipt is malformed. Retry sign-out.");
-        const closed = receipt as Record<string, unknown>;
-        if (Object.keys(closed).sort().join(",") !== "credential_revision,generation,status" || closed.status !== "ok" || typeof closed.generation !== "string" || closed.generation === generation || closed.credential_revision !== 0) throw new Error("Engine cleanup receipt is malformed. Retry sign-out.");
-        const settled = await this.sessionFence(outgoing.origin);
-        if (settled.generation !== closed.generation || settled.subject !== null || settled.credential_revision !== 0 || settled.cleanup !== null) throw new Error("Engine cleanup receipt is not settled. Retry sign-out.");
-        if (!current()) throw new Error("Engine cleanup is no longer current. Retry sign-out."); this.acceptedSessionFence = null; return;
-      }
-      let observed = await this.sessionFence(outgoing.origin);
-      if (!current()) throw new Error("Engine cleanup is no longer current. Retry sign-out.");
-      if (observed.cleanup) {
-        if (observed.cleanup.retired_generation !== outgoing.generation) throw new Error("Engine cleanup was superseded. Retry sign-out.");
-        if (observed.cleanup.status === "running") observed = await waitForPendingCleanup();
-        if (observed.cleanup?.status === "running") throw new Error("Engine credential cleanup timed out. Retry account cleanup.");
-        if (observed.cleanup && observed.cleanup.retired_generation !== outgoing.generation) throw new Error("Engine cleanup was superseded. Retry sign-out.");
-        if (observed.subject !== null || observed.credential_revision !== 0) throw new Error("Engine cleanup state is malformed.");
-        generation = observed.generation; revision = 0; continue;
-      }
-      if (observed.generation === outgoing.generation && observed.subject === outgoing.subject) {
-        if (observed.credential_revision < outgoing.credential_revision) throw new Error("Engine cleanup revision regressed. Retry sign-out.");
-        generation = observed.generation; revision = observed.credential_revision; continue;
-      }
-      if (observed.subject === null && observed.credential_revision === 0) { if (!current()) throw new Error("Engine cleanup is no longer current. Retry sign-out."); this.acceptedSessionFence = null; return; }
-      throw new Error("Engine cleanup was superseded. Retry sign-out.");
-    }
-    throw new Error("Engine credential cleanup did not finish. Retry sign-out.");
   }
 
   // ---- Documents API ----

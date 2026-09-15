@@ -30,7 +30,6 @@ from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
 from app.api.auth import AuthMiddleware
 from app.launcher import get_registry as _get_launcher_registry
-from app.api.token_routes import router as token_router
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
 from app.api.tunnel_routes import router as tunnel_router
 from app.api.setup_routes import router as setup_router
@@ -84,7 +83,6 @@ from app.services.cloud_sync.settings_sync import get_settings_sync
 from app.services.ai.engine import (
     initialize_matrx_ai,
     load_tools_and_register,
-    warm_jwt_cache,
 )
 from app.services.ai.key_manager import load_user_keys_into_env
 from app.services.local_db.database import get_db
@@ -555,15 +553,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("[app/main.py] Filesystem index unavailable; direct browsing remains active", exc_info=True)
         _registry.failed("filesystem_index", exc)
-
-    # Phase 0a (post): Warm the in-memory JWT cache from SQLite so matrx-ai has
-    # the user's token available immediately on first authenticated API call.
-    try:
-        await warm_jwt_cache()
-    except Exception:
-        logger.warning(
-            "[app/main.py] Phase 0a: JWT cache warm failed (non-fatal)", exc_info=True
-        )
 
     # Phase 0a (post2): Load user-stored AI provider API keys from SQLite into
     # os.environ so matrx_ai picks them up on every request.  Runs before
@@ -1469,62 +1458,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
 
-    # Phase 7: Cross-component broadcast subscription.
-    # Activates the inbound router (app/api/cross_component_router.py) so
-    # wake hints from aidream and RPC envelopes from other components can
-    # reach this engine. Gated by the `extension_broadcast_enabled` user
-    # setting (default ON) — the same gate extension_broadcast.py honors
-    # for publishes. The old MATRX_BRIDGE_BROADCAST_ENABLED env var was
-    # removed (.env notes the cutover); gating on it here left the
-    # subscribe path permanently dead while the setting claimed ON.
-    #
-    # Mixed-reality wiring: at startup we look up the persisted user_id
-    # from the auth_tokens SQLite row. If a session is already present
-    # (user previously signed in), we subscribe immediately. If not,
-    # POST /auth/token / DELETE /auth/token (token_routes.py) handle the
-    # login/logout path and call connect_broadcast / disconnect_broadcast
-    # so the subscription tracks the live signed-in identity. The user
-    # id latched here is stashed on app.state.broadcast_user_id so the
-    # shutdown teardown can match the subscribe that started it.
-    app.state.broadcast_user_id = None
-    from app.api.extension_broadcast import is_broadcast_enabled
-
-    if not CLOUD_PARTICIPATION_ENABLED:
-        logger.info(
-            "[app/main.py] Phase 7: cross-component broadcast SKIPPED — cloud "
-            "coordination disabled (MATRX_CLOUD_PARTICIPATION=0, dev isolation). "
-            "This engine stays off the shared per-user bridge channel."
-        )
-    elif is_broadcast_enabled():
-        try:
-            from app.api.extension_broadcast import connect_broadcast
-            from app.services.local_db.repositories import TokenRepo
-
-            row = await TokenRepo().get()
-            user_id = (row or {}).get("user_id")
-            if user_id:
-                await connect_broadcast(user_id)
-                app.state.broadcast_user_id = user_id
-                logger.info(
-                    "[app/main.py] Phase 7: cross-component broadcast subscribed for user_id=%s",
-                    user_id,
-                )
-            else:
-                logger.info(
-                    "[app/main.py] Phase 7: cross-component broadcast skipped — no signed-in user "
-                    "(will subscribe on next POST /auth/token)"
-                )
-        except Exception as exc:
-            logger.warning(
-                "[app/main.py] Phase 7: cross-component broadcast failed to start (non-fatal): %s",
-                exc,
-                exc_info=True,
-            )
-    else:
-        logger.info(
-            "[app/main.py] Phase 7: cross-component broadcast disabled "
-            "(extension_broadcast_enabled=false in settings)"
-        )
+    # Phase 7: one daemon listener restores and retires session-dependent
+    # services after sign-in, sign-out, rotation, recovery, and account switches.
+    try:
+        from app.services.daemon_session_reconciler import get_daemon_session_reconciler
+        await get_daemon_session_reconciler().start()
+        app.state.daemon_session_reconciler_started = True
+    except Exception as exc:
+        app.state.daemon_session_reconciler_started = False
+        logger.warning("[app/main.py] Phase 7: daemon session reconciler failed: %s", exc)
 
     # Phase 8: matrx-scheduler host (surface='desktop').
     #
@@ -1539,9 +1481,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Phase 8 uses Postgres polling against the sch_* tables.
     #
     # Activation is gated by MATRX_LOCAL_SCHEDULER_ENABLED (default off).
-    # The Supabase client carries the user's JWT when one is persisted
-    # in auth_tokens — RLS filters sch_* rows to that user only. When no
-    # user is signed in, the scanner polls but sees zero rows.
+    # Every scanner request resolves the current daemon grant. RLS scopes
+    # sch_* rows to that owner; signed-out requests carry only the
+    # publishable key and cannot reuse an earlier user's bearer.
     #
     # See app/services/scheduler_host.py for the full host posture.
     app.state.scheduler_host_started = False
@@ -1555,7 +1497,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if is_scheduler_enabled():
             from supabase import create_async_client  # type: ignore[import-not-found]
             from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
-            from app.services.local_db.repositories import TokenRepo
+            from app.services.scheduler_host import scheduler_client_options
 
             if not (SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY):
                 logger.warning(
@@ -1564,36 +1506,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 )
             else:
                 _scheduler_supabase = await create_async_client(
-                    SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY
+                    SUPABASE_URL,
+                    SUPABASE_PUBLISHABLE_KEY,
+                    options=scheduler_client_options(SUPABASE_PUBLISHABLE_KEY),
                 )
-                # Attach the persisted JWT so PostgREST queries from the
-                # scanner carry the user's identity and RLS scopes the
-                # sch_task / sch_run rows to that user. If no JWT is
-                # persisted yet (user not signed in), the scanner still
-                # polls but RLS returns zero rows — the next POST
-                # /auth/token (when the desktop UI delivers a session)
-                # is the natural place to re-attach the new token;
-                # follow-up work, not blocking for the host plumb.
-                try:
-                    _tok_row = await TokenRepo().get()
-                    _access_token = (_tok_row or {}).get("access_token")
-                    if _access_token:
-                        try:
-                            _scheduler_supabase.postgrest.auth(_access_token)
-                            logger.info(
-                                "[app/main.py] Phase 8: scheduler Supabase client "
-                                "attached persisted user JWT (RLS-scoped)"
-                            )
-                        except Exception:
-                            logger.debug(
-                                "[app/main.py] Phase 8: postgrest.auth() failed (non-fatal)",
-                                exc_info=True,
-                            )
-                except Exception:
-                    logger.debug(
-                        "[app/main.py] Phase 8: TokenRepo read failed (non-fatal)",
-                        exc_info=True,
-                    )
 
                 _configured = await configure_scheduler_host(_scheduler_supabase)
                 if _configured:
@@ -1700,18 +1616,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Phase S0: Tear down cross-component broadcast subscription ────────
     # Mirrors Phase 7 startup. The disconnect is best-effort + hard-timeouted
     # so a wedged Supabase realtime socket can never block engine shutdown.
-    _broadcast_user_id = getattr(app.state, "broadcast_user_id", None)
-    if _broadcast_user_id:
+    if getattr(app.state, "daemon_session_reconciler_started", False):
         try:
-            from app.api.extension_broadcast import disconnect_broadcast
-
-            await asyncio.wait_for(
-                disconnect_broadcast(_broadcast_user_id), timeout=3.0
-            )
-            logger.info(
-                "[app/main.py] Phase S0: cross-component broadcast disconnected for user_id=%s",
-                _broadcast_user_id,
-            )
+            from app.services.daemon_session_reconciler import get_daemon_session_reconciler
+            await asyncio.wait_for(get_daemon_session_reconciler().stop(), timeout=3.0)
         except asyncio.TimeoutError:
             logger.warning(
                 "[app/main.py] Phase S0: cross-component broadcast disconnect timed out after 3s"
@@ -2191,7 +2099,6 @@ async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedErro
     )
 
 
-app.include_router(token_router)  # Token sync — React pushes JWT to Python
 # Admin endpoints (/admin/status, /admin/shutdown, /admin/diagnose) — used by
 # the Tauri shell to coordinate engine lifecycle without reaching across to
 # kill engine-owned children. Listed in _PUBLIC_PATHS in app/api/auth.py.

@@ -70,7 +70,7 @@ import {
   type ExtensionTunnelStatus,
 } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import type { MatrxUser as SupabaseUser } from "@/lib/custodian";
 
 interface BridgeTestProps {
   engineStatus: EngineStatus;

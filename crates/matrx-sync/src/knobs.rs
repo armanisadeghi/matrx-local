@@ -30,6 +30,14 @@ pub struct Knobs {
     pub mass_delete_percent: u8,
     /// `sync.mass_delete_count` — items ≥10, default 1000 (D8). The **absolute** arm.
     pub mass_delete_count: u32,
+    /// `sync.mass_delete_window_hours` — hours ≥1, default 24. The breaker's **rolling window**.
+    ///
+    /// `deleted_count` and `deleted_percent` are measured over the deletions this mapping executed
+    /// inside this window **plus** the plan being built — never over one plan alone. Counting one
+    /// plan let a wipe through in instalments (H1): the daemon plans on a debounce timer and the
+    /// scanner walks a large tree incrementally, so an `rm -rf`, an unmounted drive, or ransomware
+    /// working alphabetically all arrive as a stream of small deletions.
+    pub mass_delete_window_hours: u32,
     /// `sync.mass_delete_min_count` — items ≥1, default 20. The **floor under the percentage
     /// arm**, added by SPEC-ENGINE amendment 2 (2026-09-13).
     ///
@@ -71,6 +79,7 @@ impl Default for Knobs {
             mass_delete_percent: 50,
             mass_delete_count: 1000,
             mass_delete_min_count: 20,
+            mass_delete_window_hours: 24,
             upload_only_propagates_deletes: true,
             download_only_local_edit: DownloadOnlyLocalEdit::PreserveAndFlag,
             conflict_copy_template: "{stem} (conflicted copy from {device} {YYYY-MM-DD}){ext}"
@@ -138,6 +147,12 @@ impl Knobs {
                 value: self.mass_delete_count.to_string(),
             });
         }
+        if self.mass_delete_window_hours < 1 {
+            return Err(KnobOutOfRange {
+                knob: "sync.mass_delete_window_hours",
+                value: self.mass_delete_window_hours.to_string(),
+            });
+        }
         if self.mass_delete_min_count < 1 {
             return Err(KnobOutOfRange {
                 knob: "sync.mass_delete_min_count",
@@ -170,6 +185,7 @@ mod tests {
         assert_eq!(k.mass_delete_percent, 50);
         assert_eq!(k.mass_delete_count, 1000);
         assert_eq!(k.mass_delete_min_count, 20);
+        assert_eq!(k.mass_delete_window_hours, 24);
         assert_eq!(k.max_path_chars, 400);
         assert_eq!(k.max_segment_chars, 255);
         assert_eq!(k.max_file_bytes, 5_000_000_000);
@@ -196,5 +212,10 @@ mod tests {
             ..Knobs::default()
         };
         assert!(floor.validate().is_err());
+        let window = Knobs {
+            mass_delete_window_hours: 0,
+            ..Knobs::default()
+        };
+        assert!(window.validate().is_err());
     }
 }

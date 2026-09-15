@@ -861,110 +861,99 @@ _TOKEN_KEY = "current_user"
 
 
 class TokenRepo:
+    """The engine's access token — a **thin adapter over the sync daemon** (SPEC-CUSTODY §10.4).
+
+    This class used to own a row in the local ``auth_tokens`` table that the React UI pushed a
+    Supabase session into. That was the device's second refresh-token holder, and nothing headless
+    could renew it: MXL-D-046. Under D17 the daemon (``matrx-syncd``) is the device's only session
+    holder, so this class stores nothing at all — it asks :mod:`app.services.sync_client` for a
+    short-lived token and shapes the answer like the row its call sites already read.
+
+    What went, and why nothing replaced it:
+
+    * ``save()`` — there is nothing to save. A token arriving from outside would be a second
+      holder by definition, which is the thing D17 abolishes.
+    * ``clear()`` — sign-out is ``POST /v1/sign-out`` on the daemon, which wipes the keychain item
+      and writes the cloud state. Clearing a local copy would be theatre.
+    * the ``refresh_token`` field — it exists in exactly one place on the device, the OS keychain,
+      and only the daemon touches it. The key is **absent** rather than present-and-``None``, so
+      code reaching for it fails loudly instead of quietly reading ``None`` as "no session".
+    """
+
     def __init__(self, db: LocalDatabase | None = None):
-        self._db = db or get_db()
+        # Accepted and ignored: the call sites pass a database handle, and rewriting all of them in
+        # the same commit as the custody switch would make the switch unreviewable. There is no
+        # local row left to read with it.
+        self._db = db
 
     async def get(self) -> dict[str, Any] | None:
-        row = await self._db.fetchone(
-            "SELECT * FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,)
-        )
-        if not row:
+        """The current access token, shaped like the row this used to return.
+
+        ``None`` means there is no usable session **right now** — signed out, sign-in needed,
+        offline, the keychain unavailable, or the daemon not running. Each is a state the daemon
+        already named; :meth:`state` returns it for a surface to render. A caller that only needs
+        "can I make a cloud call" reads ``None`` and stops, exactly as before.
+        """
+        from app.services.sync_client import get_sync_client
+
+        grant = await get_sync_client().access_grant()
+        if grant is None:
             return None
-        data = _row_to_dict(row)
-        # Decrypt tokens that were encrypted at rest (transparent for legacy
-        # plaintext rows). An undecryptable token decrypts to None → the
-        # caller sees no usable session and re-auth kicks in.
-        from app.services.local_db.secret_store import unprotect
+        token, user_id = grant
+        return {
+            "key": _TOKEN_KEY,
+            "access_token": token,
+            "user_id": user_id,
+            # The daemon schedules rotation off the token's own ``exp``; a caller that wants the
+            # expiry reads the claim, which :meth:`is_expired` already does.
+            "expires_at": None,
+        }
 
-        if data.get("access_token") is not None:
-            data["access_token"] = unprotect(data["access_token"])
-        if data.get("refresh_token") is not None:
-            data["refresh_token"] = unprotect(data["refresh_token"])
-        return data
+    async def state(self):
+        """The honest session state, for a surface that must say why there is no token."""
+        from app.services import sync_client
 
-    async def save(
-        self,
-        access_token: str,
-        user_id: str,
-        refresh_token: str | None = None,
-        expires_at: int | None = None,
-    ) -> None:
-        # 🚨 Do not restore a passthrough: protect() is the fail-loud encrypted
-        # storage resolver, and plaintext is not an equivalent credential store.
-        from app.services.local_db.secret_store import protect
-
-        await self._db.execute(
-            """INSERT INTO auth_tokens (key, access_token, refresh_token, user_id, expires_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(key) DO UPDATE SET
-                 access_token=excluded.access_token,
-                 refresh_token=excluded.refresh_token,
-                 user_id=excluded.user_id,
-                 expires_at=excluded.expires_at,
-                 updated_at=excluded.updated_at""",
-            (
-                _TOKEN_KEY,
-                protect(access_token),
-                protect(refresh_token),
-                user_id,
-                expires_at,
-                _now(),
-            ),
-        )
-        await self._db.commit()
+        return await sync_client.get_sync_client().session()
 
     async def get_owner_user_id(self) -> str | None:
-        """Return the signed-in owner's user_id without decrypting tokens.
+        """The signed-in owner's user id, without handing anybody a token to learn it.
 
-        Used by the auth layer to authorize remote (tunnel) callers: only the
-        user who signed into THIS instance may drive it remotely. Reads just
-        the plaintext user_id column, so it's cheap and avoids touching the
-        keychain on every request.
+        Used by the auth layer to authorise remote (tunnel) callers.
         """
-        row = await self._db.fetchone(
-            "SELECT user_id FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,)
-        )
-        if not row:
-            return None
-        uid = _row_to_dict(row).get("user_id")
-        return uid or None
+        from app.services.sync_client import get_sync_client
 
-    async def clear(self) -> None:
-        await self._db.execute("DELETE FROM auth_tokens WHERE key = ?", (_TOKEN_KEY,))
-        await self._db.commit()
+        return await get_sync_client().user_id()
 
     def is_expired(self, token_row: dict[str, Any]) -> bool:
-        """True when the ACCESS token is expired.
+        """True when the ACCESS token is expired, read from the JWT's own ``exp`` claim.
 
-        The JWT's own ``exp`` claim is the source of truth — the stored
-        ``expires_at`` column has been observed carrying the SESSION
-        (refresh-token) expiry (~7 days) while the access token was already
-        dead, which made every engine-owned sync loop run "configured" into
-        guaranteed 401s (MXL-D-046). The column is only a fallback for rows
-        whose token cannot be decoded.
+        The claim is the source of truth. The old ``expires_at`` column "has been observed carrying
+        the SESSION (refresh-token) expiry (~7 days) while the access token was already dead, which
+        made every engine-owned sync loop run 'configured' into guaranteed 401s" (MXL-D-046). The
+        column is gone; the lesson is kept, and the daemon now schedules from the same claim.
         """
         import base64
         import json as _json
         import time
 
         token = token_row.get("access_token")
-        if isinstance(token, str) and token.count(".") == 2:
-            try:
-                payload_b64 = token.split(".")[1]
-                payload_b64 += "=" * (-len(payload_b64) % 4)
-                claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
-                exp = claims.get("exp")
-                if exp is not None:
-                    return int(time.time()) >= int(exp)
-            except Exception:
-                logger.warning(
-                    "[auth_tokens] could not decode JWT exp claim — falling back "
-                    "to the stored expires_at column (known to over-report)"
-                )
-        expires_at = token_row.get("expires_at")
-        if not expires_at:
-            return False
-        return int(time.time()) >= int(expires_at)
+        if not isinstance(token, str) or token.count(".") != 2:
+            # Not a JWT: refuse to call it valid. "Cannot tell" is never "fine".
+            return True
+        try:
+            payload_b64 = token.split(".")[1]
+            payload_b64 += "=" * (-len(payload_b64) % 4)
+            claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+            exp = claims.get("exp")
+        except Exception:
+            logger.warning(
+                "[token] the access token's exp claim could not be decoded; treating it as expired "
+                "so the caller asks the sync daemon again rather than sending a token we cannot read"
+            )
+            return True
+        if exp is None:
+            return True
+        return int(time.time()) >= int(exp)
 
 
 # ==================================================================

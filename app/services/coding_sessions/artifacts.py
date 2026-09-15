@@ -48,7 +48,7 @@ from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 from app.services.paths.manager import safe_dir
 from app.services.session_freshness import (
-    request_ui_session_refresh,
+    request_session_grant,
     session_blocker,
 )
 
@@ -466,7 +466,7 @@ class CodingSessionArtifactsLane:
             self._session_blocker_since = (
                 self._session_blocker_since or self._last_run_at or _utc_now_iso()
             )
-            await request_ui_session_refresh(
+            await request_session_grant(
                 lane="coding_session_artifacts", reason="expired_or_missing"
             )
             return 0, 0
@@ -528,7 +528,7 @@ class CodingSessionArtifactsLane:
                             or self._last_run_at
                             or _utc_now_iso()
                         )
-                        await request_ui_session_refresh(
+                        await request_session_grant(
                             lane="coding_session_artifacts", reason="rejected_401"
                         )
                         halt.set()

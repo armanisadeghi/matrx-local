@@ -190,21 +190,40 @@ impl SupabaseOAuth {
         struct Err_ {
             error: Option<String>,
             error_description: Option<String>,
+            // Supabase OAuth server errors use this pair rather than OAuth's
+            // `error`/`error_description` for an exhausted rotating refresh token.
+            error_code: Option<String>,
+            msg: Option<String>,
         }
         let parsed: Err_ = serde_json::from_str(&body).unwrap_or(Err_ {
             error: None,
             error_description: None,
+            error_code: None,
+            msg: None,
         });
-        let code = parsed.error.unwrap_or_else(|| status.as_u16().to_string());
+        let code = parsed
+            .error
+            .or(parsed.error_code)
+            .unwrap_or_else(|| status.as_u16().to_string());
 
-        // 400/401 `invalid_grant` is terminal: revoked, reused, or the user revoked the grant from
-        // the web. Everything else — 5xx, 429, anything unrecognised — is retryable (§5).
+        // 400/401 known grant refusals are terminal: revoked, reused, or the user revoked the
+        // grant from the web. Supabase reports rotating-token exhaustion as `error_code`, not
+        // the standard OAuth `error`. Everything else — including unknown 400s, 5xx and 429 —
+        // remains retryable (§5); a bad proxy response must not erase a valid local session.
         let terminal = (status.as_u16() == 400 || status.as_u16() == 401)
-            && matches!(code.as_str(), "invalid_grant" | "invalid_request" | "unauthorized_client");
+            && matches!(
+                code.as_str(),
+                "invalid_grant"
+                    | "invalid_request"
+                    | "unauthorized_client"
+                    | "refresh_token_not_found"
+                    | "refresh_token_already_used"
+                    | "session_expired"
+            );
         if terminal {
             Err(CustodyError::GrantRefused {
                 error: code,
-                description: parsed.error_description,
+                description: parsed.error_description.or(parsed.msg),
             })
         } else {
             Err(CustodyError::AmbiguousResponse {
@@ -263,6 +282,8 @@ pub struct FakeAuthServer {
 pub enum FakeFailure {
     /// The terminal path.
     InvalidGrant,
+    /// Supabase's rotating-token exhaustion response (`error_code`).
+    RefreshTokenNotFound,
     /// A 5xx or a 429 — retryable.
     ServerError(u16),
     /// A captive-portal 200 carrying HTML.
@@ -277,6 +298,10 @@ impl FakeFailure {
             FakeFailure::InvalidGrant => CustodyError::GrantRefused {
                 error: "invalid_grant".into(),
                 description: Some("the refresh token has been revoked".into()),
+            },
+            FakeFailure::RefreshTokenNotFound => CustodyError::GrantRefused {
+                error: "refresh_token_not_found".into(),
+                description: Some("Invalid Refresh Token: Refresh Token Not Found".into()),
             },
             FakeFailure::ServerError(status) => CustodyError::AmbiguousResponse {
                 status,
@@ -408,5 +433,39 @@ mod tests {
     #[test]
     fn a_token_that_is_not_a_jwt_is_refused() {
         assert!(identity_from_jwt("not-a-jwt").is_err());
+    }
+
+    #[tokio::test]
+    async fn supabase_refresh_token_not_found_is_terminal() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = [0_u8; 4096];
+            let _ = socket.read(&mut request).await.expect("read request");
+            let body = r#"{"code":400,"error_code":"refresh_token_not_found","msg":"Invalid Refresh Token: Refresh Token Not Found"}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+
+        let provider = SupabaseOAuth {
+            token_url: format!("http://{address}/auth/v1/oauth/token"),
+            client_id: "test-client".into(),
+            http: reqwest::Client::new(),
+        };
+        let error = provider.refresh("exhausted-token").await.expect_err("terminal refusal");
+        assert!(matches!(
+            error,
+            CustodyError::GrantRefused { ref error, .. } if error == "refresh_token_not_found"
+        ));
     }
 }

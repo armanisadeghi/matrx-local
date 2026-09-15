@@ -33,6 +33,7 @@ import {
   listRegisteredGoogleFiles,
   type RegisteredGoogleFile,
 } from "@/lib/google-workspace";
+import { fetchLocalTools } from "@/lib/local-tool-exposure";
 import { cn } from "@/lib/utils";
 
 const MAX_ATTACHMENTS = 5;
@@ -45,15 +46,6 @@ interface LocalToolEntry {
   description: string;
   category: string;
   advertised: boolean;
-}
-
-interface LocalToolsResponse {
-  tools?: Array<{
-    name?: string;
-    description?: string;
-    category?: string;
-    advertised?: boolean;
-  }>;
 }
 
 interface ComingSoonRow {
@@ -167,11 +159,7 @@ export function CloudChatPlusMenu({
     let cancelled = false;
     setToolsLoading(true);
     setToolsError(null);
-    fetch(`${engineUrl}/chat/local-tools`, { signal: AbortSignal.timeout(6000) })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as LocalToolsResponse;
-      })
+    fetchLocalTools(engineUrl)
       .then((payload) => {
         if (cancelled) return;
         const advertised = (payload.tools ?? [])

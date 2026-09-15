@@ -42,7 +42,13 @@ pub struct ApiState {
     /// The loopback listener's port, for the `Host` allow-list.
     pub tcp_port: Option<u16>,
     /// Raised by `POST /v1/shutdown`; the run loop watches it.
-    pub shutdown: tokio::sync::Notify,
+    ///
+    /// A `watch` channel and **not** a `Notify`: a notification has to find a waiter, and the run
+    /// loop does not become one until after it has bound its listeners, published its discovery
+    /// file and started adopting a session — which is exactly the stretch in which a shutdown is
+    /// most likely to arrive and most important to honour. A `watch` holds the request until
+    /// somebody reads it, so the window does not exist rather than being narrow.
+    pub shutdown: tokio::sync::watch::Sender<bool>,
     /// The teardown budget, in seconds (`sync.shutdown_budget_s`).
     pub shutdown_budget_s: u64,
 }

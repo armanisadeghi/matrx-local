@@ -1,13 +1,13 @@
 """The engine's client for the sync daemon's control API (FS-C5, SPEC-CUSTODY §6).
 
-The Python engine is a **token consumer**, never a token holder. It asks `matrx-syncd` for a
-short-lived access token and holds it in memory only; there is no refresh token anywhere in
-Python, which is what makes the MXL-D-046 class — a UI-pushed token nothing headless can renew —
-structurally impossible rather than merely fixed.
+The Python engine is a **token consumer**, never a token holder. It asks `matrx-syncd` for the
+current token-owner grant at each operation boundary; the daemon alone caches and refreshes it.
+There is no refresh token or durable access-token cache anywhere in Python.
 
 Public surface:
 
 * :func:`get_sync_client` — the process-wide client.
+* :class:`SyncDaemonClient.access_grant` — the current atomic JWT/user pair.
 * :class:`SyncDaemonClient.access_token` — a JWT, or ``None`` with a state.
 * :class:`SyncDaemonClient.session` — the honest session state, for a surface to render.
 

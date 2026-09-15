@@ -7,10 +7,9 @@ and synchronization between local and cloud storage.
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.services.cloud_sync.instance_manager import get_instance_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
@@ -20,12 +19,8 @@ router = APIRouter(prefix="/cloud", tags=["cloud-sync"])
 
 
 class ConfigureRequest(BaseModel):
-    jwt: str
+    """Identity assertion checked against the local sync daemon."""
     user_id: str
-    expected_generation: UUID | None = None
-    expected_credential_revision: int | None = Field(
-        default=None, ge=0, le=9_007_199_254_740_991
-    )
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -68,24 +63,31 @@ class InstanceInfo(BaseModel):
 
 # ── Configuration ───────────────────────────────────────────────────────
 
+async def _require_daemon_owner(user_id: str) -> None:
+    """Refuse a caller assertion that does not match the daemon's owner."""
+    from app.services.sync_client import get_sync_client
+
+    grant = await get_sync_client().access_grant()
+    if grant is None:
+        raise HTTPException(status_code=409, detail="sync_daemon_session_unavailable")
+    _, daemon_user_id = grant
+    if user_id != daemon_user_id:
+        raise HTTPException(status_code=403, detail="desktop_owner_mismatch")
+
+
 @router.post("/configure")
 async def configure_sync(req: ConfigureRequest) -> dict:
-    """Configure the sync engine with user credentials.
+    """Configure cloud sync after binding to the daemon's current owner.
 
     Called by the frontend after user authentication.
     """
-    from app.services.auth_session import get_auth_session, SessionFenceError
-    try:
-        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
-    except SessionFenceError as error:
-        raise HTTPException(status_code=409, detail={"code": error.code})
+    await _require_daemon_owner(req.user_id)
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
     sync.configure(
         supabase_url=SUPABASE_URL,
         supabase_key=SUPABASE_PUBLISHABLE_KEY,
-        jwt=req.jwt,
         user_id=req.user_id,
         instance_id=mgr.instance_id,
     )
@@ -108,19 +110,14 @@ async def configure_sync(req: ConfigureRequest) -> dict:
 
 @router.post("/reconfigure")
 async def reconfigure_sync(req: ConfigureRequest) -> dict:
-    """Re-configure with a fresh JWT (e.g. after token refresh)."""
-    from app.services.auth_session import get_auth_session, SessionFenceError
-    try:
-        await get_auth_session().current_token_matches(generation=str(req.expected_generation) if req.expected_generation else None, revision=req.expected_credential_revision, subject=req.user_id, token=req.jwt)
-    except SessionFenceError as error:
-        raise HTTPException(status_code=409, detail={"code": error.code})
+    """Reconfigure after confirming the daemon still owns this user."""
+    await _require_daemon_owner(req.user_id)
     sync = get_settings_sync()
     mgr = get_instance_manager()
 
     sync.configure(
         supabase_url=SUPABASE_URL,
         supabase_key=SUPABASE_PUBLISHABLE_KEY,
-        jwt=req.jwt,
         user_id=req.user_id,
         instance_id=mgr.instance_id,
     )

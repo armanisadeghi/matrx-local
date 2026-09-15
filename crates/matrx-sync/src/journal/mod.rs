@@ -519,6 +519,82 @@ impl Journal {
         Ok(())
     }
 
+    // --------------------------------------------- the mass-delete rolling window
+
+    /// How many deletions this mapping executed at or after `since` (H1).
+    ///
+    /// This is what [`crate::PlanContext::recent_deletions`] is filled from. Timestamps are
+    /// RFC3339 UTC, whose lexicographic order **is** chronological order, so the comparison is a
+    /// string comparison and the daemon computes `since` by subtracting
+    /// `sync.mass_delete_window_hours` from now.
+    ///
+    /// The planner never calls this: it is pure, and a window is state.
+    pub fn deletions_since(&self, mapping_id: &str, since: &str) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM mass_delete_window WHERE mapping_id = ?1 AND at >= ?2",
+            params![mapping_id, since],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// The mapping's item count when the deletion window opened, if a window is open and has not
+    /// aged out past `since`.
+    ///
+    /// This is [`crate::PlanContext::window_item_count`] — the percentage arm's **frozen**
+    /// denominator (SPEC-ENGINE §2 amendment 3). `None` means no window is open, and the planner
+    /// then falls back to what the mapping holds now, which is the same number when no deletions
+    /// have happened.
+    pub fn window_item_count(&self, mapping_id: &str, since: &str) -> Result<Option<usize>> {
+        let row: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT item_count FROM mass_delete_window_open
+                 WHERE mapping_id = ?1 AND opened_at >= ?2",
+                params![mapping_id, since],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(row.map(|n| n.max(0) as usize))
+    }
+
+    /// Forget this mapping's deletion window.
+    ///
+    /// Called when the user **resumes a suspended mapping** — they have looked at what was about
+    /// to happen and said to go on, so the window that stopped it must not stop it again on the
+    /// next plan. It is also how a legitimate large cleanup completes: suspend, ask, resume.
+    ///
+    /// It touches only the breaker's own memory; the `activity` log the user reads is untouched.
+    pub fn clear_deletion_window(&self, mapping_id: &str) -> Result<usize> {
+        self.conn.execute(
+            "DELETE FROM mass_delete_window_open WHERE mapping_id = ?1",
+            params![mapping_id],
+        )?;
+        let n = self.conn.execute(
+            "DELETE FROM mass_delete_window WHERE mapping_id = ?1",
+            params![mapping_id],
+        )?;
+        Ok(n)
+    }
+
+    /// Drop window rows older than `before`, so the table cannot grow without bound.
+    ///
+    /// Separate from [`Journal::clear_deletion_window`] on purpose: this is housekeeping outside
+    /// the window, that one is the user's decision inside it.
+    pub fn prune_deletion_window(&self, before: &str) -> Result<usize> {
+        // A window whose opening has aged out is no window: its frozen denominator must go with
+        // it, or a stale count would divide a fresh window's deletions.
+        self.conn.execute(
+            "DELETE FROM mass_delete_window_open WHERE opened_at < ?1",
+            params![before],
+        )?;
+        let n = self.conn.execute(
+            "DELETE FROM mass_delete_window WHERE at < ?1",
+            params![before],
+        )?;
+        Ok(n)
+    }
+
     // ------------------------------------------------------------- conflicts
 
     /// Record a conflict.

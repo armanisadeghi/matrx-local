@@ -42,6 +42,16 @@ pub struct World {
     pub next_id: u64,
     /// Wall-clock stand-in, incremented per applied op. Deterministic.
     pub tick: u64,
+    /// Deletions this world has EXECUTED — the breaker's rolling window (H1).
+    ///
+    /// The journal keeps the real one in `mass_delete_window`; the model keeps a count, because
+    /// every property run is one window. Resuming a suspended mapping is what clears it.
+    pub executed_deletions: usize,
+    /// The item count when the deletion window opened — the percentage arm's frozen denominator.
+    ///
+    /// Recorded by the first deletion, BEFORE its synced row goes, exactly as the journal's
+    /// `mass_delete_window_open` row is. Resuming a suspended mapping clears it with the window.
+    pub window_item_count: Option<usize>,
 }
 
 impl World {
@@ -79,6 +89,13 @@ impl World {
         }
         for op in &plan.ops {
             self.apply_op(op);
+        }
+    }
+
+    /// Freeze the denominator on the first deletion of a window, before the row is removed.
+    fn open_delete_window(&mut self) {
+        if self.window_item_count.is_none() {
+            self.window_item_count = Some(self.synced.len());
         }
     }
 
@@ -183,11 +200,15 @@ impl World {
                 self.record_synced_from_trees(path);
             }
             PlanOp::DeleteLocalToTrash { path, .. } => {
+                self.open_delete_window();
+                self.executed_deletions += 1;
                 self.local.remove(path);
                 self.unhashed.remove(path);
                 self.synced.remove(path);
             }
             PlanOp::DeleteRemoteTombstone { path, .. } => {
+                self.open_delete_window();
+                self.executed_deletions += 1;
                 if let Some(n) = self.remote.get_mut(path) {
                     let at = format!("2026-09-13T00:01:{:02}Z", self.tick % 60);
                     n.deleted_at = Some(at);

@@ -105,7 +105,6 @@ _LOCAL_BOOTSTRAP_PATHS = frozenset(
         "/chat/local-llm/status",
         "/chat/delegation/status",  # read-only local diagnostics; tunnel requires auth
         "/auth/token",  # JWT is the credential being given to the engine
-        "/auth/session-state",
         "/admin/status",
         "/admin/shutdown",
         "/admin/diagnose",

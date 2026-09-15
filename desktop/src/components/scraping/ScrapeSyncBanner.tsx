@@ -22,7 +22,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, CloudOff, LogIn, Loader2, RefreshCw, UploadCloud } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
 import { engine, type ScrapeSyncState, type ScrapeSyncStatus } from "@/lib/api";
-import supabase from "@/lib/supabase";
+import { getAuthedSession } from "@/lib/custodian";
 import { nativeVaultEngineTransitionContext } from "@/lib/native-vault-auth";
 
 const POLL_MS = 30_000;
@@ -80,23 +80,17 @@ export function ScrapeSyncBanner() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  /** Re-establish the engine's JWT from the live Supabase session. The engine
-   *  drains the scrape backlog on receipt, so this is the whole fix. */
+  /** Ask the engine to drain the scrape backlog.
+   *
+   *  This used to re-push the window's JWT to the engine first, because the engine's copy could
+   *  be stale and nothing could renew it. The engine now asks the sync daemon for a live token
+   *  whenever it needs one (FS-C5b), so there is nothing to re-establish — only work to trigger. */
   const handleSignIn = useCallback(async () => {
     setBusy(true);
     try {
-      const { data } = await supabase.auth.getSession();
-      const session = data.session;
-      if (session) {
-        const context = nativeVaultEngineTransitionContext(session.user.id);
-        if (!context) throw new Error("Engine account alignment is not ready");
-        await engine.syncTokenToPython(
-          session.access_token,
-          session.user.id,
-          context,
-          session.refresh_token,
-          session.expires_in,
-        );
+      const session = await getAuthedSession();
+      if (session && !nativeVaultEngineTransitionContext(session.user.id)) {
+        throw new Error("Engine account alignment is not ready");
       }
       const result = await engine.triggerScrapeSync();
       setJustSynced(result.pushed);
@@ -111,8 +105,8 @@ export function ScrapeSyncBanner() {
   const handleRetry = useCallback(async () => {
     setBusy(true);
     try {
-      const { data } = await supabase.auth.getSession();
-      const context = nativeVaultEngineTransitionContext(data.session?.user.id);
+      const session = await getAuthedSession();
+      const context = nativeVaultEngineTransitionContext(session?.user.id);
       if (!context || !context.isCurrent()) throw new Error("Engine account alignment is not ready");
       const result = await engine.triggerScrapeSync();
       if (!context.isCurrent()) throw new Error("Engine account alignment changed");

@@ -6,6 +6,7 @@ import { QuickActionBar } from "./QuickActionBar";
 import { AppActionBanner } from "./AppActionBanner";
 import { EngineDownBanner } from "@/components/EngineDownBanner";
 import { EngineSupervisorBanner } from "@/components/recovery/EngineSupervisorBanner";
+import { AccountConnectionBanner } from "@/components/AccountConnectionBanner";
 import { AppConfigBanner } from "@/components/AppConfigBanner";
 import { useAppConfigStatus } from "@/hooks/use-app-config-status";
 import { useDevTerminalHeight } from "@/components/DevTerminalPanel";
@@ -13,7 +14,7 @@ import type { EngineStatus } from "@/hooks/use-engine";
 import type { TranscriptionState, TranscriptionActions } from "@/hooks/use-transcription";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import type { AppNotification } from "@/hooks/use-notifications";
-import type { User } from "@supabase/supabase-js";
+import type { MatrxUser as User } from "@/lib/custodian";
 import { recovery } from "@/lib/recovery";
 import { RecoveryCenter } from "@/components/recovery/RecoveryCenter";
 import { SurfaceErrorBoundary } from "@/components/recovery/SurfaceErrorBoundary";
@@ -21,6 +22,8 @@ import { SurfaceErrorBoundary } from "@/components/recovery/SurfaceErrorBoundary
 const NOOP = () => {};
 
 export interface PageEntry {
+  /** Delay engine-only data reads until discovery has supplied an origin. */
+  requiresEngine?: boolean;
   /** The hash path this page owns, e.g. "/" or "/voice" */
   path: string;
   /** The fully constructed React element to keep alive */
@@ -31,6 +34,8 @@ interface AppLayoutProps {
   engineStatus: EngineStatus;
   engineUrl: string | null;
   engineVersion?: string;
+  accountConnectionError?: string | null;
+  onRetryAccountConnection?: () => Promise<void>;
   onRefresh: () => void;
   onOpenMonitor?: () => void;
   /** Full engine restart (stop → start → reconnect) — powers the down-banner. */
@@ -72,6 +77,8 @@ export function AppLayout({
   engineStatus,
   engineUrl,
   engineVersion,
+  accountConnectionError,
+  onRetryAccountConnection,
   onRefresh,
   onOpenMonitor,
   onRestartEngine,
@@ -146,8 +153,6 @@ export function AppLayout({
           onRestartEngine={onRestartEngine}
           onOpenMonitor={onOpenMonitor ?? NOOP}
         />
-        {/* "The engine is failing to START" — a different sentence and a
-            different remedy from EngineDownBanner's "it is not running". */}
         <EngineSupervisorBanner onOpenMonitor={onOpenMonitor ?? NOOP} />
         <AppConfigBanner
           appConfig={appConfig}
@@ -155,8 +160,11 @@ export function AppLayout({
           updateActions={updateActions}
         />
         <AppActionBanner engineStatus={engineStatus} />
+        {user && engineStatus === "connected" && onRetryAccountConnection && (
+          <AccountConnectionBanner error={accountConnectionError ?? null} onRetry={onRetryAccountConnection} />
+        )}
         <main className="flex flex-1 flex-col overflow-hidden relative">
-          {pages.map(({ path, element }) => {
+          {pages.map(({ path, element, requiresEngine }) => {
             const generation = surfaceGenerations[path] ?? 0;
             return (
             <div
@@ -165,7 +173,13 @@ export function AppLayout({
               style={{ display: pageIsActive(path, location.pathname) ? "flex" : "none" }}
             >
               <SurfaceErrorBoundary route={path} resetKey={generation} onReset={() => resetSurface(path)} onOpenRecovery={() => setRecoveryOpen(true)}>
-                <div key={`${path}-${generation}`} className="flex h-full flex-col overflow-hidden">{element}</div>
+                <div key={`${path}-${generation}`} className="flex h-full flex-col overflow-hidden">
+                  {requiresEngine && !engineUrl ? (
+                    <div role="status" className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
+                      Connecting to the local engine… Use Recovery if the connection needs attention.
+                    </div>
+                  ) : element}
+                </div>
               </SurfaceErrorBoundary>
             </div>
           )})}

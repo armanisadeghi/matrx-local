@@ -23,7 +23,6 @@ CRITICAL_MODULES = [
     "app.api.tool_routes",
     "app.api.settings_routes",
     "app.api.auth",
-    "app.api.token_routes",
     "app.tools.dispatcher",
     # Media generation — must import with NO optional packages installed
     # (all torch/diffusers imports are lazy behind the service boundary).

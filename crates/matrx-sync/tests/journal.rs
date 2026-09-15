@@ -72,9 +72,34 @@ fn remote_confirmation() -> RemoteConfirmation {
 
 #[test]
 fn a_fresh_journal_migrates_to_the_binarys_max_version() {
+    // The expected version is spelled out, not just compared with itself, so adding a migration —
+    // or amending one in place — is a deliberate, visible change rather than a silent one.
+    //
+    // 003 was briefly amended in place to add `mass_delete_window_open`, which was wrong: a journal
+    // already at version 3 never re-runs 003, so it never got the table and the next breaker read
+    // failed with `no such table`. 003 has been restored to its committed body and 004 carries the
+    // addition. `no_migration_file_changes_after_it_is_committed` now makes a repeat a failure.
+    const EXPECTED_VERSION: i64 = 4;
+
     let j = Journal::open_in_memory().expect("open");
-    assert_eq!(j.schema_version().expect("version"), matrx_sync::journal::max_version());
-    assert!(matrx_sync::journal::max_version() >= 1);
+    assert_eq!(
+        matrx_sync::journal::max_version(),
+        EXPECTED_VERSION,
+        "the migration set changed; update EXPECTED_VERSION and say why in the commit"
+    );
+    assert_eq!(j.schema_version().expect("version"), EXPECTED_VERSION);
+    // Every table the later migrations add is really there on a fresh journal.
+    for table in ["synced_write_guard", "mass_delete_window", "mass_delete_window_open"] {
+        let found: i64 = j
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                [table],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert_eq!(found, 1, "{table} is missing from a freshly migrated journal");
+    }
 }
 
 #[test]
@@ -644,21 +669,35 @@ fn the_row_type_comes_from_the_op_kind_not_from_the_caller() {
     assert!(row.is_dir && row.content_hash.is_none() && row.checksum.is_none());
 }
 
-/// G4, from hostile re-verification. Migration 002's claim that "only the three confirmation
-/// methods raise the flag" was itself a convention claim — the kind F3 was raised for. This test
-/// is the enforcement: the flag may be named only inside its own allowlist, so a fourth site
-/// cannot appear without CI saying so.
+/// **Secondary, belt-and-braces.** The PRIMARY enforcement of invariant I1's single door is the
+/// type system: `tree_synced` is written only through `GuardRaised::write`, and `GuardRaised` is
+/// private to `src/journal/confirm.rs` with a private constructor, so a fourth door does not
+/// compile. `the_guard_token_is_not_exported` pins that.
 ///
-/// The allowlist is exactly three files, named here and nowhere else:
-/// `src/journal/confirm.rs`, `migrations/002_i1_write_guard.sql`, and this test file.
+/// This test is the second layer. The third hostile pass (H2) defeated its earlier form — a
+/// literal grep for the flag's name — with `concat!("synced_write", "_", "guard")` in a new `src/`
+/// file, so it now flags any file outside the allowlist that **writes `tree_synced`** at all,
+/// which is what that probe actually did. It is still a substring search and can still be worked
+/// around by someone who means to; it is here to catch a fourth door arriving by accident, and the
+/// compiler is what catches the rest.
 #[test]
-fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
+fn nothing_outside_the_allowlist_writes_the_synced_tree_or_its_guard() {
     use std::path::{Path, PathBuf};
 
     const ALLOWED: &[&str] = &[
         "src/journal/confirm.rs",
+        "src/journal/mod.rs", // reads only: local_tree/remote_tree/synced_tree SELECTs
+        "migrations/001_initial.sql",
         "migrations/002_i1_write_guard.sql",
         "tests/journal.rs",
+    ];
+    /// Writing shapes. A SELECT over `tree_synced` is fine; these are not.
+    const WRITE_SHAPES: &[&str] = &[
+        "INSERT INTO tree_synced",
+        "INSERT OR REPLACE INTO tree_synced",
+        "UPDATE tree_synced",
+        "DELETE FROM tree_synced",
+        "synced_write_guard",
     ];
 
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -671,7 +710,7 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
                 walk(&path, out);
             } else if path
                 .extension()
-                .is_some_and(|e| e == "rs" || e == "sql" || e == "md")
+                .is_some_and(|e| e == "rs" || e == "sql")
             {
                 out.push(path);
             }
@@ -686,12 +725,13 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
     assert!(files.len() > 5, "the walk found almost nothing; it is broken");
 
     let mut offenders = Vec::new();
-    let mut found_in_allowlist = 0usize;
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        if !text.contains("synced_write_guard") {
+        // Normalise whitespace so a wrapped SQL literal is still recognised.
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !WRITE_SHAPES.iter().any(|shape| flat.contains(shape)) {
             continue;
         }
         let relative = file
@@ -699,22 +739,427 @@ fn the_synced_write_guard_is_referenced_only_from_its_allowlist() {
             .expect("under the crate root")
             .to_string_lossy()
             .replace('\\', "/");
-        if ALLOWED.contains(&relative.as_str()) {
-            found_in_allowlist += 1;
-        } else {
+        if !ALLOWED.contains(&relative.as_str()) {
             offenders.push(relative);
         }
     }
 
-    assert_eq!(
-        found_in_allowlist,
-        ALLOWED.len(),
-        "the allowlist names a file that no longer mentions the guard; the test has gone stale"
-    );
     assert!(
         offenders.is_empty(),
-        "`synced_write_guard` is referenced outside its allowlist ({ALLOWED:?}): {offenders:?}. \
-         The flag is the whole of invariant I1's enforcement — a new site raising it is a new door \
-         into tree_synced, and it must be argued, not added."
+        "these files write tree_synced or its guard from outside the allowlist ({ALLOWED:?}): \
+         {offenders:?}. The synced tree has exactly three doors and they all live in \
+         src/journal/confirm.rs."
     );
+}
+
+/// H2: the guard token is **not exported**, so no other module can raise the guard — the property
+/// the grep above only approximates.
+#[test]
+fn the_guard_token_is_not_exported() {
+    let confirm = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/journal/confirm.rs"),
+    )
+    .expect("read confirm.rs");
+
+    assert!(
+        confirm.contains("struct GuardRaised"),
+        "the guard token has been renamed or removed; this test and the module doc need updating"
+    );
+    for forbidden in [
+        "pub struct GuardRaised",
+        "pub(crate) struct GuardRaised",
+        "pub(super) struct GuardRaised",
+        "pub fn raise(",
+        "pub(crate) fn raise(",
+        "pub(super) fn raise(",
+    ] {
+        assert!(
+            !confirm.contains(forbidden),
+            "`{forbidden}` would let another module raise the tree_synced write guard. The token \
+             and its constructor are private to src/journal/confirm.rs on purpose: that privacy is \
+             what makes a fourth door a compile error instead of a test finding."
+        );
+    }
+
+    // And the module itself is private, so even a `pub` item inside it would not escape the crate.
+    let journal = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/journal/mod.rs"),
+    )
+    .expect("read journal/mod.rs");
+    assert!(
+        journal.contains("mod confirm;") && !journal.contains("pub mod confirm;"),
+        "src/journal/confirm.rs must stay a private module"
+    );
+}
+
+/// H1: the breaker's rolling window is durable, because the wipe it exists to stop frequently
+/// takes the process down with it.
+#[test]
+fn the_deletion_window_is_recorded_on_confirmation_and_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("syncd.db");
+    {
+        let mut j = Journal::open(&path).expect("open");
+        j.put_mapping(&mapping_row()).expect("mapping");
+
+        // A deletion is recorded only when it is CONFIRMED — never on enqueue.
+        let mut del = upload_op();
+        del.kind = OpKind::DeleteRemote;
+        del.idempotency_key = "key-del-1".to_string();
+        let id = j.enqueue_op(&del).expect("enqueue");
+        assert_eq!(
+            j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+            0,
+            "an enqueued deletion has not happened yet"
+        );
+
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+            .expect("confirm");
+        assert_eq!(
+            j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+            1
+        );
+        // The window is a window: anything before it does not count.
+        assert_eq!(
+            j.deletions_since(MAPPING, "2026-09-14T00:00:00Z").expect("count"),
+            0
+        );
+    }
+
+    // The restart an `rm -rf` frequently causes must not erase the breaker's memory.
+    let j = Journal::open(&path).expect("reopen");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+        1,
+        "the window must survive a restart"
+    );
+
+    // Resuming a suspended mapping forgets it, so the user's "go on" is not refused again.
+    assert_eq!(j.clear_deletion_window(MAPPING).expect("clear"), 1);
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-13T00:00:00Z").expect("count"),
+        0
+    );
+}
+
+/// A non-destructive op does not count against the window, and the window is per mapping (I7).
+#[test]
+fn only_real_deletions_count_and_only_against_their_own_mapping() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+    let mut other = mapping_row();
+    other.id = "44444444-4444-4444-4444-444444444444".to_string();
+    j.put_mapping(&other).expect("second mapping");
+
+    // `unindex` removes a synced row but destroys no user-visible copy.
+    let mut bookkeeping = upload_op();
+    bookkeeping.kind = OpKind::Unindex;
+    bookkeeping.idempotency_key = "key-unindex".to_string();
+    let id = j.enqueue_op(&bookkeeping).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+        .expect("confirm");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+        0,
+        "bookkeeping is not a deletion"
+    );
+
+    // A real deletion on the OTHER mapping does not count against this one.
+    let mut del = upload_op();
+    del.mapping_id = other.id.clone();
+    del.kind = OpKind::DeleteLocal;
+    del.idempotency_key = "key-del-other".to_string();
+    let id = j.enqueue_op(&del).expect("enqueue");
+    j.lease_next_op(&other.id, "y", "2026-09-13T00:00:02Z", "2026-09-13T00:15:02Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "y", true, true, "2026-09-13T12:00:01Z")
+        .expect("confirm");
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("count"),
+        0
+    );
+    assert_eq!(
+        j.deletions_since(&other.id, "2000-01-01T00:00:00Z").expect("count"),
+        1
+    );
+
+    // Housekeeping outside the window is not the user's decision inside it.
+    assert_eq!(j.prune_deletion_window("2026-09-14T00:00:00Z").expect("prune"), 1);
+    assert_eq!(
+        j.deletions_since(&other.id, "2000-01-01T00:00:00Z").expect("count"),
+        0
+    );
+}
+
+/// I1: the window's denominator is frozen by the deletion that OPENS it, at the count BEFORE that
+/// deletion's row is removed — and it does not move when the mapping grows or shrinks afterwards.
+#[test]
+fn the_window_freezes_the_item_count_it_opened_with() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+
+    // Three synced files, then one is deleted.
+    for i in 0..3 {
+        let path = format!("f{i}.txt");
+        let mut op = upload_op();
+        op.path_nfc = path.clone();
+        op.seq = i;
+        op.idempotency_key = format!("key-up-{i}");
+        let id = j.enqueue_op(&op).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:01Z", "2026-09-13T00:15:01Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_op(
+            id,
+            "x",
+            &local_confirmation(),
+            &remote_confirmation(),
+            "2026-09-13T00:00:05Z",
+        )
+        .expect("confirm");
+    }
+    assert_eq!(j.synced_tree(MAPPING).expect("tree").len(), 3);
+
+    let mut del = upload_op();
+    del.kind = OpKind::DeleteRemote;
+    del.path_nfc = "f0.txt".to_string();
+    del.seq = 10;
+    del.idempotency_key = "key-del-0".to_string();
+    let id = j.enqueue_op(&del).expect("enqueue");
+    j.lease_next_op(MAPPING, "x", "2026-09-13T11:00:00Z", "2026-09-13T11:15:00Z")
+        .expect("lease")
+        .expect("ready");
+    j.confirm_delete_op(id, "x", true, true, "2026-09-13T12:00:00Z")
+        .expect("confirm");
+
+    let since = "2026-09-13T00:00:00Z";
+    assert_eq!(
+        j.window_item_count(MAPPING, since).expect("count"),
+        Some(3),
+        "the count is taken BEFORE the opening deletion's row goes, so it is 3, not 2"
+    );
+
+    // The mapping grows. The frozen denominator does not.
+    for i in 3..20 {
+        let path = format!("f{i}.txt");
+        let mut op = upload_op();
+        op.path_nfc = path.clone();
+        op.seq = 20 + i;
+        op.idempotency_key = format!("key-up2-{i}");
+        let id = j.enqueue_op(&op).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T13:00:00Z", "2026-09-13T13:15:00Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_op(
+            id,
+            "x",
+            &local_confirmation(),
+            &remote_confirmation(),
+            "2026-09-13T13:00:05Z",
+        )
+        .expect("confirm");
+    }
+    assert_eq!(
+        j.window_item_count(MAPPING, since).expect("count"),
+        Some(3),
+        "files added during the window must not dilute the percentage"
+    );
+
+    // A window that has aged out offers no denominator …
+    assert_eq!(
+        j.window_item_count(MAPPING, "2026-09-14T00:00:00Z").expect("count"),
+        None
+    );
+    // … and resuming clears it outright, so the next window opens fresh.
+    j.clear_deletion_window(MAPPING).expect("clear");
+    assert_eq!(j.window_item_count(MAPPING, since).expect("count"), None);
+}
+
+/// I2: a clock that jumps BACKWARDS must not hide a deletion from the window.
+#[test]
+fn a_backwards_clock_cannot_shrink_the_deletion_window() {
+    let mut j = Journal::open_in_memory().expect("open");
+    j.put_mapping(&mapping_row()).expect("mapping");
+
+    for (i, stamp) in [
+        // The clock then jumps two days backwards between the instalments.
+        (0, "2026-09-13T12:00:00Z"),
+        (1, "2026-09-11T12:00:00Z"),
+    ] {
+        let mut del = upload_op();
+        del.kind = OpKind::DeleteLocal;
+        del.path_nfc = format!("f{i}.txt");
+        del.seq = 100 + i;
+        del.idempotency_key = format!("key-back-{i}");
+        let id = j.enqueue_op(&del).expect("enqueue");
+        j.lease_next_op(MAPPING, "x", "2026-09-13T00:00:00Z", "2026-09-13T23:00:00Z")
+            .expect("lease")
+            .expect("ready");
+        j.confirm_delete_op(id, "x", true, true, stamp).expect("confirm");
+    }
+
+    // Both are inside the last 24 hours as the daemon now sees it. Without the clamp the second
+    // deletion is stamped two days earlier and falls out: one of two counted.
+    assert_eq!(
+        j.deletions_since(MAPPING, "2026-09-12T12:00:00Z").expect("count"),
+        2,
+        "a backwards clock must not hide a deletion from the window"
+    );
+    assert_eq!(
+        j.window_item_count(MAPPING, "2026-09-12T12:00:00Z").expect("count"),
+        Some(0),
+        "and the window it opened must stay inside the window too"
+    );
+}
+
+/// J2: a journal that already reached `schema_version = 3` while `003` carried the in-place
+/// amendment — or, the case that actually bites, one that reached 3 **before** it did — must upgrade
+/// cleanly.
+///
+/// That is the whole reason migrations are forward-only, and the reason the suite could not see the
+/// bug: every other test opens a FRESH journal, where 003 and 004 both run. This one builds the old
+/// state by hand.
+#[test]
+fn a_journal_left_at_version_3_without_the_table_upgrades_cleanly() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("syncd.db");
+
+    // Build a journal exactly as a binary that shipped migrations 1..=3 would have left it.
+    {
+        let conn = rusqlite::Connection::open(&path).expect("open raw");
+        for m in matrx_sync::journal::MIGRATIONS.iter().filter(|m| m.version <= 3) {
+            conn.execute_batch(m.sql).expect("apply");
+            conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?1, '2026-09-15T00:00:00Z')",
+                [m.version],
+            )
+            .expect("record");
+        }
+        let has_table: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='mass_delete_window_open'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert_eq!(
+            has_table, 0,
+            "this test proves nothing unless the old journal really lacks the table"
+        );
+    }
+
+    // The binary opens it and carries it forward.
+    let j = Journal::open(&path).expect("upgrade an existing journal");
+    assert_eq!(j.schema_version().expect("version"), matrx_sync::journal::max_version());
+
+    // And the breaker read that used to fail with `no such table` now works.
+    j.put_mapping(&mapping_row()).expect("mapping");
+    assert_eq!(
+        j.window_item_count(MAPPING, "2000-01-01T00:00:00Z").expect("read"),
+        None
+    );
+    assert_eq!(
+        j.deletions_since(MAPPING, "2000-01-01T00:00:00Z").expect("read"),
+        0
+    );
+}
+
+/// A migration is FROZEN once committed. An edit is invisible to every journal that already applied
+/// it, which is how `mass_delete_window_open` went missing from upgraded journals while the whole
+/// suite stayed green.
+///
+/// `migrations/FINGERPRINTS.md` records each file's length and FNV-1a fingerprint. (The name
+/// is neither `MANIFEST` nor `*.manifest`: the repo's root `.gitignore` blocks both, which kept the
+/// first version of this file untracked — the test passed here and would have failed on a fresh
+/// clone. The assertion below is what catches that class now.) This is a **change
+/// detector**, not a security control — FNV-1a is not cryptographic and is not trying to be, and
+/// nothing here stops someone who edits the manifest too. It stops the edit nobody meant to make
+/// permanent.
+#[test]
+fn no_migration_file_changes_after_it_is_committed() {
+    fn fingerprint(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    // The file has to be IN the repository, not just on this disk. The first version of it was
+    // named `MANIFEST`, which the root .gitignore silently swallowed: green here, broken on a
+    // fresh clone. A guard that only exists locally is not a guard.
+    let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations/FINGERPRINTS.md");
+    let ignored = std::process::Command::new("git")
+        .args(["check-ignore", "-q"])
+        .arg(&manifest_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(
+        !ignored,
+        "{} is matched by .gitignore, so it is not in the repository and this whole test only \
+         works on the machine that wrote it",
+        manifest_path.display()
+    );
+
+    let manifest = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/FINGERPRINTS.md"),
+    )
+    .expect("migrations/FINGERPRINTS.md is checked in");
+
+    // The file is prose plus data lines, so a data line is recognised by its SHAPE — three tokens,
+    // a length and a hex fingerprint — rather than by everything else being commented. A parser
+    // that had to be told what to skip would break the first time someone added a sentence.
+    let recorded: Vec<(String, usize, u64)> = manifest
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            let [name, len, fp] = parts[..] else { return None };
+            Some((
+                name.to_string(),
+                len.parse::<usize>().ok()?,
+                u64::from_str_radix(fp, 16).ok()?,
+            ))
+        })
+        .collect();
+    assert!(
+        !recorded.is_empty(),
+        "no fingerprint lines parsed out of {}; the file's shape changed",
+        manifest_path.display()
+    );
+
+    assert_eq!(
+        recorded.len(),
+        matrx_sync::journal::MIGRATIONS.len(),
+        "the manifest lists {} migrations, the binary carries {}. Adding a migration means adding its \
+         file, its MIGRATIONS entry AND its manifest line.",
+        recorded.len(),
+        matrx_sync::journal::MIGRATIONS.len()
+    );
+
+    for (m, (name, len, fp)) in matrx_sync::journal::MIGRATIONS.iter().zip(&recorded) {
+        assert_eq!(&m.name, name, "the manifest is out of order with MIGRATIONS");
+        let bytes = m.sql.as_bytes();
+        assert_eq!(
+            (bytes.len(), fingerprint(bytes)),
+            (*len, *fp),
+            "migration {name} has CHANGED since it was committed. A journal that already applied \
+             it will never see the edit — that is what forward-only means, and it is exactly how \
+             `mass_delete_window_open` went missing from upgraded journals while every test, which \
+             opens a fresh journal, stayed green. Write a NEW migration instead. If this change is \
+             genuinely intended and no journal anywhere has applied the old body, update \
+             migrations/FINGERPRINTS.md in the same commit and say why."
+        );
+    }
 }

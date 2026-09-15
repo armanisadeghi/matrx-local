@@ -8,8 +8,8 @@ const context = vi.hoisted(() => {
   return { state, get: vi.fn(() => ({ isCurrent: () => state.current })) };
 });
 
-vi.mock("@/lib/supabase", () => ({
-  default: { auth: { getSession: vi.fn() } },
+vi.mock("@/lib/custodian", () => ({
+  getAuthedSession: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({
   engine: {
@@ -103,9 +103,9 @@ describe("ScrapeSyncBanner retry authority", () => {
   afterEach(async () => { if (root) await act(async () => root.unmount()); node?.remove(); });
   it("uses a current context for the mounted Retry upload action and refuses a stale completion", async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const supabase = await import("@/lib/supabase");
+    const custodian = await import("@/lib/custodian");
     const { engine } = await import("@/lib/api");
-    vi.mocked(supabase.default.auth.getSession).mockResolvedValue({ data: { session: { user: { id: "actor-a" } } } } as never);
+    vi.mocked(custodian.getAuthedSession).mockResolvedValue({ access_token: "grant-a", user: { id: "actor-a" } } as never);
     vi.mocked(engine.getScrapeSyncStatus).mockResolvedValue(status({ action: "retry" }));
     vi.mocked(engine.triggerScrapeSync).mockResolvedValue({ reset_to_pending: 0, pushed: 1, deferred: 0, failed: 0, status: status({ state: "synced", action: "none", unsynced: 0 }) });
     context.state.current = true; node = document.createElement("div"); document.body.append(node); root = createRoot(node);

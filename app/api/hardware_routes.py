@@ -65,6 +65,7 @@ async def _push_hardware_to_cloud(profile: dict[str, Any]) -> None:
 
         mgr = get_instance_manager()
         now = datetime.now(timezone.utc).isoformat()
+        user_id, headers = await sync._request_context()
 
         payload = {
             "system_hardware": profile,
@@ -75,10 +76,10 @@ async def _push_hardware_to_cloud(profile: dict[str, Any]) -> None:
         url = (
             f"{sync._supabase_url}/rest/v1/app_instances"
             f"?instance_id=eq.{mgr.instance_id}"
-            f"&user_id=eq.{sync._user_id}"
+            f"&user_id=eq.{user_id}"
         )
         headers = {
-            **sync._headers(),
+            **headers,
             "Prefer": "return=minimal",
         }
 

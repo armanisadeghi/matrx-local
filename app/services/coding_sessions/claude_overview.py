@@ -49,7 +49,7 @@ from app.services.coding_sessions.identity_client import (
     fetch_complete_identity_inventory,
 )
 from app.services.session_freshness import (
-    request_ui_session_refresh,
+    request_session_grant,
     session_blocker,
 )
 from app.services.local_db.database import get_db
@@ -224,6 +224,18 @@ def _session_index(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
 _INDEX_READ_LOCK = asyncio.Lock()
 
 
+async def _reap_index_helper(process: asyncio.subprocess.Process) -> None:
+    """Stop a helper that cannot return its index result to its owner."""
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=3)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+
+
 async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, int]]:
     """Run the scan in a short-lived helper process. Raises on any failure."""
     command = claude_index_helper.helper_command(root)
@@ -237,12 +249,15 @@ async def _read_index_in_helper(root: Path) -> tuple[dict[str, Any], dict[str, i
             process.communicate(), timeout=claude_index_helper.HELPER_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+        await _reap_index_helper(process)
         raise TimeoutError(
             "session-index helper exceeded "
             f"{claude_index_helper.HELPER_TIMEOUT_SECONDS:.0f}s"
         ) from exc
+    except BaseException:
+        # Cancellation during reconciler shutdown must not orphan a scanner.
+        await _reap_index_helper(process)
+        raise
     if process.returncode != 0:
         detail = (stderr or b"").decode("utf-8", errors="replace").strip()[:500]
         raise RuntimeError(detail or f"exit status {process.returncode}")
@@ -274,6 +289,13 @@ async def _session_index_async(root: Path) -> tuple[dict[str, Any], dict[str, in
         if _INDEX_CACHE is not None and _INDEX_CACHE[0] == fingerprint:
             return _INDEX_CACHE[1], _INDEX_CACHE[2]
         return await _scan_index(root, fingerprint)
+
+
+async def read_session_index_async(
+    root: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Read the complete Claude index without occupying the engine event loop."""
+    return await _session_index_async(root or default_sessions_root())
 
 
 async def _scan_index(
@@ -387,7 +409,7 @@ async def cloud_inventory(*, force: bool = False) -> tuple[dict[str, dict[str, A
         # the owner for a fresh copy instead of waiting for the next hour — and
         # ask BEFORE describing the gap, so one the desktop is already filling
         # is reported as a refresh in progress and not as a signed-out Mac.
-        await request_ui_session_refresh(
+        await request_session_grant(
             lane="claude_overview", reason="stored access token missing or expired"
         )
         state = session_blocker(lane="claude_overview")

@@ -55,7 +55,15 @@ pub enum SuspendReason {
     MassDelete {
         /// How many deletions this plan would have performed.
         planned_deletes: usize,
-        /// How many paths the mapping currently has under management (`tree_synced`).
+        /// The **frozen denominator**: the mapping's item count when the deletion window opened.
+        ///
+        /// ⚠️ **Never render this as the mapping's size.** It is a historical number, deliberately
+        /// not the live one — the whole point is that it stops moving while a wipe is in progress,
+        /// so by the time a surface shows a suspension it is already out of date, and it excludes
+        /// everything added since. A sentence like "42 of 240 files" built from it would be a lie
+        /// in exactly the situation where the user most needs the truth. Use it only as the
+        /// percentage arm's divisor and to explain WHY the breaker tripped; read the mapping's
+        /// current size from `tree_synced`.
         tracked_items: usize,
         /// The `sync.mass_delete_percent` value in force.
         percent_threshold: u8,
@@ -63,6 +71,10 @@ pub enum SuspendReason {
         count_threshold: u32,
         /// The `sync.mass_delete_min_count` value in force — the floor under the percentage arm.
         min_count_threshold: u32,
+        /// How many deletions this mapping already executed inside the rolling window.
+        recent_deletions: usize,
+        /// The `sync.mass_delete_window_hours` value in force.
+        window_hours: u32,
     },
 }
 
@@ -236,6 +248,22 @@ pub struct PlanContext {
     pub device_name: String,
     /// Today's date as `YYYY-MM-DD`, injected. The planner reads no clock.
     pub today: String,
+    /// Deletions this mapping has already **executed** inside the rolling window
+    /// (`sync.mass_delete_window_hours`), counted by the daemon from the journal and passed in.
+    ///
+    /// The breaker measures this plan's deletions **plus** these, because a wipe that reaches the
+    /// planner in instalments is still a wipe (H1). The planner is pure, so it cannot read a clock
+    /// or the journal to work this out — it arrives as a value like every other input.
+    pub recent_deletions: usize,
+    /// The mapping's item count when the deletion window opened — the percentage arm's **frozen**
+    /// denominator (SPEC-ENGINE §2 amendment 3), or `None` when no window is open.
+    ///
+    /// It is frozen because reading the live count at plan time is wrong in both directions. A
+    /// shrinking mapping dilutes its own percentage (each instalment is small *relative to what is
+    /// left*), and so does a growing one: 40 files, 19 deleted, 200 added, 19 more deleted read as
+    /// 15.8% instead of 95% and propagated with no suspension. A mapping receiving a download, an
+    /// import or a restore while a local `rm -rf` walks the tree is exactly that shape.
+    pub window_item_count: Option<usize>,
     /// Paths carrying an unresolved `conflicts` row.
     ///
     /// A path awaiting the user's decision gets **no ops at all** — that is what the mapping state
@@ -250,6 +278,8 @@ impl Default for PlanContext {
         PlanContext {
             device_name: "this device".to_string(),
             today: "1970-01-01".to_string(),
+            recent_deletions: 0,
+            window_item_count: None,
             open_conflicts: BTreeSet::new(),
         }
     }
@@ -439,8 +469,19 @@ pub fn plan(
     }
 
     let planned_deletes = ops.iter().filter(|o| o.is_destructive()).count();
-    let tracked_items = synced.len();
-    if trips_breaker(planned_deletes, tracked_items, knobs) {
+    // The denominator is the mapping's item count at the START of the window, recorded by the
+    // deletion that opened it. Deriving it from `tree_synced` at plan time was wrong: the window's
+    // own deletions are gone from it (a shrinking mapping dilutes itself) AND anything added since
+    // inflates it (a growing mapping dilutes itself too — the case that let 38 of 40 through).
+    // With no window open there is nothing to freeze, and the live count is the right answer.
+    let tracked_items = ctx
+        .window_item_count
+        .unwrap_or(synced.len() + ctx.recent_deletions);
+    if trips_breaker(
+        planned_deletes + ctx.recent_deletions,
+        tracked_items,
+        knobs,
+    ) {
         return Plan {
             ops: Vec::new(),
             suspended: Some(SuspendReason::MassDelete {
@@ -449,6 +490,8 @@ pub fn plan(
                 percent_threshold: knobs.mass_delete_percent,
                 count_threshold: knobs.mass_delete_count,
                 min_count_threshold: knobs.mass_delete_min_count,
+                recent_deletions: ctx.recent_deletions,
+                window_hours: knobs.mass_delete_window_hours,
             }),
         };
     }
@@ -467,11 +510,18 @@ fn kind_word(is_dir: bool) -> &'static str {
     }
 }
 
-/// The mass-delete circuit breaker, exactly as SPEC-ENGINE §2 states it (amendment 2, 2026-09-13):
+/// The mass-delete circuit breaker.
 ///
 /// > suspend when `deleted_count >= sync.mass_delete_count` **OR**
 /// > ( `deleted_percent >= sync.mass_delete_percent` **AND**
 /// > `deleted_count >= sync.mass_delete_min_count` ).
+///
+/// **`deleted_count` is measured over a ROLLING WINDOW**, not over one plan: the deletions this
+/// mapping executed in the last `sync.mass_delete_window_hours` plus the plan being built. Counting
+/// a single plan let 38 of 40 files through in two instalments, each one below both arms, with no
+/// suspension and no user-visible event (H1) — and a stream of small deletions is exactly the
+/// shape an `rm -rf`, an unmounting drive or ransomware presents to a debounce-timed planner. The
+/// window resets when the user resumes a suspended mapping.
 ///
 /// The absolute arm protects a huge folder, where 50% is unreachable in one pass. The percentage
 /// arm protects a small one — and the `min_count` floor under it is what stops a two-file folder

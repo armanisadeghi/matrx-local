@@ -219,17 +219,18 @@ class _PingPongHarness:
         self.sync.configure(
             supabase_url="https://stub.supabase.co",
             supabase_key="stub-key",
-            jwt="stub-jwt",
             user_id="user-1",
             instance_id="inst-1",
         )
         self.cloud_row: dict[str, Any] | None = None
         self.pushes: list[dict[str, Any]] = []
 
-        async def fetch() -> dict[str, Any] | None:
+        async def fetch(*, expected_owner: str | None = None) -> dict[str, Any] | None:
+            assert expected_owner in (None, "user-1")
             return self.cloud_row
 
-        async def push() -> None:
+        async def push(*, expected_owner: str | None = None) -> None:
+            assert expected_owner in (None, "user-1")
             self.pushes.append(self.sync.get_all())
             self.cloud_row = {
                 "settings_json": self.sync.get_all(),
@@ -239,9 +240,17 @@ class _PingPongHarness:
         async def status(*_a: Any, **_k: Any) -> None:
             return None
 
+        async def request_context(
+            *, expected_owner: str | None = None
+        ) -> tuple[str, dict[str, str]]:
+            if expected_owner not in (None, "user-1"):
+                raise RuntimeError("sync_daemon_owner_changed")
+            return "user-1", {}
+
         monkeypatch.setattr(self.sync, "_fetch_cloud_settings", fetch)
         monkeypatch.setattr(self.sync, "_push_to_cloud", push)
         monkeypatch.setattr(self.sync, "_update_sync_status", status)
+        monkeypatch.setattr(self.sync, "_request_context", request_context)
 
 
 def test_settings_pull_stamps_cloud_timestamp_not_now(
@@ -293,3 +302,33 @@ def test_settings_local_edit_still_pushes(
     result = asyncio.run(h.sync.sync())
     assert result["status"] == "pushed"
     assert len(h.pushes) == 1 and h.pushes[0]["theme"] == "dark"
+
+
+def test_settings_owner_change_during_pull_does_not_mutate_local_replica(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = _PingPongHarness(tmp_path, monkeypatch)
+    h.sync._settings = {"theme": "dark"}
+    h.sync._local_updated_at = "2026-07-01T00:00:00+00:00"
+    h.cloud_row = {
+        "settings_json": {"theme": "light"},
+        "updated_at": "2026-07-10T08:00:00+00:00",
+    }
+    calls = 0
+
+    async def switched_owner(
+        *, expected_owner: str | None = None
+    ) -> tuple[str, dict[str, str]]:
+        nonlocal calls
+        calls += 1
+        owner = "user-1" if calls == 1 else "user-2"
+        if expected_owner is not None and owner != expected_owner:
+            raise RuntimeError("sync_daemon_owner_changed")
+        return owner, {}
+
+    monkeypatch.setattr(h.sync, "_request_context", switched_owner)
+
+    result = asyncio.run(h.sync.sync())
+
+    assert result == {"status": "error", "reason": "sync_daemon_owner_changed"}
+    assert h.sync.get("theme") == "dark"

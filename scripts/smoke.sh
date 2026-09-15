@@ -43,6 +43,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+source "$REPO_ROOT/scripts/smoke-environment.sh"
+SMOKE_BUILD_LOCK_OWNED=0
+trap smoke_release_build_lock EXIT
 
 MODE="${1:-web}"
 [[ "$MODE" == -* ]] && MODE="web"
@@ -58,12 +61,21 @@ SUMMARY="$RUN_DIR/summary.md"
 SMOKE_OS_HOME="$RUN_DIR/os-home"
 SMOKE_MATRX_HOME="$RUN_DIR/matrx-home"
 mkdir -p "$SMOKE_OS_HOME" "$SMOKE_MATRX_HOME"
+# A fresh encrypted test world gets a fresh DEK. It is never printed or stored;
+# the run-scoped SQLite database becomes intentionally unreadable after smoke.
+SMOKE_DB_ENCRYPTION_KEY="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64url") + "=")')"
 
 # A third, run-specific world: live=22140+, dev=22240+, smoke=23000-65000.
 # Space concurrent smoke runs 20 ports apart. The exact engine port is forced,
 # so it fails closed if another process wins the tiny check→launch race.
 SMOKE_BUILD_PORT_MARKER="$REPO_ROOT/desktop/src-tauri/target/.matrx-isolated-smoke-port"
 if [ "$NO_BUILD" -eq 1 ] && [ "$MODE" != "web" ]; then
+  # A no-build run consumes both the marker and the artifact it describes.
+  # Lock before either read so a builder cannot replace them between reads.
+  if ! smoke_acquire_build_lock "$REPO_ROOT/desktop/src-tauri/target/.matrx-smoke-build.lock"; then
+    echo "smoke: another packaged smoke run owns the shared build output" >&2
+    exit 2
+  fi
   if [ ! -f "$SMOKE_BUILD_PORT_MARKER" ]; then
     echo "smoke: --no-build requires a previously built isolated smoke app" >&2
     exit 2
@@ -277,6 +289,16 @@ run_packaged() {
   pre_children="$(child_pids | tr '\n' ' ')"
   [ -n "$pre_children" ] && warn "pre-existing cloudflared/llama-server PIDs (will be ignored): $pre_children"
 
+  # Both builders and --no-build consumers use shared target artifacts. Hold
+  # exclusive ownership until the packaged app has fully shut down so another
+  # smoke cannot replace its sidecar or bundle during launch.
+  if [ "$SMOKE_BUILD_LOCK_OWNED" -ne 1 ] && \
+     ! smoke_acquire_build_lock "$REPO_ROOT/desktop/src-tauri/target/.matrx-smoke-build.lock"; then
+    record_fail "packaged: another smoke run owns the shared build output" \
+      "Wait for that packaged smoke run to finish, then retry."
+    return 1
+  fi
+
   if [ "$NO_BUILD" -eq 0 ]; then
     info "Building the Python sidecar (PyInstaller — several minutes)…"
     if ! ./scripts/build-sidecar.sh > "$build_log" 2>&1; then
@@ -321,7 +343,8 @@ run_packaged() {
     # exactly the "does it start" signal we need. Override it OFF for the smoke
     # build only, via Tauri's inline config merge; the committed config (and
     # thus the real release) is untouched.
-    local no_updater_cfg='{"bundle":{"createUpdaterArtifacts":false}}'
+    local isolated_tauri_cfg
+    isolated_tauri_cfg="$(smoke_tauri_config)"
     local provider_config=()
     if [ "$OS" = "macos" ] && [ "${MATRX_NATIVE_VAULT_PROVIDER:-}" = "absent" ]; then
       # Match release.yml's explicit host-only profile when the optional signed
@@ -333,7 +356,7 @@ run_packaged() {
     if ! ( cd desktop && \
       VITE_MATRX_ISOLATED_SMOKE=1 \
       VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
-      pnpm tauri build $bundle_flag "${provider_config[@]}" --config "$no_updater_cfg" ) >> "$build_log" 2>&1; then
+      pnpm tauri build $bundle_flag "${provider_config[@]}" --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1; then
       record_fail "packaged: tauri build failed" "$(tail -30 "$build_log")"
       echo "Full build log: \`$build_log\`" >> "$SUMMARY"
       return 1
@@ -357,24 +380,14 @@ run_packaged() {
   pre_children="$(child_pids | tr '\n' ' ')"
   info "Launching $(basename "$bin") and capturing everything it logs…"
 
-  local -a isolated_env=(
-    "MATRX_ISOLATED_TEST=1"
-    "MATRX_HOME_DIR=$SMOKE_MATRX_HOME"
-    "MATRX_PORT=$SMOKE_ENGINE_PORT_BASE"
-    "MATRX_PORT_BASE=$SMOKE_ENGINE_PORT_BASE"
-    "MATRX_SKIP_ORPHAN_SCAN=1"
-    "MATRX_INSTANCE_SALT=smoke-$RUN_ID"
-    "MATRX_CLOUD_PARTICIPATION=0"
-    "TEST_MODE=1"
-    "HOME=$SMOKE_OS_HOME"
-    "USERPROFILE=$SMOKE_OS_HOME"
-    "APPDATA=$SMOKE_OS_HOME/AppData/Roaming"
-    "LOCALAPPDATA=$SMOKE_OS_HOME/AppData/Local"
-    "XDG_DATA_HOME=$SMOKE_OS_HOME/.local/share"
-    "XDG_CONFIG_HOME=$SMOKE_OS_HOME/.config"
-    "XDG_CACHE_HOME=$SMOKE_OS_HOME/.cache"
-  )
-  env "${isolated_env[@]}" "$bin" > "$log" 2>&1 &
+  smoke_build_isolated_env \
+    "$SMOKE_OS_HOME" "$SMOKE_MATRX_HOME" "$SMOKE_ENGINE_PORT_BASE" "$RUN_ID" \
+    "$SMOKE_DB_ENCRYPTION_KEY"
+  if ! smoke_verify_isolated_encryption_environment "$SMOKE_DB_ENCRYPTION_KEY"; then
+    record_fail "packaged: could not create an isolated database encryption key"
+    return 1
+  fi
+  env "${SMOKE_ISOLATED_ENV[@]}" "$bin" > "$log" 2>&1 &
   local pid=$!
 
   # Give it a real startup window: Rust setup + sidecar spawn + engine boot.
@@ -546,6 +559,7 @@ run_packaged() {
     fi
   fi
   echo "Full app log: \`$log\`" >> "$SUMMARY"; echo >> "$SUMMARY"
+  smoke_release_build_lock
 }
 
 case "$MODE" in

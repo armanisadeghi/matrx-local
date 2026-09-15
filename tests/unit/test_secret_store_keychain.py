@@ -163,6 +163,91 @@ def test_helper_serializes_read_and_create(
     assert payload
 
 
+def test_helper_uses_dual_gated_isolated_key_without_touching_keychain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.fernet import Fernet
+
+    expected = Fernet.generate_key().decode("ascii")
+    events: list[str] = []
+
+    class ForbiddenKeyring:
+        def __getattr__(self, _name):
+            events.append("keychain")
+            raise AssertionError("isolated smoke must not touch the user Keychain")
+
+    monkeypatch.setenv(keychain_helper.ISOLATED_DB_KEY_ENV, expected)
+    monkeypatch.setenv("MATRX_ISOLATED_TEST", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setitem(keychain_helper.sys.modules, "keyring", ForbiddenKeyring())
+    monkeypatch.setattr(
+        keychain_helper,
+        "_assert_default_macos_keychain",
+        lambda: events.append("preflight"),
+    )
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(keychain_helper, "_validated_output_fd", lambda: write_fd)
+    try:
+        assert keychain_helper.run_keychain_helper() == 0
+        payload = os.read(read_fd, 4096).decode("ascii")
+    finally:
+        os.close(read_fd)
+
+    assert payload == expected
+    assert events == []
+
+
+@pytest.mark.parametrize("present_gate", ["MATRX_ISOLATED_TEST", "TEST_MODE"])
+def test_isolated_key_is_rejected_with_only_one_test_gate(
+    monkeypatch: pytest.MonkeyPatch, present_gate: str,
+) -> None:
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv(
+        keychain_helper.ISOLATED_DB_KEY_ENV,
+        Fernet.generate_key().decode("ascii"),
+    )
+    for gate in ("MATRX_ISOLATED_TEST", "TEST_MODE"):
+        monkeypatch.delenv(gate, raising=False)
+    monkeypatch.setenv(present_gate, "1")
+    with pytest.raises(PermissionError, match="both test gates"):
+        keychain_helper._isolated_test_key()
+
+
+def test_missing_macos_default_keychain_fails_before_keyring(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import builtins
+
+    events: list[str] = []
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "keyring":
+            events.append("keyring-import")
+            raise AssertionError("preflight must happen before importing keyring")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delenv(keychain_helper.ISOLATED_DB_KEY_ENV, raising=False)
+    monkeypatch.setattr(keychain_helper.sys, "platform", "darwin")
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr(
+        keychain_helper,
+        "_assert_default_macos_keychain",
+        lambda: (_ for _ in ()).throw(RuntimeError("no default")),
+    )
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(keychain_helper, "_validated_output_fd", lambda: write_fd)
+    try:
+        assert keychain_helper.run_keychain_helper() == 1
+        assert os.read(read_fd, 4096) == b""
+    finally:
+        os.close(read_fd)
+
+    assert events == []
+    assert "RuntimeError" in capsys.readouterr().err
+
+
 def test_helper_refuses_unauthorized_parent_before_touching_keychain(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

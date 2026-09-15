@@ -18,6 +18,7 @@ from typing import Iterator
 
 HELPER_ARGUMENT = "--matrx-keychain-helper-v1"
 HELPER_FD_ENV = "MATRX_KEYCHAIN_HELPER_FD"
+ISOLATED_DB_KEY_ENV = "MATRX_ISOLATED_DB_ENCRYPTION_KEY"
 KEYRING_SERVICE = "matrx-local"
 KEYRING_USERNAME = "db-encryption-key"
 # A frozen one-file helper spends roughly 3-4 seconds in the PyInstaller
@@ -31,6 +32,36 @@ KEYRING_USERNAME = "db-encryption-key"
 # the startup index warm-up and the SQLite repair for disk, and one answer
 # slower than 15 s cost every cloud lane its session for hours.
 KEYCHAIN_TIMEOUT_SECONDS = 45
+
+
+def _isolated_test_key() -> str | None:
+    """Return a validated run-scoped DEK only in the explicit test world."""
+    key = os.environ.get(ISOLATED_DB_KEY_ENV)
+    if key is None:
+        return None
+    if (
+        os.environ.get("MATRX_ISOLATED_TEST") != "1"
+        or os.environ.get("TEST_MODE") != "1"
+    ):
+        raise PermissionError("isolated database key requires both test gates")
+
+    from cryptography.fernet import Fernet
+
+    Fernet(key.encode("ascii"))
+    return key
+
+
+def _assert_default_macos_keychain() -> None:
+    """Fail quietly before Security.framework can open a missing-keychain UI."""
+    result = subprocess.run(
+        ["/usr/bin/security", "default-keychain", "-d", "user"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError("no default macOS user keychain")
 
 
 @contextmanager
@@ -129,17 +160,25 @@ def run_keychain_helper() -> int:
         # Validate before importing or touching Keychain. The public argv flag
         # alone must never become a raw-key export oracle.
         output_fd = _validated_output_fd()
-        import keyring
         from cryptography.fernet import Fernet
 
-        # The lock spans read + possible create. Without it, two overlapping
-        # engines can both observe a missing item, generate different DEKs,
-        # and make the first process's ciphertext permanently unreadable.
-        with _exclusive_keychain_lock():
-            key = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
-            if not key:
-                key = Fernet.generate_key().decode("ascii")
-                keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key)
+        key = _isolated_test_key()
+        if key is None:
+            if sys.platform == "darwin":
+                # With HOME redirected to a fresh directory, keyring's direct
+                # Security.framework call can show a modal "Keychain Not Found"
+                # dialog. This read-only CLI query fails without UI.
+                _assert_default_macos_keychain()
+            import keyring
+
+            # The lock spans read + possible create. Without it, two overlapping
+            # engines can both observe a missing item, generate different DEKs,
+            # and make the first process's ciphertext permanently unreadable.
+            with _exclusive_keychain_lock():
+                key = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+                if not key:
+                    key = Fernet.generate_key().decode("ascii")
+                    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key)
         payload = key.encode("ascii")
         while payload:
             written = os.write(output_fd, payload)

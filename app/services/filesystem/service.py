@@ -84,8 +84,18 @@ class FilesystemService:
         self._thread_stop = threading.Event()
         self._directory_lists.start()
         self._searches.start()
+        initialize_started = time.monotonic()
         await asyncio.to_thread(self.index.initialize)
+        logger.info(
+            "[filesystem] startup index initialization completed in %.3fs",
+            time.monotonic() - initialize_started,
+        )
+        roots_started = time.monotonic()
         await self.refresh_roots()
+        logger.info(
+            "[filesystem] startup root refresh completed in %.3fs",
+            time.monotonic() - roots_started,
+        )
         self._started = True
         self._spawn(self._crawl_loop(), "filesystem-crawl")
         self._spawn(self._watch_loop(), "filesystem-watch")

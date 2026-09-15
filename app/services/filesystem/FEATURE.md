@@ -49,8 +49,9 @@ Places, browsing, or metadata search.
 ## Lifecycle and maintenance
 
 `app/main.py` starts `filesystem_index` through `app/launcher.py` after the
-local database phase. Startup opens the small dedicated SQLite database,
-discovers roots, then immediately returns while crawl/watch/enrichment tasks
+local database phase. Startup awaits the dedicated SQLite schema and root
+discovery, then reports readiness without running the full index aggregate
+census. `GET /filesystem/status` owns that census. Crawl/watch/enrichment tasks
 run in the background. Shutdown sets a cooperative thread stop event, awaits
 the crawl, cancels watchers/enrichment, and reports stopped only afterward.
 

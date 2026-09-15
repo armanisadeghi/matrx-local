@@ -543,12 +543,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         _filesystem_service = get_filesystem_service()
         await _filesystem_service.start()
-        _filesystem_status = await _filesystem_service.status()
+        # The complete status is an aggregate census over the durable index.
+        # It is observability, not readiness: schema and roots are ready once
+        # start() returns, while callers can request the full census on demand.
         _registry.ready(
             "filesystem_index",
-            path=str(_filesystem_status["database"]),
-            entries=_filesystem_status["entries"],
-            directories_pending=_filesystem_status["directories_pending"],
+            path=str(_filesystem_service.index.path),
         )
     except Exception as exc:
         logger.warning("[app/main.py] Filesystem index unavailable; direct browsing remains active", exc_info=True)

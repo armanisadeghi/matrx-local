@@ -13,16 +13,65 @@ use matrx_sync::model::Direction;
 use matrx_sync::sim::{Hazards, Simulation};
 use matrx_sync::Knobs;
 
+/// The seeds every scenario runs.
+///
+/// A fixed, checked-in set comes first: a test whose inputs change per run cannot be replayed by a
+/// colleague reading the failure.
+///
+/// `SIM_SEEDS` adds more, and takes an **explicit range** so a soak can reach seeds nobody has
+/// used. Hostile re-verification pointed out that the old bare-count form always extended from the
+/// same offset, so a `SIM_SEEDS=100` run re-treads a `SIM_SEEDS=200` run's ground and a verifier
+/// wanting genuinely fresh seeds had to write a throwaway harness. Three forms:
+///
+/// | `SIM_SEEDS` | Seeds added |
+/// |---|---|
+/// | `100` | `1_000_000 ..= 1_000_099` — the legacy form, kept so old commands still work |
+/// | `7000000..7000100` | exactly that half-open range |
+/// | `7000000+100` | 100 seeds from 7,000,000 |
 fn seeds() -> Vec<u64> {
-    // A fixed, checked-in set: a test whose inputs change per run cannot be replayed by a
-    // colleague reading the failure. `SIM_SEEDS=n` adds n more for a local soak.
     let mut out: Vec<u64> = vec![1, 2, 3, 7, 11, 42, 101, 1_009, 65_537, 999_331];
-    if let Ok(extra) = std::env::var("SIM_SEEDS") {
-        if let Ok(n) = extra.parse::<u64>() {
-            out.extend(1_000_000..1_000_000 + n);
-        }
-    }
+    out.extend(extra_seeds());
     out
+}
+
+/// Parse `SIM_SEEDS` into the range it names. Unparseable input is a loud panic, not a silent
+/// empty range: a soak that quietly ran zero extra seeds would report green for nothing.
+fn extra_seeds() -> Vec<u64> {
+    let Ok(spec) = std::env::var("SIM_SEEDS") else {
+        return Vec::new();
+    };
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Vec::new();
+    }
+    const DEFAULT_OFFSET: u64 = 1_000_000;
+
+    let Some(seeds) = parse_seed_spec(spec, DEFAULT_OFFSET) else {
+        panic!(
+            "SIM_SEEDS={spec:?} is not a count, a START..END range, or a START+COUNT offset; \
+             refusing to run a soak that silently adds no seeds"
+        );
+    };
+    seeds
+}
+
+/// The `SIM_SEEDS` grammar, as a pure function so it can be tested without touching the
+/// process-wide environment that every other test in this binary reads concurrently.
+fn parse_seed_spec(spec: &str, default_offset: u64) -> Option<Vec<u64>> {
+    let (start, count) = if let Some((start, end)) = spec.split_once("..") {
+        match (start.trim().parse::<u64>(), end.trim().parse::<u64>()) {
+            (Ok(s), Ok(e)) if e >= s => (s, e - s),
+            _ => return None,
+        }
+    } else if let Some((start, count)) = spec.split_once('+') {
+        match (start.trim().parse::<u64>(), count.trim().parse::<u64>()) {
+            (Ok(s), Ok(n)) => (s, n),
+            _ => return None,
+        }
+    } else {
+        (default_offset, spec.parse::<u64>().ok()?)
+    };
+    Some((start..start.saturating_add(count)).collect())
 }
 
 /// Seed one cloud file and one file on each device, then let the scheduler interleave everything.
@@ -412,4 +461,129 @@ fn a_conflict_whose_copy_already_exists_in_the_cloud_still_settles() {
         sim.disagreements().expect("read state").is_empty(),
         "the fleet must agree afterwards — {report:?}"
     );
+}
+
+/// The mass-delete circuit breaker, end to end — a permanent named scenario.
+///
+/// Hostile re-verification wrote this because no simulation scenario seeded a bulk delete, which
+/// is the hazard that matters most for data loss: an `rm -rf`, a drive that unmounted under the
+/// sync root, ransomware. The two knobs guarding it were asserted only as pure planner units, and
+/// nothing proved the breaker stops a real fleet mid-flight and leaves the cloud whole.
+///
+/// Twelve files synced, then all twelve gone from one device at once. Both halves of the ruled
+/// rule are asserted, because both are the rule (SPEC-ENGINE §2, amendment 2):
+///
+/// * with the floor lowered so the percentage arm bites, the mapping **suspends** and the cloud
+///   keeps every file;
+/// * at the shipped defaults a twelve-file folder is **not** protected — 100% clears the
+///   percentage arm but 12 is under the floor of 20 — so the deletion propagates. That is the
+///   ruled behaviour, not a defect, and it is asserted so nobody later mistakes it for one. It is
+///   also why the floor is a knob.
+#[test]
+fn the_mass_delete_breaker_stops_a_real_fleet_and_leaves_the_cloud_whole() {
+    for seed in seeds().into_iter().take(12) {
+        // (a) The breaker bites once the folder is inside the knobs' reach.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let guarded = Knobs {
+            // Its minimum legal value — knobs are knobs.
+            mass_delete_count: 10,
+            mass_delete_min_count: 10,
+            ..Knobs::default()
+        };
+        let mut sim =
+            Simulation::new(seed, dir.path(), Direction::TwoWay, guarded, 1).expect("build");
+        for i in 0..12 {
+            sim.devices[0]
+                .fs
+                .write(&format!("doc{i}.txt"), &format!("c{i}"), 1);
+        }
+        sim.run_and_settle(200, 24).expect("initial sync");
+        assert_eq!(
+            sim.server.live_contents().len(),
+            12,
+            "seed {seed}: the twelve files must reach the cloud first"
+        );
+
+        for i in 0..12 {
+            sim.devices[0].fs.remove(&format!("doc{i}.txt"), true);
+        }
+        let report = sim.run_and_settle(200, 24).expect("the wipe");
+
+        assert!(
+            sim.devices[0].suspended.is_some(),
+            "seed {seed}: twelve of twelve deleted and the breaker did not trip — {report:?}"
+        );
+        assert_eq!(
+            sim.server.live_contents().len(),
+            12,
+            "seed {seed}: the cloud was emptied despite the suspension — {report:?}"
+        );
+        for i in 0..12 {
+            assert!(
+                sim.reachable_contents().contains(&format!("c{i}")),
+                "seed {seed}: content c{i} lost — {report:?}"
+            );
+        }
+
+        // (b) At the shipped defaults the same wipe propagates, because 12 is under the floor of
+        // 20. This is SPEC-ENGINE §2's own worked example and its own reason for the knob.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sim = Simulation::new(seed, dir.path(), Direction::TwoWay, Knobs::default(), 1)
+            .expect("build");
+        for i in 0..12 {
+            sim.devices[0]
+                .fs
+                .write(&format!("doc{i}.txt"), &format!("c{i}"), 1);
+        }
+        sim.run_and_settle(200, 24).expect("initial sync");
+        for i in 0..12 {
+            sim.devices[0].fs.remove(&format!("doc{i}.txt"), true);
+        }
+        sim.run_and_settle(200, 24).expect("the wipe");
+        assert!(
+            sim.devices[0].suspended.is_none(),
+            "seed {seed}: a twelve-file folder is below the default floor and must NOT suspend"
+        );
+        assert!(
+            sim.server.live_contents().is_empty(),
+            "seed {seed}: the deletion must propagate at defaults"
+        );
+        // Nothing is shredded even then: the local deletes went to the OS trash.
+        assert_eq!(
+            sim.devices[0].fs.trash.len(),
+            12,
+            "seed {seed}: every propagated delete must still be recoverable locally"
+        );
+    }
+}
+
+/// `SIM_SEEDS` parsing itself. A soak that silently adds no seeds reports green for nothing, and
+/// the re-verifier had to write a throwaway harness because the old form could not reach a fresh
+/// range at all.
+#[test]
+fn sim_seeds_takes_a_count_a_range_or_an_offset() {
+    // The legacy bare count, from the default offset.
+    assert_eq!(
+        parse_seed_spec("3", 1_000_000),
+        Some(vec![1_000_000, 1_000_001, 1_000_002])
+    );
+    // An explicit half-open range — genuinely fresh seeds, reachable at last.
+    assert_eq!(
+        parse_seed_spec("7000000..7000003", 1_000_000),
+        Some(vec![7_000_000, 7_000_001, 7_000_002])
+    );
+    // A start plus a count.
+    assert_eq!(
+        parse_seed_spec("7000000+2", 1_000_000),
+        Some(vec![7_000_000, 7_000_001])
+    );
+    // Whitespace is tolerated; nonsense is not swallowed.
+    assert_eq!(parse_seed_spec(" 1 .. 3 ", 0), Some(vec![1, 2]));
+    assert_eq!(parse_seed_spec("nonsense", 0), None);
+    assert_eq!(parse_seed_spec("5..1", 0), None, "a reversed range is a typo");
+    assert_eq!(parse_seed_spec("1..x", 0), None);
+
+    // And the checked-in set always runs, whatever the environment says.
+    let base = seeds();
+    assert!(base.contains(&1) && base.contains(&999_331), "{base:?}");
 }

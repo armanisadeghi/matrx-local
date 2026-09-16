@@ -383,6 +383,20 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         assert data["tool_traces"][0]["args"] == {"a": 1}
         assert data["tool_traces"][0]["metadata"]["namespace"] == "host"
 
+        # A recovered cloud tombstone must stop appearing in exports/history.
+        # Keep the row for sync; the read boundary hides it like media/tool_calls.
+        await db.execute(
+            "UPDATE chat.tool_trace SET deleted_at=? WHERE id=?",
+            ("2026-09-16T00:00:00Z", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa33"),
+        )
+        await db.commit()
+        data = await store.get_conversation_data("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01")
+        assert data["tool_traces"] == []
+        assert await db.fetchone(
+            "SELECT id FROM chat.tool_trace WHERE id=?",
+            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa33",),
+        ) is not None
+
     _run(tmp_path, scenario)
 
 

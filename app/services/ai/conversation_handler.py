@@ -1104,7 +1104,8 @@ class SQLiteConversationStore:
         )
         trace_rows = await db.fetchall(
             "SELECT * FROM chat.tool_trace "
-            "WHERE conversation_id = ? ORDER BY COALESCE(ts, created_at), id",
+            "WHERE conversation_id = ? AND deleted_at IS NULL "
+            "ORDER BY COALESCE(ts, created_at), id",
             (conversation_id,),
         )
         tool_traces: list[dict[str, Any]] = []

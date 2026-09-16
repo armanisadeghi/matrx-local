@@ -129,6 +129,18 @@ phrase in the sync directories.
 - `chat.coding_session` and `chat.coding_session_entry` are owner-only raw
   ledgers and are never structural-mirror tables. The generator excludes both
   by name and chat sync has a second runtime refusal guard.
+- **Additive chat columns preserve historical rows.** For an existing populated
+  chat mirror, structural reconciliation records the new cloud-column set in a
+  resumable `chat._mirror_meta` hydration marker before `ALTER TABLE`; a fresh
+  empty table gets no marker. The matching keyset cursor is separate from the
+  normal pull cursor. Reconciliation validates all existing column types, adds
+  missing columns, then creates generated indexes so an index on a new column
+  cannot run before that column exists. Only chat has a consumer for these
+  markers; other mirror schemas do not create them. SR-10 covers
+  `agent_plan`, `agent_task`, `code_edit`, `code_message_file`,
+  `observational_memory_event`, `pending_injection`, `request_snapshot`,
+  `tool_trace`, and `user_todo`; its marked fields are their verified additive
+  cloud fields, never owner-only coding-session ledgers.
 - Conversations/messages are local-only today (gap #1) — hard-delete is fine
   there because no cloud counterpart exists yet.
 - Known wart: `sync_all()` reports `"success"` for skipped entities (gap #6,
@@ -149,6 +161,10 @@ conversation, not a test edit.
   > **Correction (2026-09-15, lane CS-18):** `POST /auth/token` no longer exists — it
   > was removed in the FS-C5b custody cutover (commit 7faafcff2); the historical bypass
   > this entry closed is unaffected, this note only flags the dead route name.
+- 2026-09-16 — Existing populated chat mirrors now retain an additive-column
+  hydration marker before schema expansion and create generated indexes only
+  after column reconciliation. This supports bounded historical repair without
+  treating an empty fresh mirror as recovery work.
 - 2026-09-12 — Lock errors on the shared connection roll the open transaction
   back (was: one lost race poisoned every later write with
   `SQLITE_BUSY_SNAPSHOT` until restart — catalog/tools sync, token save,

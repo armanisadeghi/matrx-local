@@ -1788,17 +1788,18 @@ fn request_admin_shutdown() -> bool {
 fn read_engine_port_from_discovery() -> Option<u16> {
     let path = matrx_discovery_file()?;
     let text = std::fs::read_to_string(path).ok()?;
-    text.split('"')
-        .skip_while(|tok| *tok != "port")
-        .nth(2)
-        .and_then(|tok| {
-            let digits: String = tok
-                .chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            digits.parse().ok()
-        })
+    parse_engine_port_from_discovery(&text)
+}
+
+/// Parse the numeric top-level `port` value written by run.py.
+///
+/// The old quote-token parser selected two fields after `"port"`, which is
+/// the NEXT JSON key (`"host"`) in the real file. That made every native quit
+/// skip `/admin/shutdown` and rely on intermittent direct SIGTERM delivery.
+fn parse_engine_port_from_discovery(text: &str) -> Option<u16> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let port = value.get("port")?.as_u64()?;
+    u16::try_from(port).ok()
 }
 
 /// Restart the app after an update with a clean shutdown sequence.
@@ -3562,7 +3563,9 @@ fn spawn_successor(
 
 #[cfg(test)]
 mod isolation_tests {
-    use super::{global_process_sweeps_allowed, resolve_engine_port_base};
+    use super::{
+        global_process_sweeps_allowed, parse_engine_port_from_discovery, resolve_engine_port_base,
+    };
 
     #[test]
     fn isolated_smoke_uses_only_the_test_port_range() {
@@ -3576,6 +3579,41 @@ mod isolation_tests {
     fn isolated_smoke_disables_global_process_sweeps() {
         assert!(!global_process_sweeps_allowed(true));
         assert!(global_process_sweeps_allowed(false));
+    }
+
+    #[test]
+    fn discovery_port_parser_reads_the_real_pretty_and_compact_shapes() {
+        assert_eq!(
+            parse_engine_port_from_discovery("{\n  \"port\": 38460,\n  \"host\": \"127.0.0.1\"\n}"),
+            Some(38460)
+        );
+        assert_eq!(
+            parse_engine_port_from_discovery("{\"port\":22140,\"host\":\"127.0.0.1\"}"),
+            Some(22140)
+        );
+    }
+
+    #[test]
+    fn discovery_port_parser_rejects_missing_string_and_out_of_range_ports() {
+        assert_eq!(
+            parse_engine_port_from_discovery("{\"url\":\"http://127.0.0.1:38460\"}"),
+            None
+        );
+        assert_eq!(
+            parse_engine_port_from_discovery("{\"port\":\"38460\"}"),
+            None
+        );
+        assert_eq!(parse_engine_port_from_discovery("{\"port\":70000}"), None);
+        assert_eq!(
+            parse_engine_port_from_discovery(
+                "{\"metadata\":{\"port\":22},\"port\":38460}"
+            ),
+            Some(38460)
+        );
+        assert_eq!(
+            parse_engine_port_from_discovery("{\"port\":38460junk}"),
+            None
+        );
     }
 }
 

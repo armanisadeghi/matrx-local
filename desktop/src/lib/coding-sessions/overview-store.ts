@@ -25,6 +25,7 @@ import {
   writeCachedOverview,
   type CachedOverview,
 } from "@/lib/coding-sessions/overview-cache";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 export interface CodingSessionsSources {
   overview(): Promise<ClaudeOverview>;
@@ -56,6 +57,8 @@ export interface CodingSessionsSnapshot {
   overviewPending: boolean;
   /** False until a real answer (not the cache) has landed at least once. */
   loadedFromEngine: boolean;
+  /** Last terminal cloud class durably accepted for this active incident. */
+  capturedCloudFailureClass: string | null;
 }
 
 function reason(value: unknown): string {
@@ -79,6 +82,7 @@ export function emptySnapshot(cached: CachedOverview | null = null): CodingSessi
     refreshing: false,
     overviewPending: false,
     loadedFromEngine: false,
+    capturedCloudFailureClass: null,
   };
 }
 
@@ -89,6 +93,37 @@ export function initialSnapshot(): CodingSessionsSnapshot {
 export interface RefreshOptions {
   now?: () => number;
   persist?: (overview: ClaudeOverview, at: number) => string | null;
+  capture?: typeof enqueueDurableClientError;
+}
+
+/** Collapse server detail into a privacy-safe incident class. Authentication,
+ * organization selection, and an in-flight first read are ordinary readiness
+ * states; they must stay visible without becoming telemetry errors. */
+export function cloudInventoryFailureClass(
+  cloud: ClaudeOverview["cloud"] | null | undefined,
+): string | null {
+  if (!cloud || cloud.checked) return null;
+  const reason = cloud.reason ?? "";
+  if (
+    reason === "cloud_check_in_flight" ||
+    reason === "session_refreshing" ||
+    reason === "no_active_user_jwt"
+  ) {
+    return null;
+  }
+  if (reason === "aidream_unreachable") return "unreachable";
+  if (reason === "aidream_server_unconfigured") return "server-unconfigured";
+  if (reason.startsWith("aidream_error:")) {
+    const detail = reason.slice("aidream_error:".length);
+    if (
+      /HTTP\s+(?:401|403)\b/i.test(detail) ||
+      /cannot name an organization/i.test(detail)
+    ) {
+      return null;
+    }
+    return "server-refusal";
+  }
+  return "invalid-response";
 }
 
 /**
@@ -103,6 +138,7 @@ export async function refreshCodingSessions(
 ): Promise<CodingSessionsSnapshot> {
   const now = options.now ?? (() => Date.now());
   const persist = options.persist ?? writeCachedOverview;
+  const capture = options.capture ?? enqueueDurableClientError;
 
   // RULE 1 — announce before awaiting. Nothing below this line may be the
   // first thing a person sees change.
@@ -151,6 +187,19 @@ export async function refreshCodingSessions(
   snapshot = { ...snapshot, refreshing: false, overviewPending: false };
   if (overview.ok) {
     const at = now();
+    const nextFailure = cloudInventoryFailureClass(overview.value.cloud);
+    if (nextFailure && nextFailure !== current.capturedCloudFailureClass) {
+      const accepted = capture({
+        level: "error",
+        source: "coding-session-cloud-inventory",
+        message: `AI Matrx conversation inventory entered terminal state: ${nextFailure}.`,
+        causalSignature: `coding-session-cloud-inventory:${nextFailure}`,
+        requireIdentity: true,
+      });
+      if (accepted) snapshot.capturedCloudFailureClass = nextFailure;
+    } else if (!nextFailure) {
+      snapshot.capturedCloudFailureClass = null;
+    }
     snapshot.overview = overview.value;
     snapshot.overviewAt = at;
     snapshot.overviewFromCache = false;

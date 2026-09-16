@@ -19,6 +19,8 @@ const MAX_SOURCE_CHARS: usize = 128;
 const MAX_MESSAGE_CHARS: usize = 2_000;
 const MAX_ROUTE_CHARS: usize = 512;
 const MAX_WINDOW_CHARS: usize = 128;
+const MIN_CAUSAL_SIGNATURE_CHARS: usize = 16;
+const MAX_CAUSAL_SIGNATURE_CHARS: usize = 128;
 const OUTBOX_FILE: &str = "error-outbox-v1.json";
 
 static OUTBOX_LOCK: Mutex<()> = Mutex::new(());
@@ -37,6 +39,15 @@ pub struct ErrorOutboxEvent {
     pub window_label: String,
     pub user_id: Option<String>,
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub causal_signature: Option<String>,
+}
+
+fn is_safe_causal_signature(value: &str) -> bool {
+    (MIN_CAUSAL_SIGNATURE_CHARS..=MAX_CAUSAL_SIGNATURE_CHARS).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn clamp(value: String, max_chars: usize) -> String {
@@ -282,6 +293,14 @@ fn validate(mut event: ErrorOutboxEvent) -> Result<ErrorOutboxEvent, String> {
     event.organization_id = event
         .organization_id
         .map(|value| clamp(value, MAX_ID_CHARS));
+    if let Some(signature) = event.causal_signature.as_deref() {
+        if !is_safe_causal_signature(signature) {
+            return Err(
+                "diagnostics causal signature must be a 16-128 character lowercase hex fingerprint"
+                    .into(),
+            );
+        }
+    }
     event.occurred_at = clamp(event.occurred_at, 64);
     if event.id.is_empty() || event.message.is_empty() || event.occurred_at.is_empty() {
         return Err("diagnostics event requires id, occurredAt, and message".into());
@@ -371,6 +390,16 @@ fn enqueue_at(path: &Path, event: ErrorOutboxEvent) -> Result<(), String> {
     if events.iter().any(|existing| existing.id == event.id) {
         return Ok(());
     }
+    if let Some(signature) = event.causal_signature.as_deref() {
+        if events.iter().any(|existing| {
+            existing.causal_signature.as_deref() == Some(signature)
+                && existing.source == event.source
+                && existing.user_id == event.user_id
+                && existing.organization_id == event.organization_id
+        }) {
+            return Ok(());
+        }
+    }
     events.push(event);
     if events.len() > MAX_RECORDS {
         events.drain(0..events.len() - MAX_RECORDS);
@@ -401,6 +430,7 @@ fn native_event_at(
         // reassigned to whichever user signs in next.
         user_id: None,
         organization_id: None,
+        causal_signature: None,
     }
 }
 
@@ -512,6 +542,7 @@ mod tests {
             window_label: "main".into(),
             user_id: Some("user-one".into()),
             organization_id: Some("org-one".into()),
+            causal_signature: None,
         }
     }
 
@@ -550,6 +581,62 @@ mod tests {
         info.level = "info".into();
         assert!(enqueue_at(&path, info).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn coalesces_only_same_causal_signature_source_and_identity() {
+        let path = temp_path("causal-dedupe");
+        let signature = "a".repeat(64);
+        let mut first = event("one", "first");
+        first.causal_signature = Some(signature.clone());
+        enqueue_at(&path, first).unwrap();
+
+        let mut same_cause = event("two", "retry");
+        same_cause.causal_signature = Some(signature.clone());
+        enqueue_at(&path, same_cause).unwrap();
+        assert_eq!(read_events(&path).unwrap().len(), 1);
+
+        let mut different_user = event("three", "other user");
+        different_user.causal_signature = Some(signature.clone());
+        different_user.user_id = Some("user-two".into());
+        enqueue_at(&path, different_user).unwrap();
+
+        let mut different_org = event("four", "other org");
+        different_org.causal_signature = Some(signature.clone());
+        different_org.organization_id = Some("org-two".into());
+        enqueue_at(&path, different_org).unwrap();
+
+        let mut different_source = event("five", "other source");
+        different_source.causal_signature = Some(signature);
+        different_source.source = "other".into();
+        enqueue_at(&path, different_source).unwrap();
+
+        assert_eq!(read_events(&path).unwrap().len(), 4);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_old_records_without_a_causal_signature() {
+        let path = temp_path("old-record");
+        std::fs::write(
+            &path,
+            r#"[{"id":"old","schemaVersion":1,"occurredAt":"2026-09-15T00:00:00.000Z","level":"error","source":"test","message":"old","route":"/test","windowLabel":"main","userId":"user-one","organizationId":"org-one"}]"#,
+        )
+        .unwrap();
+
+        let records = read_events(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].causal_signature, None);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_private_or_malformed_causal_signatures() {
+        let path = temp_path("invalid-causal-signature");
+        let mut invalid = event("private", "must not persist");
+        invalid.causal_signature = Some("token=private-value".into());
+        assert!(enqueue_at(&path, invalid).is_err());
+        assert!(!path.exists());
     }
 
     #[test]

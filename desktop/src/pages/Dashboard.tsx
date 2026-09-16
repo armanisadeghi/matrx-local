@@ -490,9 +490,23 @@ export function browserCardPresentation(
     case "browser_launch_failed":
       return {
         value: "Not running",
-        description: "Chromium is installed but did not start",
+        description: "Built-in browser needs repair, then restart if needed",
         variant: "warning",
         action: "repair",
+      };
+    case "browser_build_mismatch":
+      return {
+        value: "Update needed",
+        description: "Built-in browser version needs an update",
+        variant: "warning",
+        action: "install",
+      };
+    case "browser_install_failed":
+      return {
+        value: "Download incomplete",
+        description: "Try downloading the built-in browser again",
+        variant: "warning",
+        action: "install",
       };
     case "playwright_package_missing":
     case "browser_not_installed":
@@ -582,12 +596,12 @@ function BrowserStatusCard({ engineStatus }: { engineStatus: EngineStatus }) {
             ) : view.action === "repair" ? (
               <>
                 <RefreshCw className="h-3 w-3" />
-                Start browser
+                Repair browser
               </>
             ) : (
               <>
                 <Download className="h-3 w-3" />
-                Install Chromium
+                {status?.action_needed?.action.label ?? "Install browser"}
               </>
             )}
           </Button>

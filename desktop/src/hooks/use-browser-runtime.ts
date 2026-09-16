@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { engine, type BrowserRuntimeStatus } from "@/lib/api";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 export interface BrowserRuntimeState {
   status: BrowserRuntimeStatus | null;
@@ -40,6 +41,31 @@ export type UseBrowserRuntimeReturn = BrowserRuntimeState & {
 // While a background first-boot download is running the engine's own state
 // changes without us doing anything, so poll — but only then.
 const INSTALLING_POLL_MS = 4000;
+const ACTIONABLE_TERMINAL_CODES = new Set([
+  "browser_install_failed",
+  "browser_launch_failed",
+  "browser_build_mismatch",
+]);
+
+/** Capture once per terminal-state transition. If identity is not ready, keep
+ * the previous marker so a later refresh can safely retry instead of silently
+ * losing the incident or assigning it to the wrong person. */
+export function captureBrowserRuntimeFailureTransition(
+  previous: string | null,
+  nextCode: string,
+  capture: typeof enqueueDurableClientError = enqueueDurableClientError,
+): string | null {
+  const safeCode = ACTIONABLE_TERMINAL_CODES.has(nextCode) ? nextCode : null;
+  if (!safeCode || previous === safeCode) return safeCode;
+  const accepted = capture({
+    level: "error",
+    source: "browser-runtime",
+    message: `Browser runtime needs attention (${safeCode}).`,
+    requireIdentity: true,
+    causalSignature: `browser-runtime:${safeCode}`,
+  });
+  return accepted ? safeCode : previous;
+}
 
 export function useBrowserRuntime(): UseBrowserRuntimeReturn {
   const [status, setStatus] = useState<BrowserRuntimeStatus | null>(null);
@@ -49,10 +75,15 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const installRunning = useRef(false);
+  const priorTerminalCode = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const next = await engine.getBrowserRuntimeStatus();
+      priorTerminalCode.current = captureBrowserRuntimeFailureTransition(
+        priorTerminalCode.current,
+        next.code,
+      );
       setStatus(next);
       setLoaded(true);
       // Adopt an install started elsewhere (first-boot background download, or

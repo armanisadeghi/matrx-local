@@ -5,7 +5,7 @@ plain READY, the Scraping page offered a "Browser" method that could only fail,
 and nothing told the user what to install. These pin the three properties that
 must not regress:
 
-  1. The state is reported, with a reason, and it names THIS world's path.
+  1. The state is reported with a privacy-safe reason.
   2. It becomes a one-click ActionNeeded — not an error, not an Arman task.
   3. It disappears completely once a browser is present (no phantom prompt).
 
@@ -44,12 +44,13 @@ def test_path_follows_the_world_not_a_hardcoded_home(tmp_path, monkeypatch):
     assert module.browsers_path() == tmp_path / ".matrx-dev" / "playwright-browsers"
 
 
-def test_missing_browser_is_reported_with_a_reason(runtime):
+def test_missing_browser_is_reported_with_a_safe_reason(runtime):
     status = runtime.status()
 
     assert status.available is False
     assert status.code == "browser_not_installed"
-    assert status.reason and str(runtime.browsers_path()) in status.reason
+    assert status.reason == "No built-in browser is installed yet."
+    assert str(runtime.browsers_path()) not in status.to_dict().values()
 
 
 def test_missing_browser_becomes_a_one_click_action(runtime):
@@ -63,14 +64,46 @@ def test_missing_browser_becomes_a_one_click_action(runtime):
     assert "install" in item.action.label.lower()
 
 
-def test_launch_failure_reason_reaches_the_user_facing_state(runtime, monkeypatch):
+def test_terminal_install_failure_has_a_safe_persisted_code(runtime):
+    runtime.record_install_failure()
+
+    status = runtime.status()
+    assert status.available is False
+    assert status.code == "browser_install_failed"
+    assert status.reason == "The built-in browser download did not finish. Try again."
+    assert str(runtime.browsers_path()) not in status.to_dict().values()
+    item = runtime.browser_action_needed()
+    assert item is not None
+    assert item.action.label == "Try again"
+
+
+def test_terminal_package_install_failure_is_not_demoted_to_missing(runtime, monkeypatch):
+    monkeypatch.setattr(runtime, "playwright_package_present", lambda: False)
+    runtime.record_install_failure()
+
+    assert runtime.status().code == "browser_install_failed"
+
+
+def test_verified_live_pool_clears_a_stale_installer_failure(runtime, monkeypatch):
+    runtime.record_install_failure()
+    monkeypatch.setattr(runtime, "playwright_package_present", lambda: True)
+    monkeypatch.setattr(runtime, "browser_binary_present", lambda: True)
+
+    runtime.record_pool_started()
+
+    status = runtime.status()
+    assert status.available is True
+    assert status.code == "ready"
+
+
+def test_launch_failure_state_does_not_reflect_raw_diagnostics(runtime, monkeypatch):
     monkeypatch.setattr(runtime, "browser_binary_present", lambda: True)
     runtime.record_launch_failure(RuntimeError("Executable doesn't exist"))
 
     status = runtime.status()
     assert status.available is False
     assert status.code == "browser_launch_failed"
-    assert "Executable doesn't exist" in (status.reason or "")
+    assert status.reason == "The built-in browser did not start. Repair it and restart the app if needed."
     assert runtime.browser_action_needed() is not None
 
 
@@ -84,7 +117,6 @@ def test_service_record_says_degraded_with_the_reason_never_failed(runtime):
     assert record["state"] == ServiceState.DEGRADED.value
     assert "browser rendering unavailable" in record["error"]
     assert record["metadata"]["browser_available"] is False
-    assert record["metadata"]["browsers_path"] == str(runtime.browsers_path())
 
 
 def test_service_record_returns_to_ready_once_the_browser_is_there(runtime, monkeypatch):
@@ -147,7 +179,7 @@ def test_the_ask_returns_once_the_retry_has_also_failed(runtime, monkeypatch):
 
     status = runtime.status()
     assert status.code == "browser_launch_failed"
-    assert "Chromium crashed on launch" in (status.reason or "")
+    assert status.reason == "The built-in browser did not start. Repair it and restart the app if needed."
     item = runtime.browser_action_needed()
     assert item is not None
     assert item.action.label == "Repair browser"

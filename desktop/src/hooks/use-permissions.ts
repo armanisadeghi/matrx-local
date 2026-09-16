@@ -45,6 +45,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { isTauri } from "@/lib/sidecar";
 import { PLATFORM } from "@/lib/platformCtx";
 import { engine, type PermissionInfo } from "@/lib/api";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -319,6 +320,107 @@ export function pluginBooleanPermissionStatus(
   return explicitlyRequested ? "denied" : "not_determined";
 }
 
+/**
+ * Accessibility, Full Disk Access, and Input Monitoring have no public
+ * authorization-status enum. Their plugin probes can only prove a grant;
+ * a false result does not tell us whether the person has never enabled it,
+ * declined it, or is constrained by device policy. Keep that uncertainty
+ * honest rather than presenting it as "Not asked yet".
+ */
+export function settingsOnlyBooleanPermissionStatus(granted: boolean): PermissionStatus {
+  return granted ? "granted" : "unknown";
+}
+
+const PROBE_CAUSAL_SIGNATURE = {
+  pluginMicrophone: "permission-probe:plugin:microphone",
+  pluginCamera: "permission-probe:plugin:camera",
+  pluginAccessibility: "permission-probe:plugin:accessibility",
+  pluginFullDiskAccess: "permission-probe:plugin:full-disk-access",
+  pluginInputMonitoring: "permission-probe:plugin:input-monitoring",
+  pluginScreenRecording: "permission-probe:plugin:screen-recording",
+  app: "permission-probe:app",
+} as const;
+
+function reportPermissionProbeFailure(
+  source: string,
+  causalSignature: string,
+  error: unknown,
+): void {
+  console.error(`[permissions] ${source} failed:`, error);
+  enqueueDurableClientError({
+    level: "error",
+    source,
+    message: `Permission status probe failed in ${source}.`,
+    causalSignature,
+    requireIdentity: true,
+  });
+}
+
+function pluginProbeCausalSignature(key: PermissionKey): string {
+  switch (key) {
+    case "microphone": return PROBE_CAUSAL_SIGNATURE.pluginMicrophone;
+    case "camera": return PROBE_CAUSAL_SIGNATURE.pluginCamera;
+    case "accessibility": return PROBE_CAUSAL_SIGNATURE.pluginAccessibility;
+    case "full_disk_access": return PROBE_CAUSAL_SIGNATURE.pluginFullDiskAccess;
+    case "input_monitoring": return PROBE_CAUSAL_SIGNATURE.pluginInputMonitoring;
+    default: return PROBE_CAUSAL_SIGNATURE.app;
+  }
+}
+
+/**
+ * The canonical, read-only plugin status read. Microphone and camera retain
+ * their explicit-request marker because the plugin exposes only a boolean.
+ * Settings-only permissions intentionally report false as unknown.
+ */
+export async function readPluginPermissionStatus(key: PermissionKey): Promise<PermissionStatus> {
+  if (!isTauri()) return "unknown";
+  const perms = await import("tauri-plugin-macos-permissions-api");
+  switch (key) {
+    case "microphone":
+      return pluginBooleanPermissionStatus(
+        await perms.checkMicrophonePermission(),
+        wasExplicitlyRequested("microphone"),
+      );
+    case "camera":
+      return pluginBooleanPermissionStatus(
+        await perms.checkCameraPermission(),
+        wasExplicitlyRequested("camera"),
+      );
+    case "accessibility":
+      return settingsOnlyBooleanPermissionStatus(await perms.checkAccessibilityPermission());
+    case "full_disk_access":
+      return settingsOnlyBooleanPermissionStatus(await perms.checkFullDiskAccessPermission());
+    case "input_monitoring":
+      return settingsOnlyBooleanPermissionStatus(await perms.checkInputMonitoringPermission());
+    default:
+      return "unknown";
+  }
+}
+
+/** Prompt for microphone access from the same app process that will capture
+ * audio, then return the post-prompt state. The explicit-request marker is
+ * written before opening the OS dialog so a declined prompt is distinguishable
+ * from first use on the next read. */
+export async function requestPluginMicrophonePermission(): Promise<PermissionStatus> {
+  if (!isTauri()) return "unknown";
+  const perms = await import("tauri-plugin-macos-permissions-api");
+  markExplicitlyRequested("microphone");
+  await perms.requestMicrophonePermission();
+  await delay(POST_REQUEST_DELAY_MS);
+  return readPluginPermissionStatus("microphone");
+}
+
+export function transcriptionMicrophonePrerequisiteError(status: PermissionStatus): string | null {
+  if (status === "granted") return null;
+  if (status === "restricted") {
+    return "Microphone access is restricted on this device (parental controls or MDM policy).";
+  }
+  if (status === "denied") {
+    return "Microphone access was denied. Open System Settings → Privacy & Security → Microphone and enable access for Matrx Local.";
+  }
+  return "Microphone access is required for transcription. Please allow access when prompted.";
+}
+
 /** Is this status a usable grant? `limited` is a grant the person scoped. */
 export function isGranted(status: PermissionStatus): boolean {
   return status === "granted" || status === "limited";
@@ -477,30 +579,14 @@ export function usePermissions(): UsePermissionsReturn {
    */
   const checkPluginPermission = useCallback(
     async (key: PermissionKey): Promise<PermissionStatus> => {
-      if (!isTauri()) return "unknown";
       try {
-        const perms = await import("tauri-plugin-macos-permissions-api");
-        switch (key) {
-          case "microphone":
-            return pluginBooleanPermissionStatus(
-              await perms.checkMicrophonePermission(),
-              wasExplicitlyRequested("microphone"),
-            );
-          case "camera":
-            return pluginBooleanPermissionStatus(
-              await perms.checkCameraPermission(),
-              wasExplicitlyRequested("camera"),
-            );
-          case "accessibility":
-            return (await perms.checkAccessibilityPermission()) ? "granted" : "not_determined";
-          case "full_disk_access":
-            return (await perms.checkFullDiskAccessPermission()) ? "granted" : "not_determined";
-          case "input_monitoring":
-            return (await perms.checkInputMonitoringPermission()) ? "granted" : "not_determined";
-          default:
-            return "unknown";
-        }
-      } catch {
+        return await readPluginPermissionStatus(key);
+      } catch (error) {
+        reportPermissionProbeFailure(
+          `permission-probe:plugin:${key}`,
+          pluginProbeCausalSignature(key),
+          error,
+        );
         return "unknown";
       }
     },
@@ -518,6 +604,7 @@ export function usePermissions(): UsePermissionsReturn {
         return result.detail ? { status, detail: result.detail } : { status };
       } catch (err) {
         console.error(`[permissions] app status for ${key} failed:`, err);
+        reportPermissionProbeFailure("permission-probe:app", PROBE_CAUSAL_SIGNATURE.app, err);
         return { status: "unknown", detail: "The app could not read this permission's status." };
       }
     },
@@ -537,7 +624,12 @@ export function usePermissions(): UsePermissionsReturn {
           try {
             const perms = await import("tauri-plugin-macos-permissions-api");
             if (await perms.checkScreenRecordingPermission()) return { status: "granted" };
-          } catch {
+          } catch (fallbackError) {
+            reportPermissionProbeFailure(
+              "permission-probe:plugin:screen-recording",
+              PROBE_CAUSAL_SIGNATURE.pluginScreenRecording,
+              fallbackError,
+            );
             // fall through
           }
         }
@@ -695,12 +787,15 @@ export function usePermissions(): UsePermissionsReturn {
         case "microphone":
         case "camera": {
           try {
-            const perms = await import("tauri-plugin-macos-permissions-api");
-            markExplicitlyRequested(key);
-            if (key === "microphone") await perms.requestMicrophonePermission();
-            else await perms.requestCameraPermission();
-            await delay(POST_REQUEST_DELAY_MS);
-            await check(key);
+            if (key === "microphone") {
+              updatePermission(key, await requestPluginMicrophonePermission());
+            } else {
+              const perms = await import("tauri-plugin-macos-permissions-api");
+              markExplicitlyRequested(key);
+              await perms.requestCameraPermission();
+              await delay(POST_REQUEST_DELAY_MS);
+              await check(key);
+            }
           } catch (err) {
             console.error(`[permissions] Failed to request ${key}:`, err);
             await openSettings(key);

@@ -54,7 +54,13 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
     ? "The built-in browser is still starting — available in a moment."
     : browserInstalling
       ? "Downloading the built-in browser — available when it finishes."
-      : "The built-in browser isn't installed yet. Install it on this page to use this method.";
+      : browserRuntime?.status?.code === "browser_build_mismatch"
+        ? "The built-in browser needs an update. Update it on this page to use this method."
+        : browserRuntime?.status?.code === "browser_launch_failed"
+          ? "The built-in browser needs repair. Repair it, then restart the app if needed."
+          : browserRuntime?.status?.code === "browser_install_failed"
+            ? "The browser download did not finish. Try again on this page to use this method."
+            : "The built-in browser isn't installed yet. Install it on this page to use this method.";
 
   return (
     <Tooltip>
@@ -90,7 +96,13 @@ export function MethodSelector({ value, onChange, className }: MethodSelectorPro
                       ? "(starting)"
                       : browserInstalling
                         ? "(downloading)"
-                        : "(not installed)"}
+                        : browserRuntime?.status?.code === "browser_build_mismatch"
+                          ? "(update needed)"
+                          : browserRuntime?.status?.code === "browser_launch_failed"
+                            ? "(repair needed)"
+                            : browserRuntime?.status?.code === "browser_install_failed"
+                              ? "(try again)"
+                              : "(not installed)"}
                   </span>
                 )}
               </button>

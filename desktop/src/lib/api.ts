@@ -5556,7 +5556,6 @@ export interface BrowserRuntimeStatus {
   available: boolean;
   code: string;
   reason: string | null;
-  browsers_path: string;
   installing: boolean;
   install_percent: number | null;
   install_message: string | null;

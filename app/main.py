@@ -191,16 +191,18 @@ async def _ensure_playwright_browsers() -> None:
                 logger.info("[app/main.py] Playwright browsers installed successfully")
             else:
                 logger.warning(
-                    "[app/main.py] Playwright browser install exited %d: %s",
+                    "[app/main.py] Playwright browser install exited %d",
                     proc.returncode,
-                    (stdout or b"").decode("utf-8", errors="replace")[:500],
                 )
+                _browser_runtime.record_install_failure()
         except Exception:
             logger.warning(
                 "[app/main.py] Playwright browser install task failed", exc_info=True
             )
+            _browser_runtime.record_install_failure()
         finally:
-            _browser_runtime.install_finished()
+            if _browser_runtime.install_in_progress():
+                _browser_runtime.install_finished()
             # The download typically lands AFTER Phase 3 gave up on the pool.
             # Bring rendering up now rather than making the user restart.
             try:

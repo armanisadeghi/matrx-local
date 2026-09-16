@@ -13,6 +13,9 @@ export interface DurableErrorEvent {
   windowLabel: string;
   userId: string | null;
   organizationId: string | null;
+  /** A privacy-safe, stable fingerprint for one causal failure class. It is
+   * persisted locally for deduplication only and is never part of the RPC. */
+  causalSignature?: string | null;
 }
 
 export interface ErrorOutboxBridge {
@@ -54,6 +57,23 @@ export type ErrorOutboxRpc = (args: {
 const FLUSH_BATCH_SIZE = 20;
 const FLUSH_SCAN_SIZE = 1_000;
 const FLUSH_INTERVAL_MS = 30_000;
+const CAUSAL_FINGERPRINT_PATTERN = /^[a-f0-9]{16,128}$/;
+const CAUSAL_CLASS_PATTERN = /^[a-z0-9][a-z0-9:._/-]{0,191}$/;
+
+function safeCausalSignature(value: string | undefined): string | null {
+  if (!value) return null;
+  if (CAUSAL_FINGERPRINT_PATTERN.test(value)) return value;
+  if (!CAUSAL_CLASS_PATTERN.test(value)) return null;
+  // Persist only a fixed-width fingerprint, never even a supposedly-safe
+  // semantic label. This keeps the disk queue free of paths, names, and future
+  // caller mistakes while letting adapters use readable constant classes.
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
 
 const nativeBridge: ErrorOutboxBridge = {
   enqueue: (event) =>
@@ -156,6 +176,12 @@ function eventId(): string {
 
 let captureContext: { userId: string; organizationId: string } | null = null;
 
+function hasCaptureIdentity(): boolean {
+  return Boolean(
+    captureContext?.userId.trim() && captureContext?.organizationId.trim(),
+  );
+}
+
 /** Bind future events to the identity active when they occurred. Events
  * captured before this is known remain installation-local and are never
  * reassigned to whoever signs in next. */
@@ -239,6 +265,7 @@ export function buildDurableErrorEvent(input: {
   level: DurableErrorLevel;
   message: string;
   source?: string;
+  causalSignature?: string;
 }): DurableErrorEvent {
   return {
     id: eventId(),
@@ -251,6 +278,7 @@ export function buildDurableErrorEvent(input: {
     windowLabel: currentWindowLabel().slice(0, 128),
     userId: captureContext?.userId ?? null,
     organizationId: captureContext?.organizationId ?? null,
+    causalSignature: safeCausalSignature(input.causalSignature),
   };
 }
 
@@ -301,10 +329,17 @@ export function enqueueDurableClientError(input: {
   level: DurableErrorLevel;
   message: string;
   source?: string;
-}): void {
-  if (!isTauri()) return;
+  causalSignature?: string;
+  /** Refuse capture during an identity transition rather than later assigning
+   * the event to a different actor. */
+  requireIdentity?: boolean;
+}): boolean {
+  if (!isTauri() || (input.requireIdentity && !hasCaptureIdentity())) {
+    return false;
+  }
   controller.enqueue(buildDurableErrorEvent(input));
   void controller.flush();
+  return true;
 }
 
 export function installErrorOutboxPersistence(

@@ -20,6 +20,7 @@ vi.mock("@/lib/sidecar", () => ({
 
 import {
   ENGINE_SUPERVISOR_OK,
+  EngineSupervisorFeed,
   engineSupervisorHeadline,
   type EngineSupervisorStatus,
 } from "@/lib/engine-supervisor";
@@ -79,5 +80,46 @@ describe("EngineSupervisorStrip", () => {
     expect(engineSupervisorHeadline(status({ phase: "failed", cause: null }))).toContain(
       "Engine failed to start",
     );
+  });
+
+  it("captures one privacy-safe event per unexpected-engine incident", () => {
+    const capture = vi.fn((_input: unknown) => true);
+    const feed = new EngineSupervisorFeed(capture);
+    feed.push(status({ phase: "restarting", exitCode: 7, exitSignal: null }));
+    feed.push(status({ phase: "failed", exitCode: 7, exitSignal: null }));
+    feed.push(ENGINE_SUPERVISOR_OK);
+    feed.push(status({ phase: "failed", exitCode: null, exitSignal: 9 }));
+
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture.mock.calls[0]?.[0]).toEqual({
+      level: "error",
+      source: "engine-supervisor",
+      message: "The local engine exited unexpectedly; automatic recovery entered restarting (exit code 7, signal none).",
+      causalSignature: "engine-supervisor:restarting:exit-7:signal-none",
+      requireIdentity: true,
+    });
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(ZLIB);
+  });
+
+  it("retries the same incident after identity-gated capture is refused", () => {
+    const capture = vi.fn((_input: unknown) => true)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const feed = new EngineSupervisorFeed(capture);
+
+    feed.push(status({ phase: "restarting", exitCode: 7 }));
+    feed.push(status({ phase: "failed", exitCode: 7 }));
+    feed.push(status({ phase: "failed", exitCode: 7 }));
+
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture.mock.calls[1]).toEqual(capture.mock.calls[0]);
+  });
+
+  it("does not capture healthy or intentional-shutdown-equivalent status", () => {
+    const capture = vi.fn();
+    const feed = new EngineSupervisorFeed(capture);
+    feed.push(ENGINE_SUPERVISOR_OK);
+    feed.push(ENGINE_SUPERVISOR_OK);
+    expect(capture).not.toHaveBeenCalled();
   });
 });

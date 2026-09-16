@@ -16,6 +16,7 @@
  */
 
 import { invokeTauri, isTauri } from "@/lib/sidecar";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 /** `ok` — nothing wrong. `restarting` — an automatic attempt is in flight.
  *  `failed` — the bound is spent and the user has to act. */
@@ -63,11 +64,17 @@ export function engineSupervisorHeadline(status: EngineSupervisorStatus): string
   return "The local engine is running";
 }
 
-class EngineSupervisorFeed {
+export class EngineSupervisorFeed {
   private status: EngineSupervisorStatus = ENGINE_SUPERVISOR_OK;
   private listeners = new Set<() => void>();
   private unlisten: (() => void) | null = null;
   private started = false;
+  private pendingIncidentCapture: Parameters<typeof enqueueDurableClientError>[0] | null = null;
+  private incidentCaptured = false;
+
+  constructor(
+    private readonly capture: typeof enqueueDurableClientError = enqueueDurableClientError,
+  ) {}
 
   getSnapshot = () => this.status;
 
@@ -81,6 +88,26 @@ class EngineSupervisorFeed {
 
   /** Test seam and event sink — replaces the snapshot and wakes subscribers. */
   push = (status: EngineSupervisorStatus) => {
+    const opensIncident =
+      this.status.phase === "ok" && status.phase !== "ok";
+    if (opensIncident) {
+      const exitCode = status.exitCode ?? "none";
+      const exitSignal = status.exitSignal ?? "none";
+      this.pendingIncidentCapture = {
+        level: "error",
+        source: "engine-supervisor",
+        message: `The local engine exited unexpectedly; automatic recovery entered ${status.phase} (exit code ${exitCode}, signal ${exitSignal}).`,
+        causalSignature: `engine-supervisor:${status.phase}:exit-${exitCode}:signal-${exitSignal}`,
+        requireIdentity: true,
+      };
+      this.incidentCaptured = false;
+    }
+    if (status.phase === "ok") {
+      this.pendingIncidentCapture = null;
+      this.incidentCaptured = false;
+    } else if (this.pendingIncidentCapture && !this.incidentCaptured) {
+      this.incidentCaptured = this.capture(this.pendingIncidentCapture);
+    }
     this.status = status;
     this.listeners.forEach((listener) => listener());
   };

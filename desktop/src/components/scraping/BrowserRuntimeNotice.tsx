@@ -22,6 +22,10 @@ export function BrowserRuntimeNotice() {
   // Install button would be a dead control — say what is actually happening and
   // ask for nothing (the engine clears this on its own, either way).
   const starting = status?.code === "browser_starting";
+  const launchFailed = status?.code === "browser_launch_failed";
+  const buildMismatch = status?.code === "browser_build_mismatch";
+  const installFailed = status?.code === "browser_install_failed";
+  const actionLabel = status?.action_needed?.action.label;
 
   if (starting) {
     return (
@@ -54,14 +58,22 @@ export function BrowserRuntimeNotice() {
         <Chrome className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">
-            {installing
-              ? "Downloading the built-in browser"
-              : "The built-in browser isn't installed yet"}
+            {installing ? "Downloading the built-in browser" : buildMismatch
+              ? "The built-in browser needs an update" : launchFailed
+                ? "The built-in browser needs repair" : installFailed
+                  ? "The built-in browser download did not finish"
+                  : "The built-in browser isn't installed yet"}
           </p>
           <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">
             {installing
               ? "Pages that need a real browser will work as soon as this finishes. Everything else keeps working meanwhile."
-              : `The "Browser" method reads pages that only show their content after running JavaScript. It needs a one-time ${sizeHint} download. Regular page fetching works without it.`}
+              : buildMismatch
+                ? "Update the built-in browser to the version this app needs. Everything else keeps working meanwhile."
+                : launchFailed
+                  ? "Repair the built-in browser, then restart the app if it still cannot start. Everything else keeps working meanwhile."
+                  : installFailed
+                    ? "Try the browser download again. Everything else keeps working meanwhile."
+                    : `The "Browser" method reads pages that only show their content after running JavaScript. It needs a one-time ${sizeHint} download. Regular page fetching works without it.`}
           </p>
           {installing && (
             <div className="mt-2 space-y-1">
@@ -94,7 +106,7 @@ export function BrowserRuntimeNotice() {
               Installing
             </>
           ) : (
-            `Install browser (${sizeHint})`
+            actionLabel ?? (buildMismatch ? "Update browser" : launchFailed ? "Repair browser" : installFailed ? "Try again" : `Install browser (${sizeHint})`)
           )}
         </Button>
       </div>

@@ -288,7 +288,6 @@ class BrowserRuntimeStatus:
     available: bool
     code: str
     reason: str | None
-    browsers_path: str
     installing: bool
     install_percent: int | None = None
     install_message: str | None = None
@@ -301,7 +300,6 @@ class BrowserRuntimeStatus:
             "available": self.available,
             "code": self.code,
             "reason": self.reason,
-            "browsers_path": self.browsers_path,
             "installing": self.installing,
             "install_percent": self.install_percent,
             "install_message": self.install_message,
@@ -317,11 +315,15 @@ class _InstallState:
         self.running = False
         self.percent: int | None = None
         self.message: str | None = None
+        # Canonical status may be rendered and captured. Keep only a stable
+        # category here, never installer output, paths, or exception text.
+        self.failure_code: str | None = None
 
     def start(self) -> None:
         self.running = True
         self.percent = 0
         self.message = "Preparing browser download…"
+        self.failure_code = None
 
     def update(self, percent: int | None, message: str | None) -> None:
         if percent is not None:
@@ -333,6 +335,15 @@ class _InstallState:
         self.running = False
         self.percent = None
         self.message = None
+
+    def fail(self, code: str) -> None:
+        self.running = False
+        self.percent = None
+        self.message = None
+        self.failure_code = code
+
+    def recover(self) -> None:
+        self.failure_code = None
 
 
 _install = _InstallState()
@@ -358,6 +369,10 @@ def record_pool_started() -> None:
     _launch_error = None
     _pool_live = True
     _retry_pending = False
+    # A failed multi-browser download may still have installed the exact
+    # Chromium build this engine needs. A live pool is stronger evidence than
+    # the stale installer exit and must restore canonical readiness.
+    _install.recover()
 
 
 def record_pool_stopped() -> None:
@@ -411,16 +426,26 @@ def install_finished() -> None:
     _install.finish()
 
 
+def record_install_failure(code: str = "browser_install_failed") -> None:
+    """Persist a privacy-safe terminal browser-installer category."""
+    _install.fail(code)
+
+
 def status() -> BrowserRuntimeStatus:
     """The current, freshly-probed browser-runtime state."""
-    path = str(browsers_path())
+    if _install.failure_code and not _install.running:
+        return BrowserRuntimeStatus(
+            available=False,
+            code=_install.failure_code,
+            reason="The built-in browser download did not finish. Try again.",
+            installing=False,
+        )
 
     if not playwright_package_present():
         return BrowserRuntimeStatus(
             available=False,
             code="playwright_package_missing",
             reason="The Playwright Python package is not installed in this engine.",
-            browsers_path=path,
             installing=_install.running,
             install_percent=_install.percent,
             install_message=_install.message,
@@ -434,30 +459,28 @@ def status() -> BrowserRuntimeStatus:
         if report.mismatch:
             # A browser IS on disk — just not the build this engine resolves.
             # Saying "not installed" here would send the user looking for a
-            # download they already have; the reason names both builds.
-            reason = report.describe()
-            if _launch_error:
-                reason = f"{reason} Last launch error: {_launch_error}"
+            # download they already have. The exact installed build and local
+            # directory are diagnostics, not client-facing runtime status.
+            newest = report.newest_installed
+            installed_revision = newest.revision if newest else "unknown"
+            reason = (
+                f"The built-in browser is build {installed_revision}, but this app "
+                f"needs build {report.expected_revision}. Updating it fixes the "
+                "mismatch without restarting the app."
+            )
             return BrowserRuntimeStatus(
                 available=False,
                 code="browser_build_mismatch",
                 reason=reason,
-                browsers_path=path,
                 installing=_install.running,
                 install_percent=_install.percent,
                 install_message=_install.message,
             )
-        reason = (
-            "No Chromium build was found in this app's browser folder "
-            f"({path})."
-        )
-        if _launch_error:
-            reason = f"{reason} Last launch error: {_launch_error}"
+        reason = "No built-in browser is installed yet."
         return BrowserRuntimeStatus(
             available=False,
             code="browser_not_installed",
             reason=reason,
-            browsers_path=path,
             installing=_install.running,
             install_percent=_install.percent,
             install_message=_install.message,
@@ -471,7 +494,6 @@ def status() -> BrowserRuntimeStatus:
             available=True,
             code="ready",
             reason=None,
-            browsers_path=path,
             installing=False,
         )
 
@@ -482,7 +504,6 @@ def status() -> BrowserRuntimeStatus:
             available=False,
             code="browser_starting",
             reason="The built-in browser is still starting",
-            browsers_path=path,
             installing=_install.running,
             install_percent=_install.percent,
             install_message=_install.message,
@@ -493,8 +514,7 @@ def status() -> BrowserRuntimeStatus:
         return BrowserRuntimeStatus(
             available=False,
             code="browser_launch_failed",
-            reason=f"Chromium is installed but would not start: {_launch_error}",
-            browsers_path=path,
+            reason="The built-in browser did not start. Repair it and restart the app if needed.",
             installing=_install.running,
             install_percent=_install.percent,
             install_message=_install.message,
@@ -508,7 +528,6 @@ def status() -> BrowserRuntimeStatus:
         available=True,
         code="ready",
         reason=None,
-        browsers_path=path,
         installing=_install.running,
     )
 
@@ -551,6 +570,13 @@ def browser_action_needed(feature: str = FEATURE) -> ActionNeeded | None:
             f"download finishes ({DOWNLOAD_SIZE_HINT}). Everything else keeps working."
         )
         label = "View progress"
+    elif current.code == "browser_install_failed":
+        title = "The built-in browser download did not finish"
+        message = (
+            "Pages that need a real browser are unavailable for now. Try the "
+            "download again; everything else keeps working."
+        )
+        label = "Try again"
     else:
         title = "The built-in browser isn't installed yet"
         message = (
@@ -574,7 +600,6 @@ def browser_action_needed(feature: str = FEATURE) -> ActionNeeded | None:
         ),
         source=SOURCE,
         details={
-            "browsers_path": current.browsers_path,
             "reason": current.reason,
             "installing": current.installing,
             "download_size_hint": DOWNLOAD_SIZE_HINT,
@@ -643,7 +668,10 @@ async def self_heal_browser_build() -> bool:
             exc_info=True,
         )
     finally:
-        install_finished()
+        if failed:
+            record_install_failure()
+        else:
+            install_finished()
 
     if failed or not browser_binary_present():
         logger.warning(
@@ -686,7 +714,6 @@ def sync_service_registry() -> BrowserRuntimeStatus:
         browser_available=current.available,
         browser_code=current.code,
         browser_reason=current.reason,
-        browsers_path=current.browsers_path,
     )
     if current.available:
         registry.ready("scraper")

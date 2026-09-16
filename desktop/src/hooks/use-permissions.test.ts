@@ -7,6 +7,7 @@ import {
   isCountable,
   isGranted,
   pluginBooleanPermissionStatus,
+  settingsOnlyBooleanPermissionStatus,
   summarizePermissions,
   PERMISSION_META,
   type PermissionKey,
@@ -37,6 +38,13 @@ describe("boolean-only AV permission status", () => {
     expect(pluginBooleanPermissionStatus(false, false)).toBe("not_determined");
     expect(pluginBooleanPermissionStatus(false, true)).toBe("denied");
     expect(pluginBooleanPermissionStatus(true, true)).toBe("granted");
+  });
+});
+
+describe("settings-only boolean permission status", () => {
+  it("does not mislabel an ungranted settings probe as not asked or denied", () => {
+    expect(settingsOnlyBooleanPermissionStatus(true)).toBe("granted");
+    expect(settingsOnlyBooleanPermissionStatus(false)).toBe("unknown");
   });
 });
 

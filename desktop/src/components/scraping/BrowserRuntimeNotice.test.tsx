@@ -23,6 +23,7 @@ import { TooltipProvider } from "@ai-matrx/design-system";
 
 import { BrowserRuntimeNotice } from "./BrowserRuntimeNotice";
 import { MethodSelector } from "./MethodSelector";
+import { captureBrowserRuntimeFailureTransition } from "@/hooks/use-browser-runtime";
 
 function renderSelector() {
   return renderToStaticMarkup(
@@ -40,7 +41,6 @@ function makeRuntime(
       available: false,
       code: "browser_not_installed",
       reason: "No Chromium build was found in this app's browser folder (/tmp/x).",
-      browsers_path: "/tmp/x",
       installing: false,
       install_percent: null,
       install_message: null,
@@ -119,6 +119,61 @@ describe("BrowserRuntimeNotice", () => {
     expect(html).not.toContain("isn't installed yet");
     expect(html).not.toContain("<button");
   });
+
+  it("offers repair and restart guidance for a terminal launch failure", () => {
+    runtime = makeRuntime({
+      status: { ...makeRuntime().status!, code: "browser_launch_failed" },
+    });
+    const html = renderToStaticMarkup(<BrowserRuntimeNotice />);
+
+    expect(html).toContain("needs repair");
+    expect(html).toContain("restart the app");
+    expect(html).toContain("Repair browser");
+  });
+
+  it("offers an update for a browser build mismatch", () => {
+    runtime = makeRuntime({
+      status: {
+        ...makeRuntime().status!,
+        code: "browser_build_mismatch",
+        action_needed: {
+          action: { label: "Update browser" },
+        } as NonNullable<UseBrowserRuntimeReturn["status"]>["action_needed"],
+      },
+    });
+    const html = renderToStaticMarkup(<BrowserRuntimeNotice />);
+
+    expect(html).toContain("needs an update");
+    expect(html).toContain("Update browser");
+  });
+});
+
+describe("browser runtime durable capture", () => {
+  it("captures once per terminal transition and retries after identity refusal", () => {
+    const capture = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+
+    let marker = captureBrowserRuntimeFailureTransition(
+      null,
+      "browser_launch_failed",
+      capture,
+    );
+    expect(marker).toBeNull();
+    marker = captureBrowserRuntimeFailureTransition(
+      marker,
+      "browser_launch_failed",
+      capture,
+    );
+    expect(marker).toBe("browser_launch_failed");
+    marker = captureBrowserRuntimeFailureTransition(
+      marker,
+      "browser_launch_failed",
+      capture,
+    );
+    expect(capture).toHaveBeenCalledTimes(2);
+
+    marker = captureBrowserRuntimeFailureTransition(marker, "ready", capture);
+    expect(marker).toBeNull();
+  });
 });
 
 describe("MethodSelector browser gating", () => {
@@ -153,6 +208,15 @@ describe("MethodSelector browser gating", () => {
     const html = renderSelector();
 
     expect(html).toContain("(starting)");
+    expect(html).not.toContain("(not installed)");
+  });
+
+  it("names an update rather than an install for a build mismatch", () => {
+    runtime = makeRuntime({
+      status: { ...makeRuntime().status!, code: "browser_build_mismatch" },
+    });
+    const html = renderSelector();
+    expect(html).toContain("(update needed)");
     expect(html).not.toContain("(not installed)");
   });
 

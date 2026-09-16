@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   emptySnapshot,
+  cloudInventoryFailureClass,
   refreshCodingSessions,
   type CodingSessionsSnapshot,
   type CodingSessionsSources,
@@ -173,5 +174,97 @@ describe("refreshCodingSessions", () => {
     expect(final.overviewAt).toBe(1_700_000_000_000);
     expect(persist).toHaveBeenCalledTimes(1);
     expect(final.cacheError).toBe("disk full");
+  });
+
+  it("captures only transitions into actionable cloud inventory failures", async () => {
+    const capture = vi.fn(() => true);
+    const unreachable = overview(1);
+    unreachable.cloud = {
+      checked: false,
+      sessions: 0,
+      checked_at: "2026-09-16T00:00:00Z",
+      reason: "aidream_unreachable",
+      detail: "private server detail must not be captured",
+    };
+
+    const first = await refreshCodingSessions(
+      sources({ overview: () => Promise.resolve(unreachable) }),
+      emptySnapshot(),
+      () => {},
+      { ...noPersist, capture },
+    );
+    await refreshCodingSessions(
+      sources({ overview: () => Promise.resolve(unreachable) }),
+      first,
+      () => {},
+      { ...noPersist, capture },
+    );
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith({
+      level: "error",
+      source: "coding-session-cloud-inventory",
+      message: "AI Matrx conversation inventory entered terminal state: unreachable.",
+      causalSignature: "coding-session-cloud-inventory:unreachable",
+      requireIdentity: true,
+    });
+  });
+
+  it("retries an unchanged cloud incident after identity-gated capture is refused", async () => {
+    const capture = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const unreachable = overview(1);
+    unreachable.cloud = {
+      checked: false,
+      sessions: 0,
+      checked_at: "2026-09-16T00:00:00Z",
+      reason: "aidream_unreachable",
+      detail: null,
+    };
+
+    const first = await refreshCodingSessions(
+      sources({ overview: () => Promise.resolve(unreachable) }),
+      emptySnapshot(),
+      () => {},
+      { ...noPersist, capture },
+    );
+    const second = await refreshCodingSessions(
+      sources({ overview: () => Promise.resolve(unreachable) }),
+      first,
+      () => {},
+      { ...noPersist, capture },
+    );
+    await refreshCodingSessions(
+      sources({ overview: () => Promise.resolve(unreachable) }),
+      second,
+      () => {},
+      { ...noPersist, capture },
+    );
+
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(second.capturedCloudFailureClass).toBe("unreachable");
+  });
+
+  it("keeps authentication, organization, and in-flight readiness states uncaptured", async () => {
+    expect(cloudInventoryFailureClass({
+      checked: false,
+      sessions: 0,
+      checked_at: "2026-09-16T00:00:00Z",
+      reason: "cloud_check_in_flight",
+      detail: null,
+    })).toBeNull();
+    expect(cloudInventoryFailureClass({
+      checked: false,
+      sessions: 0,
+      checked_at: "2026-09-16T00:00:00Z",
+      reason: "aidream_error:Cannot name an organization for this request",
+      detail: null,
+    })).toBeNull();
+    expect(cloudInventoryFailureClass({
+      checked: false,
+      sessions: 0,
+      checked_at: "2026-09-16T00:00:00Z",
+      reason: "aidream_error:HTTP 401",
+      detail: null,
+    })).toBeNull();
   });
 });

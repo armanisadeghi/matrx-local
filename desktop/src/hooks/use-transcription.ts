@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback, useRef, useContext, useMemo } from "react";
 import { isTauri } from "@/lib/sidecar";
+import { PLATFORM } from "@/lib/platformCtx";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 import { overlayWhisperCatalog } from "@/lib/transcription/catalog";
+import {
+  readPluginPermissionStatus,
+  requestPluginMicrophonePermission,
+  transcriptionMicrophonePrerequisiteError,
+} from "@/hooks/use-permissions";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   HardwareDetectionResult,
@@ -26,6 +33,9 @@ async function tauriListen<T>(event: string, handler: (e: { payload: T }) => voi
   const { listen } = await import("@tauri-apps/api/event");
   return listen<T>(event, handler);
 }
+
+const TRANSCRIPTION_MICROPHONE_PROBE_SIGNATURE =
+  "permission-probe:plugin:microphone";
 
 export interface TranscriptionDownloadQueueEntry {
   filename: string;
@@ -149,6 +159,9 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
   const downloadingFilenameRef = useRef<string | null>(null);
   // Track downloaded filenames for queue dedup (subset of setupStatus.downloaded_models)
   const downloadedFilenamesRef = useRef<Set<string>>(new Set());
+  // Permission probe failures are a single causal condition until a successful
+  // read resets the transition. Do not turn a retry button into an outbox flood.
+  const microphoneProbeFailureReportedRef = useRef(false);
 
   // Full transcript derived from segments
   const fullTranscript = segments
@@ -406,6 +419,40 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     // double-append every whisper-segment.
     if (recordingGuardRef.current) return;
     recordingGuardRef.current = true;
+
+    // This is the one microphone prerequisite gate for every transcription
+    // caller (Voice, dictation, quick actions). It runs before listeners or
+    // native capture startup, so an expected privacy state never reaches CPAL
+    // and never creates a durable operational error.
+    if (PLATFORM.is_mac) {
+      try {
+        let status = await readPluginPermissionStatus("microphone");
+        if (status === "not_determined") {
+          status = await requestPluginMicrophonePermission();
+        }
+        microphoneProbeFailureReportedRef.current = false;
+        const prerequisiteError = transcriptionMicrophonePrerequisiteError(status);
+        if (prerequisiteError) {
+          setError(prerequisiteError);
+          recordingGuardRef.current = false;
+          return;
+        }
+      } catch (error) {
+        if (!microphoneProbeFailureReportedRef.current) {
+          microphoneProbeFailureReportedRef.current = enqueueDurableClientError({
+            level: "error",
+            source: "permission-probe:plugin:microphone",
+            message: "Permission status probe failed for the microphone.",
+            causalSignature: TRANSCRIPTION_MICROPHONE_PROBE_SIGNATURE,
+            requireIdentity: true,
+          });
+        }
+        setError("Microphone access could not be checked. Open System Settings → Privacy & Security → Microphone and try again.");
+        recordingGuardRef.current = false;
+        return;
+      }
+    }
+
     setError(null);
     setSegments([]);
     setLiveRms(0);

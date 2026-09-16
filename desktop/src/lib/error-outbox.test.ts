@@ -5,6 +5,8 @@ import {
   buildDurableErrorEvent,
   createErrorOutboxIdentityCoordinator,
   createErrorOutboxController,
+  enqueueDurableClientError,
+  setErrorOutboxCaptureContext,
   uploadIdentityBoundErrorBatch,
   type DurableErrorEvent,
   type ErrorOutboxBridge,
@@ -66,6 +68,45 @@ describe("durable renderer error outbox", () => {
       /aws-value|supa-value|passwd-value|credential-value|oauth-value/,
     );
     expect(built.message.match(/\[REDACTED]/g)).toHaveLength(5);
+  });
+
+  it("keeps only a bounded hash-like causal signature", () => {
+    const accepted = buildDurableErrorEvent({
+      level: "error",
+      message: "failure",
+      causalSignature: "permission-probe:plugin:accessibility",
+    });
+    const rejected = buildDurableErrorEvent({
+      level: "error",
+      message: "failure",
+      causalSignature: "token=private-value",
+    });
+    const repeated = buildDurableErrorEvent({
+      level: "error",
+      message: "another failure",
+      causalSignature: "permission-probe:plugin:accessibility",
+    });
+
+    expect(accepted.causalSignature).toMatch(/^[a-f0-9]{16}$/);
+    expect(repeated.causalSignature).toBe(accepted.causalSignature);
+    expect(rejected.causalSignature).toBeNull();
+  });
+
+  it("refuses identity-required capture before context is available", () => {
+    setErrorOutboxCaptureContext(null);
+    (window as Window & {
+      __TAURI_INTERNALS__?: { invoke?: unknown };
+    }).__TAURI_INTERNALS__ = { invoke: vi.fn() };
+
+    expect(
+      enqueueDurableClientError({
+        level: "error",
+        message: "must not enqueue",
+        requireIdentity: true,
+      }),
+    ).toBe(false);
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__;
   });
 
   it("acknowledges only successful uploads and retains the failed suffix", async () => {

@@ -480,19 +480,18 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
             )
             pkg_out, _ = await pkg_proc.communicate()
             if pkg_proc.returncode != 0:
-                out_text = pkg_out.decode("utf-8", errors="replace").strip() if pkg_out else "(no output)"
                 yield await _sse_event("progress", {
                     "component": "browser_engine",
                     "status": "error",
-                    "message": f"Failed to install Playwright package: {out_text[-500:]}",
+                    "message": "Browser setup could not finish. Try again.",
                     "percent": 0,
                 })
                 return
-        except Exception as e:
+        except Exception:
             yield await _sse_event("progress", {
                 "component": "browser_engine",
                 "status": "error",
-                "message": f"Could not run pip install playwright: {e}",
+                "message": "Browser setup could not start. Try again.",
                 "percent": 0,
             })
             return
@@ -506,11 +505,11 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
 
     try:
         cmd = _build_playwright_cmd(browser)
-    except Exception as e:
+    except Exception:
         yield await _sse_event("progress", {
             "component": "browser_engine",
             "status": "error",
-            "message": f"Could not locate Playwright installer: {e}",
+            "message": "Browser installer is unavailable. Restart the app and try again.",
             "percent": 0,
         })
         return
@@ -518,7 +517,7 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
     yield await _sse_event("progress", {
         "component": "browser_engine",
         "status": "installing",
-        "message": f"Running: {' '.join(cmd[:3])} ... install {browser}",
+        "message": "Downloading the built-in browser…",
         "percent": 20,
     })
 
@@ -531,18 +530,17 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-    except Exception as e:
+    except Exception:
         yield await _sse_event("progress", {
             "component": "browser_engine",
             "status": "error",
-            "message": f"Failed to launch installer: {e}",
+            "message": "Browser download could not start. Restart the app and try again.",
             "percent": 0,
         })
         return
 
     import re as _re
 
-    output_lines: list[str] = []
     try:
         while True:
             line = await proc.stdout.readline()
@@ -550,20 +548,25 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
                 break
             text = line.decode("utf-8", errors="replace").strip()
             if text:
-                output_lines.append(text)
                 percent = 25
+                message = "Preparing the browser download…"
                 if "downloading" in text.lower():
                     percent = 40
+                    message = "Downloading the built-in browser…"
                 if "%" in text:
                     m = _re.search(r"(\d+)%", text)
                     if m:
                         percent = min(int(m.group(1)), 95)
                 if "extracting" in text.lower() or "unpack" in text.lower():
                     percent = 80
+                    message = "Installing the built-in browser…"
                 yield await _sse_event("progress", {
                     "component": "browser_engine",
                     "status": "installing",
-                    "message": text,
+                    # Installer output is untrusted local diagnostic data. It
+                    # can contain paths and credential-bearing URLs, so never
+                    # reflect or retain it in an SSE event.
+                    "message": message,
                     "percent": percent,
                 })
     except (asyncio.CancelledError, GeneratorExit):
@@ -584,11 +587,10 @@ async def _install_playwright_browsers(browsers_path: str, browser: str = "chrom
             "percent": 100,
         })
     else:
-        last_lines = "\n".join(output_lines[-5:]) if output_lines else "(no output)"
         yield await _sse_event("progress", {
             "component": "browser_engine",
             "status": "error",
-            "message": f"Installation failed (exit {proc.returncode}). Last output: {last_lines}",
+            "message": "Browser download did not finish. Try again.",
             "percent": 0,
         })
 

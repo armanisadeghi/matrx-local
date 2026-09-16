@@ -99,13 +99,19 @@ async def install_browser_runtime() -> StreamingResponse:
                         failed = True
                     yield event
             finally:
-                browser_runtime.install_finished()
+                if failed:
+                    browser_runtime.record_install_failure()
+                else:
+                    browser_runtime.install_finished()
 
             if failed or not browser_runtime.browser_binary_present():
                 await browser_runtime.publish_action_needed()
                 yield await _sse_event(
                     "complete",
-                    {"message": "Browser install did not complete", "installed": False},
+                    {
+                        "message": "Browser download did not finish. Try again.",
+                        "installed": False,
+                    },
                 )
                 return
 

@@ -71,6 +71,7 @@ import traceback as _traceback
 import uuid as _uuid
 from fastapi.responses import JSONResponse as _JSONResponse
 from app.common.platform_ctx import refresh_capabilities
+from app.services.scraper.browser_runtime import BackgroundInstallOwner
 from app.services.scraper.engine import get_scraper_engine
 from app.services.proxy.server import (
     DEFAULT_PROXY_PORT,
@@ -94,6 +95,7 @@ from app.websocket_manager import WebSocketManager
 
 logger = get_logger()
 websocket_manager = WebSocketManager()
+_browser_install_owner = BackgroundInstallOwner()
 
 
 async def _ensure_playwright_browsers() -> None:
@@ -180,12 +182,14 @@ async def _ensure_playwright_browsers() -> None:
             5, "Downloading the built-in browser (first run)…"
         )
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _browser_install_owner.spawn(
                 *cmd,
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
+            if proc is None:
+                return
             stdout, _ = await proc.communicate()
             if proc.returncode == 0:
                 logger.info("[app/main.py] Playwright browsers installed successfully")
@@ -201,27 +205,40 @@ async def _ensure_playwright_browsers() -> None:
             )
             _browser_runtime.record_install_failure()
         finally:
+            if "proc" in locals() and proc is not None:
+                _browser_install_owner.clear_process(proc)
             if _browser_runtime.install_in_progress():
                 _browser_runtime.install_finished()
             # The download typically lands AFTER Phase 3 gave up on the pool.
             # Bring rendering up now rather than making the user restart.
-            try:
-                from app.services.scraper.engine import get_scraper_engine
+            if not _browser_install_owner.stopping:
+                try:
+                    from app.services.scraper.engine import get_scraper_engine
 
-                engine = get_scraper_engine()
-                if engine.is_ready and _browser_runtime.browser_binary_present():
-                    await engine.ensure_browser_pool()
-                    _browser_runtime.sync_service_registry()
-                await _browser_runtime.publish_action_needed()
-            except Exception:
-                logger.warning(
-                    "[app/main.py] Post-install browser pool start failed", exc_info=True
-                )
+                    engine = get_scraper_engine()
+                    if engine.is_ready and _browser_runtime.browser_binary_present():
+                        await engine.ensure_browser_pool()
+                        _browser_runtime.sync_service_registry()
+                    await _browser_runtime.publish_action_needed()
+                except Exception:
+                    logger.warning(
+                        "[app/main.py] Post-install browser pool start failed",
+                        exc_info=True,
+                    )
 
     # Run in background so the server starts immediately; keep a reference to
     # prevent the task from being garbage-collected before it finishes.
-    _browser_install_task = asyncio.create_task(_install())
-    _browser_install_task.add_done_callback(lambda _: None)  # suppress GC warning
+    _browser_install_owner.start(_install())
+
+
+async def _stop_playwright_browser_install() -> bool:
+    """Cancel and reap the first-boot browser download before engine teardown."""
+    from app.services.scraper import browser_runtime
+
+    stopped = await _browser_install_owner.stop(timeout=5.0)
+    if browser_runtime.install_in_progress():
+        browser_runtime.install_finished()
+    return stopped
 
 
 # Request diagnostics retain the failure, never credentials or their fragments.
@@ -1580,6 +1597,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Package installation and automatic runtime migration spawn pip/helper
     # processes owned by this engine. Cancel and reap them before continuing
     # teardown so an app quit can never orphan an installer.
+    try:
+        browser_installer_stopped = await _stop_playwright_browser_install()
+        if not browser_installer_stopped:
+            logger.error(
+                "[app/main.py] Background browser installer did not stop cleanly"
+            )
+    except Exception as exc:
+        logger.warning(
+            "[app/main.py] Background browser installer cleanup failed: %s", exc
+        )
+
     try:
         from app.services.image_gen.installer import shutdown_background_installers
 

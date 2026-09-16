@@ -24,11 +24,14 @@ Everything here is parameterised by ``PLAYWRIGHT_BROWSERS_PATH`` /
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import signal
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.services.action_needed.models import (
     ActionNeeded,
@@ -429,6 +432,129 @@ def install_finished() -> None:
 def record_install_failure(code: str = "browser_install_failed") -> None:
     """Persist a privacy-safe terminal browser-installer category."""
     _install.fail(code)
+
+
+async def _signal_installer_tree(
+    process: asyncio.subprocess.Process,
+    *,
+    force: bool,
+) -> None:
+    """Signal the installer and every descendant it owns."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        return
+
+    # The Python fallback launches Playwright's Node driver as a descendant.
+    # Windows process groups do not make terminate() recursive; taskkill /T
+    # is the OS primitive that closes that owned tree.
+    args = ["taskkill", "/T", "/PID", str(process.pid)]
+    if force:
+        args.insert(1, "/F")
+    killer = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await asyncio.wait_for(killer.wait(), timeout=2.0)
+    except TimeoutError:
+        killer.kill()
+        await killer.wait()
+
+
+async def stop_background_install(
+    task: asyncio.Task[None] | None,
+    process: asyncio.subprocess.Process | None,
+    *,
+    timeout: float = 5.0,
+    signal_tree: Callable[
+        [asyncio.subprocess.Process], Awaitable[None]
+    ] | None = None,
+) -> bool:
+    """Stop and reap the first-boot browser installer owned by this engine.
+
+    Cancelling only ``communicate()`` leaves the Node installer alive. Signal
+    the child first, give the owning task a bounded chance to finish, then
+    cancel/kill as the final fallback.
+    """
+    if task is None and process is None:
+        return True
+
+    if process is not None and process.returncode is None:
+        if signal_tree is None:
+            await _signal_installer_tree(process, force=False)
+        else:
+            await signal_tree(process)
+
+    if task is not None and not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except TimeoutError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    if process is not None and process.returncode is None:
+        if signal_tree is None:
+            await _signal_installer_tree(process, force=True)
+        else:
+            await signal_tree(process)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+
+    return (task is None or task.done()) and (
+        process is None or process.returncode is not None
+    )
+
+
+class BackgroundInstallOwner:
+    """One race-free owner for the first-boot Playwright installer tree."""
+
+    def __init__(self) -> None:
+        self.task: asyncio.Task[None] | None = None
+        self.process: asyncio.subprocess.Process | None = None
+        self.stopping = False
+        self._spawn_lock = asyncio.Lock()
+
+    def start(self, work: Awaitable[None]) -> None:
+        self.stopping = False
+        self.task = asyncio.create_task(work)
+
+    async def spawn(
+        self,
+        *cmd: str,
+        create: Callable[..., Awaitable[asyncio.subprocess.Process]] = asyncio.create_subprocess_exec,
+        **kwargs: Any,
+    ) -> asyncio.subprocess.Process | None:
+        async with self._spawn_lock:
+            if self.stopping:
+                return None
+            if os.name == "posix":
+                kwargs["start_new_session"] = True
+            else:
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            self.process = await create(*cmd, **kwargs)
+            return self.process
+
+    def clear_process(self, process: asyncio.subprocess.Process) -> None:
+        if self.process is process:
+            self.process = None
+
+    async def stop(self, *, timeout: float = 5.0) -> bool:
+        self.stopping = True
+        # Serialize with spawn. Once this lock is acquired, either the child is
+        # fully registered or the stopping flag prevented it from existing.
+        async with self._spawn_lock:
+            task = self.task
+            process = self.process
+        stopped = await stop_background_install(task, process, timeout=timeout)
+        self.task = None
+        self.process = None
+        return stopped
 
 
 def status() -> BrowserRuntimeStatus:

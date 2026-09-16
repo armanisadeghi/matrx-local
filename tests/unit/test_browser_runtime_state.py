@@ -16,6 +16,7 @@ PLAYWRIGHT_BROWSERS_PATH, so a dev engine never points at the installed app's
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 
 import pytest
@@ -94,6 +95,80 @@ def test_verified_live_pool_clears_a_stale_installer_failure(runtime, monkeypatc
     status = runtime.status()
     assert status.available is True
     assert status.code == "ready"
+
+
+def test_background_installer_shutdown_terminates_child_and_cancels_stuck_owner(runtime):
+    class FakeProcess:
+        returncode = None
+        terminated = False
+        killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def scenario():
+        process = FakeProcess()
+        never = asyncio.Event()
+        signals = 0
+
+        async def signal_tree(_process):
+            nonlocal signals
+            signals += 1
+            if signals == 2:
+                _process.returncode = -9
+
+        async def stuck_installer():
+            await never.wait()
+
+        task = asyncio.create_task(stuck_installer())
+        stopped = await runtime.stop_background_install(
+            task,
+            process,
+            timeout=0.01,
+            signal_tree=signal_tree,
+        )
+
+        assert stopped is True
+        assert signals == 2
+        assert task.cancelled()
+
+    asyncio.run(scenario())
+
+
+def test_background_installer_owner_prevents_spawn_after_shutdown_starts(runtime):
+    async def scenario():
+        owner = runtime.BackgroundInstallOwner()
+        ready = asyncio.Event()
+        allow_spawn = asyncio.Event()
+        create_calls = 0
+
+        async def create(*_args, **_kwargs):
+            nonlocal create_calls
+            create_calls += 1
+            raise AssertionError("shutdown must fence a late installer spawn")
+
+        async def installer():
+            ready.set()
+            await allow_spawn.wait()
+            await owner.spawn("installer", create=create)
+
+        owner.start(installer())
+        await ready.wait()
+        stop_task = asyncio.create_task(owner.stop(timeout=0.1))
+        await asyncio.sleep(0)
+        allow_spawn.set()
+
+        assert await stop_task is True
+        assert create_calls == 0
+
+    asyncio.run(scenario())
 
 
 def test_launch_failure_state_does_not_reflect_raw_diagnostics(runtime, monkeypatch):

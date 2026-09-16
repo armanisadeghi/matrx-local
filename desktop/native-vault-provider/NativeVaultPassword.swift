@@ -322,18 +322,32 @@ extension CredentialProviderViewController {
         }
     }
     private func linearizedComplete(_ operation: NativePasswordOperation, grant: NativeVaultSessionAccess.Grant, credential: (username: String, password: String)) {
-        if let state = nativePasswordCurrentState { guard NativePasswordStage.grantIsCurrent(state(), grant), nativePasswordCoordinator.prepareCompletion(operation) else { cancelPassword(operation, "Your Vault account changed. Start again."); return }; if let sink = nativePasswordCompleteSink { sink(credential) { [weak self] in Task { @MainActor in self?.nativePasswordCoordinator.clearCompleted(operation) } }; return } }
+        let injectedState = nativePasswordCurrentState
+        let injectedLock = nativePasswordCompletionLock
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let semaphore = DispatchSemaphore(value: 0)
-            do {
-                try ProviderStore(mode: .providerAccess).locked { state in
-                    guard NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject), grant) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
-                    DispatchQueue.main.async {
-                        guard let self, self.nativePasswordCoordinator.prepareCompletion(operation) else { semaphore.signal(); return }
-                        self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: credential.username, password: credential.password), completionHandler: { [weak self] _ in Task { @MainActor in self?.nativePasswordCoordinator.clearCompleted(operation); semaphore.signal() } })
+            let completeUnderLock: (NativePasswordCurrentState) throws -> Void = { state in
+                guard NativePasswordStage.grantIsCurrent(state, grant) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
+                DispatchQueue.main.async {
+                    guard let self, self.nativePasswordCoordinator.prepareCompletion(operation) else { semaphore.signal(); return }
+                    let finished = { [weak self] in Task { @MainActor in self?.nativePasswordCoordinator.clearCompleted(operation) }; return () }
+                    if let sink = self.nativePasswordCompleteSink {
+                        sink(credential, finished)
+                    } else {
+                        self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: credential.username, password: credential.password), completionHandler: { _ in finished() })
                     }
-                    semaphore.wait()
+                    // The invocation is the linearization point. Apple may never
+                    // call its completion handler after terminating the extension.
+                    semaphore.signal()
                 }
+                semaphore.wait()
+            }
+            do {
+                if let injectedLock { try injectedLock(completeUnderLock) }
+                else if let injectedState { try completeUnderLock(injectedState()) }
+                else { try ProviderStore(mode: .providerAccess).locked { state in
+                    try completeUnderLock(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject))
+                } }
             } catch { DispatchQueue.main.async { self?.cancelPassword(operation, "Your Vault account changed. Start again.") } }
         }
     }

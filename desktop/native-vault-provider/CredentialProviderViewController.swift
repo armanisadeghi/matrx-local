@@ -89,6 +89,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     var nativePasswordAuthorize: ((@escaping (Bool) -> Void) -> Void)?
     var nativePasswordAcquire: ((@escaping (Result<NativeVaultSessionAccess.Grant, Error>) -> Void) -> Void)?
     var nativePasswordCurrentState: (@Sendable () -> NativePasswordCurrentState)?
+    var nativePasswordCompletionLock: (((NativePasswordCurrentState) throws -> Void) throws -> Void)?
     var nativePasswordOrganizationChoice: (([NativeOrganization]) -> Int?)?
     var nativePasswordMatchChoice: (([NativePasswordMatch]) -> Int?)?
     var nativePasswordCancelSink: ((NSError) -> Void)?

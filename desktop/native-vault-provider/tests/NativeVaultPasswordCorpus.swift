@@ -4,7 +4,32 @@ import AuthenticationServices
 final class ScriptedPasswordTransport: NativeVaultPasswordTransporting {
     var requests: [URLRequest] = []
     var replies: [Result<(Data, HTTPURLResponse), Error>] = []
-    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { requests.append(request); completion(replies.removeFirst()) }
+    var beforeReply: ((Int) -> Void)?
+    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { requests.append(request); beforeReply?(requests.count); completion(replies.removeFirst()) }
+}
+
+
+final class PasswordStateBox {
+    private let lock = NSLock()
+    private var state: NativePasswordCurrentState
+    init(_ state: NativePasswordCurrentState) { self.state = state }
+    func read() -> NativePasswordCurrentState { lock.lock(); defer { lock.unlock() }; return state }
+    func replace(_ next: NativePasswordCurrentState) { lock.lock(); defer { lock.unlock() }; state = next }
+}
+
+final class PasswordCompletionLockProbe {
+    private let lock = NSLock()
+    private let observation = NSLock()
+    private var released = false
+    func withLock(_ state: NativePasswordCurrentState, body: (NativePasswordCurrentState) throws -> Void) rethrows {
+        lock.lock()
+        defer {
+            lock.unlock()
+            observation.lock(); released = true; observation.unlock()
+        }
+        try body(state)
+    }
+    func wasReleased() -> Bool { observation.lock(); defer { observation.unlock() }; return released }
 }
 
 @main
@@ -14,6 +39,11 @@ struct NativeVaultPasswordCorpus {
     }
     static func rejects(_ body: () throws -> Void, _ message: String) {
         do { try body(); fatalError(message) } catch { }
+    }
+    @MainActor static func waitUntil(_ message: String, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() && Date() < deadline { _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+        require(condition(), message)
     }
     @MainActor static func main() {
         let subject = "11111111-1111-4111-8111-111111111111"
@@ -52,11 +82,45 @@ struct NativeVaultPasswordCorpus {
         var completed: [(String, String)] = []; var cancellations: [NSError] = []
         controller.nativePasswordCompleteSink = { credential, done in completed.append(credential); done() }; controller.nativePasswordCancelSink = { cancellations.append($0) }
         controller.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
-        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        waitUntil("controller did not finish") { !completed.isEmpty || !cancellations.isEmpty }
         require(completed.count == 1 && completed[0].0 == "u" && completed[0].1 == "p" && cancellations.isEmpty && transport.requests.count == 3, "actual controller prepare path must reach exactly one completion")
         let identity = ASPasswordCredentialIdentity(serviceIdentifier: ASCredentialServiceIdentifier(identifier: "example.com", type: .domain), user: "u", recordIdentifier: "test")
         controller.provideCredentialWithoutUserInteraction(for: ASPasswordCredentialRequest(credentialIdentity: identity))
         require(cancellations.last?.code == ASExtensionError.userInteractionRequired.rawValue, "actual modern callback must require interaction")
+        let routeReplies = [Result<(Data, HTTPURLResponse), Error>.success((report, response("{}").1)), .success((match, response("{}").1)), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
+        for stage in 1...3 {
+            for changedSubject in [false, true] {
+                let state = PasswordStateBox(NativePasswordCurrentState(generation: grant.generation, subject: subject))
+                let stagedTransport = ScriptedPasswordTransport(); stagedTransport.replies = routeReplies
+                stagedTransport.beforeReply = { count in
+                    if count == stage { state.replace(NativePasswordCurrentState(generation: changedSubject ? grant.generation : "new-generation", subject: changedSubject ? org : subject)) }
+                }
+                let staged = CredentialProviderViewController(); staged.nativePasswordKeyOverride = "public-build-key"; staged.nativePasswordTransport = stagedTransport; staged.nativePasswordAuthorize = { $0(true) }; staged.nativePasswordAcquire = { $0(.success(grant)) }; staged.nativePasswordCurrentState = { state.read() }; staged.nativePasswordOrganizationChoice = { _ in 0 }; staged.nativePasswordMatchChoice = { _ in 0 }
+                var delivered = 0; var refused = 0
+                staged.nativePasswordCompleteSink = { _, _ in delivered += 1 }; staged.nativePasswordCancelSink = { _ in refused += 1 }
+                staged.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+                waitUntil("controller did not reject changed account") { refused > 0 || delivered > 0 }
+                require(delivered == 0 && refused == 1 && stagedTransport.requests.count == stage, "actual controller must fence account change at response stage \(stage)")
+            }
+        }
+        let rejectedController = CredentialProviderViewController(); rejectedController.nativePasswordKeyOverride = "public-build-key"
+        var authorizationCalls = 0; var inputRefusals = 0
+        rejectedController.nativePasswordAuthorize = { done in authorizationCalls += 1; done(false) }
+        rejectedController.nativePasswordCancelSink = { _ in inputRefusals += 1 }
+        rejectedController.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain), oversized])
+        require(inputRefusals == 1 && authorizationCalls == 0, "actual controller must reject the whole identifier request before authorization")
+
+        let lockProbe = PasswordCompletionLockProbe()
+        let noCallbackTransport = ScriptedPasswordTransport(); noCallbackTransport.replies = routeReplies
+        let noCallback = CredentialProviderViewController(); noCallback.nativePasswordKeyOverride = "public-build-key"; noCallback.nativePasswordTransport = noCallbackTransport; noCallback.nativePasswordAuthorize = { $0(true) }; noCallback.nativePasswordAcquire = { $0(.success(grant)) }; noCallback.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }; noCallback.nativePasswordOrganizationChoice = { _ in 0 }; noCallback.nativePasswordMatchChoice = { _ in 0 }
+        noCallback.nativePasswordCompletionLock = { body in try lockProbe.withLock(NativePasswordCurrentState(generation: grant.generation, subject: subject), body: body) }
+        var noCallbackDelivered = 0; var heldDuringDelivery = false; var noCallbackRefused = 0
+        // Apple is allowed never to call this handler. Hold it deliberately.
+        noCallback.nativePasswordCompleteSink = { _, _ in noCallbackDelivered += 1; heldDuringDelivery = !lockProbe.wasReleased() }
+        noCallback.nativePasswordCancelSink = { _ in noCallbackRefused += 1 }
+        noCallback.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+        waitUntil("completion lock must release without Apple's callback") { lockProbe.wasReleased() }
+        require(noCallbackDelivered == 1 && heldDuringDelivery && noCallbackRefused == 0, "completion must invoke Apple once under lock, then release without callback")
         print("Native Vault password codec corpus passed")
     }
 }

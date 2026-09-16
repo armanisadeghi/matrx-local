@@ -60,6 +60,7 @@ mkdir -p "$CONTENTS/MacOS"
   -framework LocalAuthentication \
   -framework Security \
   "$SOURCE/NativeVaultCodec.swift" \
+  "$SOURCE/NativeVaultEnrollmentLifecycle.swift" \
   "$SOURCE/NativeVaultState.swift" \
   "$SOURCE/NativeVaultPrivateSession.swift" \
   "$SOURCE/CredentialProviderViewController.swift" \

@@ -129,8 +129,9 @@ else
 fi
 
 # 4. The provider is a distinct app extension. It has the AutoFill capability
-# and its own Keychain group; the host is deliberately limited to the
-# nonsecret App Group. Final release verification validates each profile's
+# and its own Keychain group; the host also needs AutoFill permission but
+# shares only the nonsecret App Group, never the provider Keychain group.
+# Final release verification validates each profile's
 # Apple CMS signature, current validity, exact team/bundle/capabilities, and
 # the certificate that actually signed that code object.
 echo "--- [4/6] native Vault provider boundary"
@@ -141,7 +142,7 @@ if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
     # process (SIGKILL, "Launchd job spawn failed") while Gatekeeper and the
     # notarization ticket still say "accepted". v1.4.92 shipped exactly that.
     HOST_ENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null || true)"
-    for key in com.apple.application-identifier com.apple.developer.team-identifier com.apple.security.application-groups; do
+    for key in com.apple.application-identifier com.apple.developer.team-identifier com.apple.security.application-groups com.apple.developer.authentication-services.autofill-credential-provider; do
         if [[ "$HOST_ENTS" == *"$key"* ]]; then
             echo "ERROR: host carries the profile-backed entitlement '$key' but ships no provisioning profile — macOS will kill it at launch. Build the host with Entitlements.plist (no restricted keys) when the provider is absent." >&2
             exit 1

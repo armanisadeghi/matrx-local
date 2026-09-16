@@ -26,8 +26,13 @@
     <dict>
         <key>NSExtensionAttributes</key>
         <dict>
-            <key>ASCredentialProviderExtensionShowsConfigurationUI</key>
-            <true/>
+            <key>ASCredentialProviderExtensionCapabilities</key>
+            <dict>
+                <key>ProvidesPasswords</key>
+                <true/>
+                <key>ShowsConfigurationUI</key>
+                <true/>
+            </dict>
         </dict>
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.authentication-services-credential-provider-ui</string>

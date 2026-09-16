@@ -41,6 +41,21 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 [[ "$(plist_value "$INFO" CFBundleIdentifier)" == "com.aimatrx.desktop.vault-provider" ]] || fail "unexpected provider bundle identifier"
 [[ "$(plist_value "$INFO" LSMinimumSystemVersion)" == "15.0" ]] || fail "provider must retain macOS 15 minimum"
 [[ "$(plist_value "$INFO" 'NSExtension:NSExtensionPointIdentifier')" == "com.apple.authentication-services-credential-provider-ui" ]] || fail "unexpected extension point"
+python3 - "$INFO" <<'PY'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as source:
+    info = plistlib.load(source)
+attributes = info.get("NSExtension", {}).get("NSExtensionAttributes", {})
+capabilities = attributes.get("ASCredentialProviderExtensionCapabilities", {})
+if not isinstance(capabilities, dict) or any(
+    capabilities.get(key) is not True for key in ("ProvidesPasswords", "ShowsConfigurationUI")
+):
+    raise SystemExit("ERROR: password/configuration capabilities must be Boolean true")
+if "ASCredentialProviderExtensionShowsConfigurationUI" in attributes:
+    raise SystemExit("ERROR: obsolete configuration UI key is forbidden")
+PY
 [[ "$(plist_value "$ENTITLEMENTS" 'com.apple.security.app-sandbox')" == "true" ]] || fail "App Sandbox entitlement missing"
 ! /usr/libexec/PlistBuddy -c 'Print :com.apple.app-sandbox' "$ENTITLEMENTS" >/dev/null 2>&1 || fail "obsolete App Sandbox entitlement key is forbidden"
 [[ "$(plist_value "$ENTITLEMENTS" 'com.apple.application-identifier')" == "JH83UH9P4D.com.aimatrx.desktop.vault-provider" ]] || fail "unexpected provider application identifier"
@@ -78,6 +93,19 @@ if [[ "$SELF_TEST" == true ]]; then
   /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
   /usr/libexec/PlistBuddy -c 'Add :com.apple.app-sandbox bool true' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
   expect_failure "obsolete App Sandbox entitlement key" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-sandbox-key.appex"
+  for capability in ProvidesPasswords ShowsConfigurationUI; do
+    cp -R "$APPEX" "$WORKDIR/missing-$capability.appex"
+    /usr/libexec/PlistBuddy -c "Delete :NSExtension:NSExtensionAttributes:ASCredentialProviderExtensionCapabilities:$capability" "$WORKDIR/missing-$capability.appex/Contents/Info.plist"
+    expect_failure "missing $capability" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-$capability.appex"
+    for invalid_value in 'string true' 'integer 1' 'bool false'; do
+      /usr/libexec/PlistBuddy -c "Add :NSExtension:NSExtensionAttributes:ASCredentialProviderExtensionCapabilities:$capability $invalid_value" "$WORKDIR/missing-$capability.appex/Contents/Info.plist"
+      expect_failure "$invalid_value $capability" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-$capability.appex"
+      /usr/libexec/PlistBuddy -c "Delete :NSExtension:NSExtensionAttributes:ASCredentialProviderExtensionCapabilities:$capability" "$WORKDIR/missing-$capability.appex/Contents/Info.plist"
+    done
+  done
+  cp -R "$APPEX" "$WORKDIR/obsolete-configuration.appex"
+  /usr/libexec/PlistBuddy -c 'Add :NSExtension:NSExtensionAttributes:ASCredentialProviderExtensionShowsConfigurationUI bool true' "$WORKDIR/obsolete-configuration.appex/Contents/Info.plist"
+  expect_failure "obsolete configuration UI key" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/obsolete-configuration.appex"
   cp -R "$APPEX" "$WORKDIR/missing-provider.appex"
   rm "$WORKDIR/missing-provider.appex/Contents/MacOS/VaultProvider"
   expect_failure "missing provider executable" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-provider.appex"
@@ -120,5 +148,5 @@ open(path, "wb").write(data.replace(before, after))
 PY
   expect_failure "wrong extension entry point" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-entry.appex"
   expect_failure "missing signed-provider profile" "$ROOT/scripts/verify-native-vault-provider.sh" --require-profile "$APPEX"
-  echo "Self-test passed: wrong bundle, missing AutoFill, obsolete App Sandbox key, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, and missing required profile were rejected."
+  echo "Self-test passed: wrong bundle, missing AutoFill, missing password/configuration capabilities, obsolete App Sandbox key, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, and missing required profile were rejected."
 fi

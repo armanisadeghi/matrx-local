@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import plistlib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,40 @@ SPEC = importlib.util.spec_from_file_location("verify_apple_provisioning_profile
 assert SPEC and SPEC.loader
 profile_verifier = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(profile_verifier)
+
+
+AUTOFILL = "com.apple.developer.authentication-services.autofill-credential-provider"
+
+
+def host_source_entitlements() -> dict[str, object]:
+    path = MODULE_PATH.parents[1] / "desktop/src-tauri/Entitlements.vault.plist"
+    return plistlib.loads(path.read_bytes())
+
+
+def test_host_source_declares_autofill_without_provider_keychain_access() -> None:
+    signed = host_source_entitlements()
+    assert signed[AUTOFILL] is True
+    assert "keychain-access-groups" not in signed
+    profile_verifier.assert_signed_contract("host", signed)
+    profile_verifier.assert_profile_authorizes("host", provider_profile(), signed)
+
+
+@pytest.mark.parametrize("replacement", [None, False, 1, "true"])
+def test_host_rejects_missing_or_mistyped_autofill_permission(replacement: object) -> None:
+    signed = host_source_entitlements()
+    if replacement is None:
+        signed.pop(AUTOFILL, None)
+    else:
+        signed[AUTOFILL] = replacement
+    with pytest.raises(ValueError, match="autofill-credential-provider"):
+        profile_verifier.assert_signed_contract("host", signed)
+
+
+def test_host_profile_must_authorize_autofill() -> None:
+    profile = provider_profile()
+    profile.pop(AUTOFILL)
+    with pytest.raises(ValueError, match="autofill-credential-provider"):
+        profile_verifier.assert_profile_authorizes("host", profile, host_source_entitlements())
 
 
 def signed_provider() -> dict[str, object]:

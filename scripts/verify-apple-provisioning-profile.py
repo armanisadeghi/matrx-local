@@ -109,6 +109,7 @@ def expected_contract(kind: str) -> tuple[str, dict[str, object], set[str]]:
         {
             APPLICATION_IDENTIFIER: f"{TEAM_ID}.{HOST_BUNDLE_ID}",
             TEAM_ENTITLEMENT: TEAM_ID,
+            "com.apple.developer.authentication-services.autofill-credential-provider": True,
             "com.apple.security.application-groups": [STATUS_GROUP],
         },
         set(),

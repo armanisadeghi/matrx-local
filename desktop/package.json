@@ -35,6 +35,7 @@
     "check:package-twins:self-test": "node scripts/check-package-twins.mjs --self-test",
     "check:native-confirm": "node scripts/check-native-confirm.mjs",
     "check:native-confirm:self-test": "node scripts/check-native-confirm.mjs --self-test",
+    "check:native-vault-provider-hook": "node scripts/check-native-vault-provider-hook.cjs",
     "check:signout-scope": "node scripts/check-signout-scope.mjs",
     "check:signout-scope:self-test": "node scripts/check-signout-scope.mjs --self-test",
     "check:session-custody": "node scripts/check-session-custody.mjs",

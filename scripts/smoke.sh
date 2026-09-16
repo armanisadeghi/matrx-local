@@ -347,7 +347,20 @@ run_packaged() {
     local isolated_tauri_cfg
     isolated_tauri_cfg="$(smoke_tauri_config)"
     local provider_config=""
-    if [ "$OS" = "macos" ] && [ "${MATRX_NATIVE_VAULT_PROVIDER:-}" = "absent" ]; then
+    local provider_mode="${MATRX_NATIVE_VAULT_PROVIDER:-}"
+    if [ "$OS" = "macos" ] && [ -z "$provider_mode" ]; then
+      # A local smoke machine may have only Command Line Tools. In that case
+      # the macOS credential-provider extension cannot be compiled, so prove
+      # the explicit host-only artifact instead of failing late at Tauri's
+      # file-copy step. Release CI still opts into `sealed` with full Xcode,
+      # its provisioning profile, and its signing identity.
+      if ! DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+        xcrun --find swiftc >/dev/null 2>&1; then
+        provider_mode="absent"
+        warn "Full Xcode is unavailable; packaging the explicit host-only macOS smoke artifact"
+      fi
+    fi
+    if [ "$OS" = "macos" ] && [ "$provider_mode" = "absent" ]; then
       # Match release.yml's explicit host-only profile when the optional signed
       # credential provider is not part of this artifact.
       provider_config="src-tauri/tauri.release.macos.host-only.conf.json"
@@ -358,11 +371,13 @@ run_packaged() {
       ( cd desktop && \
         VITE_MATRX_ISOLATED_SMOKE=1 \
         VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+        MATRX_NATIVE_VAULT_PROVIDER="$provider_mode" \
         pnpm tauri build $bundle_flag --config "$provider_config" --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1
     else
       ( cd desktop && \
         VITE_MATRX_ISOLATED_SMOKE=1 \
         VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+        MATRX_NATIVE_VAULT_PROVIDER="$provider_mode" \
         pnpm tauri build $bundle_flag --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1
     fi
     if [ "$?" -ne 0 ]; then

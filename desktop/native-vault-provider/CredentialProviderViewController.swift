@@ -232,13 +232,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Check your AI Matrx Vault connection") { [weak self] allowed, _ in
             guard allowed else { Task { @MainActor in self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
             DispatchQueue.global(qos: .userInitiated).async {
-                self?.acquireCurrentConnection(privateSession: privateSession, context: context, key: key)
+                let result = Self.acquireCurrentConnection(privateSession: privateSession, context: context)
+                DispatchQueue.main.async { self?.handleCurrentConnection(result, key: key, context: context, privateSession: privateSession) }
             }
         }
     }
-    private func acquireCurrentConnection(privateSession: NativeVaultPrivateSession, context: LAContext, key: String) {
-        do {
-            let access = try ProviderStore(mode: .providerAccess).locked { state -> AccessState in
+    private nonisolated static func acquireCurrentConnection(privateSession: NativeVaultPrivateSession, context: LAContext) -> Result<AccessState, Error> {
+        Result {
+            try ProviderStore(mode: .providerAccess).locked { state -> AccessState in
                 guard state.provider_subject != nil, let session = try privateSession.readActive(context: context, matching: state) else {
                     throw EnrollmentError.message("Vault connection is not configured. Connect an account.")
                 }
@@ -251,13 +252,18 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 _ = try privateSession.beginRefresh(session, context: context)
                 return .refresh(refreshToken: refreshToken, subject: session.subject, generation: state.generation)
             }
+        }
+    }
+    private func handleCurrentConnection(_ result: Result<AccessState, Error>, key: String, context: LAContext, privateSession: NativeVaultPrivateSession) {
+        switch result {
+        case let .success(access):
             switch access {
             case let .active(accessToken, subject, generation):
                 fetchCurrentIdentity(accessToken: accessToken, expectedSubject: subject, generation: generation, key: key)
             case let .refresh(refreshToken, subject, generation):
                 refreshCurrentConnection(refreshToken: refreshToken, expectedSubject: subject, generation: generation, key: key, context: context, privateSession: privateSession)
             }
-        } catch {
+        case let .failure(error):
             setConnectionFailure(error)
             finishConnectionOperation()
         }

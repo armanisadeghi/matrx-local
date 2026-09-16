@@ -23,7 +23,7 @@ while [[ "${1:-}" == --* ]]; do
 done
 APPEX="${1:-$ROOT/native-vault-provider/build/AI Matrx Vault Provider.appex}"
 INFO="$APPEX/Contents/Info.plist"
-ENTITLEMENTS="$APPEX/Contents/VaultProvider.entitlements"
+ENTITLEMENTS="$APPEX/Contents/Resources/VaultProvider.entitlements"
 BINARY="$APPEX/Contents/MacOS/VaultProvider"
 
 [[ -f "$INFO" ]] || fail "provider Info.plist is missing: $INFO"
@@ -72,11 +72,11 @@ if [[ "$SELF_TEST" == true ]]; then
   /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.example.wrong' "$WORKDIR/wrong-bundle.appex/Contents/Info.plist"
   expect_failure "wrong bundle identifier" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-bundle.appex"
   cp -R "$APPEX" "$WORKDIR/missing-entitlement.appex"
-  /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.authentication-services.autofill-credential-provider' "$WORKDIR/missing-entitlement.appex/Contents/VaultProvider.entitlements"
+  /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.authentication-services.autofill-credential-provider' "$WORKDIR/missing-entitlement.appex/Contents/Resources/VaultProvider.entitlements"
   expect_failure "missing AutoFill entitlement" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-entitlement.appex"
   cp -R "$APPEX" "$WORKDIR/wrong-sandbox-key.appex"
-  /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$WORKDIR/wrong-sandbox-key.appex/Contents/VaultProvider.entitlements"
-  /usr/libexec/PlistBuddy -c 'Add :com.apple.app-sandbox bool true' "$WORKDIR/wrong-sandbox-key.appex/Contents/VaultProvider.entitlements"
+  /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
+  /usr/libexec/PlistBuddy -c 'Add :com.apple.app-sandbox bool true' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
   expect_failure "obsolete App Sandbox entitlement key" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-sandbox-key.appex"
   cp -R "$APPEX" "$WORKDIR/missing-provider.appex"
   rm "$WORKDIR/missing-provider.appex/Contents/MacOS/VaultProvider"

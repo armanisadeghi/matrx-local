@@ -5,15 +5,15 @@ import LocalAuthentication
 import Security
 
 // Provider-owned OAuth. The host never receives a token or Keychain handle.
-private let clientID = "d8a02629-f5f2-4064-ab26-31da07f082fc"
-private let callback = URL(string: "matrx-vault-provider://oauth/callback")!
-private let authorizeURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/authorize")!
-private let tokenURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/token")!
-private let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo")!
+let clientID = "d8a02629-f5f2-4064-ab26-31da07f082fc"
+let callback = URL(string: "matrx-vault-provider://oauth/callback")!
+let authorizeURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/authorize")!
+let tokenURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/token")!
+let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo")!
 /// URLSession's convenience completion handler has already accumulated the
 /// response. This delegate refuses redirects and cancels as soon as the fixed
 /// envelope limit is crossed.
-private final class BoundedTransport: NSObject, URLSessionDataDelegate {
+final class BoundedTransport: NSObject, URLSessionDataDelegate {
     private var data = Data(); private let limit = 64 * 1024
     private let completion: (Result<(Data, HTTPURLResponse), Error>) -> Void
     init(_ completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { self.completion = completion }
@@ -35,7 +35,7 @@ private final class BoundedTransport: NSObject, URLSessionDataDelegate {
 }
 
 private extension Data { func urlSafeBase64() -> String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") } }
-private func formBody(_ parameters: [(String, String)]) -> Data {
+func formBody(_ parameters: [(String, String)]) -> Data {
     func encode(_ value: String) -> String {
         value.utf8.map { byte in
             switch byte {
@@ -48,7 +48,7 @@ private func formBody(_ parameters: [(String, String)]) -> Data {
     }
     return parameters.map { "\(encode($0.0))=\(encode($0.1))" }.joined(separator: "&").data(using: .utf8)!
 }
-private func connectionResponseError(_ status: Int) -> Error {
+func connectionResponseError(_ status: Int) -> Error {
     switch status {
     case 401, 403: return EnrollmentError.message("Vault connection needs reconnect.")
     case 429: return EnrollmentError.message("Vault connection is busy. Try again later.")
@@ -80,6 +80,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var activeOperation: NativeVaultEnrollmentOperation?
     private var startingConnect = false
     private let connectionAdmission = NativeVaultCurrentConnectionAdmission()
+    let sessionAccess = NativeVaultSessionAccess()
+    let nativePasswordTransport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()
+    var nativePasswordOperation: NativePasswordOperation?
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
@@ -88,7 +91,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     override func prepareInterfaceForExtensionConfiguration() { showConfiguration() }
     override func loadView() { view = NSView() }
-    override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) { }
+    override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+        beginPasswordRequest(serviceIdentifiers)
+    }
+
+    override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
+        // This direct-list provider intentionally has no identity index yet.
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
+    }
 
     private func showConfiguration() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -207,12 +217,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             } catch { DispatchQueue.main.async { self?.finishOperation(operation.id); self?.showError(error) } }
         }.start(request)
     }
-    private enum AccessState {
-        case active(accessToken: String, subject: String, generation: String)
-        case refresh(refreshToken: String, subject: String, generation: String)
-    }
-    // Provider-private session access for configuration only. It returns an
-    // identity label, never an access token, to the UI or the Tauri host.
+    // Configuration and password filling both use the provider-owned session
+    // primitive. It returns only an identity label here, never a token.
     private func loadCurrentConnection() {
         guard activeOperation == nil, !startingConnect, connectionAdmission.admit() else {
             setConnectionStatus("An account connection is already in progress.")
@@ -230,98 +236,17 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         catch { setConnectionStatus("Vault protection is unavailable on this Mac."); finishConnectionOperation(); return }
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Check your AI Matrx Vault connection") { [weak self] allowed, _ in
             guard allowed else { Task { @MainActor in self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = Self.acquireCurrentConnection(privateSession: privateSession, context: context)
-                DispatchQueue.main.async { self?.handleCurrentConnection(result, key: key, context: context, privateSession: privateSession) }
-            }
-        }
-    }
-    private nonisolated static func acquireCurrentConnection(privateSession: NativeVaultPrivateSession, context: LAContext) -> Result<AccessState, Error> {
-        Result {
-            try ProviderStore(mode: .providerAccess).locked { state -> AccessState in
-                guard state.provider_subject != nil, let session = try privateSession.readActive(context: context, matching: state) else {
-                    throw EnrollmentError.message("Vault connection is not configured. Connect an account.")
-                }
-                // Refresh slightly early so a token cannot expire between the
-                // authorized Keychain read and the userinfo request.
-                if session.expires_at_ms > Int64(Date().timeIntervalSince1970 * 1000) + 10_000 {
-                    return .active(accessToken: session.access_token, subject: session.subject, generation: state.generation)
-                }
-                let refreshToken = session.refresh_token
-                _ = try privateSession.beginRefresh(session, context: context)
-                return .refresh(refreshToken: refreshToken, subject: session.subject, generation: state.generation)
-            }
-        }
-    }
-    private func handleCurrentConnection(_ result: Result<AccessState, Error>, key: String, context: LAContext, privateSession: NativeVaultPrivateSession) {
-        switch result {
-        case let .success(access):
-            switch access {
-            case let .active(accessToken, subject, generation):
-                fetchCurrentIdentity(accessToken: accessToken, expectedSubject: subject, generation: generation, key: key)
-            case let .refresh(refreshToken, subject, generation):
-                refreshCurrentConnection(refreshToken: refreshToken, expectedSubject: subject, generation: generation, key: key, context: context, privateSession: privateSession)
-            }
-        case let .failure(error):
-            setConnectionFailure(error)
-            finishConnectionOperation()
-        }
-    }
-    private func refreshCurrentConnection(refreshToken: String, expectedSubject: String, generation: String, key: String, context: LAContext, privateSession: NativeVaultPrivateSession) {
-        var request = URLRequest(url: tokenURL); request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(key, forHTTPHeaderField: "apikey")
-        request.httpBody = formBody([("grant_type", "refresh_token"), ("client_id", clientID), ("refresh_token", refreshToken)])
-        BoundedTransport { [weak self] result in
-            do {
-                let (data, http) = try result.get()
-                guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }
-                let token = try VaultEnvelopeCodec.token(data)
-                self?.fetchCurrentIdentity(accessToken: token.access_token, expectedSubject: expectedSubject, generation: generation, key: key) { identity in
-                    let store = try ProviderStore(mode: .providerAccess)
-                    try store.locked { state in
-                        guard NativeVaultEnrollmentLifecycle.canCommitRefresh(current: state, expectedSubject: expectedSubject, expectedGeneration: generation, identity: identity) else {
-                            throw EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider.")
-                        }
-                        let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000
-                        try privateSession.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context)
+            self?.sessionAccess.acquire(key: key, context: context) { result in
+                Task { @MainActor in
+                    guard let self else { return }
+                    switch result {
+                    case let .success(grant): self.setConnectionStatus("Connected account: \(grant.subject)")
+                    case let .failure(error): self.setConnectionFailure(error)
                     }
+                    self.finishConnectionOperation()
                 }
-            } catch {
-                // The Keychain remains refresh_pending after every failed or
-                // ambiguous refresh. Never replay the old refresh token.
-                self?.setConnectionFailure(error)
-                DispatchQueue.main.async { self?.finishConnectionOperation() }
             }
-        }.start(request)
-    }
-    private func fetchCurrentIdentity(accessToken: String, expectedSubject: String, generation: String, key: String, afterIdentity: ((Identity) throws -> Void)? = nil) {
-        var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        BoundedTransport { [weak self] result in
-            do {
-                let (data, http) = try result.get()
-                guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }
-                let identity = try VaultEnvelopeCodec.userinfo(data)
-                guard identity.sub == expectedSubject else { throw EnrollmentError.message("Vault connection needs reconnect.") }
-                if let afterIdentity {
-                    try afterIdentity(identity)
-                } else {
-                    let store = try ProviderStore(mode: .providerAccess)
-                    try store.locked { state in
-                        guard state.generation == generation, state.provider_subject == identity.sub else {
-                            throw EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider.")
-                        }
-                    }
-                }
-                self?.setConnectionStatus("Connected account: \(identity.email ?? identity.sub)")
-                DispatchQueue.main.async { self?.finishConnectionOperation() }
-            } catch {
-                self?.setConnectionFailure(error)
-                DispatchQueue.main.async { self?.finishConnectionOperation() }
-            }
-        }.start(request)
+        }
     }
     private func finishStartingConnect() {
         startingConnect = false

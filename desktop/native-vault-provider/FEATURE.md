@@ -8,6 +8,13 @@ description: Provider-owned native OAuth enrollment and non-secret host lifecycl
 
 The macOS credential-provider extension owns its distinct public OAuth client, PKCE transaction, provider-only Data Protection Keychain session, and App Group status publication. The host reads only the non-secret generation/status record and may invalidate or reconcile its actor; it cannot receive private session data or request token material. `ready` remains false until separate signed-provider, Keychain, LocalAuthentication, and real admin OAuth acceptance gates pass.
 
+The first password unit is direct-list only: AuthenticationServices supplies the
+request's actual domain/URL identifiers, the provider performs LocalAuthentication
+before its protected Keychain read, chooses a current organization, lists value-free
+matches, and materializes only the selected matching item. The provider uses one
+session/refresh primitive for configuration and password use. It does not populate
+the identity store, handle no-interaction filling, or claim signed OS delivery.
+
 Canonical contract: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-ENROLLMENT.md`.
 
 ## Strict envelope corpus

@@ -10,15 +10,15 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 0
 fi
 
-DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}"
 [[ -d "$DEVELOPER_DIR" ]] || {
-  echo "ERROR: Xcode is required at $DEVELOPER_DIR. Set DEVELOPER_DIR to a full Xcode installation." >&2
+  echo "ERROR: macOS Command Line Tools are required at $DEVELOPER_DIR. Set DEVELOPER_DIR to a usable toolchain." >&2
   exit 1
 }
 export DEVELOPER_DIR
 SWIFTC="$(xcrun --find swiftc 2>/dev/null || true)"
 [[ -n "$SWIFTC" ]] || {
-  echo "ERROR: no Swift compiler is available through $DEVELOPER_DIR. Install full Xcode or set DEVELOPER_DIR." >&2
+  echo "ERROR: no Swift compiler is available through $DEVELOPER_DIR. Install Command Line Tools or set DEVELOPER_DIR." >&2
   exit 1
 }
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
@@ -43,7 +43,7 @@ SOURCE="$ROOT/native-vault-provider"
 OUTPUT="$SOURCE/build/AI Matrx Vault Provider.appex"
 CONTENTS="$OUTPUT/Contents"
 rm -rf "$OUTPUT"
-mkdir -p "$CONTENTS/MacOS"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 "$SWIFTC" \
   -application-extension \
@@ -63,10 +63,13 @@ mkdir -p "$CONTENTS/MacOS"
   "$SOURCE/NativeVaultEnrollmentLifecycle.swift" \
   "$SOURCE/NativeVaultState.swift" \
   "$SOURCE/NativeVaultPrivateSession.swift" \
+  "$SOURCE/NativeVaultPassword.swift" \
   "$SOURCE/CredentialProviderViewController.swift" \
   -o "$CONTENTS/MacOS/VaultProvider"
 cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"
-cp "$SOURCE/VaultProvider.entitlements" "$CONTENTS/VaultProvider.entitlements"
+# Entitlements are codesign input, not a bundle-root payload. A root-level
+# non-code file becomes an unsealed nested component during release signing.
+cp "$SOURCE/VaultProvider.entitlements" "$CONTENTS/Resources/VaultProvider.entitlements"
 VAULT_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY:-}"
 if [[ -z "$VAULT_PUBLISHABLE_KEY" || ! "$VAULT_PUBLISHABLE_KEY" =~ ^[!-~]+$ ]]; then
   echo "ERROR: VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY must be supplied as an allowlisted printable public build input." >&2
@@ -74,7 +77,7 @@ if [[ -z "$VAULT_PUBLISHABLE_KEY" || ! "$VAULT_PUBLISHABLE_KEY" =~ ^[!-~]+$ ]]; 
 fi
 /usr/libexec/PlistBuddy -c "Set :MatrxVaultSupabasePublishableKey $VAULT_PUBLISHABLE_KEY" "$CONTENTS/Info.plist"
 plutil -lint "$CONTENTS/Info.plist" >/dev/null
-plutil -lint "$CONTENTS/VaultProvider.entitlements" >/dev/null
+plutil -lint "$CONTENTS/Resources/VaultProvider.entitlements" >/dev/null
 
 # A release provider has a distinct identity/profile from its Tauri host. Do
 # not make local source builds require private release inputs, but make a

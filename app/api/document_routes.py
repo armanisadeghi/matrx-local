@@ -306,6 +306,7 @@ async def _sync_note_to_sqlite(
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
     is_new: bool = False,
+    user_id: str | None = None,
 ) -> None:
     """Persist note metadata to SQLite for sync tracking.
 
@@ -316,6 +317,10 @@ async def _sync_note_to_sqlite(
     c_hash = content_hash(content)
 
     existing = await repo.get(note_id)
+    existing_owner = str((existing or {}).get("user_id") or "")
+    requested_owner = str(user_id or "")
+    if existing_owner and existing_owner != requested_owner:
+        raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     now = _now()
 
     # Create a local version snapshot if content actually changed
@@ -336,7 +341,10 @@ async def _sync_note_to_sqlite(
 
     note_data: dict[str, Any] = {
         "id": note_id,
-        "user_id": "",
+        # New authenticated notes retain their owner.  An older local-only
+        # row with no owner stays unowned: assigning it to whoever is signed
+        # in now would silently adopt data from a prior account.
+        "user_id": existing_owner if existing is not None else requested_owner,
         "folder_id": folder_id,
         "title": label,
         "label": label,
@@ -426,11 +434,24 @@ async def update_folder(
     folder_id: str, req: UpdateFolderRequest, request: Request
 ) -> dict[str, Any]:
     _configure_sync(request)
+    user_id = _get_user_id_optional(request)
 
     if req.name:
         for f in file_manager.list_folders():
             fid = _folder_id_for_name(f)
             if fid == folder_id:
+                repo = _get_notes_repo()
+                for nf in file_manager.scan_all():
+                    if Path(nf["file_path"]).parts[:1] != (f,):
+                        continue
+                    row = await repo.get_by_file_path(nf["file_path"])
+                    if (
+                        row is None
+                        or not row.get("user_id")
+                        or not user_id
+                        or str(row["user_id"]) != str(user_id)
+                    ):
+                        raise HTTPException(status_code=404, detail="Folder not found")
                 file_manager.rename_folder(f, req.name)
                 break
 
@@ -453,13 +474,14 @@ async def update_folder(
 @router.delete("/folders/{folder_id}")
 async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
     _configure_sync(request)
+    user_id = _get_user_id_optional(request)
     repo = _get_notes_repo()
 
     # Hold the sync lock: deleting files + writing tombstones must not
     # interleave with a full_sync/pull that snapshotted the old state — the
     # race re-pulled just-deleted notes and erased the fresh tombstones.
     async with sync_engine.sync_lock:
-        await _delete_folder_locked(folder_id, repo)
+        await _delete_folder_locked(folder_id, repo, user_id)
 
     if sync_engine.is_configured:
         _fire_and_forget(supabase_docs.delete_folder(folder_id))
@@ -467,7 +489,7 @@ async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
     return {"status": "deleted"}
 
 
-async def _delete_folder_locked(folder_id: str, repo: NotesRepo) -> None:
+async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | None) -> None:
     for f in file_manager.list_folders():
         fid = _folder_id_for_name(f)
         if fid == folder_id:
@@ -482,13 +504,30 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo) -> None:
                 nf for nf in file_manager.scan_all()
                 if Path(nf["file_path"]).parts[:1] == (f,)
             ]
+            # Check the complete directory before touching any file, so a
+            # mixed-account folder cannot be partially deleted.
+            rows: dict[str, dict[str, Any] | None] = {}
             for nf in contained:
                 row = await repo.get_by_file_path(nf["file_path"])
                 if row is None:
                     row = await repo.get(_note_id_for_path(nf["file_path"]))
+                rows[nf["file_path"]] = row
+                if (
+                    row is None
+                    or not row.get("user_id")
+                    or not user_id
+                    or str(row["user_id"]) != str(user_id)
+                ):
+                    raise HTTPException(status_code=404, detail="Folder not found")
+            for nf in contained:
+                row = rows[nf["file_path"]]
                 del_id = row["id"] if row else _note_id_for_path(nf["file_path"])
+                # Unindexed files are local-only: do not create a cloud
+                # tombstone under the current session.
+                if row is None:
+                    continue
                 try:
-                    await repo.soft_delete(del_id)
+                    await repo.soft_delete(del_id, user_id=str(user_id or ""))
                 except Exception:
                     logger.warning(
                         "Could not tombstone note %s during folder delete",
@@ -511,13 +550,13 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo) -> None:
             # Drop the last-synced hashes for the removed files so sync state
             # doesn't keep tracking paths that no longer exist.
             try:
-                state = file_manager.load_sync_state()
+                state = sync_engine._load_sync_state()
                 hashes = state.get("note_hashes", {})
                 removed = [nf["file_path"] for nf in contained]
                 if any(fp in hashes for fp in removed):
                     for fp in removed:
                         hashes.pop(fp, None)
-                    file_manager.save_sync_state(state)
+                    sync_engine._save_sync_state(state)
             except Exception:
                 logger.warning("Could not prune sync-state hashes on folder delete", exc_info=True)
             break
@@ -684,6 +723,7 @@ async def create_note(req: CreateNoteRequest, request: Request) -> dict[str, Any
         tags=req.tags,
         metadata=req.metadata,
         is_new=True,
+        user_id=user_id,
     )
 
     logger.info(
@@ -701,6 +741,7 @@ async def create_note(req: CreateNoteRequest, request: Request) -> dict[str, Any
             tags=req.tags,
             metadata=req.metadata,
             file_path=file_path,
+            owner_user_id=user_id,
         ))
 
     return result
@@ -711,12 +752,16 @@ async def update_note(
     note_id: str, req: UpdateNoteRequest, request: Request
 ) -> dict[str, Any]:
     _configure_sync(request)
+    user_id = _get_user_id_optional(request)
 
     existing_record: dict[str, Any] | None = None
 
     # Fast path: SQLite is the cheap O(1) lookup — try it first.
     repo = _get_notes_repo()
     sqlite_note = await repo.get(note_id)
+    sqlite_owner = str((sqlite_note or {}).get("user_id") or "")
+    if sqlite_owner and sqlite_owner != str(user_id or ""):
+        raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     if sqlite_note and sqlite_note.get("file_path"):
         fp = sqlite_note["file_path"]
         if file_manager.note_path_from_file_path(fp).is_file():
@@ -801,6 +846,7 @@ async def update_note(
         file_path=file_path,
         tags=tags,
         metadata=metadata,
+        user_id=user_id,
     )
 
     result: dict[str, Any] = {
@@ -819,7 +865,7 @@ async def update_note(
         "_source": "local",
     }
 
-    if sync_engine.is_configured:
+    if sync_engine.is_configured and user_id:
         _fire_and_forget(sync_engine.push_note(
             note_id=note_id,
             label=label,
@@ -829,6 +875,7 @@ async def update_note(
             tags=tags,
             metadata=metadata,
             file_path=file_path,
+            owner_user_id=user_id,
         ))
 
     return result
@@ -837,6 +884,7 @@ async def update_note(
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, request: Request) -> dict[str, str]:
     _configure_sync(request)
+    user_id = _get_user_id_optional(request)
     repo = _get_notes_repo()
 
     # Sync lock: file removal + tombstone must not interleave with an
@@ -844,6 +892,9 @@ async def delete_note(note_id: str, request: Request) -> dict[str, str]:
     async with sync_engine.sync_lock:
         # Primary: SQLite knows the exact file_path — no scan needed.
         sqlite_note = await repo.get(note_id)
+        owner = str((sqlite_note or {}).get("user_id") or "")
+        if owner and owner != str(user_id or ""):
+            raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
         if sqlite_note and sqlite_note.get("file_path"):
             file_manager.delete_note(sqlite_note["file_path"])
         else:
@@ -853,13 +904,14 @@ async def delete_note(note_id: str, request: Request) -> dict[str, str]:
                     file_manager.delete_note(f["file_path"])
                     break
 
-        await repo.soft_delete(note_id)
+        if sqlite_note and owner:
+            await repo.soft_delete(note_id, user_id=owner)
 
     # Breaker-gated: single deletes are normal, but a caller looping this
     # endpoint is indistinguishable from a mass wipe — every cloud delete
     # spends the same budget. A blocked delete keeps its SQLite tombstone
     # and propagates after explicit confirmation.
-    if sync_engine.is_configured and sync_engine.allow_cloud_delete(note_id):
+    if owner and owner == str(user_id or "") and sync_engine.is_configured and sync_engine.allow_cloud_delete(note_id):
         _fire_and_forget(
             supabase_docs.soft_delete_note(note_id, sync_engine.device_id)
         )
@@ -877,6 +929,13 @@ async def set_note_excluded(
 ) -> dict[str, Any]:
     """Mark a note as excluded from sync (or re-include it)."""
     repo = _get_notes_repo()
+    user_id = _get_user_id_optional(request)
+    note = await repo.get(note_id)
+    owner = str((note or {}).get("user_id") or "")
+    if owner and owner != str(user_id or ""):
+        raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
+    if not owner:
+        return {"id": note_id, "sync_status": note.get("sync_status", "never_synced") if note else "never_synced", "deferred_account": True}
     await repo.set_excluded(note_id, req.excluded)
     return {"id": note_id, "sync_status": "excluded" if req.excluded else "never_synced"}
 
@@ -921,6 +980,7 @@ async def list_versions(note_id: str, request: Request) -> list[dict[str, Any]]:
 async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dict[str, Any]:
     """Revert a note to a previous version. Works locally; no cloud required."""
     _configure_sync(request)
+    user_id = _get_user_id_optional(request)
 
     versions_repo = _get_versions_repo()
     version = await versions_repo.get_version(note_id, req.version_number)
@@ -931,6 +991,9 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
     # Get current note metadata from SQLite
     repo = _get_notes_repo()
     existing = await repo.get(note_id)
+    owner = str((existing or {}).get("user_id") or "")
+    if owner and owner != str(user_id or ""):
+        raise HTTPException(status_code=404, detail=f"Note not found: {note_id}")
     folder_name = (existing.get("folder_name") or "General") if existing else "General"
     folder_id = existing.get("folder_id") if existing else None
     label = version.get("label") or (existing.get("label", "Untitled") if existing else "Untitled")
@@ -952,6 +1015,7 @@ async def revert_note(note_id: str, req: RevertRequest, request: Request) -> dic
         folder_name=folder_name,
         folder_id=folder_id,
         file_path=file_path,
+        user_id=user_id,
     )
 
     result: dict[str, Any] = {
@@ -993,8 +1057,9 @@ async def sync_status(request: Request) -> dict[str, Any]:
     _configure_sync(request)
     base = sync_engine.get_status()
     repo = _get_notes_repo()
-    pending = await repo.list_pending_push()
-    excluded = await repo.list_excluded()
+    user_id = _get_user_id_optional(request)
+    pending = await repo.list_pending_push(user_id) if user_id else []
+    excluded = await repo.list_excluded(user_id) if user_id else []
     base["pending_push_count"] = len(pending)
     base["excluded_count"] = len(excluded)
     return base

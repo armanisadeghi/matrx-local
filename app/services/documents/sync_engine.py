@@ -29,9 +29,11 @@ SQLite tracks per-note sync status:
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -91,11 +93,17 @@ class SyncEngine:
         self.fm = fm or file_manager
         self.sb = sb or supabase_docs
         self._device_id: str | None = None
-        self._user_id: str | None = None
+        # The engine is a process singleton, but an HTTP request, the daemon,
+        # and the file watcher can overlap.  Principal identity is task-local
+        # so a later login cannot turn an already-running note operation into
+        # a different user's request.
+        self._user_id_context: ContextVar[str | None] = ContextVar(
+            f"notes_sync_user_{id(self)}", default=None
+        )
         self._watch_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._sync_lock = asyncio.Lock()
-        self._last_push_hashes: dict[str, str] = {}
+        self._last_push_hashes_by_user: dict[str, dict[str, str]] = {}
         self._auto_task: asyncio.Task | None = None
         self._auto_stop = asyncio.Event()
         self._auto_last_skip_reason: str | None = None
@@ -107,10 +115,24 @@ class SyncEngine:
         # notes_folder_id_fkey → PostgREST 409. We resolve to a real remote
         # folder (by id-presence, else by name) or fall back to NULL — the
         # folder_name column carries the organization regardless.
-        self._folder_cache_ids: set[str] = set()
-        self._folder_cache_by_name: dict[str, str] = {}
-        self._folder_cache_at: float = 0.0
+        self._folder_cache_by_user: dict[str, tuple[set[str], dict[str, str], float]] = {}
         self._recovery_hook_installed = False
+
+    @property
+    def _user_id(self) -> str | None:
+        return self._user_id_context.get()
+
+    @_user_id.setter
+    def _user_id(self, value: str | None) -> None:
+        self._user_id_context.set(value)
+
+    @property
+    def _last_push_hashes(self) -> dict[str, str]:
+        """Per-account echo state; paths alone are not an identity boundary."""
+        user_id = self._user_id
+        if not user_id:
+            return {}
+        return self._last_push_hashes_by_user.setdefault(user_id, {})
 
     @property
     def device_id(self) -> str:
@@ -164,6 +186,42 @@ class SyncEngine:
         self._user_id = user_id
         self.sb.set_jwt(jwt)
 
+    def _load_sync_state(self) -> dict[str, Any]:
+        """Return state isolated to the operation's authenticated account.
+
+        The legacy top-level state is deliberately left intact: it has no
+        principal marker, so assigning it to the next login would adopt an
+        unknown account's cursor and hashes.
+        """
+        state = self.fm.load_sync_state()
+        user_id = self._user_id
+        if not user_id:
+            return {"note_hashes": {}}
+        accounts = state.get("accounts")
+        if not isinstance(accounts, dict):
+            return {"note_hashes": {}}
+        account_state = accounts.get(user_id, {})
+        result = copy.deepcopy(account_state) if isinstance(account_state, dict) else {}
+        result.setdefault("note_hashes", {})
+        return result
+
+    def _save_sync_state(self, account_state: dict[str, Any]) -> None:
+        user_id = self._user_id
+        if not user_id:
+            return
+        state = self.fm.load_sync_state()
+        accounts = state.get("accounts")
+        if not isinstance(accounts, dict):
+            accounts = {}
+        accounts[user_id] = copy.deepcopy(account_state)
+        state["accounts"] = accounts
+        self.fm.save_sync_state(state)
+
+    @staticmethod
+    def _is_owned_by(row: dict[str, Any] | None, user_id: str) -> bool:
+        """Only a known matching owner may participate in account sync."""
+        return bool(row and row.get("user_id") and row.get("user_id") == user_id)
+
     @property
     def is_configured(self) -> bool:
         return bool(self._user_id and self.sb.available)
@@ -210,6 +268,7 @@ class SyncEngine:
         metadata: dict[str, Any] | None = None,
         file_path: str | None = None,
         force: bool = False,
+        owner_user_id: str | None = None,
     ) -> dict[str, Any]:
         """Push a single note to Supabase (public entry — serialized).
 
@@ -232,6 +291,7 @@ class SyncEngine:
                 metadata=metadata,
                 file_path=file_path,
                 force=force,
+                owner_user_id=owner_user_id,
             )
 
     async def _resolve_remote_folder_id(
@@ -255,32 +315,42 @@ class SyncEngine:
         """
         if not folder_id and not folder_name:
             return None
-        if not self._user_id:
+        actor_user_id = self._user_id
+        if not actor_user_id:
             return None
 
+        user_id = self._user_id
+        if not user_id:
+            return None
         now = time.monotonic()
-        if now - self._folder_cache_at > 60.0:
+        cache_ids, cache_by_name, cache_at = self._folder_cache_by_user.get(
+            user_id, (set(), {}, 0.0)
+        )
+        if now - cache_at > 60.0:
             try:
-                remote_folders = await self.sb.list_folders(self._user_id)
+                remote_folders = await self.sb.list_folders(user_id)
             except Exception:
                 logger.debug("Folder resolve: list_folders failed", exc_info=True)
                 remote_folders = []
                 # Keep any prior cache; only refresh the timestamp on success.
             else:
-                self._folder_cache_ids = {
+                cache_ids = {
                     f["id"] for f in remote_folders if f.get("id")
                 }
-                self._folder_cache_by_name = {
+                cache_by_name = {
                     str(f.get("name", "")).strip().lower(): f["id"]
                     for f in remote_folders
                     if f.get("id") and f.get("name")
                 }
-                self._folder_cache_at = now
+                cache_at = now
+                self._folder_cache_by_user[user_id] = (
+                    cache_ids, cache_by_name, cache_at
+                )
 
-        if folder_id and folder_id in self._folder_cache_ids:
+        if folder_id and folder_id in cache_ids:
             return folder_id
         if folder_name:
-            match = self._folder_cache_by_name.get(folder_name.strip().lower())
+            match = cache_by_name.get(folder_name.strip().lower())
             if match:
                 return match
         return None
@@ -296,6 +366,7 @@ class SyncEngine:
         metadata: dict[str, Any] | None = None,
         file_path: str | None = None,
         force: bool = False,
+        owner_user_id: str | None = None,
     ) -> dict[str, Any]:
         """Push a single note to Supabase. Local file must already be written.
 
@@ -309,11 +380,37 @@ class SyncEngine:
             logger.debug("push_note skipped — no user_id configured")
             return {"id": note_id, "label": label, "_synced_to_cloud": False}
 
+        actor_user_id = self._user_id
+        if owner_user_id is not None and owner_user_id != actor_user_id:
+            return {
+                "id": note_id,
+                "label": label,
+                "_synced_to_cloud": False,
+                "_deferred_account": True,
+                "reason": "account_changed",
+            }
+
+        # A retry/direct push is only eligible when its persisted owner agrees
+        # with the task-bound authenticated principal.  Never turn a previous
+        # account's local row (or an unknown legacy row) into this account's
+        # cloud note.
+        repo = self._get_notes_repo()
+        local_row = await repo.get(note_id)
+        local_owner = str((local_row or {}).get("user_id") or "")
+        if local_owner != actor_user_id:
+            return {
+                "id": note_id,
+                "label": label,
+                "_synced_to_cloud": False,
+                "_deferred_account": True,
+                "reason": "foreign_or_unknown_owner",
+            }
+
         if file_path is None:
             # Best effort: recover the real path from SQLite before falling
             # back to the folder+label derivation.
             try:
-                row = await self._get_notes_repo().get(note_id)
+                row = local_row
                 if row and row.get("file_path"):
                     file_path = row["file_path"]
             except Exception:
@@ -351,7 +448,7 @@ class SyncEngine:
                 # row still carries that hash and is live. An unconditional
                 # upsert here silently last-writer-wins over a concurrent edit
                 # from another device (SYNC_CONTRACT violation).
-                state = self.fm.load_sync_state()
+                state = self._load_sync_state()
                 last_synced_hash = (
                     state.get("note_hashes", {}).get(file_path)
                     if not force
@@ -366,7 +463,7 @@ class SyncEngine:
 
                 upsert_body = dict(
                     note_id=note_id,
-                    user_id=self._user_id,
+                    user_id=actor_user_id,
                     label=label,
                     content=content,
                     folder_name=folder_name,
@@ -440,12 +537,13 @@ class SyncEngine:
                 # synced, and the next pull would clobber the newer local file
                 # with older cloud content (contract: note_hashes == "hash at
                 # last successful sync", docs/SYNC_CONTRACT.md).
-                state = self.fm.load_sync_state()
-                state["note_hashes"][file_path] = c_hash
-                self.fm.save_sync_state(state)
+                state = self._load_sync_state()
+                state.setdefault("note_hashes", {})[file_path] = c_hash
+                self._save_sync_state(state)
 
-                repo = self._get_notes_repo()
-                await repo.set_sync_status(note_id, "synced", remote_hash=c_hash)
+                await repo.set_sync_status(
+                    note_id, "synced", remote_hash=c_hash, user_id=actor_user_id
+                )
 
             except Exception as exc:
                 # Expected, actionable cloud rejections (HTTP 4xx: auth,
@@ -474,7 +572,7 @@ class SyncEngine:
                 # note is picked up again by list_pending_push. Best-effort —
                 # a failing status write must not mask the original push error.
                 try:
-                    await self._get_notes_repo().set_sync_status(note_id, "failed")
+                    await repo.set_sync_status(note_id, "failed", user_id=actor_user_id)
                 except Exception:
                     logger.warning(
                         "Could not record sync_status=failed for note %s",
@@ -498,7 +596,8 @@ class SyncEngine:
         """``note`` may carry the already-fetched full row (pull_changes gets
         complete rows from get_notes_since) — skipping the refetch removes a
         second network failure point per row."""
-        if not self._user_id:
+        actor_user_id = self._user_id
+        if not actor_user_id:
             return None
 
         if note is None:
@@ -513,7 +612,14 @@ class SyncEngine:
         if not note:
             return None
 
+        remote_owner = note.get("created_by") or note.get("user_id")
+        if remote_owner and remote_owner != actor_user_id:
+            return {**note, "_deferred_account": True}
+
         repo = self._get_notes_repo()
+        local_row = await repo.get(note_id)
+        if local_row is not None and not self._is_owned_by(local_row, actor_user_id):
+            return {**note, "_deferred_account": True}
 
         # A remote soft-delete must propagate as a deletion — writing the
         # deleted row's content back to disk resurrected notes the user had
@@ -530,6 +636,8 @@ class SyncEngine:
                     owner = await repo.get_by_file_path(fp)
                 except Exception:
                     pass
+                if owner and not self._is_owned_by(owner, actor_user_id):
+                    return {**note, "_deferred_account": True}
                 if owner and owner["id"] != note_id and not owner.get("is_deleted"):
                     logger.info(
                         "Tombstone for note %s skipped file removal — %s now "
@@ -541,12 +649,12 @@ class SyncEngine:
                         self.fm.delete_note(fp)
                     except Exception:
                         logger.debug("Could not remove local file for deleted note %s", note_id)
-                    state = self.fm.load_sync_state()
+                    state = self._load_sync_state()
                     state.get("note_hashes", {}).pop(fp, None)
-                    self.fm.save_sync_state(state)
+                    self._save_sync_state(state)
                     self._last_push_hashes.pop(fp, None)
             try:
-                await repo.soft_delete(note_id)
+                await repo.soft_delete(note_id, user_id=actor_user_id)
             except Exception:
                 pass
             return {**note, "_deleted": True}
@@ -557,8 +665,6 @@ class SyncEngine:
         label = note.get("label") or "Untitled"
         folder_name = note.get("folder_name") or "General"
         file_path = note.get("file_path")
-
-        local_row = await repo.get(note_id)
 
         # Local tombstone guard: this device deleted the note; don't let a pull
         # of the (not-yet-tombstoned) remote row resurrect it unless the remote
@@ -582,6 +688,8 @@ class SyncEngine:
                 note["_allocated_path"] = True
         else:
             owner = await repo.get_by_file_path(file_path)
+            if owner and not self._is_owned_by(owner, actor_user_id):
+                return {**note, "_deferred_account": True}
             if owner and owner["id"] != note_id and not owner.get("is_deleted"):
                 # Two distinct notes claim one path (duplicate labels across
                 # clients). If the incoming note is BYTE-IDENTICAL to the
@@ -614,7 +722,7 @@ class SyncEngine:
         if file_path and not note.get("_allocated_path"):
             local_hash = self.fm.note_hash(file_path)
             remote_hash = note.get("content_hash")
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             last_known_hash = state.get("note_hashes", {}).get(file_path)
 
             # A local file that differs from the incoming remote content may
@@ -662,8 +770,8 @@ class SyncEngine:
 
         self._last_push_hashes[file_path] = c_hash
 
-        state = self.fm.load_sync_state()
-        state["note_hashes"][file_path] = c_hash
+        state = self._load_sync_state()
+        state.setdefault("note_hashes", {})[file_path] = c_hash
 
         # The note moved paths (cross-device rename, or a write-back race lost
         # to another device's allocation): remove the file at the OLD path —
@@ -678,7 +786,7 @@ class SyncEngine:
             state.get("note_hashes", {}).pop(old_fp, None)
             self._last_push_hashes.pop(old_fp, None)
 
-        self.fm.save_sync_state(state)
+        self._save_sync_state(state)
 
         if note.get("_allocated_path"):
             # Write the allocated path back so every device converges on one
@@ -713,7 +821,7 @@ class SyncEngine:
         sv = note.get("sync_version", 0)
         await repo.upsert({
             "id": note_id,
-            "user_id": self._user_id or "",
+            "user_id": actor_user_id,
             "folder_id": note.get("folder_id"),
             "title": label,
             "label": label,
@@ -757,7 +865,7 @@ class SyncEngine:
             return {"pulled": 0, "conflicts": 0, **skipped}
 
         async with self._sync_lock:
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             last_pull_at = state.get("last_pull_at")
 
             try:
@@ -766,7 +874,8 @@ class SyncEngine:
                 logger.warning("Failed to pull changes from Supabase", exc_info=True)
                 return {"pulled": 0, "conflicts": 0, "error": "network_error"}
 
-            stats = {"pulled": 0, "conflicts": 0, "deleted": 0, "skipped": 0}
+            stats = {"pulled": 0, "conflicts": 0, "deleted": 0, "skipped": 0, "deferred_account": 0}
+            deferred = False
             max_ts = last_pull_at or ""
             for note in notes:
                 ts = note.get("updated_at") or ""
@@ -787,8 +896,13 @@ class SyncEngine:
 
                 result = await self._pull_note(note["id"])
                 if not result:
+                    deferred = True
+                    stats["failed"] = stats.get("failed", 0) + 1
                     continue
-                if result.get("_deleted"):
+                if result.get("_deferred_account"):
+                    stats["deferred_account"] += 1
+                    deferred = True
+                elif result.get("_deleted"):
                     stats["deleted"] += 1
                 elif result.get("_conflict"):
                     stats["conflicts"] += 1
@@ -797,11 +911,11 @@ class SyncEngine:
                 else:
                     stats["pulled"] += 1
 
-            if max_ts and max_ts != last_pull_at:
+            if not deferred and max_ts and max_ts != last_pull_at:
                 # Reload — _pull_note calls above rewrote sync state.
-                state = self.fm.load_sync_state()
+                state = self._load_sync_state()
                 state["last_pull_at"] = max_ts
-                self.fm.save_sync_state(state)
+                self._save_sync_state(state)
 
             return stats
 
@@ -818,7 +932,10 @@ class SyncEngine:
                 return {"pushed": 0, "failed": 0, "skipped": 0, **skipped}
 
             repo = self._get_notes_repo()
-            pending = await repo.list_pending_push()
+            user_id = self._user_id
+            if not user_id:
+                return {"error": "Not configured"}
+            pending = await repo.list_pending_push(user_id)
             local_files = self.fm.scan_all()
             local_by_path = {f["file_path"]: f for f in local_files}
 
@@ -838,9 +955,7 @@ class SyncEngine:
             remote_hashes: set[str] = set()
             if pending:
                 try:
-                    for r in await self.sb.get_all_notes_with_hashes(
-                        self._user_id
-                    ):
+                    for r in await self.sb.get_all_notes_with_hashes(user_id):
                         remote_by_id[r["id"]] = r
                         if r.get("content_hash"):
                             remote_hashes.add(r["content_hash"])
@@ -934,9 +1049,11 @@ class SyncEngine:
                         metadata=note.get("metadata", {}),
                         file_path=fp,
                     )
-                    if result.get("_conflict"):
+                    if result.get("_deferred_account"):
+                        stats["deferred_account"] = stats.get("deferred_account", 0) + 1
+                    elif result.get("_conflict"):
                         stats["conflicts"] += 1
-                    else:
+                    elif result.get("_synced_to_cloud"):
                         stats["pushed"] += 1
                 except Exception:
                     stats["failed"] += 1
@@ -971,12 +1088,11 @@ class SyncEngine:
             except Exception:
                 return {"pulled": 0, "conflicts": 0, "error": "network_error"}
 
-            stats = {"pulled": 0, "conflicts": 0, "skipped": 0}
+            stats = {"pulled": 0, "conflicts": 0, "skipped": 0, "deferred_account": 0}
             repo = self._get_notes_repo()
 
             for remote in remote_notes:
                 note_id = remote["id"]
-                fp = remote.get("file_path")
 
                 local_note = await repo.get(note_id)
                 if local_note and not local_note.get("sync_enabled", True):
@@ -984,10 +1100,12 @@ class SyncEngine:
                     continue
 
                 result = await self._pull_note(note_id)
-                if result and not result.get("_deleted"):
+                if result and result.get("_deferred_account"):
+                    stats["deferred_account"] += 1
+                elif result and not result.get("_deleted") and not result.get("_conflict"):
                     stats["pulled"] += 1
-                    if result.get("_conflict"):
-                        stats["conflicts"] += 1
+                elif result and result.get("_conflict"):
+                    stats["conflicts"] += 1
 
             return stats
 
@@ -1005,6 +1123,7 @@ class SyncEngine:
                 "conflicts": 0,
                 "unchanged": 0,
                 "deleted_local": 0,
+                "deferred_account": 0,
             }
 
             skipped = self._access_skipped()
@@ -1029,13 +1148,20 @@ class SyncEngine:
             local_files = self.fm.scan_all()
             local_by_path: dict[str, dict] = {f["file_path"]: f for f in local_files}
 
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             known_hashes = state.get("note_hashes", {})
             repo = self._get_notes_repo()
 
             for fp, remote in remote_by_path.items():
                 note_id = remote["id"]
+                path_owner = await repo.get_by_file_path(fp)
+                if path_owner and not self._is_owned_by(path_owner, self._user_id):
+                    stats["deferred_account"] += 1
+                    continue
                 local_note = await repo.get(note_id)
+                if local_note is not None and not self._is_owned_by(local_note, self._user_id):
+                    stats["deferred_account"] += 1
+                    continue
                 if local_note and not local_note.get("sync_enabled", True):
                     continue
 
@@ -1050,8 +1176,13 @@ class SyncEngine:
                     # their edit would be destructive — resurrect it locally.
                     if local_note and local_note.get("is_deleted"):
                         if remote.get("content_hash") != local_note.get("remote_content_hash"):
-                            await self._pull_note(note_id)
-                            stats["pulled"] += 1
+                            result = await self._pull_note(note_id)
+                            if result and result.get("_deferred_account"):
+                                stats["deferred_account"] += 1
+                            elif result and result.get("_conflict"):
+                                stats["conflicts"] += 1
+                            elif result and not result.get("_deleted"):
+                                stats["pulled"] += 1
                             continue
                         if not self.allow_cloud_delete(note_id):
                             stats["deletes_blocked"] = (
@@ -1068,8 +1199,11 @@ class SyncEngine:
                                 "Could not propagate local delete for %s", note_id
                             )
                         continue
-                    await self._pull_note(remote["id"])
-                    stats["pulled"] += 1
+                    result = await self._pull_note(remote["id"])
+                    if result and result.get("_deferred_account"):
+                        stats["deferred_account"] += 1
+                    elif result and not result.get("_conflict"):
+                        stats["pulled"] += 1
 
                 elif local["content_hash"] == remote.get("content_hash"):
                     stats["unchanged"] += 1
@@ -1078,17 +1212,20 @@ class SyncEngine:
                     # matched zero rows and pending_push rows never converged.
                     await repo.set_sync_status(
                         note_id, "synced",
-                        remote_hash=remote.get("content_hash")
+                        remote_hash=remote.get("content_hash"), user_id=self._user_id
                     )
 
                 elif known_hashes.get(fp) == local["content_hash"]:
-                    await self._pull_note(remote["id"])
-                    stats["pulled"] += 1
+                    result = await self._pull_note(remote["id"])
+                    if result and result.get("_deferred_account"):
+                        stats["deferred_account"] += 1
+                    elif result and not result.get("_conflict"):
+                        stats["pulled"] += 1
 
                 elif known_hashes.get(fp) == remote.get("content_hash"):
                     content = self.fm.read_note(fp)
                     if content is not None:
-                        await self._push_note(
+                        result = await self._push_note(
                             note_id=remote["id"],
                             label=remote.get("label", local["label"]),
                             content=content,
@@ -1096,7 +1233,10 @@ class SyncEngine:
                             folder_id=remote.get("folder_id"),
                             file_path=fp,
                         )
-                        stats["pushed"] += 1
+                        if result.get("_deferred_account"):
+                            stats["deferred_account"] += 1
+                        elif result.get("_synced_to_cloud"):
+                            stats["pushed"] += 1
                 elif remote.get("last_device_id") == self.device_id:
                     # Divergence, but the cloud row was last written by THIS
                     # device — no other device has contributed since our last
@@ -1105,7 +1245,7 @@ class SyncEngine:
                     # conflicting with their own saves. Push instead.
                     content = self.fm.read_note(fp)
                     if content is not None:
-                        await self._push_note(
+                        result = await self._push_note(
                             note_id=remote["id"],
                             label=remote.get("label", local["label"]),
                             content=content,
@@ -1113,7 +1253,10 @@ class SyncEngine:
                             folder_id=remote.get("folder_id"),
                             file_path=fp,
                         )
-                        stats["pushed"] += 1
+                        if result.get("_deferred_account"):
+                            stats["deferred_account"] += 1
+                        elif result.get("_synced_to_cloud"):
+                            stats["pushed"] += 1
 
                 else:
                     local_content = self.fm.read_note(fp) or ""
@@ -1140,6 +1283,12 @@ class SyncEngine:
                     if local_note and not local_note.get("sync_enabled", True):
                         continue
                     if local_note and local_note.get("is_deleted"):
+                        continue
+                    if local_note is not None and not self._is_owned_by(local_note, self._user_id):
+                        # Raw files and legacy/foreign rows stay available for
+                        # local editing, but a signed-in account may not adopt
+                        # them into its cloud replica.
+                        stats["deferred_account"] += 1
                         continue
 
                     content = self.fm.read_note(fp)
@@ -1180,9 +1329,9 @@ class SyncEngine:
                                 "remote_content_hash": local["content_hash"],
                                 "sync_version": twin.get("sync_version", 0),
                             })
-                            st = self.fm.load_sync_state()
-                            st["note_hashes"][fp] = local["content_hash"]
-                            self.fm.save_sync_state(st)
+                            st = self._load_sync_state()
+                            st.setdefault("note_hashes", {})[fp] = local["content_hash"]
+                            self._save_sync_state(st)
                             self._last_push_hashes[fp] = local["content_hash"]
                             try:
                                 await self.sb.set_file_path_if_null(
@@ -1210,6 +1359,12 @@ class SyncEngine:
                             )
                             continue
 
+                        # No authoritative same-account cloud identity exists
+                        # for this unindexed file. Keep it local; do not make
+                        # its ownership depend on the current login.
+                        stats["deferred_account"] += 1
+                        continue
+
                     push_id = (
                         local_note["id"] if local_note else _note_id_for_path(fp)
                     )
@@ -1236,7 +1391,7 @@ class SyncEngine:
                             stats["deleted_local"] += 1
                             continue
 
-                    await self._push_note(
+                    result = await self._push_note(
                         note_id=push_id,
                         label=local["label"],
                         content=content,
@@ -1244,7 +1399,10 @@ class SyncEngine:
                         folder_id=(local_note or {}).get("folder_id"),
                         file_path=fp,
                     )
-                    stats["pushed"] += 1
+                    if result.get("_deferred_account"):
+                        stats["deferred_account"] += 1
+                    elif result.get("_synced_to_cloud"):
+                        stats["pushed"] += 1
 
             # Remote notes WITHOUT a file_path — created by other clients (the
             # web app writes no file_path). remote_by_path walks right past
@@ -1257,6 +1415,9 @@ class SyncEngine:
                 if remote.get("file_path"):
                     continue
                 local_note = await repo.get(note_id)
+                if local_note is not None and not self._is_owned_by(local_note, self._user_id):
+                    stats["deferred_account"] += 1
+                    continue
                 if local_note and not local_note.get("sync_enabled", True):
                     continue
                 if local_note and local_note.get("is_deleted"):
@@ -1269,17 +1430,18 @@ class SyncEngine:
                     stats["unchanged"] += 1
                     continue
                 result = await self._pull_note(note_id)
-                if result and not result.get("_deleted"):
-                    if result.get("_conflict"):
-                        stats["conflicts"] += 1
-                    else:
-                        stats["pulled"] += 1
-                        imported += 1
-                        if imported % 100 == 0:
-                            logger.info(
-                                "full_sync: imported %d pathless cloud notes so far…",
-                                imported,
-                            )
+                if result and result.get("_deferred_account"):
+                    stats["deferred_account"] += 1
+                elif result and not result.get("_deleted") and not result.get("_conflict"):
+                    stats["pulled"] += 1
+                    imported += 1
+                    if imported % 100 == 0:
+                        logger.info(
+                            "full_sync: imported %d pathless cloud notes so far…",
+                            imported,
+                        )
+                elif result and result.get("_conflict"):
+                    stats["conflicts"] += 1
 
             if stats.get("skipped_duplicate") or stats.get("adopted"):
                 # A firing here means note identity was lost somewhere (fresh
@@ -1298,11 +1460,13 @@ class SyncEngine:
             # this reload→save free of awaits: it must stay atomic on the
             # event loop so a concurrent reset_delete_breaker can never be
             # overwritten by a stale snapshot (see allow_cloud_delete).
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             state["last_full_sync"] = time.time()
+            self._save_sync_state(state)
             # Live remote corpus size — scales the mass-delete breaker budget.
-            state["remote_live_count"] = len(remote_notes)
-            self.fm.save_sync_state(state)
+            root_state = self.fm.load_sync_state()
+            root_state["remote_live_count"] = len(remote_notes)
+            self.fm.save_sync_state(root_state)
 
             if stats.get("deletes_blocked"):
                 logger.critical(
@@ -1483,17 +1647,10 @@ class SyncEngine:
             return
         self._auto_last_skip_reason = None
 
-        # Configure only when the persisted credentials actually changed:
-        # request handlers configure this same singleton with the request's
-        # JWT, and near a token refresh the request token can be FRESHER than
-        # the persisted row — an unconditional background re-configure could
-        # briefly downgrade the client to the staler token mid-request.
-        if (
-            self._user_id != row["user_id"]
-            or self._auto_last_token != row["access_token"]
-        ):
-            self.configure(row["user_id"], row["access_token"])
-            self._auto_last_token = row["access_token"]
+        # This daemon has its own ContextVar context. Bind on every tick so it
+        # cannot inherit a request principal, while request tasks retain theirs.
+        self.configure(row["user_id"], row["access_token"])
+        self._auto_last_token = row["access_token"]
 
         if not self.watcher_active:
             await self.start_watcher()
@@ -1501,7 +1658,7 @@ class SyncEngine:
         pull = await self.pull_changes()
         push = await self.push_all()
 
-        state = self.fm.load_sync_state()
+        state = self._load_sync_state()
         last_full = state.get("last_full_sync") or 0
         full: dict[str, Any] | None = None
         if (time.time() - last_full) > self._FULL_SYNC_MAX_AGE_S:
@@ -1564,7 +1721,7 @@ class SyncEngine:
 
         except ImportError:
             logger.info("watchfiles not available, using polling for document watch")
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             known = dict(state.get("note_hashes", {}))
 
             while not self._stop_event.is_set():
@@ -1592,6 +1749,21 @@ class SyncEngine:
                 exc_info=True,
             )
 
+    async def _bind_watcher_principal(self) -> str | None:
+        """Bind the watcher task to the current persisted session, if any."""
+        from app.services.local_db.repositories import TokenRepo
+
+        try:
+            row = await TokenRepo().get()
+        except RuntimeError:
+            # No durable session is a signed-out watcher, never permission to
+            # reuse an inherited request ContextVar/JWT.
+            return None
+        if not row or not row.get("user_id") or not row.get("access_token"):
+            return None
+        self.configure(row["user_id"], row["access_token"])
+        return row["user_id"]
+
     async def _handle_external_delete(self, file_path: str) -> None:
         """Handle an externally deleted .md file.
 
@@ -1601,14 +1773,17 @@ class SyncEngine:
         locally deleted file came back on the next sync).
         """
         async with self._sync_lock:
+            actor_user_id = await self._bind_watcher_principal()
+            if not actor_user_id:
+                return
             # Recheck after the watcher debounce — editors that save via
             # delete-then-rename briefly look like a deletion.
             if self.fm.note_path_from_file_path(file_path).is_file():
                 return
 
-            state = self.fm.load_sync_state()
+            state = self._load_sync_state()
             state.get("note_hashes", {}).pop(file_path, None)
-            self.fm.save_sync_state(state)
+            self._save_sync_state(state)
             self._last_push_hashes.pop(file_path, None)
 
             repo = self._get_notes_repo()
@@ -1617,8 +1792,10 @@ class SyncEngine:
                 row = await repo.get(_note_id_for_path(file_path))
             if row is None:
                 return
+            if not self._is_owned_by(row, actor_user_id):
+                return
             try:
-                await repo.soft_delete(row["id"])
+                await repo.soft_delete(row["id"], user_id=actor_user_id)
             except Exception:
                 logger.debug("Could not tombstone deleted note %s", file_path)
                 return
@@ -1649,6 +1826,9 @@ class SyncEngine:
         the next pull clobbered it with older cloud content.
         """
         async with self._sync_lock:
+            actor_user_id = await self._bind_watcher_principal()
+            if not actor_user_id:
+                return
             content = self.fm.read_note(file_path)
             if content is None:
                 return
@@ -1662,7 +1842,11 @@ class SyncEngine:
             existing = await repo.get_by_file_path(file_path)
             if existing is None:
                 existing = await repo.get(_note_id_for_path(file_path))
-            note_id = existing["id"] if existing else _note_id_for_path(file_path)
+            # A watcher must not turn an arbitrary file into the account that
+            # happened to be signed in when it observed the change.
+            if not self._is_owned_by(existing, actor_user_id):
+                return
+            note_id = existing["id"]
 
             parts = Path(file_path).parts
             folder = parts[0] if len(parts) > 1 else "General"
@@ -1777,6 +1961,9 @@ class SyncEngine:
 
         repo = self._get_notes_repo()
         sqlite_note = await repo.get(note_id)
+        actor_user_id = self._user_id
+        if not actor_user_id or not self._is_owned_by(sqlite_note, actor_user_id):
+            return {"id": note_id, "_deferred_account": True}
         label = (sqlite_note.get("label") or sqlite_note.get("title", "Untitled")) if sqlite_note else "Untitled"
         folder_name = (sqlite_note.get("folder_name") or "General") if sqlite_note else "General"
         folder_id = sqlite_note.get("folder_id") if sqlite_note else None
@@ -1810,12 +1997,14 @@ class SyncEngine:
             written_path = self.fm.write_note(
                 folder_name, label, remote_content, note_path
             )
-            await repo.set_sync_status(note_id, "synced", remote_hash=content_hash(remote_content))
+            await repo.set_sync_status(
+                note_id, "synced", remote_hash=content_hash(remote_content), user_id=actor_user_id
+            )
             # The file now matches the cloud — record the synced hash so pulls
             # treat it as clean (and pushes precondition on the right value).
-            state = self.fm.load_sync_state()
-            state["note_hashes"][written_path] = content_hash(remote_content)
-            self.fm.save_sync_state(state)
+            state = self._load_sync_state()
+            state.setdefault("note_hashes", {})[written_path] = content_hash(remote_content)
+            self._save_sync_state(state)
             result["content"] = remote_content
 
         elif resolution == "merge":
@@ -2036,7 +2225,7 @@ class SyncEngine:
     # ── Status ───────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict[str, Any]:
-        state = self.fm.load_sync_state()
+        state = self._load_sync_state()
         conflicts = self.fm.list_conflicts()
         # Access-degraded is surfaced so the UI can prompt with an actionable,
         # EVIDENCE-BASED message instead of silently showing an empty list.
@@ -2056,7 +2245,7 @@ class SyncEngine:
             "notes_access_degraded": degraded,
             "notes_access_reason": notes_health.get("message") if degraded else None,
             "notes_access_kind": notes_health.get("kind"),
-            "delete_breaker": state.get("delete_breaker"),
+            "delete_breaker": self.fm.load_sync_state().get("delete_breaker"),
         }
 
 

@@ -1144,19 +1144,32 @@ class NotesRepo:
         )
         return [self._deserialize(r) for r in rows]
 
-    async def get(self, note_id: str) -> dict[str, Any] | None:
-        row = await self._db.fetchone("SELECT * FROM notes WHERE id = ?", (note_id,))
+    async def get(self, note_id: str, *, user_id: str | None = None) -> dict[str, Any] | None:
+        if user_id is None:
+            row = await self._db.fetchone("SELECT * FROM notes WHERE id = ?", (note_id,))
+        else:
+            row = await self._db.fetchone(
+                "SELECT * FROM notes WHERE id = ? AND user_id = ?", (note_id, user_id)
+            )
         return self._deserialize(row) if row else None
 
-    async def get_by_file_path(self, file_path: str) -> dict[str, Any] | None:
-        row = await self._db.fetchone(
-            "SELECT * FROM notes WHERE file_path = ? AND is_deleted = 0", (file_path,)
-        )
+    async def get_by_file_path(
+        self, file_path: str, *, user_id: str | None = None
+    ) -> dict[str, Any] | None:
+        if user_id is None:
+            row = await self._db.fetchone(
+                "SELECT * FROM notes WHERE file_path = ? AND is_deleted = 0", (file_path,)
+            )
+        else:
+            row = await self._db.fetchone(
+                "SELECT * FROM notes WHERE file_path = ? AND is_deleted = 0 AND user_id = ?",
+                (file_path, user_id),
+            )
         return self._deserialize(row) if row else None
 
     async def upsert(self, note: dict[str, Any]) -> None:
         now = _now()
-        await self._db.execute(
+        cursor = await self._db.execute(
             """INSERT INTO notes
                (id, user_id, folder_id, title, label, content, content_hash, file_path,
                 is_deleted, is_pinned, tags, sync_version, supabase_updated_at,
@@ -1177,7 +1190,8 @@ class NotesRepo:
                  remote_content_hash=excluded.remote_content_hash,
                  folder_name=excluded.folder_name,
                  metadata=excluded.metadata,
-                 updated_at=excluded.updated_at""",
+                 updated_at=excluded.updated_at
+               WHERE notes.user_id = excluded.user_id""",
             (
                 note["id"],
                 note.get("user_id", ""),
@@ -1203,12 +1217,19 @@ class NotesRepo:
             ),
         )
         await self._db.commit()
+        # The conflict predicate is the authority, rather than a preflight
+        # SELECT that can race another writer.  It also prevents blank legacy
+        # rows from being silently adopted by a newly signed-in account.
+        if cursor.rowcount == 0:
+            raise PermissionError("note ownership mismatch")
 
     async def upsert_many(self, notes: list[dict[str, Any]]) -> None:
         for n in notes:
             await self.upsert(n)
 
-    async def update_fields(self, note_id: str, updates: dict[str, Any]) -> None:
+    async def update_fields(
+        self, note_id: str, updates: dict[str, Any], *, user_id: str | None = None
+    ) -> None:
         allowed = {
             "title", "label", "content", "content_hash", "file_path",
             "folder_id", "folder_name", "tags", "metadata", "is_deleted",
@@ -1232,45 +1253,65 @@ class NotesRepo:
         sets.append("updated_at = ?")
         params.append(_now())
         params.append(note_id)
+        where = "WHERE id = ?"
+        if user_id is not None:
+            where += " AND user_id = ?"
+            params.append(user_id)
         await self._db.execute(
-            f"UPDATE notes SET {', '.join(sets)} WHERE id = ?", tuple(params)
+            f"UPDATE notes SET {', '.join(sets)} {where}", tuple(params)
         )
         await self._db.commit()
 
-    async def soft_delete(self, note_id: str) -> None:
-        await self._db.execute(
-            "UPDATE notes SET is_deleted = 1, updated_at = ? WHERE id = ?",
-            (_now(), note_id),
-        )
+    async def soft_delete(self, note_id: str, *, user_id: str | None = None) -> None:
+        if user_id is None:
+            await self._db.execute(
+                "UPDATE notes SET is_deleted = 1, updated_at = ? WHERE id = ?",
+                (_now(), note_id),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE notes SET is_deleted = 1, updated_at = ? WHERE id = ? AND user_id = ?",
+                (_now(), note_id, user_id),
+            )
         await self._db.commit()
 
     async def hard_delete(self, note_id: str) -> None:
         await self._db.execute("DELETE FROM notes WHERE id = ?", (note_id,))
         await self._db.commit()
 
-    async def list_syncable(self) -> list[dict[str, Any]]:
+    async def list_syncable(self, user_id: str) -> list[dict[str, Any]]:
         rows = await self._db.fetchall(
             "SELECT * FROM notes WHERE is_deleted = 0 AND sync_enabled = 1 "
-            "ORDER BY updated_at DESC"
+            "AND user_id = ? ORDER BY updated_at DESC",
+            (user_id,),
         )
         return [self._deserialize(r) for r in rows]
 
-    async def list_pending_push(self) -> list[dict[str, Any]]:
+    async def list_pending_push(self, user_id: str) -> list[dict[str, Any]]:
         rows = await self._db.fetchall(
             "SELECT * FROM notes WHERE sync_status IN ('never_synced', 'pending_push', 'failed') "
-            "AND sync_enabled = 1 AND is_deleted = 0 ORDER BY updated_at DESC"
+            "AND sync_enabled = 1 AND is_deleted = 0 AND user_id = ? "
+            "ORDER BY updated_at DESC",
+            (user_id,),
         )
         return [self._deserialize(r) for r in rows]
 
-    async def list_excluded(self) -> list[dict[str, Any]]:
-        rows = await self._db.fetchall(
-            "SELECT * FROM notes WHERE sync_status = 'excluded' OR sync_enabled = 0 "
-            "ORDER BY updated_at DESC"
-        )
+    async def list_excluded(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM notes WHERE (sync_status = 'excluded' OR sync_enabled = 0)"
+        params: tuple[Any, ...] = ()
+        if user_id:
+            query += " AND user_id = ?"
+            params = (user_id,)
+        rows = await self._db.fetchall(query + " ORDER BY updated_at DESC", params)
         return [self._deserialize(r) for r in rows]
 
     async def set_sync_status(
-        self, note_id: str, status: str, remote_hash: str | None = None
+        self,
+        note_id: str,
+        status: str,
+        remote_hash: str | None = None,
+        *,
+        user_id: str | None = None,
     ) -> None:
         params: list[Any] = [status, _now()]
         sets = ["sync_status = ?", "updated_at = ?"]
@@ -1281,8 +1322,12 @@ class NotesRepo:
             sets.append("remote_content_hash = ?")
             params.append(remote_hash)
         params.append(note_id)
+        where = "WHERE id = ?"
+        if user_id is not None:
+            where += " AND user_id = ?"
+            params.append(user_id)
         await self._db.execute(
-            f"UPDATE notes SET {', '.join(sets)} WHERE id = ?", tuple(params)
+            f"UPDATE notes SET {', '.join(sets)} {where}", tuple(params)
         )
         await self._db.commit()
 

@@ -87,6 +87,14 @@ bound by the same contract).
 ## The invariants (never "fix" these away)
 
 - **Local write first**; a failed network never blocks or fails a request.
+- **Account admission precedes sync.** A Notes row has one durable `user_id`.
+  Queue retries, direct pushes, pulls, reconciliation, conflict actions and
+  watcher actions may touch cloud/files only when that owner equals the
+  operation's authenticated subject. Blank legacy rows are local-only until a
+  deliberate migration establishes ownership; never adopt them on login.
+  Sync cursors, hashes and folder caches are account-keyed. The mass-delete
+  breaker stays machine-wide. The singleton wire client holds its JWT in task
+  context, and daemon/watcher operations bind their own persisted principal.
 - **Conflicts preserve BOTH copies** — no silent last-writer-wins, no
   hash-less overwrite. Missing/stale last-known-hash ⇒ assume unsynced local
   edit and conflict (pinned: `test_pull_conflicts_when_last_known_hash_missing`).

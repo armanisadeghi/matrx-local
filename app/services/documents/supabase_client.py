@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import re
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -92,14 +93,21 @@ class SupabaseDocClient:
     """Thin wrapper around Supabase PostgREST for the notes/documents tables."""
 
     def __init__(self) -> None:
-        self._jwt: str | None = None
+        # This client is a module singleton, but notes work is scheduled from
+        # request handlers and the engine-owned loop at the same time.  A
+        # mutable instance token lets a later account hand-off change an
+        # already-scheduled request's credentials.  Context-local custody
+        # binds a fire-and-forget child task to the principal that created it.
+        self._jwt: ContextVar[str | None] = ContextVar(
+            f"supabase_doc_jwt_{id(self)}", default=None
+        )
 
     def set_jwt(self, token: str | None) -> None:
-        self._jwt = token
+        self._jwt.set(token)
 
     @property
     def available(self) -> bool:
-        return bool(_REST_BASE and self._jwt)
+        return bool(_REST_BASE and self._jwt.get())
 
     def _headers(self, actor_tier: str | None = None) -> dict[str, str]:
         h: dict[str, str] = {
@@ -107,8 +115,9 @@ class SupabaseDocClient:
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
-        if self._jwt:
-            h["Authorization"] = f"Bearer {self._jwt}"
+        jwt = self._jwt.get()
+        if jwt:
+            h["Authorization"] = f"Bearer {jwt}"
         # DD-131 (B-44): the client-channel actor declaration. `actor_tier`
         # is passed explicitly by the ONE caller that is this engine's own
         # background reconciliation loop (sync_engine.py) — never by a
@@ -140,7 +149,7 @@ class SupabaseDocClient:
     ) -> list[dict[str, Any]]:
         if not _REST_BASE:
             raise RuntimeError("SUPABASE_URL not configured")
-        if not self._jwt:
+        if not self._jwt.get():
             raise RuntimeError("No JWT set — user must be authenticated")
 
         headers = self._headers(actor_tier)

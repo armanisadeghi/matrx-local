@@ -51,7 +51,9 @@ class FakeFileManager:
     def __init__(self, base_dir: Path) -> None:
         self.base_dir = base_dir
         self.notes: dict[str, str] = {}  # rel path -> content
-        self.state: dict[str, Any] = {"note_hashes": {}, "last_sync_version": 0}
+        self.state: dict[str, Any] = {
+            "accounts": {"user-1": {"note_hashes": {}, "last_sync_version": 0}}
+        }
         self.conflicts_saved: list[dict[str, Any]] = []
         self.conflicts_resolved: list[str] = []
         self.deleted: list[str] = []
@@ -210,16 +212,20 @@ class FakeNotesRepo:
         self.soft_deleted: list[str] = []
 
     async def get(self, note_id: str) -> dict[str, Any] | None:
-        return self.rows.get(note_id)
+        row = self.rows.get(note_id)
+        if row is not None:
+            row.setdefault("user_id", "user-1")
+        return row
 
     async def get_by_file_path(self, file_path: str) -> dict[str, Any] | None:
         for row in self.rows.values():
             if row.get("file_path") == file_path:
+                row.setdefault("user_id", "user-1")
                 return row
         return None
 
     async def set_sync_status(
-        self, note_id: str, status: str, remote_hash: str | None = None
+        self, note_id: str, status: str, remote_hash: str | None = None, *, user_id: str | None = None
     ) -> None:
         self.status_calls.append((note_id, status, remote_hash))
         if note_id in self.rows:
@@ -229,16 +235,19 @@ class FakeNotesRepo:
         self.excluded_calls.append((note_id, excluded))
 
     async def upsert(self, row: dict[str, Any]) -> None:
-        self.rows[row["id"]] = {**self.rows.get(row["id"], {}), **row}
+        self.rows[row["id"]] = {
+            "user_id": "user-1", **self.rows.get(row["id"], {}), **row
+        }
 
-    async def soft_delete(self, note_id: str) -> None:
+    async def soft_delete(self, note_id: str, *, user_id: str | None = None) -> None:
         self.soft_deleted.append(note_id)
 
-    async def list_pending_push(self) -> list[dict[str, Any]]:
+    async def list_pending_push(self, user_id: str) -> list[dict[str, Any]]:
         return [
             r
             for r in self.rows.values()
             if r.get("sync_status") in ("never_synced", "pending_push", "failed")
+            and r.get("user_id") == user_id
         ]
 
 
@@ -249,11 +258,28 @@ def engine(tmp_path: Path) -> SyncEngine:
     eng._get_notes_repo = lambda: repo  # type: ignore[method-assign]
     eng._repo = repo  # test-side handle
     eng._device_id = "test-device"  # avoid touching sync-state persistence
+    async def _test_watcher_principal() -> str:
+        # The real watcher reads TokenRepo in its own task context.  This
+        # in-memory fixture supplies that persisted subject explicitly.
+        eng.configure(user_id="user-1", jwt="jwt-1")
+        return "user-1"
+    eng._bind_watcher_principal = _test_watcher_principal  # type: ignore[method-assign]
     return eng
 
 
 def _configure(eng: SyncEngine) -> None:
     eng.configure(user_id="user-1", jwt="jwt-1")
+
+
+def _account_state(eng: SyncEngine) -> dict[str, Any]:
+    return eng.fm.state["accounts"]["user-1"]
+
+
+def _seed_owned_note(eng: SyncEngine, note_id: str, file_path: str | None = None) -> None:
+    eng._repo.rows[note_id] = {  # type: ignore[attr-defined]
+        "id": note_id, "user_id": "user-1", "file_path": file_path,
+        "sync_status": "pending_push", "sync_enabled": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +309,7 @@ def test_push_without_user_id_is_local_only_and_touches_nothing(engine: SyncEngi
 
 def test_push_with_user_but_sb_unavailable_saves_locally_only(engine: SyncEngine) -> None:
     _configure(engine)
+    _seed_owned_note(engine, "n1")
     engine.sb.available = False
     result = _run(engine.push_note("n1", "Hello", "body", folder_name="Work"))
     assert result["_synced_to_cloud"] is False
@@ -291,19 +318,20 @@ def test_push_with_user_but_sb_unavailable_saves_locally_only(engine: SyncEngine
     # recorded when nothing reached the cloud, or the next pull would treat
     # the unsynced local edit as already-synced and clobber it with older
     # remote content (contract amendment 2026-07-13).
-    assert "Work/Hello.md" not in engine.fm.state["note_hashes"]
+    assert "Work/Hello.md" not in _account_state(engine)["note_hashes"]
     # No repo status write happens on the local-only path.
     assert engine._repo.status_calls == []
 
 
 def test_push_new_note_upserts_and_marks_synced(engine: SyncEngine) -> None:
     _configure(engine)
+    _seed_owned_note(engine, "n1")
     result = _run(engine.push_note("n1", "Hello", "body"))
     assert result["_synced_to_cloud"] is True
     assert [c[0] for c in engine.sb.calls if c[0] == "upsert_note"] == ["upsert_note"]
     assert engine._repo.status_calls == [("n1", "synced", content_hash("body"))]
     # note_hashes recorded ONLY after the successful push.
-    assert engine.fm.state["note_hashes"]["General/Hello.md"] == content_hash("body")
+    assert _account_state(engine)["note_hashes"]["General/Hello.md"] == content_hash("body")
 
 
 def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
@@ -314,6 +342,7 @@ def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
     locally. The old get_note -> create_version -> update_note dance is gone.
     """
     _configure(engine)
+    _seed_owned_note(engine, "n1")
     engine.sb.notes["n1"] = {"id": "n1", "label": "Hello", "content": "old body"}
     result = _run(engine.push_note("n1", "Hello", "new body"))
     assert result["_synced_to_cloud"] is True
@@ -324,6 +353,7 @@ def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
 
 def test_push_failure_marks_status_failed(engine: SyncEngine) -> None:
     _configure(engine)
+    _seed_owned_note(engine, "n1")
     engine.sb.fail_pushes = True
     result = _run(engine.push_note("n1", "Hello", "body"))
     # Local write succeeded; cloud flag stays False; status recorded as failed.
@@ -331,7 +361,7 @@ def test_push_failure_marks_status_failed(engine: SyncEngine) -> None:
     assert engine.fm.notes["General/Hello.md"] == "body"
     assert engine._repo.status_calls == [("n1", "failed", None)]
     # The failed push must NOT be recorded as the last-synced hash.
-    assert "General/Hello.md" not in engine.fm.state["note_hashes"]
+    assert "General/Hello.md" not in _account_state(engine)["note_hashes"]
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +387,7 @@ def test_pull_overwrites_when_local_unchanged_since_last_sync(engine: SyncEngine
     _configure(engine)
     fp = "General/n.md"
     engine.fm.notes[fp] = "local synced content"
-    engine.fm.state["note_hashes"][fp] = content_hash("local synced content")
+    _account_state(engine)["note_hashes"][fp] = content_hash("local synced content")
     note_id = _seed_remote(engine, fp, "remote newer content")
 
     result = _run(engine.pull_note(note_id))
@@ -374,7 +404,7 @@ def test_pull_conflicts_when_local_edited_since_last_sync(engine: SyncEngine) ->
     _configure(engine)
     fp = "General/n.md"
     engine.fm.notes[fp] = "locally edited content"
-    engine.fm.state["note_hashes"][fp] = content_hash("what we synced before")
+    _account_state(engine)["note_hashes"][fp] = content_hash("what we synced before")
     note_id = _seed_remote(engine, fp, "remote content")
 
     result = _run(engine.pull_note(note_id))
@@ -397,7 +427,7 @@ def test_pull_conflicts_when_last_known_hash_missing(engine: SyncEngine) -> None
     _configure(engine)
     fp = "General/n.md"
     engine.fm.notes[fp] = "local content"
-    assert fp not in engine.fm.state["note_hashes"]
+    assert fp not in _account_state(engine)["note_hashes"]
     note_id = _seed_remote(engine, fp, "remote content")
 
     result = _run(engine.pull_note(note_id))
@@ -420,7 +450,7 @@ def test_pull_of_remote_soft_delete_propagates_deletion(engine: SyncEngine) -> N
     _configure(engine)
     fp = "General/gone.md"
     engine.fm.notes[fp] = "doomed"
-    engine.fm.state["note_hashes"][fp] = content_hash("doomed")
+    _account_state(engine)["note_hashes"][fp] = content_hash("doomed")
     engine.sb.notes["dead-1"] = {
         "id": "dead-1",
         "is_deleted": True,
@@ -430,7 +460,7 @@ def test_pull_of_remote_soft_delete_propagates_deletion(engine: SyncEngine) -> N
     result = _run(engine.pull_note("dead-1"))
     assert result is not None and result.get("_deleted") is True
     assert fp not in engine.fm.notes
-    assert fp not in engine.fm.state["note_hashes"]
+    assert fp not in _account_state(engine)["note_hashes"]
     assert engine._repo.soft_deleted == ["dead-1"]
 
 
@@ -441,7 +471,7 @@ def test_pull_skips_when_remote_is_own_devices_push(engine: SyncEngine) -> None:
     _configure(engine)
     fp = "General/n.md"
     engine.fm.notes[fp] = "newer local draft"
-    engine.fm.state["note_hashes"][fp] = content_hash("what we pushed before")
+    _account_state(engine)["note_hashes"][fp] = content_hash("what we pushed before")
     note_id = _seed_remote(engine, fp, "what we pushed before")
     engine.sb.notes[note_id]["last_device_id"] = "test-device"
 
@@ -455,7 +485,7 @@ def test_pull_still_conflicts_when_remote_is_another_device(engine: SyncEngine) 
     _configure(engine)
     fp = "General/n.md"
     engine.fm.notes[fp] = "locally edited content"
-    engine.fm.state["note_hashes"][fp] = content_hash("what we synced before")
+    _account_state(engine)["note_hashes"][fp] = content_hash("what we synced before")
     note_id = _seed_remote(engine, fp, "remote content")
     engine.sb.notes[note_id]["last_device_id"] = "other-device"
 
@@ -511,11 +541,13 @@ def _seed_conflict(
     remote: str = "REMOTE body",
     fp: str = "General/Conflicted.md",
 ) -> str:
+    _configure(engine)
     engine.fm.save_conflict(fp, local, remote, note_id)
     _run(
         engine._repo.upsert(
             {
                 "id": note_id,
+                "user_id": "user-1",
                 "label": "Conflicted",
                 "title": "Conflicted",
                 "folder_name": "General",
@@ -619,7 +651,7 @@ def test_pull_changes_never_echo_skips_tombstones(engine: SyncEngine) -> None:
     _configure(engine)
     fp = "General/mine.md"
     engine.fm.notes[fp] = "pushed body"
-    engine.fm.state["note_hashes"][fp] = content_hash("pushed body")
+    _account_state(engine)["note_hashes"][fp] = content_hash("pushed body")
     engine._last_push_hashes[fp] = content_hash("pushed body")
     engine.sb.notes["n1"] = {"id": "n1", "file_path": fp, "is_deleted": True}
 
@@ -638,7 +670,7 @@ def test_pull_changes_never_echo_skips_tombstones(engine: SyncEngine) -> None:
     result = _run(engine.pull_changes())
     assert result["deleted"] == 1
     assert fp not in engine.fm.notes
-    assert engine.fm.state["last_pull_at"] == "2026-07-13T00:00:00+00:00"
+    assert _account_state(engine)["last_pull_at"] == "2026-07-13T00:00:00+00:00"
 
 
 def test_pull_allocates_path_for_pathless_cloud_note_without_clobbering(
@@ -676,8 +708,9 @@ def test_push_conflicts_instead_of_overwriting_foreign_remote_edit(
     wrote it since our last sync), the push must preserve BOTH sides — never
     silent last-writer-wins (pinned 2026-07-13)."""
     _configure(engine)
+    _seed_owned_note(engine, "n1", "General/Hello.md")
     fp = "General/Hello.md"
-    engine.fm.state["note_hashes"][fp] = content_hash("commonly synced")
+    _account_state(engine)["note_hashes"][fp] = content_hash("commonly synced")
     engine.sb.notes["n1"] = {
         "id": "n1",
         "label": "Hello",
@@ -700,4 +733,4 @@ def test_push_conflicts_instead_of_overwriting_foreign_remote_edit(
         }
     ]
     # note_hashes must NOT advance — nothing synced.
-    assert engine.fm.state["note_hashes"][fp] == content_hash("commonly synced")
+    assert _account_state(engine)["note_hashes"][fp] == content_hash("commonly synced")

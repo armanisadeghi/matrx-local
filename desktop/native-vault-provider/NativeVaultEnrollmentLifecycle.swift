@@ -1,6 +1,20 @@
 import Foundation
 import CryptoKit
 
+@MainActor
+final class NativeVaultCurrentConnectionAdmission {
+    private var inFlight = false
+    func admit() -> Bool {
+        guard !inFlight else { return false }
+        inFlight = true
+        return true
+    }
+    func finish(_ uiCleanup: () -> Void) {
+        inFlight = false
+        uiCleanup()
+    }
+}
+
 extension Data {
     func nativeVaultURLSafeBase64() -> String {
         base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")

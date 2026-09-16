@@ -79,7 +79,7 @@ private final class Transaction {
 final class CredentialProviderViewController: ASCredentialProviderViewController, ASWebAuthenticationPresentationContextProviding {
     private var activeOperation: NativeVaultEnrollmentOperation?
     private var startingConnect = false
-    private var connectionInFlight = false
+    private let connectionAdmission = NativeVaultCurrentConnectionAdmission()
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
@@ -214,11 +214,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     // Provider-private session access for configuration only. It returns an
     // identity label, never an access token, to the UI or the Tauri host.
     private func loadCurrentConnection() {
-        guard activeOperation == nil, !startingConnect, !connectionInFlight else {
+        guard activeOperation == nil, !startingConnect, connectionAdmission.admit() else {
             setConnectionStatus("An account connection is already in progress.")
             return
         }
-        connectionInFlight = true
         setConnectionBusy(true)
         guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else {
             setConnectionStatus("This build has no public Vault configuration. Install an updated AI Matrx build.")
@@ -329,8 +328,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         setConnectionBusy(false)
     }
     private func finishConnectionOperation() {
-        connectionInFlight = false
-        setConnectionBusy(false)
+        connectionAdmission.finish { setConnectionBusy(false) }
     }
     @discardableResult
     private func finishOperation(_ id: UUID? = nil, cancel: Bool = true) -> NativeVaultOperationCommitGuard.CancellationResult? {
@@ -347,7 +345,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         retryButton?.isEnabled = !busy
     }
     @objc private func retryCurrentConnection() {
-        guard activeOperation == nil, !startingConnect, !connectionInFlight else {
+        guard activeOperation == nil, !startingConnect else {
             setConnectionStatus("An account connection is already in progress.")
             return
         }

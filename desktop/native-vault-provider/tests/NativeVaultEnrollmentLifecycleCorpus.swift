@@ -12,7 +12,7 @@ struct NativeVaultEnrollmentLifecycleCorpus {
         try doubleConnectCannotReplaceCallbackOwner()
         try generationChangeCancelsRefreshCommit()
         try cancelBeforePersistenceLeavesNoWrites()
-        try repeatedRetryCannotCreateSecondOperation()
+        try currentConnectionAdmissionReturnsToMainActor()
         try configurationCompletionRequiresCurrentOperation()
         print("native Vault enrollment lifecycle corpus passed")
     }
@@ -63,9 +63,21 @@ struct NativeVaultEnrollmentLifecycleCorpus {
         resume.signal()
         guard done.wait(timeout: .now() + 2) == .success, !committed, writes == 0 else { throw Failure.bad }
     }
-    static func repeatedRetryCannotCreateSecondOperation() throws {
-        let refresh = try operation()
-        guard NativeVaultEnrollmentLifecycle.begin(verifier: "retry", state: "retry", generation: generation, active: refresh) == nil else { throw Failure.bad }
+    @MainActor static func currentConnectionAdmissionReturnsToMainActor() throws {
+        let admission = NativeVaultCurrentConnectionAdmission()
+        guard admission.admit(), !admission.admit() else { throw Failure.bad }
+        let workerDone = DispatchSemaphore(value: 0)
+        var cleanupOnMain = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            // This is the controller's worker-result handoff shape: the worker
+            // never mutates admission/UI state and returns to MainActor once.
+            DispatchQueue.main.async {
+                admission.finish { cleanupOnMain = Thread.isMainThread }
+                workerDone.signal()
+            }
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        guard workerDone.wait(timeout: .now()) == .success, cleanupOnMain, admission.admit() else { throw Failure.bad }
     }
     static func rejects(_ body: () throws -> Void) throws {
         do { try body(); throw Failure.bad } catch Failure.bad { throw Failure.bad } catch { }

@@ -1,6 +1,12 @@
 import Foundation
 import AuthenticationServices
 
+final class ScriptedPasswordTransport: NativeVaultPasswordTransporting {
+    var requests: [URLRequest] = []
+    var replies: [Result<(Data, HTTPURLResponse), Error>] = []
+    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { requests.append(request); completion(replies.removeFirst()) }
+}
+
 @main
 struct NativeVaultPasswordCorpus {
     static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -39,6 +45,18 @@ struct NativeVaultPasswordCorpus {
         require(!NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: "generation-b", subject: subject), grant), "generation change must reject stale grant")
         require(!NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: "generation-a", subject: org), grant), "subject change must reject stale grant")
         require(NativePasswordStage.interactionRequiredCode == ASExtensionError.userInteractionRequired.rawValue, "modern no-interaction policy must require interaction")
+        let response = { (json: String) in (json.data(using: .utf8)!, HTTPURLResponse(url: URL(string: "https://server.app.matrxserver.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!) }
+        let transport = ScriptedPasswordTransport()
+        transport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
+        let controller = CredentialProviderViewController(); controller.nativePasswordKeyOverride = "public-build-key"; controller.nativePasswordTransport = transport; controller.nativePasswordAuthorize = { $0(true) }; controller.nativePasswordAcquire = { $0(.success(grant)) }; controller.nativePasswordCurrentState = { NativePasswordCurrentState(generation: "generation-a", subject: subject) }; controller.nativePasswordOrganizationChoice = { _ in 0 }; controller.nativePasswordMatchChoice = { _ in 0 }
+        var completed: [(String, String)] = []; var cancellations: [NSError] = []
+        controller.nativePasswordCompleteSink = { credential, done in completed.append(credential); done() }; controller.nativePasswordCancelSink = { cancellations.append($0) }
+        controller.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        require(completed.count == 1 && completed[0].0 == "u" && completed[0].1 == "p" && cancellations.isEmpty && transport.requests.count == 3, "actual controller prepare path must reach exactly one completion")
+        let identity = ASPasswordCredentialIdentity(serviceIdentifier: ASCredentialServiceIdentifier(identifier: "example.com", type: .domain), user: "u", recordIdentifier: "test")
+        controller.provideCredentialWithoutUserInteraction(for: ASPasswordCredentialRequest(credentialIdentity: identity))
+        require(cancellations.last?.code == ASExtensionError.userInteractionRequired.rawValue, "actual modern callback must require interaction")
         print("Native Vault password codec corpus passed")
     }
 }

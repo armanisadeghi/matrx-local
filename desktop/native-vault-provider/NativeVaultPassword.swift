@@ -221,13 +221,17 @@ final class NativeVaultSessionAccess {
 }
 
 extension CredentialProviderViewController {
-    private var nativePasswordKey: String? { Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String }
+    private var nativePasswordKey: String? { nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) }
     func beginPasswordRequest(_ serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         let identifiers: [(String, String)]
         do { identifiers = try NativePasswordStage.identifiers(serviceIdentifiers) }
         catch { let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return }
         let operation = nativePasswordCoordinator.begin(identifiers)
         guard let key = nativePasswordKey, key.validToken else { return cancelPassword(operation, "This build has no public Vault configuration. Install an updated AI Matrx build.") }
+        if let authorize = nativePasswordAuthorize, let acquire = nativePasswordAcquire {
+            authorize { [weak self] allowed in Task { @MainActor in guard let self, self.current(operation) else { return }; guard allowed else { self.cancelPassword(operation, "Unlock Vault protection to continue."); return }; acquire { result in Task { @MainActor in self.receivedGrant(result, operation: operation) } } } }
+            return
+        }
         let privateSession = NativeVaultPrivateSession(); let context: LAContext
         do { context = try privateSession.authenticatedContext(reason: "Unlock AI Matrx Vault to choose a password") } catch { return cancelPassword(operation, "Vault protection is unavailable on this Mac.") }
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock AI Matrx Vault to choose a password") { [weak self] allowed, _ in
@@ -257,6 +261,7 @@ extension CredentialProviderViewController {
         } catch { cancelPassword(operation, "Vault organizations are unavailable. Try again.") }
     }
     private func selectOrganization(_ organizations: [NativeOrganization], preferred: String?, operation: NativePasswordOperation) -> NativeOrganization? {
+        if let choice = nativePasswordOrganizationChoice { guard let index = choice(organizations), organizations.indices.contains(index) else { cancelPassword(operation, "Password selection was cancelled."); return nil }; return organizations[index] }
         if let subject = operation.subject, let stored = UserDefaults.standard.string(forKey: "native-vault-last-organization-\(subject)"), let match = organizations.first(where: { $0.id == stored }) { return match }
         if let preferred, let match = organizations.first(where: { $0.id == preferred }) { return match }
         if organizations.count == 1 { return organizations[0] }
@@ -287,6 +292,7 @@ extension CredentialProviderViewController {
             let result = try NativePasswordCodec.matches(data); guard !result.matches.isEmpty else { return cancelPassword(operation, "No saved password matches this website.") }
             operation.phase = .selectingCredential
             let alert = NSAlert(); alert.messageText = "Choose a saved password"; alert.informativeText = result.truncated ? "Only the first matching passwords in \(organization.name) are shown; more may be available." : "Only matching passwords in \(organization.name) are shown."
+            if let choice = nativePasswordMatchChoice { guard let index = choice(result.matches), result.matches.indices.contains(index) else { return cancelPassword(operation, "Password selection was cancelled.") }; return materialize(result.matches[index], organization: organization, grant: grant, operation: operation) }
             let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 340, height: 28)); result.matches.forEach { picker.addItem(withTitle: $0.displayName) }; alert.accessoryView = picker; alert.addButton(withTitle: "Use password"); alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return cancelPassword(operation, "Password selection was cancelled.") }
             materialize(result.matches[picker.indexOfSelectedItem], organization: organization, grant: grant, operation: operation)
@@ -309,12 +315,14 @@ extension CredentialProviderViewController {
     }
     private func withLiveGrant(_ operation: NativePasswordOperation, _ grant: NativeVaultSessionAccess.Grant, then: @escaping () -> Void) {
         guard current(operation) else { return }
+        let injectedState = nativePasswordCurrentState
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let valid = (try? ProviderStore(mode: .providerAccess).locked { state in NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject), grant) }) ?? false
+            let valid = injectedState.map { NativePasswordStage.grantIsCurrent($0(), grant) } ?? ((try? ProviderStore(mode: .providerAccess).locked { state in NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject), grant) }) ?? false)
             DispatchQueue.main.async { guard let self, self.current(operation) else { return }; guard valid else { self.cancelPassword(operation, "Your Vault account changed. Start again."); return }; then() }
         }
     }
     private func linearizedComplete(_ operation: NativePasswordOperation, grant: NativeVaultSessionAccess.Grant, credential: (username: String, password: String)) {
+        if let state = nativePasswordCurrentState { guard NativePasswordStage.grantIsCurrent(state(), grant), nativePasswordCoordinator.prepareCompletion(operation) else { cancelPassword(operation, "Your Vault account changed. Start again."); return }; if let sink = nativePasswordCompleteSink { sink(credential) { [weak self] in Task { @MainActor in self?.nativePasswordCoordinator.clearCompleted(operation) } }; return } }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let semaphore = DispatchSemaphore(value: 0)
             do {
@@ -330,5 +338,5 @@ extension CredentialProviderViewController {
         }
     }
     private func current(_ operation: NativePasswordOperation) -> Bool { nativePasswordCoordinator.current(operation) }
-    private func cancelPassword(_ operation: NativePasswordOperation, _ message: String) { guard nativePasswordCoordinator.cancel(operation) else { return }; extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue, userInfo: [NSLocalizedDescriptionKey: message])) }
+    private func cancelPassword(_ operation: NativePasswordOperation, _ message: String) { guard nativePasswordCoordinator.cancel(operation) else { return }; let error = NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue, userInfo: [NSLocalizedDescriptionKey: message]); if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) } }
 }

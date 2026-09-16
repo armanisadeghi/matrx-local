@@ -81,8 +81,18 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var startingConnect = false
     private let connectionAdmission = NativeVaultCurrentConnectionAdmission()
     let sessionAccess = NativeVaultSessionAccess()
-    let nativePasswordTransport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()
+    var nativePasswordTransport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()
     let nativePasswordCoordinator = NativePasswordOperationCoordinator()
+    // Test seam for the actual provider callbacks. Production leaves these nil
+    // and uses LA, Keychain, ProviderStore, native UI, and extensionContext.
+    var nativePasswordKeyOverride: String?
+    var nativePasswordAuthorize: ((@escaping (Bool) -> Void) -> Void)?
+    var nativePasswordAcquire: ((@escaping (Result<NativeVaultSessionAccess.Grant, Error>) -> Void) -> Void)?
+    var nativePasswordCurrentState: (@Sendable () -> NativePasswordCurrentState)?
+    var nativePasswordOrganizationChoice: (([NativeOrganization]) -> Int?)?
+    var nativePasswordMatchChoice: (([NativePasswordMatch]) -> Int?)?
+    var nativePasswordCancelSink: ((NSError) -> Void)?
+    var nativePasswordCompleteSink: (((String, String), @escaping () -> Void) -> Void)?
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
@@ -97,11 +107,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
         // This direct-list provider intentionally has no identity index yet.
-        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode))
+        let error = NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode)
+        if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
     }
 
     override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
-        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode))
+        let error = NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode)
+        if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
     }
 
     private func showConfiguration() {

@@ -1,56 +1,110 @@
 /**
  * Shared helpers for the Matrx Local E2E suite.
  *
- * - Canonical admin credentials come from desktop/.env.test (gitignored),
- *   using AI_ADMIN_USERNAME / AI_ADMIN_PASSWORD. Legacy TEST_USER_* aliases
- *   remain accepted so existing CI/local setup does not break.
- * - Engine policy: tests probe ~/.matrx/local.json for a live engine and use
- *   it READ-ONLY (status/list/health endpoints). Never trigger downloads,
- *   generation jobs, or vault mutations against the user's engine.
+ * ## Signing in (MXL-D-091)
+ *
+ * There is no password form in this app any more, and there must not be: the sync daemon is the
+ * device's only session holder. So the harness does not type a password into a screen — it hands
+ * the DEV-WORLD daemon a session through its own control API, before the browser starts, and the
+ * app then adopts an ordinary session. `node e2e/setup/harness-session.mjs` does that and prints
+ * the `MATRX_HOME_DIR` the dev server must run with; [`signInViaHarness`] then only waits for the
+ * authenticated shell, because the session is already installed.
+ *
+ * ## The engine, and whose engine it is
+ *
+ * Everything here reads the **dev world's** home (`MATRX_HOME_DIR`, else `~/.matrx-dev`) and the
+ * dev engine band. `~/.matrx` and ports 22140–22159 belong to the installed app — the person
+ * using this Mac — and no test ever reads, probes or touches them (matrx-local CLAUDE.md,
+ * Hard Rule 9). A dev engine is still used READ-ONLY by specs that need one: status, list and
+ * health reads, never a download, a generation job or a vault mutation.
  */
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/**
+ * Where `harness-session.mjs` records the home it signed in, so the Playwright process finds the
+ * same daemon the dev server was started against without any environment plumbing. Gitignored.
+ */
+export const HARNESS_HOME_FILE = "desktop/.harness-home";
 
-export interface TestCreds {
-  email: string;
-  password: string;
+/** The DEV world's home — never `~/.matrx`, which is the installed app's. */
+export function harnessHome(): string {
+  const override = process.env.MATRX_HOME_DIR;
+  if (override && override.length > 0) return override;
+  const recorded = path.resolve(process.cwd(), ".harness-home");
+  try {
+    const home = readFileSync(recorded, "utf8").trim();
+    if (home.length > 0) return home;
+  } catch {
+    /* nobody has run the harness script in this checkout yet */
+  }
+  return path.join(os.homedir(), ".matrx-dev");
 }
 
-function parseEnvFile(p: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!existsSync(p)) return out;
-  for (const line of readFileSync(p, "utf8").split("\n")) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    const key = m?.[1];
-    const value = m?.[2];
-    if (key !== undefined && value !== undefined && !line.trim().startsWith("#")) out[key] = value;
-  }
-  return out;
-}
-
-/** Load the test account from desktop/.env.test, or null if not provisioned. */
-export function loadTestCreds(): TestCreds | null {
-  const env = parseEnvFile(path.resolve(__dirname, "..", ".env.test"));
-  const email = env.AI_ADMIN_USERNAME || env.TEST_USER_EMAIL;
-  const password = env.AI_ADMIN_PASSWORD || env.TEST_USER_PASSWORD;
-  if (email && password) {
-    return { email, password };
-  }
-  return null;
+/** The daemon's identity on this device, or `null` when the harness has not signed it in. */
+export interface HarnessIdentity {
+  readonly email: string;
+  readonly userId: string;
 }
 
 /**
- * Probe for a live local engine via the discovery file (~/.matrx/local.json).
+ * Ask the dev-world daemon who it is signed in as.
+ *
+ * This is the gate every authenticated spec uses: it is the actual precondition (a session exists
+ * on this device) rather than a proxy for it (a credentials file exists somewhere).
+ */
+export async function harnessIdentity(): Promise<HarnessIdentity | null> {
+  const home = harnessHome();
+  try {
+    const discovery = JSON.parse(
+      readFileSync(path.join(home, "syncd.json"), "utf8"),
+    ) as { tcp_port?: number; world?: string };
+    if (discovery.world !== "dev" || typeof discovery.tcp_port !== "number") return null;
+    const token = readFileSync(path.join(home, "syncd.token"), "utf8").split("\n")[1]?.trim();
+    if (!token) return null;
+    const response = await fetch(`http://127.0.0.1:${discovery.tcp_port}/v1/session`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Matrx-Client": "harness" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    const session = (await response.json()) as {
+      signed_in?: boolean;
+      email?: string;
+      user_id?: string;
+    };
+    if (!session.signed_in || !session.email || !session.user_id) return null;
+    return { email: session.email, userId: session.user_id };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sentence a spec skips with when the device IS signed in and the spec needs it not to be.
+ *
+ * The unauthenticated screen cannot be asserted on a signed-in device, and pretending otherwise
+ * is how a test starts passing for the wrong reason.
+ */
+export const HARNESS_ALREADY_SIGNED_IN =
+  "This device has a dev-world session, so there is no unauthenticated screen to assert. Run " +
+  "`node e2e/setup/harness-session.mjs` against a fresh home, or sign this one out, to run it.";
+
+/** The sentence a spec skips with when nobody signed the harness in. */
+export const HARNESS_NOT_SIGNED_IN =
+  "No dev-world session on this device. Run: node e2e/setup/harness-session.mjs, then start the " +
+  "dev server with the MATRX_HOME_DIR it prints (see docs/UI_TESTING.md).";
+
+/**
+ * Probe for a DEV-WORLD engine via the discovery file in the harness home.
  * Returns the engine base URL if it responds to GET /health, else null.
- * READ-ONLY policy: specs may use a live engine for status/list reads only.
+ * READ-ONLY policy: specs may use it for status/list reads only.
+ *
+ * It deliberately never looks in `~/.matrx`: that discovery file belongs to the installed app.
  */
 export async function probeEngine(): Promise<string | null> {
-  const discovery = path.join(os.homedir(), ".matrx", "local.json");
+  const discovery = path.join(harnessHome(), "local.json");
   if (!existsSync(discovery)) return null;
   try {
     const parsed = JSON.parse(readFileSync(discovery, "utf8")) as {
@@ -69,25 +123,19 @@ export async function probeEngine(): Promise<string | null> {
 }
 
 /**
- * Log in through the REAL Login page (email/password form) and wait for the
- * authenticated shell (sidebar nav) to render.
+ * Open the app on a device the harness has already signed in, and wait for the authenticated
+ * shell (sidebar nav).
  *
- * Browser-mode timeline after submit: Supabase session → useEngine port scan
- * (22140-22159 via JS fetch) → StartupScreen while "discovering" → AppLayout.
- * With no engine running the scan takes a while before the shell renders with
- * an error status, hence the long timeout.
+ * There is nothing to type: `e2e/setup/harness-session.mjs` installed the session in the
+ * dev-world daemon, the dev server's harness bridge hands this page that daemon's endpoint and
+ * read token, and the app adopts it exactly as it adopts a real sign-in.
+ *
+ * Browser-mode timeline: daemon session → useEngine port scan (the DEV band, 22240–22259, via JS
+ * fetch) → StartupScreen while "discovering" → AppLayout. With no dev engine running the scan
+ * takes a while before the shell renders with an error status, hence the long timeout.
  */
-export async function loginViaUI(page: Page, creds: TestCreds): Promise<void> {
+export async function signInViaHarness(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Matrx Local" }),
-  ).toBeVisible({ timeout: 45_000 }); // generous: first load compiles the full Vite dep graph
-  await page.getByLabel("Email").fill(creds.email);
-  await page.getByLabel("Password").fill(creds.password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-
-  // Login errors surface inline on the card — fail fast with a useful message
-  // instead of timing out on the nav assertion.
   //
   // The Engine Monitor dialog can auto-open at ANY point after auth (engine
   // status flaps to "error" mid port-scan). Radix modals mark the rest of the
@@ -98,7 +146,7 @@ export async function loginViaUI(page: Page, creds: TestCreds): Promise<void> {
   await expect(async () => {
     await dismissEngineMonitorIfOpen(page);
     await expect(shellNav).toBeVisible({ timeout: 5_000 });
-  }).toPass({ timeout: 90_000 });
+  }).toPass({ timeout: 120_000 });
 }
 
 /**

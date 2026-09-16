@@ -38,6 +38,12 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
+        Rig::in_world(World::Dev)
+    }
+
+    /// The same rig in a named world. MXL-D-091's guard needs a LIVE-world custodian, and it is
+    /// the only thing that does: every other test here is a dev-world test by construction.
+    fn in_world(world: World) -> Self {
         let journal = Arc::new(Mutex::new(Journal::open_in_memory().expect("journal")));
         let auth = Arc::new(FakeAuthServer::new());
         let keychain = Arc::new(FakeKeychain::new());
@@ -48,7 +54,7 @@ impl Rig {
         ));
         let custodian = Custodian::new(
             CustodyConfig {
-                world: World::Dev,
+                world,
                 supabase_url: "https://db.matrxserver.com".into(),
                 publishable_key: "sb_publishable_test".into(),
                 client_id: DESKTOP_CLIENT_ID.into(),
@@ -944,4 +950,82 @@ async fn adoption_never_overwrites_a_session_this_device_already_decided() {
         matrx_sync::custody::AdoptOutcome::NotNeeded
     );
     assert_eq!(rig.row().state, SessionState::SignedOut);
+}
+
+// ------------------------------------------------- MXL-D-091: the harness door
+
+/// The dev-world harness door installs a session the app then adopts as an ordinary one.
+///
+/// This is the door that makes every screen of Matrx Local verifiable again after the custody
+/// cutover removed the password form (MXL-D-091). What it proves is that the installed session is
+/// INDISTINGUISHABLE from a real one to every consumer: the journal row says `signed_in`, the
+/// keychain holds the refresh token, and `GET /v1/token` hands out the access token.
+#[tokio::test]
+async fn the_dev_world_harness_door_installs_an_ordinary_session() {
+    let rig = Rig::new();
+    let installed = rig
+        .custodian
+        .install_harness_session(matrx_sync::custody::HarnessSession {
+            access_token: jwt("87a6e699-3622-4869-8843-d0867456c0dd", "admin@admin.com"),
+            refresh_token: "harness-refresh-1".into(),
+            expires_in: 3600,
+        })
+        .await
+        .expect("the dev world opens the door");
+
+    assert_eq!(installed.email, "admin@admin.com");
+    assert!(installed.credential_persisted, "the fake keychain accepted it");
+    assert!(rig.keychain.contains("87a6e699-3622-4869-8843-d0867456c0dd"));
+
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignedIn);
+    assert_eq!(row.email.as_deref(), Some("admin@admin.com"));
+
+    // The app's own read path — the one the webview uses — sees a plain session.
+    let grant = rig.custodian.token().await.expect("a token is granted");
+    assert_eq!(grant.user_id, "87a6e699-3622-4869-8843-d0867456c0dd");
+    let snapshot = rig.custodian.session().await;
+    assert!(snapshot.signed_in);
+    assert_eq!(snapshot.email.as_deref(), Some("admin@admin.com"));
+
+    // No password ever reaches custody: the grant happened in the harness.
+    let serialized = serde_json::to_string(&row).expect("row");
+    assert!(!serialized.contains("password"));
+}
+
+/// **THE GUARD.** The harness door is closed in the live world.
+///
+/// A live-world daemon holds a real person's session. If this test ever passes on a version whose
+/// world check is broken or inverted, an automated harness could install `admin@admin.com` over
+/// Arman's own signed-in session — which is why the assertion is on the REFUSAL and on the
+/// untouched journal row, not merely on an error being returned.
+#[tokio::test]
+async fn the_harness_door_is_refused_in_the_live_world() {
+    let rig = Rig::in_world(World::Live);
+    let refusal = rig
+        .custodian
+        .install_harness_session(matrx_sync::custody::HarnessSession {
+            access_token: jwt("87a6e699-3622-4869-8843-d0867456c0dd", "admin@admin.com"),
+            refresh_token: "harness-refresh-1".into(),
+            expires_in: 3600,
+        })
+        .await
+        .expect_err("the live world refuses the harness door");
+
+    assert!(
+        matches!(
+            refusal,
+            CustodyError::HarnessDoorNotInDevWorld { world: "live" }
+        ),
+        "the refusal names the world it was asked in, got {refusal:?}"
+    );
+    assert_eq!(refusal.code(), "harness_door_not_in_dev_world");
+    assert!(!refusal.retryable(), "a closed door is not a transient failure");
+
+    // Nothing was installed: no keychain item, no session, and the state a surface reads is
+    // still the honest signed-out one.
+    assert!(!rig.keychain.contains("87a6e699-3622-4869-8843-d0867456c0dd"));
+    assert!(!rig.custodian.session().await.signed_in);
+    let refused = rig.custodian.token().await.expect_err("no token in the live world either");
+    assert_eq!(refused.state, SessionState::SignedOut);
 }

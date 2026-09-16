@@ -16,6 +16,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { devHarnessCustodyConfig } from "@/lib/dev-harness-custody";
+
 /** The five session values of the ONE honest-state enum (ruling C3), plus the daemon's own. */
 export type SessionState =
   | "signed_in"
@@ -114,11 +116,17 @@ const CACHE_MARGIN_MS = 30_000;
 let configPromise: Promise<ClientConfig> | null = null;
 
 function loadConfig(): Promise<ClientConfig> {
-  configPromise ??= invoke<ClientConfig>("syncd_client_config").catch(() => ({
-    base_url: null,
-    read_token: null,
-    world: "unknown",
-  }));
+  // In the packaged app and in `pnpm tauri:dev` this is the ONE answer: Rust reads the discovery
+  // file and hands over the read token.
+  //
+  // In a plain browser page there is no Tauri, so the call rejects — and before MXL-D-091 that
+  // was the end of it: no endpoint, no token, no session, and therefore no screen of this app an
+  // agent could verify. `devHarnessCustodyConfig` is the dev-server-only fallback that restores
+  // it. It is behind `import.meta.env.DEV`, so it is dead code in every shipped bundle, and it
+  // receives only the same read token the packaged webview holds.
+  configPromise ??= invoke<ClientConfig>("syncd_client_config").catch(() =>
+    devHarnessCustodyConfig(),
+  );
   return configPromise;
 }
 

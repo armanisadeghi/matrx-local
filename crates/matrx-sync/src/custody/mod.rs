@@ -158,6 +158,33 @@ pub struct SignedIn {
     pub email: String,
 }
 
+/// The session the dev-world test harness hands [`Custodian::install_harness_session`].
+///
+/// It carries no password: the harness did the Supabase password grant itself with the canonical
+/// admin test account, and offers only the result.
+#[derive(Debug, Clone)]
+pub struct HarnessSession {
+    /// The Supabase access token the grant returned.
+    pub access_token: String,
+    /// The Supabase refresh token the grant returned.
+    pub refresh_token: String,
+    /// Seconds of life the grant declared.
+    pub expires_in: i64,
+}
+
+/// What the dev-world harness door reports back.
+#[derive(Debug, Clone, Serialize)]
+pub struct HarnessInstalled {
+    /// Supabase user id (uuid).
+    pub user_id: String,
+    /// The account now signed in on this device.
+    pub email: String,
+    /// Whether the refresh credential reached this computer's credential store. `false` means the
+    /// session is real for this daemon's lifetime and will not survive its restart — said out
+    /// loud rather than discovered later.
+    pub credential_persisted: bool,
+}
+
 /// The sentence a device shows when a session it held before the custody cutover could not be
 /// carried over.
 ///
@@ -592,6 +619,114 @@ impl Custodian {
             identity.email
         ));
         AdoptOutcome::Adopted
+    }
+
+    /// **Dev world only.** Install a session the automated test harness already obtained, so an
+    /// agent can put `admin@admin.com` in front of every screen of this app.
+    ///
+    /// ## Why this exists
+    ///
+    /// The custody cutover made this daemon the device's only session holder and removed the
+    /// email/password form from the product — correctly: a password field in the app is a second
+    /// credential holder. But it also removed the only door the browser-mode E2E harness had, so
+    /// no screen of Matrx Local could be verified by an agent any more (MXL-D-091). That makes
+    /// every UI claim about this app unverifiable, which is a worse defect than the one the
+    /// cutover fixed.
+    ///
+    /// ## What it is, and what it is not
+    ///
+    /// The harness performs the Supabase password grant **itself**, with the canonical admin test
+    /// account, and hands the resulting session here. The daemon then installs it through exactly
+    /// the same steps a real sign-in uses — write-ahead credential, `adopt`, `record_success`,
+    /// one `session.changed` — so every consumer (the webview, the Python engine, the tray) sees
+    /// an ordinary session and no surface has a test-only branch. **The product does not regain a
+    /// password field**: no password ever reaches this crate, this daemon, or this app.
+    ///
+    /// ## The guard
+    ///
+    /// It refuses on any daemon that is not in the dev world, and the refusal names the world.
+    /// A live-world daemon holds a real person's session and this door is not merely unused
+    /// there — it is closed. The control API additionally answers `404` for the route in the live
+    /// world, so the path is *absent* as well as refused.
+    ///
+    /// ## What rotation does afterwards
+    ///
+    /// The password grant's refresh token belongs to Supabase's GoTrue session store, while this
+    /// daemon rotates against the OAuth 2.1 token endpoint (`/auth/v1/oauth/token`), which
+    /// answers `invalid_client` for a non-OAuth session. So this session lives for exactly as
+    /// long as the access token it was handed, and when rotation is due the daemon says
+    /// `sign_in_needed` in its ordinary words — it never pretends to hold a session it cannot
+    /// renew. A harness run is minutes long; it re-seeds rather than waiting.
+    pub async fn install_harness_session(
+        &self,
+        granted: HarnessSession,
+    ) -> Result<HarnessInstalled> {
+        if self.inner.config.world != World::Dev {
+            return Err(CustodyError::HarnessDoorNotInDevWorld {
+                world: self.inner.config.world.as_str(),
+            });
+        }
+        if granted.access_token.is_empty() || granted.refresh_token.is_empty() {
+            return Err(CustodyError::AmbiguousResponse {
+                status: 400,
+                detail: "the harness offered a session with an empty access or refresh token"
+                    .into(),
+            });
+        }
+        let identity = oauth::identity_from_jwt(&granted.access_token)?;
+        let response = TokenResponse {
+            access_token: granted.access_token,
+            refresh_token: Some(granted.refresh_token.clone()),
+            expires_in: granted.expires_in,
+        };
+
+        let now_str = rfc3339(self.inner.clock.now_wall());
+        // S8's write-ahead rule, the same order a sign-in uses.
+        let credential = StoredCredential {
+            v: StoredCredential::VERSION,
+            refresh_token: granted.refresh_token.clone(),
+            user_id: identity.user_id.clone(),
+            email: identity.email.clone(),
+            client_id: self.inner.config.client_id.clone(),
+            issued_at: now_str.clone(),
+            rotated_at: now_str.clone(),
+            world: self.inner.config.world,
+        };
+        // A dev machine or a CI runner may have no usable keychain. That is a fact the harness is
+        // TOLD, never one that is swallowed: the session still installs (it lives in memory for
+        // this run), and `credential_persisted: false` says it will not survive a daemon restart.
+        let credential_persisted = match self.save_credential(credential).await {
+            Ok(()) => true,
+            Err(e) => {
+                log_line(&format!(
+                    "the dev-world harness session was installed but this computer's credential \
+                     store refused to keep it ({}); it will not survive a daemon restart",
+                    e.message()
+                ));
+                false
+            }
+        };
+
+        let adopted = self
+            .adopt(
+                &identity.user_id,
+                &identity.email,
+                &granted.refresh_token,
+                &response,
+                &now_str,
+            )
+            .await;
+        self.record_success(&adopted).await;
+        log_line(&format!(
+            "installed a dev-world test-harness session for {} — the product's own sign-in is \
+             untouched",
+            identity.email
+        ));
+        Ok(HarnessInstalled {
+            user_id: identity.user_id,
+            email: identity.email,
+            credential_persisted,
+        })
     }
 
     /// Run the refresh loop until the returned handle's task is cancelled.

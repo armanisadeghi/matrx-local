@@ -213,3 +213,6 @@ matrx-extend/
 
 # Runtime log artifacts — never track (accidentally committed rotated logs kept dirtying the tree and blocking release.sh)
 system/logs/
+
+# MXL-D-091: the dev-world home the E2E harness signed in (a path, machine-local).
+desktop/.harness-home

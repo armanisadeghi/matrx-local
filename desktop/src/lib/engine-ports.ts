@@ -4,7 +4,16 @@
  * Live, dev, and smoke-test builds are separate worlds. Smoke builds receive
  * a run-specific port base from scripts/smoke.sh; production ignores that
  * override unless the explicit isolation marker is also compiled in.
+ *
+ * **A `harness`-mode build is a SOURCE RUN and owns the dev band** (Hard Rule 9). It is a build,
+ * so `import.meta.env.DEV` is false in it — and until MXL-D-091 that meant the browser harness
+ * scanned 22140–22159 and attached to the INSTALLED app's engine, which belongs to the person
+ * using this Mac and is off limits to every agent. Observed live on 2026-09-15: a harness page
+ * reported `Connected 127.0.0.1:22140`.
  */
+
+/** See `lib/dev-harness-custody.ts`: `vite.config.ts` compiles this in as a literal. */
+declare const __MATRX_HARNESS_BRIDGE__: boolean;
 
 const LIVE_ENGINE_PORT_BASE = 22140;
 const DEV_ENGINE_PORT_BASE = 22240;
@@ -15,6 +24,11 @@ export interface EnginePortEnvironment {
   dev: boolean;
   isolatedSmoke: boolean;
   smokePortBase?: string | undefined;
+  /**
+   * A `harness`-mode build: a source run served to a browser test. It is not a dev server, but
+   * it is emphatically not the installed app either, so it takes the dev band.
+   */
+  harness?: boolean | undefined;
 }
 
 export function resolveEnginePortBase(env: EnginePortEnvironment): number {
@@ -31,11 +45,12 @@ export function resolveEnginePortBase(env: EnginePortEnvironment): number {
     }
     return parsed;
   }
-  return env.dev ? DEV_ENGINE_PORT_BASE : LIVE_ENGINE_PORT_BASE;
+  return env.dev || env.harness === true ? DEV_ENGINE_PORT_BASE : LIVE_ENGINE_PORT_BASE;
 }
 
 export const ENGINE_PORT_BASE = resolveEnginePortBase({
   dev: import.meta.env.DEV,
+  harness: __MATRX_HARNESS_BRIDGE__,
   isolatedSmoke: import.meta.env.VITE_MATRX_ISOLATED_SMOKE === "1",
   smokePortBase: import.meta.env.VITE_MATRX_TEST_ENGINE_PORT_BASE,
 });

@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
   dismissEngineMonitorIfOpen,
-  loadTestCreds,
-  loginViaUI,
+  HARNESS_NOT_SIGNED_IN,
+  harnessIdentity,
+  signInViaHarness,
 } from "./helpers";
 
 test.describe("Cloud Chat live integration", () => {
@@ -10,8 +11,7 @@ test.describe("Cloud Chat live integration", () => {
     page,
   }) => {
     test.setTimeout(240_000);
-    const creds = loadTestCreds();
-    test.skip(!creds, "desktop/.env.test is missing canonical AI_ADMIN credentials");
+        test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
 
     const runId = Date.now().toString(36);
     const startMarker = `MXL_CHAT_START_${runId}`;
@@ -19,7 +19,7 @@ test.describe("Cloud Chat live integration", () => {
     const startPrompt = `Reply exactly: ${startMarker}`;
     const continuePrompt = `Reply exactly: ${continueMarker}`;
 
-    await loginViaUI(page, creds!);
+    await signInViaHarness(page);
     await page.getByRole("link", { name: "Cloud Chat" }).click();
 
     const composer = page.getByPlaceholder("Message AI Matrx...");

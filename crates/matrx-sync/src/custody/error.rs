@@ -65,6 +65,17 @@ pub enum CustodyError {
         /// The notifier's own words.
         cause: String,
     },
+    /// The dev-world-only test-harness session door was called on a daemon that is NOT in the
+    /// dev world (MXL-D-091's guard).
+    ///
+    /// The door exists so an automated browser harness can put `admin@admin.com` in front of
+    /// every screen without the product regaining a password field. A live-world daemon holds a
+    /// real person's session, so the door is not merely unused there — it is refused, and the
+    /// refusal names the world it was asked in.
+    HarnessDoorNotInDevWorld {
+        /// The world the daemon is actually running in.
+        world: &'static str,
+    },
     /// A value the daemon was configured with is unusable.
     Configuration {
         /// The setting's name.
@@ -87,6 +98,7 @@ impl CustodyError {
             CustodyError::Journal(_) => "internal",
             CustodyError::CloudStateWrite { .. } => "internal",
             CustodyError::Notification { .. } => "internal",
+            CustodyError::HarnessDoorNotInDevWorld { .. } => "harness_door_not_in_dev_world",
             CustodyError::Configuration { .. } => "internal",
         }
     }
@@ -135,6 +147,10 @@ impl CustodyError {
             }
             CustodyError::Notification { .. } => {
                 "Nothing to do here — the state is still shown in the app and the tray."
+            }
+            CustodyError::HarnessDoorNotInDevWorld { .. } => {
+                "Nothing to do — this is a test-harness route and it only exists in the dev world. \
+                 Run the harness against a source daemon started with `--world dev`."
             }
             CustodyError::Configuration { .. } => {
                 "Reinstall AI Matrx; this build was packaged without a value it needs."
@@ -186,6 +202,11 @@ impl fmt::Display for CustodyError {
             CustodyError::Notification { cause } => {
                 write!(f, "the system notification could not be posted: {cause}")
             }
+            CustodyError::HarnessDoorNotInDevWorld { world } => write!(
+                f,
+                "the test-harness session door was asked of a {world}-world daemon; it exists in \
+                 the dev world only"
+            ),
             CustodyError::Configuration { setting, detail } => {
                 write!(f, "the setting {setting} is unusable: {detail}")
             }

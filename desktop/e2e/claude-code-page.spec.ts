@@ -1,16 +1,15 @@
 import { expect, test } from "@playwright/test";
 
-import { loadTestCreds, loginViaUI } from "./helpers";
+import { HARNESS_NOT_SIGNED_IN, harnessIdentity, signInViaHarness } from "./helpers";
 
 test("Coding Sessions shows every provider, scrolls, and syncs in one action", async ({
   page,
 }) => {
-  const creds = loadTestCreds();
-  test.skip(!creds, "desktop/.env.test missing — see docs/UI_TESTING.md");
+    test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
 
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  await loginViaUI(page, creds!);
+  await signInViaHarness(page);
 
   await page.getByRole("link", { name: "Coding Sessions" }).click();
   await expect(

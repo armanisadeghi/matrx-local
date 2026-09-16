@@ -13,12 +13,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
   dismissEngineMonitorIfOpen,
-  loadTestCreds,
-  loginViaUI,
+  HARNESS_NOT_SIGNED_IN,
+  harnessIdentity,
+  signInViaHarness,
   probeEngine,
 } from "./helpers";
 
-const creds = loadTestCreds();
 
 const VARIANT_LABELS = [
   "Classic tabs",
@@ -29,7 +29,7 @@ const VARIANT_LABELS = [
 ] as const;
 
 async function openMediaGeneration(page: Page): Promise<void> {
-  await loginViaUI(page, creds!);
+  await signInViaHarness(page);
   await dismissEngineMonitorIfOpen(page);
   await page.getByRole("link", { name: "Media Generation" }).click();
   await expect(
@@ -56,10 +56,9 @@ async function expectNoCrash(page: Page): Promise<void> {
 }
 
 test.describe("media generation", () => {
-  test.skip(
-    !creds,
-    "desktop/.env.test missing — run: node e2e/setup/create-test-user.mjs (see docs/UI_TESTING.md)",
-  );
+  test.beforeEach(async () => {
+    test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
+  });
 
   test("page renders with the layout switcher", async ({ page }) => {
     await openMediaGeneration(page);

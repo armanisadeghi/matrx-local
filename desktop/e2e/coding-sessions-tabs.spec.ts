@@ -8,7 +8,12 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-import { dismissEngineMonitorIfOpen, loadTestCreds, loginViaUI } from "./helpers";
+import {
+  HARNESS_NOT_SIGNED_IN,
+  dismissEngineMonitorIfOpen,
+  harnessIdentity,
+  signInViaHarness,
+} from "./helpers";
 
 const EVIDENCE =
   process.env.CS11_EVIDENCE_DIR ??
@@ -20,12 +25,11 @@ function shot(name: string): string {
 }
 
 test("one feature, three tabs, and a row that opens its conversation", async ({ page }) => {
-  const creds = loadTestCreds();
-  test.skip(!creds, "desktop/.env.test missing — see docs/UI_TESTING.md");
+    test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
 
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  await loginViaUI(page, creds!);
+  await signInViaHarness(page);
 
   // ONE sidebar entry for the feature. "Codex Usage" was a second one.
   await expect(page.getByRole("link", { name: "Coding Sessions" })).toBeVisible();
@@ -115,9 +119,8 @@ test("one feature, three tabs, and a row that opens its conversation", async ({ 
 });
 
 test("the retired Codex Usage route lands on the usage tab", async ({ page }) => {
-  const creds = loadTestCreds();
-  test.skip(!creds, "desktop/.env.test missing — see docs/UI_TESTING.md");
-  await loginViaUI(page, creds!);
+    test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
+  await signInViaHarness(page);
   await page.goto("/#/codex-usage");
   await expect(page).toHaveURL(/coding-sessions\?tab=usage/);
   await expect(page.getByRole("heading", { name: "Coding Sessions" })).toBeVisible();
@@ -135,14 +138,13 @@ test("the retired Codex Usage route lands on the usage tab", async ({ page }) =>
  * Pass CS11_CONVERSATION_ID=<a conversation the signed-in account owns>.
  */
 test("a coding-session conversation opens with its messages", async ({ page }) => {
-  const creds = loadTestCreds();
-  test.skip(!creds, "desktop/.env.test missing — see docs/UI_TESTING.md");
+    test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
   const conversationId = process.env.CS11_CONVERSATION_ID;
   test.skip(!conversationId, "set CS11_CONVERSATION_ID to a conversation this account owns");
 
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  await loginViaUI(page, creds!);
+  await signInViaHarness(page);
 
   // Same retry reason as above: the shell may still be settling its own
   // navigation when the deep link is set.

@@ -26,5 +26,8 @@
     "allowUnreachableCode": false,
     "types": ["node"]
   },
-  "include": ["vite.config.ts"]
+  // `vite-plugins/**` is Vite-config-time code (Node), and it shares MXL-D-091's guard with the
+  // browser in `src/lib/harness-bridge-contract.ts` — one copy of the rule, so the two cannot
+  // drift. Both are type-checked here.
+  "include": ["vite.config.ts", "vite-plugins/**/*.ts", "src/lib/harness-bridge-contract.ts"]
 }

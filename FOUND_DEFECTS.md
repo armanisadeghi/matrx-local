@@ -32,37 +32,34 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Test harness
 
-### MXL-D-091 — CS-19 removed the browser-mode login the whole E2E suite depends on, so no authenticated desktop UI can be verified
-- **Area:** `desktop/e2e/helpers.ts:79-101` (`loginViaUI` fills "Email"/"Password"
-  and clicks "Sign in"), consumed by every authenticated spec
-  (`auth.spec.ts`, `cloud-chat-live.spec.ts`, `coding-sessions-tabs.spec.ts`,
-  `claude-code-page.spec.ts`, `coding-sessions-diagnosis.spec.ts`,
-  `media-gen.spec.ts`); `desktop/src/lib/custodian.ts:117` is the reason —
-  the webview's session now comes only from the daemon through the Tauri
-  command `syncd_client_config`, which does not exist in a browser.
-- **Symptom:** On v1.4.126 the Login page renders "AI Matrx Sync is not running
-  on this computer, so there is no signed-in session. Choose Start sync to
-  start it." with a single "Sign in with AI Matrx" OAuth button and no email or
-  password field, so `loginViaUI` fails at `page.getByLabel("Email").fill(...)`
-  and every authenticated browser-mode spec is unrunnable. `playwright test`
-  on 2026-09-15 (XT-04) failed both of its captures this way before reaching
-  the surface under test.
-- **Consequence:** `docs/UI_TESTING.md`'s browser-mode rung — this repo's ONLY
-  way for an agent to verify an authenticated screen without touching Arman's
-  installed app — is gone, and nothing announced it. Lanes that need UI proof
-  are left with a choice between no evidence and the installed app they may
-  not touch.
-- **Status:** open — **needs a decision, not a patch.** Restoring browser-mode
-  authentication means giving the webview a session path that does not go
-  through Tauri, which is an auth-surface change (D17 put the only durable
-  credential in the daemon's keychain on purpose). Whoever owns custody should
-  choose between: a test-only daemon read-token handoff via a Vite env var, a
-  Tauri-hosted E2E driver, or declaring browser mode unauthenticated and moving
-  every authenticated spec to a driven Tauri build.
-- **Analysis stamp:** Analyzed 2026-09-15 — verified live: Playwright run against
-  the worktree at `4e926fb45`+XT-04, screenshot
-  `common-docs/projects/coding-agent-bridge/evidence/xt04-03-browser-login-removed.png`.
-- **Owner hint:** the custody/CS-19 lane (it closed the door) with the E2E harness.
+### MXL-D-091 — CS-19 removed the browser-mode login the whole E2E suite depends on — FIXED 2026-09-15
+- **What it was:** the custody cutover removed the email/password screen (correctly — the daemon
+  is the device's only session holder, D17), and with it the only door the browser-mode harness
+  had: in Chromium there is no Tauri, so `invoke("syncd_client_config")` cannot answer and the app
+  has no endpoint, no token and no session. Every UI claim about this app became unverifiable.
+- **Fix:** the door was restored one layer LOWER, so the product does not regain a password field.
+  `e2e/setup/harness-session.mjs` performs the Supabase password grant itself with the canonical
+  admin account and hands the dev-world daemon the session through `POST /v1/harness/session`
+  (`Custodian::install_harness_session`), which installs it exactly as a real sign-in;
+  `vite-plugins/dev-syncd-bridge.ts` + `src/lib/harness-bridge-contract.ts` hand the browser page
+  the daemon's endpoint and READ token, which is all the packaged webview holds either. Off in
+  every production build, refused for `~/.matrx`, refused for any non-dev-world daemon, and the
+  daemon refuses the route and the call outside the dev world. Guards proven failing-then-passing:
+  `crates/matrx-sync/tests/custody.rs::the_harness_door_is_refused_in_the_live_world`,
+  `routes.rs::the_harness_door_exists_in_the_dev_world_only`,
+  `src/lib/dev-harness-custody.test.ts`.
+- **What the restored harness immediately found — both fixed in the same change:**
+  - `appPages` held the `/codex-usage` redirect, which `AppLayout` mounts for the life of the
+    session, so it fired on every render and pinned the WHOLE app to `/coding-sessions?tab=usage`:
+    no other page in Matrx Local could be reached from 2026-09-14. Guard:
+    `src/app-pages-never-redirect.test.ts`.
+  - a `harness`-mode build is a build, so `import.meta.env.DEV` was false and the browser harness
+    scanned 22140–22159 and attached to the INSTALLED app's engine. Guard:
+    `src/lib/engine-ports.test.ts`.
+- **Evidence:** `common-docs/projects/coding-agent-bridge/evidence/xtfix4-harness-signin-cloudchat.png`
+  — signed in as `admin@admin.com`, Cloud Chat on the mirrored coding conversation
+  `e812c501-d912-55be-af02-df08dc2ded74`, the reply composer label rendering the server's own
+  sentence, engine `127.0.0.1:22240` (the dev band, never the installed app's).
 
 ---
 

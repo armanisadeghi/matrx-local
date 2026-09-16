@@ -23,7 +23,7 @@
  * why, or you are re-opening the hole this file was written to close.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { loadTestCreds, loginViaUI } from "./helpers";
+import { HARNESS_NOT_SIGNED_IN, harnessIdentity, signInViaHarness } from "./helpers";
 
 /** Errors that are artifacts of browser-mode, not app defects. */
 const EXPECTED_IN_BROWSER_MODE = [
@@ -122,15 +122,11 @@ test.describe("boot", () => {
   test("authenticated shell boots with no crash and no uncaught errors", async ({
     page,
   }) => {
-    const creds = loadTestCreds();
-    test.skip(
-      !creds,
-      "desktop/.env.test missing — run: node e2e/setup/create-test-user.mjs (see docs/UI_TESTING.md)",
-    );
+        test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
 
     const fatalErrors = collectFatalErrors(page);
 
-    await loginViaUI(page, creds!);
+    await signInViaHarness(page);
     await expectNoCrashScreen(page);
 
     // The authenticated tree mounts far more than the login tree (AppLayout,

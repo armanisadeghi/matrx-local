@@ -11,6 +11,12 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
+  define: {
+    // `vite.config.ts` compiles this in for the app; unit tests get the same literal so the
+    // modules that read it (lib/dev-harness-custody, lib/engine-ports) load at all. `false` is
+    // the shipped value, and every test that cares passes the flag explicitly instead.
+    __MATRX_HARNESS_BRIDGE__: "false",
+  },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",

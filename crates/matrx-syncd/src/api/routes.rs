@@ -6,7 +6,7 @@ use crate::discovery::Scope;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response, StatusCode};
-use matrx_sync::custody::{AdoptOutcome, CustodyError, RedirectKind};
+use matrx_sync::custody::{AdoptOutcome, CustodyError, HarnessSession, RedirectKind, World};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -319,6 +319,52 @@ async fn route(
             }))
         }
 
+        // THE DEV-WORLD TEST-HARNESS DOOR (MXL-D-091). The custody cutover removed the
+        // email/password form from the product, which also removed the only way the browser-mode
+        // E2E harness could sign in — so no screen of this app could be verified by an agent any
+        // more. The harness does the Supabase password grant itself with the canonical admin test
+        // account and offers the result here; the daemon installs it exactly as it installs a real
+        // session, so the app adopts it with no test-only branch and the product never regains a
+        // password field.
+        //
+        // It is CLOSED in the live world twice over: this arm does not exist there (the route
+        // falls through to the 404 below), and the custodian refuses the call as well.
+        (&Method::POST, "/v1/harness/session") if harness_door_open(state.world) => {
+            #[derive(Deserialize)]
+            struct Body {
+                access_token: String,
+                refresh_token: String,
+                expires_in: Option<i64>,
+            }
+            let Some(body) = read_json::<Body>(request).await else {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "That harness session did not carry an access token and a refresh token.",
+                    "Run the harness sign-in script, which performs the grant and sends both.",
+                    false,
+                    json!({}),
+                );
+            };
+            match state
+                .custodian
+                .install_harness_session(HarnessSession {
+                    access_token: body.access_token,
+                    refresh_token: body.refresh_token,
+                    expires_in: body.expires_in.unwrap_or(3600),
+                })
+                .await
+            {
+                Ok(installed) => ok_json(json!({
+                    "user_id": installed.user_id,
+                    "email": installed.email,
+                    "credential_persisted": installed.credential_persisted,
+                    "world": state.world.as_str(),
+                })),
+                Err(e) => custody_error(&e),
+            }
+        }
+
         (&Method::POST, "/v1/sign-out") => match state.custodian.sign_out().await {
             Ok(()) => ok_json(json!({"ok": true})),
             Err(e) => custody_error(&e),
@@ -359,10 +405,22 @@ fn custody_error(e: &CustodyError) -> Response<BoxBody> {
     let status = match e.code() {
         "credential_store_unavailable" | "sign_in_needed" | "signed_out"
         | "unknown_transaction" | "loopback_port_unavailable" => StatusCode::CONFLICT,
+        // A closed door is a refusal, not a server fault.
+        "harness_door_not_in_dev_world" => StatusCode::FORBIDDEN,
         "offline" => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(status, e.code(), &e.message(), e.remedy(), e.retryable(), json!({}))
+}
+
+/// Whether the dev-world test-harness session door exists on this daemon (MXL-D-091's guard).
+///
+/// **The live world has no such route.** This is the outer of the two layers: the route arm is
+/// guarded by it, so in the live world the path falls through to the 404 envelope and is absent
+/// rather than merely refused. The inner layer is `Custodian::install_harness_session`, which
+/// refuses the call even if a future caller reaches it another way.
+pub const fn harness_door_open(world: World) -> bool {
+    matches!(world, World::Dev)
 }
 
 /// The methods a route actually serves, for `Access-Control-Allow-Methods`.
@@ -371,7 +429,7 @@ fn methods_for(path: &str) -> &'static str {
         "/v1/health" | "/v1/version" | "/v1/token" | "/v1/session" | "/v1/status"
         | "/v1/events" => "GET, OPTIONS",
         "/v1/sign-in" | "/v1/sign-in/callback" | "/v1/sign-out" | "/v1/adopt"
-        | "/v1/shutdown" => "POST, OPTIONS",
+        | "/v1/shutdown" | "/v1/harness/session" => "POST, OPTIONS",
         _ => "GET, POST, OPTIONS",
     }
 }
@@ -409,6 +467,21 @@ mod tests {
     // here: `hyper::body::Incoming` cannot be constructed outside hyper, so a unit test of
     // `route()` could only re-state the match arms it is supposed to be checking — which is what
     // the test that used to sit here did.
+
+    #[test]
+    fn the_harness_door_exists_in_the_dev_world_only() {
+        // MXL-D-091's guard. If this ever passes for `Live`, a test harness could install a
+        // session on the machine of a real signed-in person.
+        assert!(harness_door_open(World::Dev));
+        assert!(!harness_door_open(World::Live));
+    }
+
+    #[test]
+    fn the_harness_door_refusal_is_a_403_not_a_500() {
+        let refusal = CustodyError::HarnessDoorNotInDevWorld { world: "live" };
+        assert_eq!(refusal.code(), "harness_door_not_in_dev_world");
+        assert_eq!(custody_error(&refusal).status(), StatusCode::FORBIDDEN);
+    }
 
     #[test]
     fn the_error_envelope_always_carries_a_remedy() {

@@ -552,12 +552,6 @@ function AppInner() {
       { path: "/configurations", element: <Configurations /> },
       { path: "/coding-sessions", requiresEngine: true, element: <CodingSessions /> },
       {
-        // Usage was a second top-level nav item until 2026-09-14. The old link
-        // keeps working and lands on the tab that replaced it.
-        path: "/codex-usage",
-        element: <Navigate to="/coding-sessions?tab=usage" replace />,
-      },
-      {
         path: "/bridge-test",
         element: (
           <BridgeTest engineStatus={status} engineUrl={url} user={auth.user} />
@@ -674,6 +668,18 @@ function AppInner() {
                 <Route
                   path="/claude-code"
                   element={<Navigate to="/coding-sessions" replace />}
+                />
+                {/* Usage was a second top-level nav item until 2026-09-14. The
+                    old link keeps working and lands on the tab that replaced
+                    it. It lives HERE and not in appPages: AppLayout mounts
+                    every appPage for the life of the session, so a Navigate
+                    there fires on every render and pins the whole app to its
+                    destination — no other page in the app can be reached. That
+                    is what it did from 2026-09-14 until MXL-D-091's harness
+                    sign-in made it visible. */}
+                <Route
+                  path="/codex-usage"
+                  element={<Navigate to="/coding-sessions?tab=usage" replace />}
                 />
                 <Route
                   path="/*"

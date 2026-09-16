@@ -21,11 +21,15 @@ import {
   Pin,
   Play,
   RefreshCw,
-  Search,
   Stethoscope,
 } from "lucide-react";
 
-import { Badge, Button, BasicInput as Input } from "@ai-matrx/design-system";
+import { Badge, Button } from "@ai-matrx/design-system";
+import {
+  MatrxDataTable,
+  type MatrxColumnDef,
+  type MatrxDataTableQueryState,
+} from "@ai-matrx/design-system/data-table";
 import {
   ArtifactsCell,
   SessionArtifactsDialog,
@@ -69,6 +73,15 @@ const STATE_CARDS: ClaudeSessionState[] = [
 ];
 
 type ListFilter = ClaudeSessionState | "pinned" | "all";
+
+const INITIAL_TABLE_QUERY: MatrxDataTableQueryState = {
+  page: 1,
+  pageSize: 0,
+  search: "",
+  anyOf: "",
+  columnFilters: {},
+  sort: null,
+};
 
 export interface SessionsTabProps {
   snapshot: CodingSessionsSnapshot;
@@ -124,7 +137,7 @@ function RowAction({
 
 export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [tableQuery, setTableQuery] = useState<MatrxDataTableQueryState>(INITIAL_TABLE_QUERY);
   const [filter, setFilter] = useState<ListFilter>("all");
   const [provider, setProvider] = useState<CodingSessionProvider | null>(null);
   const [artifactsDialogId, setArtifactsDialogId] = useState<string | null>(null);
@@ -150,18 +163,12 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
 
   const conversations = useMemo(() => {
     const rows = filterRowsByProvider(data?.conversations ?? [], data, provider);
-    const needle = query.trim().toLowerCase();
     return rows.filter((row) => {
       if (filter === "pinned" && !row.pinned) return false;
       if (filter !== "all" && filter !== "pinned" && row.state !== filter) return false;
-      if (!needle) return true;
-      return (
-        row.title.toLowerCase().includes(needle) ||
-        (row.project ?? "").toLowerCase().includes(needle) ||
-        (row.category ?? "").toLowerCase().includes(needle)
-      );
+      return true;
     });
-  }, [data, filter, provider, query]);
+  }, [data, filter, provider]);
 
   /**
    * "Unknown" earns its warning voice only when the server COULD NOT be asked.
@@ -182,6 +189,127 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
     }
     setBlocked({ title: row.title, reason: target.reason, sessionId: row.session_id });
   };
+
+  const columns: MatrxColumnDef<ClaudeConversation>[] = [
+    {
+      id: "pinned",
+      header: <Pin className="mx-auto h-3.5 w-3.5" />,
+      label: "Pinned",
+      sortable: true,
+      filter: false,
+      width: 48,
+      sortValue: (row) => row.pinned,
+      cell: (row) =>
+        row.pinned ? (
+          <Pin
+            className="mx-auto h-3.5 w-3.5 text-amber-500"
+            aria-label="Pinned in the coding agent"
+          />
+        ) : null,
+    },
+    {
+      id: "conversation",
+      header: "Conversation",
+      sortable: true,
+      filter: false,
+      width: 360,
+      sortValue: (row) => row.title,
+      cell: (row) => (
+        <div className="max-w-md truncate">
+          {row.title}
+          {!row.in_claude_sidebar && (
+            <span
+              className="ml-2 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+              title="On this Mac, but the agent's sidebar never listed it (started from the CLI). It syncs like any other."
+            >
+              CLI only
+            </span>
+          )}
+          {row.category && (
+            <span className="ml-2 text-xs text-muted-foreground">{row.category}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: "project",
+      header: "Project",
+      sortable: true,
+      filter: false,
+      width: 160,
+      sortValue: (row) => row.project ?? "",
+      cell: (row) => <span className="text-muted-foreground">{row.project ?? "—"}</span>,
+    },
+    {
+      id: "updated",
+      header: "Updated",
+      sortable: true,
+      defaultSortDirection: "desc",
+      filter: false,
+      width: 112,
+      sortValue: (row) => row.last_activity_at,
+      cell: (row) => (
+        <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+          {formatWhen(row.last_activity_at)}
+        </span>
+      ),
+    },
+    {
+      id: "size",
+      header: "Size",
+      sortable: true,
+      filter: false,
+      width: 88,
+      sortValue: (row) => row.bytes,
+      cell: (row) => (
+        <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+          {formatFileSize(row.bytes)}
+        </span>
+      ),
+    },
+    {
+      id: "artifacts",
+      header: "Artifacts",
+      sortable: false,
+      filter: false,
+      width: 112,
+      cell: (row) => (
+        <ArtifactsCell
+          sessions={snapshot.artifactSessions}
+          error={snapshot.artifactSessionsError}
+          sessionId={row.session_id}
+          onOpen={() => setArtifactsDialogId(row.session_id)}
+        />
+      ),
+    },
+    {
+      id: "state",
+      header: "In AI Matrx?",
+      sortable: true,
+      filter: false,
+      width: 144,
+      sortValue: (row) => row.state,
+      cell: (row) => (
+        <span
+          className={quietUnknown(row) ? "text-muted-foreground" : SESSION_STATE_TONE[row.state]}
+          title={
+            quietUnknown(row)
+              ? "AI Matrx has not been asked yet. The next read has the answer."
+              : SESSION_STATE_HINT[row.state]
+          }
+          data-testid={quietUnknown(row) ? "state-checking" : undefined}
+        >
+          {quietUnknown(row) ? "Checking…" : SESSION_STATE_LABEL[row.state]}
+          {row.delivery.quarantined > 0 && (
+            <span className="ml-1 text-xs">({row.delivery.quarantined} refused)</span>
+          )}
+          {row.state === "queued" && row.delivery.pending > 0 && (
+            <span className="ml-1 text-xs">({row.delivery.pending} waiting)</span>
+          )}
+        </span>
+      ),
+    },
+  ];
 
   return (
     <div className="flex flex-col gap-6">
@@ -349,211 +477,112 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-64 flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder={`Search ${conversations.length.toLocaleString()} conversation${
+      <div className="min-w-0" data-testid="sessions-table">
+        <MatrxDataTable
+          data={conversations}
+          columns={columns}
+          getRowId={(row) => row.session_id}
+          searchText={(row) => [row.title, row.project, row.category].filter(Boolean).join(" ")}
+          query={{
+            mode: "controlled-local",
+            state: tableQuery,
+            onStateChange: setTableQuery,
+          }}
+          isLoading={snapshot.overviewPending && !data}
+          isFetching={snapshot.overviewPending && Boolean(data)}
+          hidePagination
+          detail={{ enabled: false }}
+          copy={false}
+          onRowOpen={openRow}
+          rowClassName={() =>
+            snapshot.overviewPending ? "opacity-50 transition-opacity" : undefined
+          }
+          toolbar={{
+            searchPlaceholder: `Search ${conversations.length.toLocaleString()} conversation${
               conversations.length === 1 ? "" : "s"
-            }`}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        {filter !== "all" && (
-          <Button variant="outline" size="sm" onClick={() => setFilter("all")}>
-            Showing {filter === "pinned" ? "pinned" : SESSION_STATE_LABEL[filter].toLowerCase()} ·
-            clear
-          </Button>
-        )}
-        {snapshot.overviewFromCache && (
-          <Badge variant="outline" data-testid="sessions-cached">
-            Last read {snapshot.overviewAt ? formatWhen(snapshot.overviewAt) : "earlier"}
-            {snapshot.overviewPending ? " · refreshing" : ""}
-          </Badge>
-        )}
-      </div>
-
-      <div className="overflow-hidden rounded-lg border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
-            <tr>
-              <th
-                className="w-8 px-2 py-2 text-center font-medium"
-                title="Pinned in the coding agent's own sidebar. Pinned there means starred in AI Matrx."
-              >
-                <Pin className="mx-auto h-3.5 w-3.5" />
-              </th>
-              <th className="px-4 py-2 text-left font-medium">Conversation</th>
-              <th className="px-4 py-2 text-left font-medium">Project</th>
-              <th className="px-4 py-2 text-right font-medium">Updated</th>
-              <th className="px-4 py-2 text-right font-medium">Size</th>
-              <th
-                className="px-4 py-2 text-right font-medium"
-                title="Files this session built that the artifacts lane kept on this Mac (in AI Matrx / pending). Click a number to see every file."
-              >
-                Artifacts
-              </th>
-              <th
-                className="px-4 py-2 text-right font-medium"
-                title="Judged against AI Matrx's own record of the session. Open the row's Delivery action for every fact behind it."
-              >
-                In AI Matrx?
-              </th>
-              <th className="px-4 py-2 text-right font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody
-            className={snapshot.overviewPending ? "opacity-50 transition-opacity" : undefined}
-            data-testid="sessions-tbody"
-            data-refreshing={snapshot.overviewPending ? "true" : "false"}
-          >
-            {conversations.map((row: ClaudeConversation) => {
-              const target = resolveSessionConversation(row);
-              const continuation = row.continuation ?? null;
-              return (
-                <tr
-                  key={row.session_id}
-                  className="cursor-pointer border-t hover:bg-muted/40"
-                  onClick={() => openRow(row)}
-                  data-testid="conversation-row"
-                >
-                  <td className="px-2 py-2 text-center">
-                    {row.pinned && (
-                      <Pin
-                        className="mx-auto h-3.5 w-3.5 text-amber-500"
-                        aria-label="Pinned in the coding agent"
-                      />
-                    )}
-                  </td>
-                  <td className="max-w-md truncate px-4 py-2">
-                    {row.title}
-                    {!row.in_claude_sidebar && (
-                      <span
-                        className="ml-2 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
-                        title="On this Mac, but the agent's sidebar never listed it (started from the CLI). It syncs like any other."
-                      >
-                        CLI only
-                      </span>
-                    )}
-                    {row.category && (
-                      <span className="ml-2 text-xs text-muted-foreground">{row.category}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2 text-muted-foreground">{row.project ?? "—"}</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
-                    {formatWhen(row.last_activity_at)}
-                  </td>
-                  <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
-                    {formatFileSize(row.bytes)}
-                  </td>
-                  <td className="px-4 py-2 text-right tabular-nums">
-                    <ArtifactsCell
-                      sessions={snapshot.artifactSessions}
-                      error={snapshot.artifactSessionsError}
-                      sessionId={row.session_id}
-                      onOpen={() => setArtifactsDialogId(row.session_id)}
-                    />
-                  </td>
-                  <td
-                    className={`px-4 py-2 text-right ${
-                      quietUnknown(row) ? "text-muted-foreground" : SESSION_STATE_TONE[row.state]
-                    }`}
-                    title={
-                      quietUnknown(row)
-                        ? "AI Matrx has not been asked yet. The next read has the answer."
-                        : SESSION_STATE_HINT[row.state]
-                    }
-                    data-testid={quietUnknown(row) ? "state-checking" : undefined}
-                  >
-                    {quietUnknown(row) ? "Checking…" : SESSION_STATE_LABEL[row.state]}
-                    {row.delivery.quarantined > 0 && (
-                      <span className="ml-1 text-xs">({row.delivery.quarantined} refused)</span>
-                    )}
-                    {row.state === "queued" && row.delivery.pending > 0 && (
-                      <span className="ml-1 text-xs">({row.delivery.pending} waiting)</span>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-1 text-right">
-                    {target.kind === "conversation" && (
-                      <RowAction
-                        label="In AI Matrx"
-                        title="Open this conversation on the AI Matrx website."
-                        icon={<ExternalLink className="h-3.5 w-3.5" />}
-                        onRun={async () => {
-                          const origin = await getWebAppOrigin();
-                          await openExternal(conversationWebUrl(origin, target.conversationId));
-                        }}
-                      />
-                    )}
-                    {continuation && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        title="Continue this session with a new turn on this Mac — or see exactly why that is not possible here, with the resume command to copy."
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setContinueRow(row);
-                        }}
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                        <span className="ml-1.5 hidden text-xs xl:inline">Continue</span>
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      title="Every delivery fact behind this row's status: the server's binding, the transcript on disk, each envelope and its error."
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpenDiagnosis(row.session_id);
-                      }}
-                    >
-                      <Stethoscope className="h-3.5 w-3.5" />
-                      <span className="ml-1.5 hidden text-xs xl:inline">Delivery</span>
-                    </Button>
-                  </td>
-                </tr>
-              );
-            })}
-            {snapshot.overviewPending && !data && (
+            }`,
+            leading: (
               <>
-                {[0, 1, 2, 3, 4].map((index) => (
-                  <tr key={`skeleton-${index}`} className="border-t" data-testid="session-skeleton">
-                    <td colSpan={8} className="px-4 py-3">
-                      <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                    </td>
-                  </tr>
-                ))}
+                {filter !== "all" && (
+                  <Button variant="outline" size="sm" onClick={() => setFilter("all")}>
+                    Showing{" "}
+                    {filter === "pinned"
+                      ? "pinned"
+                      : SESSION_STATE_LABEL[filter].toLowerCase()} · clear
+                  </Button>
+                )}
+                {snapshot.overviewFromCache && (
+                  <Badge variant="outline" data-testid="sessions-cached">
+                    Last read {snapshot.overviewAt ? formatWhen(snapshot.overviewAt) : "earlier"}
+                    {snapshot.overviewPending ? " · refreshing" : ""}
+                  </Badge>
+                )}
               </>
-            )}
-            {!snapshot.overviewPending && conversations.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                  {notice?.state === "cold" ? (
-                    <span
-                      className="inline-flex items-center gap-2"
+            ),
+          }}
+          emptyState={{
+            ...(notice?.state === "cold"
+              ? {
+                  icon: (
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
                       data-testid="sessions-empty-cold"
-                    >
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      {notice.headline}
-                      {notice.detail ? ` ${notice.detail}` : ""}
-                    </span>
-                  ) : activeChip && !activeChip.listed ? (
-                    unlistedProviderNote(activeChip)
-                  ) : query || filter !== "all" ? (
-                    "No conversations match that search or filter."
-                  ) : (
-                    "No coding-agent conversations found on this Mac."
-                  )}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                    />
+                  ),
+                  ...(notice.detail ? { description: notice.detail } : {}),
+                }
+              : {}),
+            title:
+              notice?.state === "cold"
+                ? notice.headline
+                : activeChip && !activeChip.listed
+                  ? unlistedProviderNote(activeChip)
+                  : tableQuery.search || filter !== "all"
+                    ? "No conversations match that search or filter."
+                    : "No coding-agent conversations found on this Mac.",
+          }}
+          rowActions={(row) => {
+            const target = resolveSessionConversation(row);
+            const continuation = row.continuation ?? null;
+            return (
+              <>
+                {target.kind === "conversation" && (
+                  <RowAction
+                    label="In AI Matrx"
+                    title="Open this conversation on the AI Matrx website."
+                    icon={<ExternalLink className="h-3.5 w-3.5" />}
+                    onRun={async () => {
+                      const origin = await getWebAppOrigin();
+                      await openExternal(conversationWebUrl(origin, target.conversationId));
+                    }}
+                  />
+                )}
+                {continuation && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title="Continue this session with a new turn on this Mac — or see exactly why that is not possible here, with the resume command to copy."
+                    onClick={() => setContinueRow(row)}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    <span className="ml-1.5 hidden text-xs xl:inline">Continue</span>
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  title="Every delivery fact behind this row's status: the server's binding, the transcript on disk, each envelope and its error."
+                  onClick={() => onOpenDiagnosis(row.session_id)}
+                >
+                  <Stethoscope className="h-3.5 w-3.5" />
+                  <span className="ml-1.5 hidden text-xs xl:inline">Delivery</span>
+                </Button>
+              </>
+            );
+          }}
+        />
         {snapshot.overviewPending && data && (
           <p
             className="flex items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground"

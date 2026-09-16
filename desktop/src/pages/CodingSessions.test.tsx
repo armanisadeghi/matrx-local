@@ -230,15 +230,24 @@ afterEach(async () => {
 describe("Coding Sessions tabs", () => {
   it("shows the session list by default", async () => {
     await render("/coding-sessions");
-    expect(container.querySelector("[data-testid='sessions-tbody']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='sessions-table'] tbody")).not.toBeNull();
     expect(container.querySelector("[data-testid='codex-usage-panel']")).toBeNull();
     expect(container.textContent).toContain("First session");
+  });
+
+  it("keeps every session column reachable through the canonical horizontal scroll owner", async () => {
+    await render("/coding-sessions");
+    const scrollOwner = container.querySelector("[data-matrx-table-scroll]");
+    expect(scrollOwner).not.toBeNull();
+    expect(scrollOwner?.className).toContain("overflow-auto");
+    expect(scrollOwner?.textContent).toContain("Actions");
+    expect(scrollOwner?.textContent).toContain("Delivery");
   });
 
   it("renders usage inside this feature when the URL asks for that tab", async () => {
     await render("/coding-sessions?tab=usage");
     expect(container.querySelector("[data-testid='codex-usage-panel']")).not.toBeNull();
-    expect(container.querySelector("[data-testid='sessions-tbody']")).toBeNull();
+    expect(container.querySelector("[data-testid='sessions-table']")).toBeNull();
   });
 
   it("says plainly that a provider has no usage source instead of hiding it", async () => {
@@ -256,7 +265,7 @@ describe("Coding Sessions tabs", () => {
     await render("/coding-sessions?tab=settings");
     expect(container.querySelector("[data-testid='agent-runtime-card']")).not.toBeNull();
     expect(container.textContent).toContain("Installed here");
-    expect(container.querySelector("[data-testid='sessions-tbody']")).toBeNull();
+    expect(container.querySelector("[data-testid='sessions-table']")).toBeNull();
   });
 
   it("moves the tab into the URL when one is clicked", async () => {
@@ -293,7 +302,7 @@ describe("Refresh", () => {
     expect(refresh.getAttribute("aria-busy")).toBe("true");
     expect(refresh.disabled).toBe(true);
     expect(
-      container.querySelector("[data-testid='sessions-tbody']")?.getAttribute("data-refreshing"),
+      container.querySelector("[data-matrx-table-scroll]")?.getAttribute("aria-busy"),
     ).toBe("true");
     // ...and the rows already read stay on screen while it works.
     expect(container.textContent).toContain("First session");
@@ -323,7 +332,7 @@ describe("A row is a door", () => {
   it("opens the session's conversation in the app's chat surface", async () => {
     await render("/coding-sessions");
     await act(async () => {
-      (container.querySelector("[data-testid='conversation-row']") as HTMLElement).click();
+      (container.querySelector("[data-row-id='session-0']") as HTMLElement).click();
     });
     expect(container.querySelector("[data-testid='location']")?.textContent).toBe(
       "/cloud-chat?conversation=conv-1-0&from=coding-sessions",
@@ -334,7 +343,7 @@ describe("A row is a door", () => {
     mocks.getClaudeOverview.mockResolvedValue(overviewPayload(["Queued session"], null));
     await render("/coding-sessions");
     await act(async () => {
-      (container.querySelector("[data-testid='conversation-row']") as HTMLElement).click();
+      (container.querySelector("[data-row-id='session-0']") as HTMLElement).click();
     });
     const notice = container.querySelector("[data-testid='session-not-openable']");
     expect(notice?.textContent).toContain("is not in AI Matrx yet");

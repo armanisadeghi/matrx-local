@@ -58,6 +58,9 @@ VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify-macos-artifact.sh"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 TAURI_CONFIG = REPO_ROOT / "desktop" / "src-tauri" / "tauri.conf.json"
 NATIVE_VAULT_HOOK = REPO_ROOT / "desktop" / "scripts" / "build-native-vault-provider-hook.cjs"
+NATIVE_VAULT_HOOK_CHECK = (
+    REPO_ROOT / "desktop" / "scripts" / "check-native-vault-provider-hook.cjs"
+)
 
 
 def test_native_vault_provider_hook_is_cross_platform() -> None:
@@ -73,7 +76,7 @@ def test_native_vault_provider_hook_is_cross_platform() -> None:
 
     assert command == "node scripts/build-native-vault-provider-hook.cjs"
     hook = NATIVE_VAULT_HOOK.read_text(encoding="utf-8")
-    assert 'process.env.TAURI_ENV_PLATFORM !== "macos"' in hook
+    assert 'targetPlatform !== "macos" && targetPlatform !== "darwin"' in hook
     assert '"scripts/build-native-vault-provider.sh"' in hook
     assert "node -e" not in command
 
@@ -83,6 +86,7 @@ def test_native_vault_provider_hook_is_cross_platform() -> None:
         env={**os.environ, "TAURI_ENV_PLATFORM": "windows"},
         check=True,
     )
+    subprocess.run(["node", str(NATIVE_VAULT_HOOK_CHECK)], check=True)
 
 
 def test_final_artifact_verification_exists_and_gates_the_release() -> None:

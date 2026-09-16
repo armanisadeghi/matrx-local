@@ -1,7 +1,7 @@
 import AppKit
 import AuthenticationServices
 import CryptoKit
-import LocalAuthentication
+@preconcurrency import LocalAuthentication
 import Security
 
 // Provider-owned OAuth. The host never receives a token or Keychain handle.
@@ -82,7 +82,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private let connectionAdmission = NativeVaultCurrentConnectionAdmission()
     let sessionAccess = NativeVaultSessionAccess()
     let nativePasswordTransport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()
-    var nativePasswordOperation: NativePasswordOperation?
+    let nativePasswordCoordinator = NativePasswordOperationCoordinator()
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
@@ -97,6 +97,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
         // This direct-list provider intentionally has no identity index yet.
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
+    }
+
+    override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
         extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
     }
 
@@ -236,14 +240,16 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         catch { setConnectionStatus("Vault protection is unavailable on this Mac."); finishConnectionOperation(); return }
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Check your AI Matrx Vault connection") { [weak self] allowed, _ in
             guard allowed else { Task { @MainActor in self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
-            self?.sessionAccess.acquire(key: key, context: context) { result in
-                Task { @MainActor in
-                    guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.sessionAccess.acquire(key: key, context: context) { result in
+                    Task { @MainActor in
                     switch result {
                     case let .success(grant): self.setConnectionStatus("Connected account: \(grant.subject)")
                     case let .failure(error): self.setConnectionFailure(error)
                     }
                     self.finishConnectionOperation()
+                    }
                 }
             }
         }

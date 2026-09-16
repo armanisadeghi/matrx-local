@@ -708,7 +708,7 @@ async fn start_sidecar(
 ) -> Result<(), String> {
     // Check if already running — but also detect and clear stale handles
     // where the process exited without going through stop_sidecar().
-    let mut stale_child_pid = None;
+    let mut stale_child_pid: Option<u32> = None;
     {
         let mut guard = state.child.lock().unwrap();
         if guard.is_some() {
@@ -1911,6 +1911,7 @@ fn reload_renderer(window: tauri::WebviewWindow) -> Result<(), String> {
 /// handle — a held handle means the process is alive.
 #[tauri::command]
 async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<SidecarStatus, String> {
+    #[allow(unused_mut)]
     let mut guard = state.child.lock().unwrap();
     let running = if let Some(ref child) = *guard {
         #[cfg(unix)]

@@ -577,7 +577,16 @@ fn kill_orphaned_sidecars() {
             }).unwrap_or(false);
 
             if !pid_is_alive {
-                let _ = std::fs::remove_file(&path);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => lifecycle_log::log(&format!(
+                        "[orphan-sweep] removed stale discovery record for dead pid {:?}",
+                        recorded_pid
+                    )),
+                    Err(error) => lifecycle_log::log(&format!(
+                        "[orphan-sweep] failed to remove stale discovery record for dead pid {:?}: {}. Remedy: remove the stale local.json before restarting if engine discovery fails.",
+                        recorded_pid, error
+                    )),
+                }
             }
         }
     }
@@ -699,6 +708,7 @@ async fn start_sidecar(
 ) -> Result<(), String> {
     // Check if already running — but also detect and clear stale handles
     // where the process exited without going through stop_sidecar().
+    let mut stale_child_pid = None;
     {
         let mut guard = state.child.lock().unwrap();
         if guard.is_some() {
@@ -709,10 +719,7 @@ async fn start_sidecar(
                 let pid = guard.as_ref().unwrap().pid();
                 let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
                 if !alive {
-                    eprintln!(
-                        "[sidecar] Stale child handle (pid={}) detected — process is gone. Clearing.",
-                        pid
-                    );
+                    stale_child_pid = Some(pid);
                     *guard = None;
                     // Fall through to respawn below.
                 } else {
@@ -724,6 +731,25 @@ async fn start_sidecar(
             // always calls stop_sidecar() first on Windows, so this is fine.
             #[cfg(not(unix))]
             return Ok(());
+        }
+    }
+    if let Some(pid) = stale_child_pid {
+        let message = format!(
+            "Stale engine child handle for pid {} was cleared after the process disappeared; the desktop will respawn the engine.",
+            pid
+        );
+        lifecycle_log::log(&format!("[start_sidecar] {message}"));
+        if let Err(error) = error_outbox::enqueue_native_event(
+            app.clone(),
+            "warn",
+            "native.startup.sidecar-stale-handle",
+            message,
+        )
+        .await
+        {
+            lifecycle_log::log(&format!(
+                "[start_sidecar] could not persist stale-handle diagnostic: {error}"
+            ));
         }
     }
 
@@ -803,9 +829,20 @@ async fn start_sidecar(
             sidecar = sidecar.env("MATRX_BUNDLED_UV_PATH", path.as_os_str());
         }
         None if !cfg!(debug_assertions) => {
-            eprintln!(
-                "[sidecar] bundled media-runtime installer is missing; image/video runtime repair will be unavailable"
-            );
+            let message = "Bundled media-runtime installer is missing; image/video runtime repair is unavailable. Remedy: reinstall or update AI Matrx Desktop.";
+            lifecycle_log::log(&format!("[start_sidecar] {message}"));
+            if let Err(error) = error_outbox::enqueue_native_event(
+                app.clone(),
+                "error",
+                "native.startup.media-runtime-installer",
+                message,
+            )
+            .await
+            {
+                lifecycle_log::log(&format!(
+                    "[start_sidecar] could not persist media-runtime diagnostic: {error}"
+                ));
+            }
         }
         None => {}
     }

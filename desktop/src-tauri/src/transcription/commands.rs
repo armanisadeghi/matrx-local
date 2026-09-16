@@ -17,6 +17,47 @@ use super::{
 // Default model used for wake word detection (fastest whisper model).
 const WAKE_WORD_DEFAULT_MODEL: &str = "ggml-tiny.en.bin";
 
+fn receive_startup_result(
+    receiver: std::sync::mpsc::Receiver<Result<(), String>>,
+    component: &str,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "{component} startup timed out after {} ms. Reconnect the microphone or restart the app before trying again.",
+            timeout.as_millis()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "{component} startup ended without reporting a result. Restart capture and try again."
+        )),
+    }
+}
+
+fn take_finished_worker(
+    slot: &Mutex<Option<JoinHandle<()>>>,
+) -> Result<Option<JoinHandle<()>>, ()> {
+    let mut slot = slot.lock().unwrap();
+    match slot.take() {
+        Some(handle) if handle.is_finished() => Ok(Some(handle)),
+        Some(handle) => {
+            *slot = Some(handle);
+            Err(())
+        }
+        None => Ok(None),
+    }
+}
+
+fn ensure_start_still_active(active: bool, component: &str) -> Result<(), String> {
+    if active {
+        Ok(())
+    } else {
+        Err(format!(
+            "{component} was stopped before startup completed. Start it again when you are ready."
+        ))
+    }
+}
+
 /// Tauri-managed state holding the active transcription context.
 pub struct TranscriptionState(pub Mutex<Option<TranscriptionManager>>);
 
@@ -390,7 +431,10 @@ pub async fn start_transcription(
     // Reap any previous capture thread that hasn't fully exited yet (stop
     // flips the flag but the loop may be mid-inference) — starting now would
     // otherwise revive it via the shared flag.
-    let leftover = recording.thread_handle.lock().unwrap().take();
+    let leftover = take_finished_worker(&recording.thread_handle).map_err(|()| {
+        "A previous audio startup is still blocked. Reconnect the microphone or restart the app before trying again."
+            .to_string()
+    })?;
     if let Some(handle) = leftover {
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = handle.join();
@@ -415,19 +459,28 @@ pub async fn start_transcription(
     // Get thread count from hardware — use up to half the CPUs, capped at 8
     let hw = HardwareProfile::detect();
     let n_threads = (hw.cpu_threads / 2).max(1).min(8) as i32;
+    let startup_timeout = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| TranscriptionConfig::load(&dir).capture_startup_timeout())
+        .unwrap_or_else(|| TranscriptionConfig::default().capture_startup_timeout());
 
     // Clone the context arc before entering the spawned thread
-    let manager_guard = state.0.lock().unwrap();
-    let manager = manager_guard
-        .as_ref()
-        .ok_or("Transcription not initialized — call init_transcription first")?;
-    let ctx = manager.context().clone();
+    let ctx = {
+        let manager_guard = state.0.lock().unwrap();
+        let manager = manager_guard
+            .as_ref()
+            .ok_or("Transcription not initialized — call init_transcription first")?;
+        manager.context().clone()
+    };
 
     // Mark as recording before spawning so the flag is set synchronously
     *recording.flag.lock().unwrap() = true;
 
     let app_events = app.clone();
     let recording_flag = app.state::<RecordingState>().flag.clone();
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
     // AudioCapture holds a cpal::Stream which is !Send, so we run the entire
     // capture + inference loop on a dedicated OS thread.
@@ -438,11 +491,12 @@ pub async fn start_transcription(
         let capture = match audio_capture::AudioCapture::start_with_device(device_name.as_deref()) {
             Ok(c) => c,
             Err(e) => {
-                let _ = app_events.emit("whisper-error", e);
+                let _ = startup_tx.send(Err(e.clone()));
                 *recording_flag.lock().unwrap() = false;
                 return;
             }
         };
+        let _ = startup_tx.send(Ok(()));
 
         // Whisper works best on 5-second chunks — long enough for sentence context,
         // short enough for responsive output.
@@ -472,7 +526,33 @@ pub async fn start_transcription(
             // Drain whatever the CPAL callback has produced since the last tick.
             // When mic is stopped we do one final drain to capture any in-flight
             // samples that arrived between the flag flip and this tick.
-            let samples = capture.drain();
+            let samples = match capture.drain() {
+                Ok(samples) => samples,
+                Err(message) => {
+                    let _ = app_events.emit("whisper-error", &message);
+                    let _ = app_events.emit("whisper-stopped", serde_json::Value::Null);
+                    crate::lifecycle_log::log(
+                        "[native-audio] transcription capture failed after startup. Remedy: reconnect or choose another microphone.",
+                    );
+                    let diagnostics_app = app_events.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = crate::error_outbox::enqueue_native_event(
+                            diagnostics_app,
+                            "error",
+                            "native.audio.capture-runtime",
+                            message,
+                        )
+                        .await
+                        {
+                            crate::lifecycle_log::log(&format!(
+                                "[native-audio] could not persist runtime diagnostic: {error}"
+                            ));
+                        }
+                    });
+                    *recording_flag.lock().unwrap() = false;
+                    break;
+                }
+            };
             if !samples.is_empty() {
                 accumulated.extend_from_slice(&samples);
 
@@ -552,8 +632,48 @@ pub async fn start_transcription(
         *recording_flag.lock().unwrap() = false;
     });
 
-    // Store the JoinHandle so graceful_shutdown_sync can join it on quit.
+    // Publish ownership immediately so shutdown can always join the worker,
+    // including while this command waits for the microphone-open handshake.
     *recording.thread_handle.lock().unwrap() = Some(handle);
+
+    let startup_result = tauri::async_runtime::spawn_blocking(move || {
+        receive_startup_result(startup_rx, "Audio capture", startup_timeout)
+    })
+    .await
+    .map_err(|error| format!("Audio capture startup task failed: {error}"))?;
+    if let Err(error) = startup_result {
+        *recording.flag.lock().unwrap() = false;
+        let finished = {
+            let mut slot = recording.thread_handle.lock().unwrap();
+            if slot.as_ref().is_some_and(|handle| handle.is_finished()) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = finished {
+            let _ = tauri::async_runtime::spawn_blocking(move || handle.join()).await;
+        }
+        let _ = app.emit("whisper-error", &error);
+        let _ = app.emit("whisper-stopped", serde_json::Value::Null);
+        crate::lifecycle_log::log(
+            "[native-audio] transcription capture could not start. Remedy: reconnect the microphone or restart the app.",
+        );
+        if let Err(persist_error) = crate::error_outbox::enqueue_native_event(
+            app.clone(),
+            "error",
+            "native.audio.capture-start",
+            error.clone(),
+        )
+        .await
+        {
+            crate::lifecycle_log::log(&format!(
+                "[native-audio] could not persist capture-start diagnostic: {persist_error}"
+            ));
+        }
+        return Err(error);
+    }
+    ensure_start_still_active(*recording.flag.lock().unwrap(), "Audio capture")?;
 
     Ok(())
 }
@@ -633,13 +753,10 @@ fn is_hallucination(text: &str) -> bool {
 #[tauri::command]
 pub async fn stop_transcription(recording: State<'_, RecordingState>) -> Result<(), String> {
     *recording.flag.lock().unwrap() = false;
-    // Join the capture thread: the loop observes the flag only every ~50ms
-    // (or after the current Whisper inference). Without joining, an immediate
-    // restart flipped the SHARED flag back to true and revived this thread —
-    // two concurrent capture loops on one WhisperContext, and the overwritten
-    // JoinHandle could never be reaped at quit (the GGML SIGABRT hole).
-    let handle = recording.thread_handle.lock().unwrap().take();
-    if let Some(handle) = handle {
+    // Reap only a worker that has already stopped. A worker blocked inside a
+    // native driver call remains owned in state; the next start refuses until
+    // it exits, so we never revive or overwrite it.
+    if let Ok(Some(handle)) = take_finished_worker(&recording.thread_handle) {
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = handle.join();
         })
@@ -666,8 +783,33 @@ pub async fn stop_transcription(recording: State<'_, RecordingState>) -> Result<
 /// Real-world triggers: pending mic permission, device hot-plug, Bluetooth
 /// negotiation, `coreaudiod` restart.
 #[tauri::command(async)]
-pub fn list_audio_input_devices() -> Vec<audio_capture::AudioDeviceInfo> {
-    audio_capture::list_input_devices()
+pub fn list_audio_input_devices(
+    app: AppHandle,
+) -> Result<Vec<audio_capture::AudioDeviceInfo>, String> {
+    match audio_capture::list_input_devices() {
+        Ok(devices) => Ok(devices),
+        Err(message) => {
+            crate::lifecycle_log::log(
+                "[native-audio] input-device enumeration failed. Remedy: check microphone access and reconnect the device.",
+            );
+            let diagnostic = message.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = crate::error_outbox::enqueue_native_event(
+                    app,
+                    "error",
+                    "native.audio.device-enumeration",
+                    diagnostic,
+                )
+                .await
+                {
+                    crate::lifecycle_log::log(&format!(
+                        "[native-audio] could not persist enumeration diagnostic: {error}"
+                    ));
+                }
+            });
+            Err(message)
+        }
+    }
 }
 
 // ── Setup Status ───────────────────────────────────────────────────────────
@@ -752,7 +894,10 @@ pub async fn start_wake_word(
     // Reap a previous thread that hasn't observed running=false yet —
     // setting the SHARED flag true below would otherwise revive it and the
     // overwritten JoinHandle could never be joined at quit.
-    let leftover = ww_state.0.thread_handle.lock().unwrap().take();
+    let leftover = take_finished_worker(&ww_state.0.thread_handle).map_err(|()| {
+        "A previous wake-word startup is still blocked. Reconnect the microphone or restart the app before trying again."
+            .to_string()
+    })?;
     if let Some(handle) = leftover {
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = handle.join();
@@ -760,15 +905,67 @@ pub async fn start_wake_word(
         .await;
     }
 
-    // Configure and start the thread
+    // Configure and start the thread. Do not announce Listening until the
+    // worker proves that the model and selected microphone are open.
     *ww_state.0.models_dir.lock().unwrap() = Some(models_dir);
     *ww_state.0.mode.lock().unwrap() = WakeWordMode::Listening;
     *ww_state.0.running.lock().unwrap() = true;
+    let startup_timeout = TranscriptionConfig::load(
+        &app.path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?,
+    )
+    .capture_startup_timeout();
+
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    super::wake_word::spawn_wake_word_thread(
+        app.clone(),
+        ww_state.0.clone(),
+        device_name,
+        startup_tx,
+    );
+
+    let startup_result = tauri::async_runtime::spawn_blocking(move || {
+        receive_startup_result(startup_rx, "Wake-word capture", startup_timeout)
+    })
+    .await
+    .map_err(|error| format!("Wake-word startup task failed: {error}"))?;
+    if let Err(error) = startup_result {
+        *ww_state.0.running.lock().unwrap() = false;
+        *ww_state.0.mode.lock().unwrap() = WakeWordMode::Muted;
+        let _ = app.emit("wake-word-mode", WakeWordMode::Muted);
+        let finished = {
+            let mut slot = ww_state.0.thread_handle.lock().unwrap();
+            if slot.as_ref().is_some_and(|handle| handle.is_finished()) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = finished {
+            let _ = tauri::async_runtime::spawn_blocking(move || handle.join()).await;
+        }
+        let _ = app.emit("wake-word-error", &error);
+        crate::lifecycle_log::log(
+            "[native-audio] wake-word capture could not start. Remedy: reconnect the microphone or restart the app.",
+        );
+        if let Err(persist_error) = crate::error_outbox::enqueue_native_event(
+            app.clone(),
+            "error",
+            "native.audio.wake-word-start",
+            error.clone(),
+        )
+        .await
+        {
+            crate::lifecycle_log::log(&format!(
+                "[native-audio] could not persist wake-word start diagnostic: {persist_error}"
+            ));
+        }
+        return Err(error);
+    }
+    ensure_start_still_active(*ww_state.0.running.lock().unwrap(), "Wake-word capture")?;
 
     let _ = app.emit("wake-word-mode", WakeWordMode::Listening);
-
-    super::wake_word::spawn_wake_word_thread(app, ww_state.0.clone(), device_name);
-
     Ok(())
 }
 
@@ -780,8 +977,7 @@ pub fn stop_wake_word(app: AppHandle, ww_state: State<'_, WakeWordAppState>) -> 
     // Reap the thread off the command path (sync command — can't await).
     // start_wake_word also reaps as a fallback, so the handle is joined
     // exactly once whichever runs first.
-    let handle = ww_state.0.thread_handle.lock().unwrap().take();
-    if let Some(handle) = handle {
+    if let Ok(Some(handle)) = take_finished_worker(&ww_state.0.thread_handle) {
         tauri::async_runtime::spawn_blocking(move || {
             let _ = handle.join();
         });
@@ -866,4 +1062,82 @@ pub fn get_wake_word_mode(ww_state: State<'_, WakeWordAppState>) -> WakeWordMode
 #[tauri::command]
 pub fn is_wake_word_running(ww_state: State<'_, WakeWordAppState>) -> bool {
     *ww_state.0.running.lock().unwrap()
+}
+
+#[cfg(test)]
+mod capture_startup_tests {
+    use super::{ensure_start_still_active, receive_startup_result, take_finished_worker};
+
+    #[test]
+    fn startup_handshake_propagates_worker_success_and_failure() {
+        let (success_tx, success_rx) = std::sync::mpsc::sync_channel(1);
+        success_tx.send(Ok(())).unwrap();
+        assert_eq!(
+            receive_startup_result(success_rx, "capture", std::time::Duration::from_secs(1)),
+            Ok(())
+        );
+
+        let (failure_tx, failure_rx) = std::sync::mpsc::sync_channel(1);
+        failure_tx.send(Err("device unavailable".into())).unwrap();
+        assert_eq!(
+            receive_startup_result(failure_rx, "capture", std::time::Duration::from_secs(1)),
+            Err("device unavailable".into())
+        );
+    }
+
+    #[test]
+    fn startup_handshake_rejects_a_worker_that_exits_silently() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        drop(sender);
+        assert_eq!(
+            receive_startup_result(receiver, "capture", std::time::Duration::from_secs(1)),
+            Err(
+                "capture startup ended without reporting a result. Restart capture and try again."
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn startup_handshake_times_out_instead_of_waiting_forever() {
+        let (_sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert_eq!(
+            receive_startup_result(receiver, "capture", std::time::Duration::ZERO),
+            Err("capture startup timed out after 0 ms. Reconnect the microphone or restart the app before trying again.".into())
+        );
+    }
+
+    #[test]
+    fn stop_during_start_retains_an_unfinished_worker_for_later_reap() {
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let slot = std::sync::Mutex::new(Some(std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        })));
+
+        assert!(take_finished_worker(&slot).is_err());
+        assert!(slot.lock().unwrap().is_some());
+
+        release_tx.send(()).unwrap();
+        let handle = loop {
+            if let Ok(Some(handle)) = take_finished_worker(&slot) {
+                break handle;
+            }
+            std::thread::yield_now();
+        };
+        handle.join().unwrap();
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn stop_before_success_prevents_false_transcription_and_wake_word_success() {
+        assert_eq!(
+            ensure_start_still_active(false, "Audio capture"),
+            Err("Audio capture was stopped before startup completed. Start it again when you are ready.".into())
+        );
+        assert_eq!(
+            ensure_start_still_active(false, "Wake-word capture"),
+            Err("Wake-word capture was stopped before startup completed. Start it again when you are ready.".into())
+        );
+        assert_eq!(ensure_start_still_active(true, "Audio capture"), Ok(()));
+    }
 }

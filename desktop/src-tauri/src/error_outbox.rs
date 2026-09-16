@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 const SCHEMA_VERSION: u8 = 1;
@@ -21,6 +22,7 @@ const MAX_WINDOW_CHARS: usize = 128;
 const OUTBOX_FILE: &str = "error-outbox-v1.json";
 
 static OUTBOX_LOCK: Mutex<()> = Mutex::new(());
+static NATIVE_EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -376,6 +378,53 @@ fn enqueue_at(path: &Path, event: ErrorOutboxEvent) -> Result<(), String> {
     write_events(path, &events)
 }
 
+fn native_event_at(
+    level: &str,
+    source: &str,
+    message: String,
+    unix_millis: u128,
+    sequence: u64,
+) -> ErrorOutboxEvent {
+    let occurred_at =
+        crate::lifecycle_log::format_utc((unix_millis / 1_000) as u64).replacen(' ', "T", 1);
+    ErrorOutboxEvent {
+        id: format!("native-{}-{}-{}", std::process::id(), unix_millis, sequence),
+        schema_version: SCHEMA_VERSION,
+        occurred_at,
+        level: level.to_string(),
+        source: source.to_string(),
+        message,
+        route: "native://desktop".into(),
+        window_label: "native".into(),
+        // Native startup and device failures can happen before authentication.
+        // They remain identity-free and installation-local rather than being
+        // reassigned to whichever user signs in next.
+        user_id: None,
+        organization_id: None,
+    }
+}
+
+/// Persist a native warning/error through the same bounded, redacting queue
+/// used by renderer diagnostics. This never writes Python-owned storage and
+/// is safe before the engine or authenticated renderer is available.
+pub async fn enqueue_native_event(
+    app: tauri::AppHandle,
+    level: &str,
+    source: &str,
+    message: impl Into<String>,
+) -> Result<(), String> {
+    let unix_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let sequence = NATIVE_EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    enqueue_error_outbox_event(
+        app,
+        native_event_at(level, source, message.into(), unix_millis, sequence),
+    )
+    .await
+}
+
 fn acknowledge_at(path: &Path, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -534,6 +583,29 @@ mod tests {
         assert!(!persisted.contains("sk-abcdefghijk"));
         assert!(!persisted.contains("eyJheader.payload.signature"));
         assert_eq!(persisted.matches("[REDACTED]").count(), 9);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_events_are_identity_free_timestamped_and_redacted() {
+        let path = temp_path("native");
+        let event = native_event_at(
+            "error",
+            "native.startup",
+            "installer failed token=top-secret".into(),
+            1_789_430_400_123,
+            7,
+        );
+        enqueue_at(&path, event).unwrap();
+
+        let persisted = read_events(&path).unwrap().remove(0);
+        assert_eq!(persisted.source, "native.startup");
+        assert_eq!(persisted.occurred_at, "2026-09-15T00:00:00Z");
+        assert_eq!(persisted.route, "native://desktop");
+        assert_eq!(persisted.window_label, "native");
+        assert_eq!(persisted.user_id, None);
+        assert_eq!(persisted.organization_id, None);
+        assert_eq!(persisted.message, "installer failed token=[REDACTED]");
         let _ = std::fs::remove_file(path);
     }
 }

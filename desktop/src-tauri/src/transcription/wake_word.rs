@@ -111,15 +111,21 @@ pub fn spawn_wake_word_thread(
     app: tauri::AppHandle,
     state: Arc<WakeWordState>,
     device_name: Option<String>,
+    startup_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
 ) {
     let state_for_thread = state.clone();
     let handle = std::thread::spawn(move || {
-        wake_word_loop(app, state_for_thread, device_name);
+        wake_word_loop(app, state_for_thread, device_name, startup_tx);
     });
     *state.thread_handle.lock().unwrap() = Some(handle);
 }
 
-fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name: Option<String>) {
+fn wake_word_loop(
+    app: tauri::AppHandle,
+    state: Arc<WakeWordState>,
+    device_name: Option<String>,
+    startup_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+) {
     use super::manager::TranscriptionManager;
     use tauri::Emitter;
 
@@ -130,10 +136,8 @@ fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name:
         match dir {
             Some(d) => (d, fname),
             None => {
-                let _ = app.emit(
-                    "wake-word-error",
-                    "models_dir not set — call start_wake_word first",
-                );
+                let message = "Wake-word models directory is unavailable.".to_string();
+                let _ = startup_tx.send(Err(message));
                 *state.running.lock().unwrap() = false;
                 return;
             }
@@ -143,13 +147,11 @@ fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name:
     let model_path = models_dir.join(&model_filename);
     if !model_path.exists() {
         // Model not downloaded yet — emit a helpful message but don't crash
-        let _ = app.emit(
-            "wake-word-error",
-            format!(
-                "Wake word model not found: {}. Complete voice setup first.",
-                model_filename
-            ),
+        let message = format!(
+            "Wake word model not found: {}. Complete voice setup first.",
+            model_filename
         );
+        let _ = startup_tx.send(Err(message));
         *state.running.lock().unwrap() = false;
         return;
     }
@@ -158,10 +160,8 @@ fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name:
     let manager = match TranscriptionManager::load(model_path) {
         Ok(m) => m,
         Err(e) => {
-            let _ = app.emit(
-                "wake-word-error",
-                format!("Failed to load wake word model: {}", e),
-            );
+            let message = format!("Failed to load wake word model: {}", e);
+            let _ = startup_tx.send(Err(message));
             *state.running.lock().unwrap() = false;
             return;
         }
@@ -174,11 +174,13 @@ fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name:
         match super::audio_capture::AudioCapture::start_with_device(device_name.as_deref()) {
             Ok(c) => c,
             Err(e) => {
-                let _ = app.emit("wake-word-error", format!("Audio capture failed: {}", e));
+                let message = format!("Audio capture failed: {}", e);
+                let _ = startup_tx.send(Err(message));
                 *state.running.lock().unwrap() = false;
                 return;
             }
         };
+    let _ = startup_tx.send(Ok(()));
 
     let sample_rate = capture.sample_rate(); // always 16_000
     let window_samples = sample_rate as usize * 2; // 2-second window
@@ -200,7 +202,34 @@ fn wake_word_loop(app: tauri::AppHandle, state: Arc<WakeWordState>, device_name:
         }
 
         let mode = state.mode.lock().unwrap().clone();
-        let samples = capture.drain();
+        let samples = match capture.drain() {
+            Ok(samples) => samples,
+            Err(message) => {
+                let _ = app.emit("wake-word-error", &message);
+                *state.mode.lock().unwrap() = WakeWordMode::Muted;
+                let _ = app.emit("wake-word-mode", WakeWordMode::Muted);
+                crate::lifecycle_log::log(
+                    "[native-audio] wake-word capture failed after startup. Remedy: reconnect or choose another microphone.",
+                );
+                let diagnostics_app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::error_outbox::enqueue_native_event(
+                        diagnostics_app,
+                        "error",
+                        "native.audio.wake-word-runtime",
+                        message,
+                    )
+                    .await
+                    {
+                        crate::lifecycle_log::log(&format!(
+                            "[native-audio] could not persist wake-word runtime diagnostic: {error}"
+                        ));
+                    }
+                });
+                *state.running.lock().unwrap() = false;
+                break;
+            }
+        };
 
         if !samples.is_empty() {
             // Always emit RMS so the UI audio meter stays alive

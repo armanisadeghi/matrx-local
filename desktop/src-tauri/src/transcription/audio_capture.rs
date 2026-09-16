@@ -30,6 +30,17 @@ pub struct AudioCapture {
     buffer: Arc<Mutex<Vec<f32>>>,
     /// The actual native capture rate (informational).
     native_sample_rate: u32,
+    /// First terminal callback/resampler fault. The consumer takes it once and
+    /// stops the session instead of waiting forever on an empty buffer.
+    fault: Arc<Mutex<Option<String>>>,
+}
+
+fn record_capture_fault(fault: &Arc<Mutex<Option<String>>>, message: &'static str) {
+    if let Ok(mut slot) = fault.lock() {
+        if slot.is_none() {
+            *slot = Some(message.to_string());
+        }
+    }
 }
 
 impl AudioCapture {
@@ -42,21 +53,18 @@ impl AudioCapture {
         let host = cpal::default_host();
 
         let device = if let Some(name) = device_name {
-            // Try to find the named device; fall back to default if not found.
+            // A persisted explicit choice must never silently capture a
+            // different microphone when that device is disconnected.
             let found = host
                 .input_devices()
                 .map_err(|e| format!("Failed to enumerate input devices: {}", e))?
                 .find(|d| d.name().map(|n| n == name).unwrap_or(false));
             match found {
                 Some(d) => d,
-                None => {
-                    eprintln!(
-                        "[audio_capture] Device '{}' not found; falling back to system default",
-                        name
-                    );
-                    host.default_input_device()
-                        .ok_or("No audio input device found")?
-                }
+                None => return Err(
+                    "The selected audio input device is unavailable. Reconnect it or choose another microphone."
+                        .to_string(),
+                ),
             }
         } else {
             host.default_input_device()
@@ -76,6 +84,7 @@ impl AudioCapture {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
             TARGET_SAMPLE_RATE as usize * 5,
         )));
+        let fault = Arc::new(Mutex::new(None));
 
         let (stream, actual_rate) = if native_rate == TARGET_SAMPLE_RATE && native_channels == 1 {
             // Perfect match — no conversion needed.
@@ -85,7 +94,7 @@ impl AudioCapture {
                 buffer_size: cpal::BufferSize::Default,
             };
             let buf = Arc::clone(&buffer);
-            let stream = build_passthrough_stream(&device, &cfg, buf)
+            let stream = build_passthrough_stream(&device, &cfg, buf, Arc::clone(&fault))
                 .map_err(|e| format!("Failed to open stream: {}", e))?;
             (stream, TARGET_SAMPLE_RATE)
         } else {
@@ -96,8 +105,15 @@ impl AudioCapture {
             );
             let cfg: cpal::StreamConfig = supported_config.into();
             let buf = Arc::clone(&buffer);
-            let stream = build_resampling_stream(&device, &cfg, native_channels, native_rate, buf)
-                .map_err(|e| format!("Failed to open resampling stream: {}", e))?;
+            let stream = build_resampling_stream(
+                &device,
+                &cfg,
+                native_channels,
+                native_rate,
+                buf,
+                Arc::clone(&fault),
+            )
+            .map_err(|e| format!("Failed to open resampling stream: {}", e))?;
             (stream, native_rate)
         };
 
@@ -109,6 +125,7 @@ impl AudioCapture {
             _stream: stream,
             buffer,
             native_sample_rate: actual_rate,
+            fault,
         })
     }
 
@@ -118,11 +135,21 @@ impl AudioCapture {
     }
 
     /// Drain all accumulated 16kHz mono samples from the buffer.
-    pub fn drain(&self) -> Vec<f32> {
-        let mut buf = self.buffer.lock().unwrap();
+    pub fn drain(&self) -> Result<Vec<f32>, String> {
+        let mut fault = self.fault.lock().map_err(|_| {
+            "Audio input failure state is unavailable; restart capture.".to_string()
+        })?;
+        if let Some(message) = fault.take() {
+            return Err(message);
+        }
+        drop(fault);
+        let mut buf = self
+            .buffer
+            .lock()
+            .map_err(|_| "Audio input buffer failed; restart capture.".to_string())?;
         let samples = buf.clone();
         buf.clear();
-        samples
+        Ok(samples)
     }
 
     /// Always returns TARGET_SAMPLE_RATE (16000) — the resampled output rate.
@@ -143,18 +170,31 @@ fn build_passthrough_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     buffer: Arc<Mutex<Vec<f32>>>,
+    fault: Arc<Mutex<Option<String>>>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError> {
+    let callback_fault = Arc::clone(&fault);
     device.build_input_stream(
         config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            let mut buf = buffer.lock().unwrap();
+            let Ok(mut buf) = buffer.lock() else {
+                record_capture_fault(
+                    &callback_fault,
+                    "Audio input buffer failed; restart capture.",
+                );
+                return;
+            };
             buf.extend_from_slice(data);
             if buf.len() > MAX_SAMPLES {
                 let drain_count = buf.len() - MAX_SAMPLES;
                 buf.drain(0..drain_count);
             }
         },
-        |err| eprintln!("[audio_capture] Stream error: {}", err),
+        move |_err| {
+            record_capture_fault(
+                &fault,
+                "Audio input stream failed. Reconnect or choose another microphone.",
+            )
+        },
         None,
     )
 }
@@ -173,6 +213,7 @@ fn build_resampling_stream(
     native_channels: u16,
     native_rate: u32,
     output_buffer: Arc<Mutex<Vec<f32>>>,
+    fault: Arc<Mutex<Option<String>>>,
 ) -> Result<cpal::Stream, String> {
     // Staging buffer: raw mono samples at native rate, accumulated between callback calls.
     let staging: Arc<Mutex<Vec<f32>>> =
@@ -196,6 +237,7 @@ fn build_resampling_stream(
 
     let resampler = Arc::new(Mutex::new(resampler));
     let channels = native_channels as usize;
+    let data_fault = Arc::clone(&fault);
 
     let stream = device
         .build_input_stream(
@@ -207,11 +249,20 @@ fn build_resampling_stream(
                     .map(|frame| frame.iter().sum::<f32>() / channels as f32)
                     .collect();
 
-                let mut stage = staging.lock().unwrap();
+                let Ok(mut stage) = staging.lock() else {
+                    record_capture_fault(
+                        &data_fault,
+                        "Audio input staging failed; restart capture.",
+                    );
+                    return;
+                };
                 stage.extend_from_slice(&mono);
 
                 // Step 2: resample all complete chunks from the staging buffer.
-                let mut rs = resampler.lock().unwrap();
+                let Ok(mut rs) = resampler.lock() else {
+                    record_capture_fault(&data_fault, "Audio resampler failed; restart capture.");
+                    return;
+                };
                 while stage.len() >= chunk_size {
                     // Drain exactly chunk_size mono frames from the staging buffer.
                     let input_chunk: Vec<f32> = stage.drain(0..chunk_size).collect();
@@ -222,9 +273,23 @@ fn build_resampling_stream(
 
                     // rubato 1.x uses audioadapter buffer types.
                     // InterleavedSlice wraps a flat slice as (channels, frames) interleaved.
-                    let input_adapter = InterleavedSlice::new(&input_chunk, 1, chunk_size).unwrap();
-                    let mut output_adapter =
-                        InterleavedSlice::new_mut(&mut output_scratch, 1, out_frames).unwrap();
+                    let Ok(input_adapter) = InterleavedSlice::new(&input_chunk, 1, chunk_size)
+                    else {
+                        record_capture_fault(
+                            &data_fault,
+                            "Audio resampler input failed; restart capture.",
+                        );
+                        return;
+                    };
+                    let Ok(mut output_adapter) =
+                        InterleavedSlice::new_mut(&mut output_scratch, 1, out_frames)
+                    else {
+                        record_capture_fault(
+                            &data_fault,
+                            "Audio resampler output failed; restart capture.",
+                        );
+                        return;
+                    };
 
                     let indexing = Indexing {
                         input_offset: 0,
@@ -239,18 +304,35 @@ fn build_resampling_stream(
                         Some(&indexing),
                     ) {
                         Ok((_in_used, out_written)) => {
-                            let mut out = output_buffer.lock().unwrap();
+                            let Ok(mut out) = output_buffer.lock() else {
+                                record_capture_fault(
+                                    &data_fault,
+                                    "Audio output buffer failed; restart capture.",
+                                );
+                                return;
+                            };
                             out.extend_from_slice(&output_scratch[..out_written]);
                             if out.len() > MAX_SAMPLES {
                                 let drain_count = out.len() - MAX_SAMPLES;
                                 out.drain(0..drain_count);
                             }
                         }
-                        Err(e) => eprintln!("[audio_capture] Resample error: {}", e),
+                        Err(_error) => {
+                            record_capture_fault(
+                                &data_fault,
+                                "Audio resampler failed; restart capture.",
+                            );
+                            return;
+                        }
                     }
                 }
             },
-            |err| eprintln!("[audio_capture] Stream error: {}", err),
+            move |_err| {
+                record_capture_fault(
+                    &fault,
+                    "Audio input stream failed. Reconnect or choose another microphone.",
+                )
+            },
             None,
         )
         .map_err(|e| format!("Failed to build resampling stream: {}", e))?;
@@ -261,48 +343,74 @@ fn build_resampling_stream(
 // ── Device listing ─────────────────────────────────────────────────────────
 
 /// List available audio input devices with their supported configurations.
-pub fn list_input_devices() -> Vec<AudioDeviceInfo> {
+pub fn list_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
     let host = cpal::default_host();
     let default_name = host
         .default_input_device()
-        .and_then(|d| d.name().ok())
+        .map(|device| {
+            device.name().map_err(|_| {
+                "Audio input device enumeration failed. Check microphone access and reconnect the device."
+                    .to_string()
+            })
+        })
+        .transpose()?
         .unwrap_or_default();
 
-    host.input_devices()
-        .map(|devices| {
-            devices
-                .filter_map(|device| {
-                    let name = device.name().ok()?;
-                    let supported = device.supported_input_configs().ok()?;
-                    let mut sample_rates = Vec::new();
-                    let mut channels = Vec::new();
+    let devices = host
+        .input_devices()
+        .map_err(|_| "Audio input device enumeration failed. Check microphone access and reconnect the device.".to_string())?;
+    let mut result = Vec::new();
+    for device in devices {
+        let name = device.name().map_err(|_| {
+            "Audio input device enumeration failed. Check microphone access and reconnect the device."
+                .to_string()
+        })?;
+        let supported = device.supported_input_configs().map_err(|_| {
+            "Audio input device configuration failed. Check microphone access and reconnect the device."
+                .to_string()
+        })?;
+        let mut sample_rates = Vec::new();
+        let mut channels = Vec::new();
 
-                    for config in supported {
-                        let min = config.min_sample_rate().0;
-                        let max = config.max_sample_rate().0;
-                        if !sample_rates.contains(&min) {
-                            sample_rates.push(min);
-                        }
-                        if min != max && !sample_rates.contains(&max) {
-                            sample_rates.push(max);
-                        }
-                        let ch = config.channels();
-                        if !channels.contains(&ch) {
-                            channels.push(ch);
-                        }
-                    }
+        for config in supported {
+            let min = config.min_sample_rate().0;
+            let max = config.max_sample_rate().0;
+            if !sample_rates.contains(&min) {
+                sample_rates.push(min);
+            }
+            if min != max && !sample_rates.contains(&max) {
+                sample_rates.push(max);
+            }
+            let ch = config.channels();
+            if !channels.contains(&ch) {
+                channels.push(ch);
+            }
+        }
 
-                    sample_rates.sort();
-                    channels.sort();
+        sample_rates.sort();
+        channels.sort();
 
-                    Some(AudioDeviceInfo {
-                        is_default: name == default_name,
-                        name,
-                        sample_rates,
-                        channels,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        result.push(AudioDeviceInfo {
+            is_default: name == default_name,
+            name,
+            sample_rates,
+            channels,
+        });
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_fault_is_first_wins_and_taken_once() {
+        let fault = Arc::new(Mutex::new(None));
+        record_capture_fault(&fault, "first");
+        record_capture_fault(&fault, "second");
+
+        assert_eq!(fault.lock().unwrap().take().as_deref(), Some("first"));
+        assert_eq!(fault.lock().unwrap().take(), None);
+    }
 }

@@ -346,18 +346,26 @@ run_packaged() {
     # thus the real release) is untouched.
     local isolated_tauri_cfg
     isolated_tauri_cfg="$(smoke_tauri_config)"
-    local provider_config=()
+    local provider_config=""
     if [ "$OS" = "macos" ] && [ "${MATRX_NATIVE_VAULT_PROVIDER:-}" = "absent" ]; then
       # Match release.yml's explicit host-only profile when the optional signed
       # credential provider is not part of this artifact.
-      provider_config=(--config src-tauri/tauri.release.macos.host-only.conf.json)
+      provider_config="src-tauri/tauri.release.macos.host-only.conf.json"
     fi
 
     info "Packaging the desktop app (tauri build — several minutes)…"
-    if ! ( cd desktop && \
-      VITE_MATRX_ISOLATED_SMOKE=1 \
-      VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
-      pnpm tauri build $bundle_flag "${provider_config[@]}" --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1; then
+    if [ -n "$provider_config" ]; then
+      ( cd desktop && \
+        VITE_MATRX_ISOLATED_SMOKE=1 \
+        VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+        pnpm tauri build $bundle_flag --config "$provider_config" --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1
+    else
+      ( cd desktop && \
+        VITE_MATRX_ISOLATED_SMOKE=1 \
+        VITE_MATRX_TEST_ENGINE_PORT_BASE="$SMOKE_ENGINE_PORT_BASE" \
+        pnpm tauri build $bundle_flag --config "$isolated_tauri_cfg" ) >> "$build_log" 2>&1
+    fi
+    if [ "$?" -ne 0 ]; then
       record_fail "packaged: tauri build failed" "$(tail -30 "$build_log")"
       echo "Full build log: \`$build_log\`" >> "$SUMMARY"
       return 1

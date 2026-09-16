@@ -116,7 +116,7 @@ pub fn engine_stderr(line: &str) {
 
 /// Seconds-since-epoch → "YYYY-MM-DD HH:MM:SSZ" (civil-from-days algorithm,
 /// avoids pulling in chrono for one format call).
-fn format_utc(secs: u64) -> String {
+pub(crate) fn format_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

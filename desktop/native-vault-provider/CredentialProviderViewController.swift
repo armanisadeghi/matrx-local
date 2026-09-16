@@ -97,11 +97,11 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
         // This direct-list provider intentionally has no identity index yet.
-        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode))
     }
 
     override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
-        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode))
     }
 
     private func showConfiguration() {

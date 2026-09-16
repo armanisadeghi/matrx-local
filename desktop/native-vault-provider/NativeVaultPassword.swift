@@ -20,6 +20,26 @@ struct NativeOrganization {
     let isPersonal: Bool
 }
 
+struct NativePasswordCurrentState { let generation: String; let subject: String? }
+
+/// Shared production stage decisions. Runtime and corpus both use these exact
+/// decisions; dependencies supply Apple input and current App Group state.
+enum NativePasswordStage {
+    static func identifiers(_ values: [ASCredentialServiceIdentifier]) throws -> [(String, String)] {
+        var result: [(String, String)] = []
+        for value in values {
+            let type = value.type == .domain ? "domain" : (value.type == .URL ? "url" : "")
+            guard !type.isEmpty, value.identifier.utf8.count <= 2048 else { throw EnrollmentError.message("This website request is not supported.") }
+            result.append((type, value.identifier))
+        }
+        return result
+    }
+    static func grantIsCurrent(_ state: NativePasswordCurrentState, _ grant: NativeVaultSessionAccess.Grant) -> Bool {
+        state.generation == grant.generation && state.subject == grant.subject
+    }
+    static var interactionRequiredCode: Int { ASExtensionError.userInteractionRequired.rawValue }
+}
+
 enum NativePasswordCodec {
     private static func rejected() -> Error { EnrollmentError.message("Vault response was rejected. Try again.") }
 
@@ -203,14 +223,9 @@ final class NativeVaultSessionAccess {
 extension CredentialProviderViewController {
     private var nativePasswordKey: String? { Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String }
     func beginPasswordRequest(_ serviceIdentifiers: [ASCredentialServiceIdentifier]) {
-        var identifiers: [(String, String)] = []
-        for value in serviceIdentifiers {
-            let type = value.type == .domain ? "domain" : (value.type == .URL ? "url" : "")
-            guard !type.isEmpty, value.identifier.utf8.count <= 2048 else {
-                let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return
-            }
-            identifiers.append((type, value.identifier))
-        }
+        let identifiers: [(String, String)]
+        do { identifiers = try NativePasswordStage.identifiers(serviceIdentifiers) }
+        catch { let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return }
         let operation = nativePasswordCoordinator.begin(identifiers)
         guard let key = nativePasswordKey, key.validToken else { return cancelPassword(operation, "This build has no public Vault configuration. Install an updated AI Matrx build.") }
         let privateSession = NativeVaultPrivateSession(); let context: LAContext
@@ -295,7 +310,7 @@ extension CredentialProviderViewController {
     private func withLiveGrant(_ operation: NativePasswordOperation, _ grant: NativeVaultSessionAccess.Grant, then: @escaping () -> Void) {
         guard current(operation) else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let valid = (try? ProviderStore(mode: .providerAccess).locked { state in state.generation == grant.generation && state.provider_subject == grant.subject }) ?? false
+            let valid = (try? ProviderStore(mode: .providerAccess).locked { state in NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject), grant) }) ?? false
             DispatchQueue.main.async { guard let self, self.current(operation) else { return }; guard valid else { self.cancelPassword(operation, "Your Vault account changed. Start again."); return }; then() }
         }
     }
@@ -304,7 +319,7 @@ extension CredentialProviderViewController {
             let semaphore = DispatchSemaphore(value: 0)
             do {
                 try ProviderStore(mode: .providerAccess).locked { state in
-                    guard state.generation == grant.generation, state.provider_subject == grant.subject else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
+                    guard NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: state.generation, subject: state.provider_subject), grant) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
                     DispatchQueue.main.async {
                         guard let self, self.nativePasswordCoordinator.prepareCompletion(operation) else { semaphore.signal(); return }
                         self.extensionContext.completeRequest(withSelectedCredential: ASPasswordCredential(user: credential.username, password: credential.password), completionHandler: { [weak self] _ in Task { @MainActor in self?.nativePasswordCoordinator.clearCompleted(operation); semaphore.signal() } })

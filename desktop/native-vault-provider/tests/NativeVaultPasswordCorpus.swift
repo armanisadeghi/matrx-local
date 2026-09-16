@@ -1,4 +1,5 @@
 import Foundation
+import AuthenticationServices
 
 @main
 struct NativeVaultPasswordCorpus {
@@ -29,6 +30,15 @@ struct NativeVaultPasswordCorpus {
         require(coordinator.current(replacement), "stale completion must not clear replacement")
         require(coordinator.prepareCompletion(replacement), "current operation completes once")
         require(!coordinator.prepareCompletion(replacement), "completion must be exactly once")
+        let actual = try! NativePasswordStage.identifiers([ASCredentialServiceIdentifier(identifier: "one.example", type: .domain), ASCredentialServiceIdentifier(identifier: "https://two.example/path", type: .URL)])
+        require(actual.count == 2 && actual[0].1 == "one.example" && actual[1].1 == "https://two.example/path", "actual Apple identifier order must be preserved")
+        let oversized = ASCredentialServiceIdentifier(identifier: String(repeating: "a", count: 2049), type: .domain)
+        rejects({ _ = try NativePasswordStage.identifiers([oversized]) }, "oversized Apple identifier must reject the whole request")
+        let grant = NativeVaultSessionAccess.Grant(accessToken: "token", subject: subject, generation: "generation-a")
+        require(NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: "generation-a", subject: subject), grant), "current state must admit matching grant")
+        require(!NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: "generation-b", subject: subject), grant), "generation change must reject stale grant")
+        require(!NativePasswordStage.grantIsCurrent(NativePasswordCurrentState(generation: "generation-a", subject: org), grant), "subject change must reject stale grant")
+        require(NativePasswordStage.interactionRequiredCode == ASExtensionError.userInteractionRequired.rawValue, "modern no-interaction policy must require interaction")
         print("Native Vault password codec corpus passed")
     }
 }

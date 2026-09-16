@@ -20,6 +20,7 @@ app must keep working offline — but it must never be silently absorbed.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -40,6 +41,29 @@ from app.services.local_db.mirror_schema import (
 logger = get_logger()
 
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+_HYDRATION_MARKER_PREFIX = "column_hydration:"
+_HYDRATION_CURSOR_PREFIX = "column_hydration_cursor:"
+_SR10_BOOTSTRAP_REVISION_KEY = "column_hydration_bootstrap:sr10-v1"
+_SR10_COLUMNS = {
+    "agent_plan": frozenset({"deleted_at"}),
+    "agent_task": frozenset({"deleted_at"}),
+    "code_edit": frozenset({"deleted_at"}),
+    "code_message_file": frozenset({"deleted_at"}),
+    "observational_memory_event": frozenset({"deleted_at"}),
+    "pending_injection": frozenset({"deleted_at"}),
+    "request_snapshot": frozenset(
+        {
+            "deleted_at",
+            "pinned_at",
+            "pin_reason",
+            "agent_definition_version",
+            "workflow_definition_version",
+        }
+    ),
+    "tool_trace": frozenset({"deleted_at"}),
+    "user_todo": frozenset({"deleted_at"}),
+}
 
 
 def mirror_dir_for(db_path: Path) -> Path:
@@ -76,12 +100,13 @@ async def attach_and_ensure_mirror(db: aiosqlite.Connection, main_db_path: Path)
 
     retained_retired: list[str] = []
     for schema, tables in MIRROR_TABLES.items():
-        retained_retired.extend(await _ensure_schema_tables(db, schema, tables))
-
         await db.execute(
             f'CREATE TABLE IF NOT EXISTS "{schema}"._mirror_meta '
             "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+        retained_retired.extend(await _ensure_schema_tables(db, schema, tables))
+        if schema == "chat":
+            await _bootstrap_sr10_hydration(db, schema, tables)
         await db.execute(
             f'INSERT INTO "{schema}"._mirror_meta (key, value) VALUES (?, ?) '
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -195,14 +220,21 @@ async def _ensure_schema_tables(
 ) -> list[str]:
     retained_retired: list[str] = []
     for name, spec in tables.items():
+        was_existing = await _table_exists(db, schema, name)
+        had_rows = was_existing and await _table_has_rows(db, schema, name)
         await db.execute(spec["create_sql"])
-        for idx_sql in spec["index_sql"]:
-            await db.execute(idx_sql)
 
         cursor = await db.execute(f'PRAGMA "{schema}".table_info("{name}")')
         rows = await cursor.fetchall()
         local_cols = {r[1]: (r[2] or "").upper() for r in rows}
         expected = spec["columns"]
+        missing = [col for col in expected if col not in local_cols]
+
+        # Mark existing rows before adding their columns.  A future snapshot
+        # refresh can therefore hydrate exactly these fields without relaxing
+        # normal pull LWW semantics or guessing NULL means "not hydrated".
+        if schema == "chat" and was_existing and had_rows and missing:
+            await _merge_hydration_marker(db, schema, name, missing)
 
         for col, typ in expected.items():
             if col not in local_cols:
@@ -219,6 +251,11 @@ async def _ensure_schema_tables(
                     schema, name, col, local_cols[col], typ,
                 )
 
+        # A cloud migration may add a column and its index together.  The
+        # column must exist before SQLite can create that generated index.
+        for idx_sql in spec["index_sql"]:
+            await db.execute(idx_sql)
+
         retired = set(RETIRED_MIRROR_COLUMNS.get(schema, {}).get(name, ()))
         for col in local_cols:
             if col not in expected:
@@ -232,3 +269,76 @@ async def _ensure_schema_tables(
                         schema, name, col,
                     )
     return retained_retired
+
+
+async def _table_exists(db: aiosqlite.Connection, schema: str, table: str) -> bool:
+    row = await (
+        await db.execute(
+            f'SELECT 1 FROM "{schema}".sqlite_master '
+            "WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        )
+    ).fetchone()
+    return row is not None
+
+
+async def _table_has_rows(db: aiosqlite.Connection, schema: str, table: str) -> bool:
+    row = await (
+        await db.execute(f'SELECT 1 FROM "{schema}"."{table}" LIMIT 1')
+    ).fetchone()
+    return row is not None
+
+
+async def _merge_hydration_marker(
+    db: aiosqlite.Connection, schema: str, table: str, columns: list[str] | frozenset[str]
+) -> None:
+    """Merge a table's missing cloud columns and restart its hydration scan."""
+    key = f"{_HYDRATION_MARKER_PREFIX}{table}"
+    row = await (
+        await db.execute(
+            f'SELECT value FROM "{schema}"._mirror_meta WHERE key=?', (key,)
+        )
+    ).fetchone()
+    try:
+        prior = json.loads(row[0]) if row else {}
+    except (TypeError, json.JSONDecodeError):
+        prior = {}
+    prior_columns = prior.get("columns", []) if isinstance(prior, dict) else []
+    merged = sorted(set(prior_columns).union(columns))
+    await db.execute(
+        f'INSERT INTO "{schema}"._mirror_meta (key, value) VALUES (?, ?) '
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps({"columns": merged}, separators=(",", ":"))),
+    )
+    await db.execute(
+        f'DELETE FROM "{schema}"._mirror_meta WHERE key=?',
+        (f"{_HYDRATION_CURSOR_PREFIX}{table}",),
+    )
+
+
+async def _bootstrap_sr10_hydration(
+    db: aiosqlite.Connection, schema: str, tables: dict
+) -> None:
+    """Schedule one recovery pass for rows that predate the SR-10 snapshot."""
+    done = await (
+        await db.execute(
+            f'SELECT 1 FROM "{schema}"._mirror_meta WHERE key=?',
+            (_SR10_BOOTSTRAP_REVISION_KEY,),
+        )
+    ).fetchone()
+    if done is not None:
+        return
+    for table, columns in _SR10_COLUMNS.items():
+        if (
+            table in tables
+            and await _table_exists(db, schema, table)
+            and await _table_has_rows(db, schema, table)
+        ):
+            expected = tables[table]["columns"]
+            await _merge_hydration_marker(
+                db, schema, table, frozenset(expected).intersection(columns)
+            )
+    await db.execute(
+        f'INSERT INTO "{schema}"._mirror_meta (key, value) VALUES (?, ?)',
+        (_SR10_BOOTSTRAP_REVISION_KEY, "done"),
+    )

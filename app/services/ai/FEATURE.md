@@ -61,3 +61,6 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
   is therefore the EFFECTIVE snapshot (what a request would actually use);
   `get_local_user_keys()` is the "saved on this machine" view. Read
   `app/services/credential_vault/FEATURE.md` before touching either tier.
+
+- Conversation history/export excludes soft-deleted `chat.tool_trace` rows,
+  including tombstones restored by schema hydration; the mirror retains them for sync.

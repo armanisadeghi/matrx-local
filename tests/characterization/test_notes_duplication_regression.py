@@ -29,7 +29,7 @@ import pytest
 
 try:
     from app.services.documents.file_manager import content_hash
-    from app.services.documents.sync_engine import SyncEngine, _note_id_for_path
+    from app.services.documents.sync_engine import SyncEngine
 except Exception as exc:  # pragma: no cover — env-dependent import guard
     pytest.skip(
         f"documents sync engine not importable in this environment: {exc}",
@@ -76,6 +76,7 @@ class FakeSupabaseFull(FakeSupabase):
         expected_file_path: str,
         new_file_path: str,
         device_id: str | None = None,
+        actor_tier: str | None = None,
     ) -> bool:
         self.cas_writebacks.append((note_id, expected_file_path, new_file_path))
         row = self.notes.get(note_id)
@@ -104,6 +105,10 @@ def engine(tmp_path: Path) -> SyncEngine:
     eng._repo = repo  # test-side handle
     eng._device_id = "test-device"
     eng.configure(user_id="user-1", jwt="jwt-1")
+    async def _test_watcher_principal() -> str:
+        eng.configure(user_id="user-1", jwt="jwt-1")
+        return "user-1"
+    eng._bind_watcher_principal = _test_watcher_principal  # type: ignore[method-assign]
     return eng
 
 
@@ -116,6 +121,7 @@ def _seed_owner(engine: SyncEngine, fp: str, content: str, note_id: str) -> None
     engine.fm.notes[fp] = content
     engine._repo.rows[note_id] = {
         "id": note_id,
+        "user_id": "user-1",
         "file_path": fp,
         "content_hash": content_hash(content),
         "label": Path(fp).stem,
@@ -197,7 +203,7 @@ def test_full_sync_identity_loss_adopts_pathless_twin(engine: SyncEngine) -> Non
     assert engine.sb.upsert_count() == 0  # nothing minted
     assert engine._repo.rows["twin-id"]["file_path"] == "Draft/lost.md"
     assert engine.sb.notes["twin-id"]["file_path"] == "Draft/lost.md"
-    assert engine.fm.state["note_hashes"]["Draft/lost.md"] == h
+    assert engine.fm.state["accounts"]["user-1"]["note_hashes"]["Draft/lost.md"] == h
 
 
 def test_full_sync_identity_loss_skips_bound_twin(engine: SyncEngine) -> None:
@@ -222,15 +228,14 @@ def test_full_sync_identity_loss_skips_bound_twin(engine: SyncEngine) -> None:
     assert engine.fm.notes["Draft/copy.md"] == "shared body"
 
 
-def test_full_sync_genuinely_new_file_still_pushes(engine: SyncEngine) -> None:
-    """The guard must not over-block: unique local content with no cloud twin
-    is a real new note and still pushes."""
+def test_full_sync_unindexed_unique_file_is_deferred(engine: SyncEngine) -> None:
+    """A raw file cannot be assigned to the account active at reconciliation."""
     engine.fm.notes["Draft/new.md"] = "brand new body"
     stats = _run(engine.full_sync())
-    assert stats["pushed"] == 1
-    assert engine.sb.upsert_count() == 1
-    pushed = next(c[1] for c in engine.sb.calls if c[0] == "upsert_note")
-    assert pushed["note_id"] == _note_id_for_path("Draft/new.md")
+    assert stats["pushed"] == 0
+    assert stats["deferred_account"] == 1
+    assert engine.sb.upsert_count() == 0
+    assert engine.fm.notes["Draft/new.md"] == "brand new body"
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +306,11 @@ def test_external_change_identical_bytes_not_pushed_as_new_note(
         "folder_name": "Draft",
     }
     engine.fm.notes["Draft/artifact-copy.md"] = "shared body"
+    engine._repo.rows["artifact-copy"] = {
+        "id": "artifact-copy", "user_id": "user-1",
+        "file_path": "Draft/artifact-copy.md", "sync_status": "pending_push",
+        "sync_enabled": True,
+    }
     _run(engine._handle_external_change("Draft/artifact-copy.md"))
     assert engine.sb.upsert_count() == 0
     # The SQLite row for the file still exists (metadata tracking is fine —
@@ -309,9 +319,13 @@ def test_external_change_identical_bytes_not_pushed_as_new_note(
     assert row is not None
 
 
-def test_external_change_unique_bytes_still_pushes(engine: SyncEngine) -> None:
-    """The watcher guard must not over-block genuinely new content."""
+def test_external_change_owned_unique_bytes_still_pushes(engine: SyncEngine) -> None:
+    """A persisted same-account row still pushes its external edit."""
     engine.fm.notes["Draft/fresh.md"] = "unique fresh body"
+    engine._repo.rows["fresh-id"] = {
+        "id": "fresh-id", "user_id": "user-1", "file_path": "Draft/fresh.md",
+        "sync_status": "pending_push", "sync_enabled": True,
+    }
     _run(engine._handle_external_change("Draft/fresh.md"))
     assert engine.sb.upsert_count() == 1
 
@@ -337,6 +351,7 @@ def _seed_pending_file(
     engine.fm.notes[fp] = content
     engine._repo.rows[note_id] = {
         "id": note_id,
+        "user_id": "user-1",
         "file_path": fp,
         "label": Path(fp).stem,
         "content_hash": content_hash(content),

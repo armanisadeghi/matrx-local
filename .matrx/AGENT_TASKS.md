@@ -41,13 +41,15 @@ _(none)_
 **Goal**
 Local smoke probes bypass ambient proxies, preserve last successful responses, and report transport failures without exposing credentials. Agent 2 owns scripts/smoke.sh, scripts/smoke-http.sh, tests/unit/test_smoke_http.py and docs/SMOKE_HARNESS.md. Terra implementation accepted by independent Sol: 48 combined transport/parity/sync tests, syntax and lint passed; new helper read installed endpoint successfully. Source ready; full packaged smoke remains unverified. No app/engine launch occurred.
 
-### TASK-007: Preserve Notes cloud transport failures
+### TASK-007: Preserve Notes transport errors and isolate sync by account
 - **Status:** in-progress
 - **Created:** 2026-09-15
-- **Source:** Same locked-Mac error-repair instruction.
+- **Source:** Arman's locked-Mac error-repair instruction, renewed September 16; exclusive Notes ownership assigned to Agent 2.
 
 **Goal**
-A missing PostgREST endpoint must not become an empty Notes result; cloud failures retain a safe error code without note contents or credentials. Agent 2 owns documents/supabase_client.py, its FEATURE.md and test_documents_transport_errors.py. No auth/RLS/actor change or real note write. Source repair accepted by independent Sol; 404 baseline returned[] before repair and raises HTTPStatusError afterward. Packaged delivery remains pending. Nine installed notes have repeated403 rejection warnings; their actual rejection cause remains unresolved until captured server-code evidence is available. Release watch owns packaged delivery; this is not a claim that403 is repaired.
+Cloud failures must remain visible and one account must never upload, overwrite, or tombstone another account's local Notes replica. The prior transport repair is in the v1.4.133 release ancestry and installed logs now expose 42501 safely. Nine failed local notes match their cloud creator/folder but belong to a different account from the configured cloud session. Source retries currently select all owners and stamp the mutable current user; the actual cloud ownership guard reproduced a 42501 rejection in a rolled-back temporary-table probe. No personal note was changed.
+
+Current repair boundary: documents sync engine/client, NotesRepo, document_routes, Notes-specific tests and FEATURE.md. Preserve ownership through local edits; scope retry/reconcile/watcher operations and account state; keep user and token paired across awaits. Preserve queued work, existing cloud ownership/authorization and optimistic concurrency. Source repair accepted by independent Sol after correcting account-state consumers, folder admission and truthful deferred counts. The focused suite passes 89 tests in this checkout; real temporary SQLite proves baseline cross-account overwrite fails after repair, and four additional state regressions fail against the previous candidate then pass. Canonical integration verification and packaged delivery are recorded in the shared reliability checkpoint; no installed error-reduction claim. Native UI verification waits while the Mac is locked. Release watch remains the sole release/install owner.
 
 
 ### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`

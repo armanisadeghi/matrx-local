@@ -504,7 +504,7 @@ export function EngineMonitor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+      <DialogContent className="flex h-[min(720px,85dvh)] max-h-[85dvh] max-w-2xl flex-col overflow-hidden">
         {/* Header */}
         <DialogHeader>
           <div className="flex items-center justify-between">
@@ -561,7 +561,7 @@ export function EngineMonitor({
 
         {/* ── Status Tab ──────────────────────────────────────── */}
         {activeTab === "status" && (
-          <div className="flex-1 overflow-auto space-y-4">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-4">
             {/* Diagnostic Steps */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -663,7 +663,7 @@ export function EngineMonitor({
 
         {/* ── Ports Tab ───────────────────────────────────────── */}
         {activeTab === "ports" && (
-          <div className="flex-1 overflow-auto space-y-3">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium flex items-center gap-1.5">
                 <Network className="h-4 w-4 text-primary" />
@@ -728,7 +728,7 @@ export function EngineMonitor({
 
         {/* ── Logs Tab ────────────────────────────────────────── */}
         {activeTab === "logs" && (
-          <div className="flex-1 min-h-0 space-y-2">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium flex items-center gap-1.5">
                 <Terminal className="h-4 w-4 text-primary" />

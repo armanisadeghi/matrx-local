@@ -166,6 +166,7 @@ DEFAULT_INTERVAL = int(os.getenv("MATRX_CHAT_SYNC_INTERVAL", "300"))
 # lost, that is not a warning), name the remedy, and count the rest.
 _reported_snapshot_drift: dict[str, set[str]] = {}
 _snapshot_drift_rows: dict[str, int] = {}
+_reported_hydration_missing: dict[str, set[str]] = {}
 
 
 def snapshot_drift_state() -> dict[str, dict[str, object]]:
@@ -200,10 +201,29 @@ def _report_snapshot_drift(table: str, unknown: list[str]) -> None:
     )
 
 
+def _report_hydration_missing(table: str, columns: list[str]) -> None:
+    """Say once when a marked field is absent from a purported cloud row."""
+    seen = _reported_hydration_missing.setdefault(table, set())
+    fresh = sorted(set(columns) - seen)
+    if not fresh:
+        return
+    seen.update(fresh)
+    logger.error(
+        "[chat_sync] hydration for chat.%s could not recover %s because the cloud "
+        "row omitted them; preserving the marker until the canonical snapshot/cloud "
+        "contract is corrected",
+        table,
+        fresh,
+    )
+
+
 _PULL_PAGE_SIZE = 500
 _MAX_PAGES_PER_TABLE = 20
 _PUSH_BATCH = 50
 _PUSH_LIMIT_PER_CYCLE = 1000
+
+_HYDRATION_MARKER_PREFIX = "column_hydration:"
+_HYDRATION_CURSOR_PREFIX = "column_hydration_cursor:"
 
 
 _DEAD_LETTER_ATTEMPTS = 5
@@ -940,6 +960,7 @@ class ChatSyncEngine:
                     status="success",
                     last_hash=await self._current_cursor_json(entity),
                 )
+                await self._hydrate_marked_columns(table, spec, cursor_col)
             except ChatSyncHTTPError as exc:
                 logger.error(
                     "[chat_sync] PULL FAILED for %s — HTTP %s: %s",
@@ -1016,6 +1037,217 @@ class ChatSyncEngine:
                 entity, _MAX_PAGES_PER_TABLE,
             )
         return {"applied": applied, "skipped": skipped, "pages": pages}
+
+    async def _hydrate_marked_columns(
+        self, table: str, spec: dict[str, Any], cursor_col: str
+    ) -> None:
+        """Fill columns added after existing mirror rows were first pulled.
+
+        Normal pulls intentionally require a strictly newer timestamp.  That
+        protects local work, but cannot fill a newly added field on an existing
+        row whose cloud timestamp is unchanged.  This separate, marked pass
+        only writes those new fields and retains the same pending-outbox guard.
+        """
+        db = get_db()
+        marker_key = f"{_HYDRATION_MARKER_PREFIX}{table}"
+        row = await db.fetchone(
+            'SELECT value FROM "chat"._mirror_meta WHERE key=?', (marker_key,)
+        )
+        if row is None:
+            return
+        try:
+            marker = json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            logger.error("[chat_sync] invalid hydration marker for chat.%s", table)
+            return
+        raw_columns = marker.get("columns", []) if isinstance(marker, dict) else []
+        pk = spec["pk"][0]
+        columns = sorted(
+            {
+                column
+                for column in raw_columns
+                if isinstance(column, str)
+                and column in spec["columns"]
+                and column not in {pk, "updated_at"}
+            }
+        )
+        if not columns:
+            await db.execute('DELETE FROM "chat"._mirror_meta WHERE key=?', (marker_key,))
+            await db.execute(
+                'DELETE FROM "chat"._mirror_meta WHERE key=?',
+                (f"{_HYDRATION_CURSOR_PREFIX}{table}",),
+            )
+            await db.commit()
+            return
+        cursor_key = f"{_HYDRATION_CURSOR_PREFIX}{table}"
+        cursor_row = await db.fetchone(
+            'SELECT value FROM "chat"._mirror_meta WHERE key=?', (cursor_key,)
+        )
+        try:
+            cursor = json.loads(cursor_row["value"]) if cursor_row else {}
+        except (TypeError, json.JSONDecodeError):
+            cursor = {}
+        cursor_ts = cursor.get("ts") if isinstance(cursor, dict) else None
+        cursor_id = cursor.get("id") if isinstance(cursor, dict) else None
+        deferred = bool(marker.get("deferred"))
+        # A missing-field scan restarts from the beginning next cycle. Its old
+        # error must not make a later complete scan retry forever.
+        missing = bool(marker.get("missing")) if cursor_row else False
+        pages = 0
+
+        while pages < _MAX_PAGES_PER_TABLE:
+            rows = await self._client.get_rows_since(
+                table,
+                cursor_col=cursor_col,
+                pk_col=pk,
+                cursor_ts=cursor_ts,
+                cursor_id=cursor_id,
+                limit=_PULL_PAGE_SIZE,
+            )
+            if not rows:
+                await self._finish_hydration_pass(
+                    table,
+                    columns,
+                    deferred=deferred,
+                    missing=missing,
+                    cursor_key=cursor_key,
+                )
+                return
+
+            pages += 1
+            for remote in rows:
+                outcome = await self._hydrate_remote_row(table, spec, columns, remote)
+                if outcome == "deferred":
+                    deferred = True
+                elif outcome == "missing":
+                    missing = True
+            last = rows[-1]
+            cursor_ts = last.get(cursor_col) or cursor_ts
+            cursor_id = str(last.get(pk)) if last.get(pk) is not None else cursor_id
+            await db.execute(
+                'INSERT INTO "chat"._mirror_meta (key, value) VALUES (?, ?) '
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (cursor_key, json.dumps({"ts": cursor_ts, "id": cursor_id})),
+            )
+            await db.execute(
+                'INSERT INTO "chat"._mirror_meta (key, value) VALUES (?, ?) '
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    marker_key,
+                    json.dumps(
+                        {"columns": columns, "deferred": deferred, "missing": missing}
+                    ),
+                ),
+            )
+            await db.commit()
+            if len(rows) < _PULL_PAGE_SIZE:
+                await self._finish_hydration_pass(
+                    table,
+                    columns,
+                    deferred=deferred,
+                    missing=missing,
+                    cursor_key=cursor_key,
+                )
+                return
+
+        logger.warning(
+            "[chat_sync] hydration for chat.%s hit the %d-page cap; continuing next cycle",
+            table,
+            _MAX_PAGES_PER_TABLE,
+        )
+
+    async def _finish_hydration_pass(
+        self,
+        table: str,
+        columns: list[str],
+        *,
+        deferred: bool,
+        missing: bool,
+        cursor_key: str,
+    ) -> None:
+        """Complete a scan, or restart it when a pending local row was skipped."""
+        db = get_db()
+        marker_key = f"{_HYDRATION_MARKER_PREFIX}{table}"
+        if deferred:
+            # Revisit from the start after the outbox drains; a skipped row has
+            # no sentinel value because NULL is a legitimate cloud value.
+            await db.execute('DELETE FROM "chat"._mirror_meta WHERE key=?', (cursor_key,))
+            await db.execute(
+                'INSERT INTO "chat"._mirror_meta (key, value) VALUES (?, ?) '
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    marker_key,
+                    json.dumps({"columns": columns, "deferred": False, "missing": missing}),
+                ),
+            )
+        elif missing:
+            # The cloud may begin returning this field without a local schema
+            # change. Restart next cycle; the error is deduplicated per field.
+            await db.execute('DELETE FROM "chat"._mirror_meta WHERE key=?', (cursor_key,))
+            await db.execute(
+                'INSERT INTO "chat"._mirror_meta (key, value) VALUES (?, ?) '
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (marker_key, json.dumps({"columns": columns, "missing": False})),
+            )
+        else:
+            await db.execute('DELETE FROM "chat"._mirror_meta WHERE key=?', (marker_key,))
+            await db.execute('DELETE FROM "chat"._mirror_meta WHERE key=?', (cursor_key,))
+        await db.commit()
+
+    async def _hydrate_remote_row(
+        self, table: str, spec: dict[str, Any], columns: list[str], remote: dict[str, Any]
+    ) -> str:
+        """Return ``applied``, ``deferred``, ``missing``, or ``skipped``."""
+        decoded = decode_remote_row(_SCHEMA, table, remote)
+        pk = spec["pk"][0]
+        row_id = decoded.get(pk)
+        remote_updated_at = decoded.get("updated_at")
+        missing = [column for column in columns if column not in remote]
+        if missing:
+            _report_hydration_missing(table, missing)
+            return "missing"
+        values = [column for column in columns if column in decoded]
+        if row_id is None or len(values) != len(columns):
+            return "skipped"
+        if "updated_at" in spec["columns"] and remote_updated_at is None:
+            return "skipped"
+
+        db = get_db()
+        entity_type = f"{_SCHEMA}.{table}"
+        pending_sql = (
+            "EXISTS (SELECT 1 FROM main.sync_queue q "
+            "WHERE q.entity_type=? AND q.entity_id=?)"
+        )
+        assignments = ", ".join(f'"{column}"=?' for column in values)
+        timestamp_guard = ""
+        timestamp_params: tuple[Any, ...] = ()
+        if "updated_at" in spec["columns"]:
+            timestamp_guard = (
+                " AND replace(COALESCE(\"updated_at\", ''), 'Z', '+00:00') <= "
+                "replace(COALESCE(?, ''), 'Z', '+00:00')"
+            )
+            timestamp_params = (remote_updated_at,)
+        cursor = await db.execute(
+            f'UPDATE "{_SCHEMA}"."{table}" SET {assignments} '
+            f'WHERE "{pk}"=? AND NOT ({pending_sql}){timestamp_guard}',
+            tuple(decoded[column] for column in values)
+            + (str(row_id), entity_type, str(row_id))
+            + timestamp_params,
+        )
+        if cursor.rowcount > 0:
+            return "applied"
+        local_columns = '"updated_at"' if "updated_at" in spec["columns"] else "1"
+        local = await db.fetchone(
+            f'SELECT {local_columns} FROM "{_SCHEMA}"."{table}" WHERE "{pk}"=?',
+            (str(row_id),),
+        )
+        if local is None:
+            return "skipped"
+        if "updated_at" not in spec["columns"]:
+            return "deferred"
+        local_ts = str(local["updated_at"] or "").replace("Z", "+00:00")
+        remote_ts = str(remote_updated_at).replace("Z", "+00:00")
+        return "deferred" if local_ts <= remote_ts else "skipped"
 
     async def _apply_remote_row(
         self, table: str, remote: dict[str, Any], *, source: str

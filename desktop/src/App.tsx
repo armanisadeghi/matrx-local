@@ -67,7 +67,10 @@ import {
   useSessionsContext,
 } from "@/contexts/TranscriptionSessionsContext";
 import { DownloadManagerProvider } from "@/contexts/DownloadManagerContext";
-import { BrowserRuntimeProvider } from "@/contexts/BrowserRuntimeContext";
+import {
+  BrowserRuntimeProvider,
+  useBrowserRuntimeConnectionRefresh,
+} from "@/contexts/BrowserRuntimeContext";
 import { MediaGenProvider } from "@/contexts/MediaGenContext";
 import { PromptMatrixProvider } from "@/contexts/PromptMatrixContext";
 import { MediaLibraryProvider } from "@/contexts/MediaLibraryContext";
@@ -192,6 +195,8 @@ function AppInner() {
     refresh,
     restartEngine,
   } = useEngine();
+
+  useBrowserRuntimeConnectionRefresh(status === "connected");
 
   useEffect(() => {
     if (status !== "connected") actionNeededStore.reset();

@@ -54,6 +54,23 @@ export function useBrowserRuntimeContext(): UseBrowserRuntimeReturn {
   return ctx;
 }
 
+/**
+ * Retry the mount-time probe after engine discovery succeeds.
+ *
+ * The provider stays mounted across engine reconnects, so its first probe can
+ * run before an engine base URL exists. This keeps that one shared store and
+ * refreshes it on the connection transition without adding a polling loop.
+ */
+export function useBrowserRuntimeConnectionRefresh(connected: boolean): void {
+  const {
+    actions: { refresh },
+  } = useBrowserRuntimeContext();
+
+  useEffect(() => {
+    if (connected) void refresh();
+  }, [connected, refresh]);
+}
+
 export function useOptionalBrowserRuntimeContext(): UseBrowserRuntimeReturn | null {
   return useContext(BrowserRuntimeContext);
 }

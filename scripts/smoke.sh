@@ -44,6 +44,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 source "$REPO_ROOT/scripts/smoke-environment.sh"
+source "$REPO_ROOT/scripts/smoke-http.sh"
 SMOKE_BUILD_LOCK_OWNED=0
 trap smoke_release_build_lock EXIT
 
@@ -406,7 +407,7 @@ run_packaged() {
       return 1
     fi
     engine_url="$(node -p "try{require('$SMOKE_MATRX_HOME/local.json').url}catch(e){''}" 2>/dev/null)"
-    if [ -n "$engine_url" ] && curl -sf --max-time 2 "$engine_url/health" > "$RUN_DIR/health.json" 2>/dev/null; then
+    if [ -n "$engine_url" ] && smoke_http_get "$engine_url/health" "$RUN_DIR/health.json" "$RUN_DIR/health.curl.log" 2; then
       break
     fi
     sleep 2; waited=$((waited + 2))
@@ -415,7 +416,8 @@ run_packaged() {
   if [ -s "$RUN_DIR/health.json" ]; then
     record_ok "packaged: app stayed up and the engine answered /health in ${waited}s ($engine_url)"
   else
-    record_fail "packaged: engine never answered /health within ${waited}s" "$(tail -30 "$log")"
+    record_fail "packaged: engine never answered /health within ${waited}s" "$(tail -30 "$log")
+$(smoke_http_diagnostic "$RUN_DIR/health.curl.log")"
   fi
 
   # /health is a LIAR for our purposes: it returns {"status":"ok"} while the AI
@@ -432,7 +434,7 @@ run_packaged() {
   #              do with the build under test. Failing on that would make this
   #              signal flaky, and a flaky signal gets ignored. So: report it
   #              loudly in the summary, never fail on it.
-  if [ -n "$engine_url" ] && curl -sf --max-time 5 "$engine_url/admin/status" > "$RUN_DIR/admin-status.json" 2>/dev/null; then
+  if [ -n "$engine_url" ] && smoke_http_get "$engine_url/admin/status" "$RUN_DIR/admin-status.json" "$RUN_DIR/admin-status.curl.log" 5; then
     local failed_svcs degraded_svcs
     failed_svcs="$(node -e "
       const s = require('$RUN_DIR/admin-status.json').services || {};
@@ -458,6 +460,8 @@ run_packaged() {
     fi
   else
     warn "could not read /admin/status — per-service health unverified"
+    { echo "## ⚠️ packaged: could not read /admin/status — per-service health unverified"; echo;
+      echo '```'; smoke_http_diagnostic "$RUN_DIR/admin-status.curl.log"; echo '```'; echo; } >> "$SUMMARY"
   fi
 
   # Existing image-generation installs may need a mandatory compatibility
@@ -465,7 +469,7 @@ run_packaged() {
   # stays responsive, but quitting here would deliberately interrupt pip and
   # leave a partial managed runtime. If this boot started that migration, wait
   # for its terminal state and make any repair failure a release blocker.
-  if [ -n "$engine_url" ] && curl -sf --max-time 5 -H "Authorization: Bearer smoke-local" "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+  if [ -n "$engine_url" ] && smoke_http_get "$engine_url/image-gen/install/status" "$RUN_DIR/image-install-status.json" "$RUN_DIR/image-install-status.curl.log" 5 smoke-local; then
     local image_install_status image_install_error image_waited=0
     image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
     if [ "$image_install_status" = "running" ]; then
@@ -477,7 +481,7 @@ run_packaged() {
         fi
         sleep 2
         image_waited=$((image_waited + 2))
-        if curl -sf --max-time 5 -H "Authorization: Bearer smoke-local" "$engine_url/image-gen/install/status" > "$RUN_DIR/image-install-status.json" 2>/dev/null; then
+        if smoke_http_get "$engine_url/image-gen/install/status" "$RUN_DIR/image-install-status.json" "$RUN_DIR/image-install-status.curl.log" 5 smoke-local; then
           image_install_status="$(node -p "require('$RUN_DIR/image-install-status.json').status || ''" 2>/dev/null)"
         else
           image_install_status="unreadable"
@@ -496,7 +500,7 @@ run_packaged() {
           record_fail "packaged: mandatory image-runtime migration did not finish within ${image_waited}s" "$(node -p "require('$RUN_DIR/image-install-status.json').message || 'still running'" 2>/dev/null)"
           ;;
         *)
-          record_fail "packaged: lost the mandatory image-runtime migration while waiting (status=${image_install_status:-missing})"
+          record_fail "packaged: lost the mandatory image-runtime migration while waiting (status=${image_install_status:-missing})" "$(smoke_http_diagnostic "$RUN_DIR/image-install-status.curl.log")"
           ;;
       esac
     elif [ "$image_install_status" = "error" ]; then
@@ -506,7 +510,7 @@ run_packaged() {
       record_fail "packaged: image-runtime installer returned an invalid status (${image_install_status:-missing})" "$(cat "$RUN_DIR/image-install-status.json" 2>/dev/null)"
     fi
   else
-    record_fail "packaged: could not read /image-gen/install/status — background runtime migration unverified"
+    record_fail "packaged: could not read /image-gen/install/status — background runtime migration unverified" "$(smoke_http_diagnostic "$RUN_DIR/image-install-status.curl.log")"
   fi
 
   # Let it settle so late-startup errors land in the log, then quit it the way

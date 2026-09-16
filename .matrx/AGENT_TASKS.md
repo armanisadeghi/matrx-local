@@ -33,6 +33,23 @@ _(none)_
 
 ## Active
 
+### TASK-006: Repair headless smoke transport checks
+- **Status:** in-progress
+- **Created:** 2026-09-15
+- **Source:** Arman: focus on errors that can be fixed while the Mac remains locked.
+
+**Goal**
+Local smoke probes bypass ambient proxies, preserve last successful responses, and report transport failures without exposing credentials. Agent 2 owns scripts/smoke.sh, scripts/smoke-http.sh, tests/unit/test_smoke_http.py and docs/SMOKE_HARNESS.md. Terra implementation accepted by independent Sol: 48 combined transport/parity/sync tests, syntax and lint passed; new helper read installed endpoint successfully. Source ready; full packaged smoke remains unverified. No app/engine launch occurred.
+
+### TASK-007: Preserve Notes cloud transport failures
+- **Status:** in-progress
+- **Created:** 2026-09-15
+- **Source:** Same locked-Mac error-repair instruction.
+
+**Goal**
+A missing PostgREST endpoint must not become an empty Notes result; cloud failures retain a safe error code without note contents or credentials. Agent 2 owns documents/supabase_client.py, its FEATURE.md and test_documents_transport_errors.py. No auth/RLS/actor change or real note write. Source repair accepted by independent Sol; 404 baseline returned[] before repair and raises HTTPStatusError afterward. Packaged delivery remains pending. Nine installed notes have repeated403 rejection warnings; their actual rejection cause remains unresolved until captured server-code evidence is available. Release watch owns packaged delivery; this is not a claim that403 is repaired.
+
+
 ### Log audit 2026-07-14 — scheduled from `docs/LOG_AUDIT_2026-07-14.md`
 
 > Source log export 2026-07-14 12:27:26. Facts + file links only in the audit doc —

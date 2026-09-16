@@ -25,7 +25,9 @@ wire boundary.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -48,11 +50,24 @@ _REST_BASE = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ""
 _WORKBENCH = "workbench"
 # HTTP methods that mutate state use Content-Profile; reads use Accept-Profile.
 _WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
+_SAFE_POSTGREST_CODE = re.compile(r"(?:[0-9A-Z]{5}|PGRST[0-9]{3})\Z")
 
 
 def _content_hash(content: str) -> str:
     """SHA-256 hash of note content for change detection."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _safe_postgrest_error_code(response: httpx.Response) -> str:
+    """Return only a bounded database/API error code; never response text."""
+    try:
+        body = json.loads(response.content)
+    except (TypeError, ValueError):
+        return "unknown"
+    code = body.get("code") if isinstance(body, dict) else None
+    if isinstance(code, str) and _SAFE_POSTGREST_CODE.fullmatch(code):
+        return code
+    return "unknown"
 
 
 def _normalize_note_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -149,11 +164,18 @@ class SupabaseDocClient:
             resp = await client.request(
                 method, url, params=params, json=json_body, headers=headers
             )
-            # A 404 on a GET simply means no rows matched — treat as empty.
-            if resp.status_code == 404 and method.upper() == "GET":
-                return []
             if resp.status_code == 204:
                 return []
+            if resp.status_code >= 300:
+                logger.warning(
+                    "Supabase PostgREST request rejected method=%s schema=%s "
+                    "table=%s status=%s code=%s",
+                    method.upper(),
+                    profile,
+                    table,
+                    resp.status_code,
+                    _safe_postgrest_error_code(resp),
+                )
             resp.raise_for_status()
             return resp.json() if resp.text else []
 
@@ -236,14 +258,10 @@ class SupabaseDocClient:
         return [_normalize_note_row(r) for r in rows]
 
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
-        try:
-            rows = await self._request(
-                "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
-            )
-            return _normalize_note_row(rows[0]) if rows else None
-        except Exception:
-            logger.debug("get_note(%s) returned no result", note_id, exc_info=True)
-            return None
+        rows = await self._request(
+            "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
+        )
+        return _normalize_note_row(rows[0]) if rows else None
 
     async def create_note(
         self,

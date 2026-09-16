@@ -23,6 +23,11 @@ Everything lands in `.smoke/runs/<timestamp>/` (gitignored). **Read
 exactly which check failed and pastes the offending log lines. `app.log` /
 `web.log` hold the full output when you need more.
 
+Engine HTTP probes bypass ambient proxies because discovered engine URLs are
+loopback-only. Each probe writes a sibling `*.curl.log` with the curl exit code
+and HTTP status; failures are copied into `summary.md` without printing auth
+headers or response bodies.
+
 Exit code is the verdict: `0` clean, `1` something failed.
 
 ## Why this exists

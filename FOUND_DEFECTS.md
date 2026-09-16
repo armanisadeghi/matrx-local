@@ -120,23 +120,11 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   logs and traced to the two source lines above; the killer was not identified.
 - **Owner hint:** whoever owns the local secret store / lifecycle attribution.
 
-### MXL-D-089 — `smoke.sh packaged` always records "could not read /image-gen/install/status" (harness check, not the app)
-- **Area:** `scripts/smoke.sh:436-477`
-- **Symptom:** Every packaged run ends with ❌ "could not read
-  /image-gen/install/status — background runtime migration unverified", so
-  the migration gate never actually gates anything. Identical line in the
-  runs of 2026-07-18 (×7), 2026-08-25 and 2026-09-13.
-- **Evidence:** the engine logs `→ GET /image-gen/install/status` then
-  `← 200 (6ms)` in the same run's `app.log`, while the harness's captured
-  `image-install-status.json` is 0 bytes — the harness curl (`-sf` with
-  `Authorization: Bearer smoke-local`) is not the request that got the 200
-  (that one is the app's own poll); the harness request is rejected by
-  `AuthMiddleware` and `-f` turns the 401 into "could not read".
-- **Status:** open
-- **Analysis:** Analyzed 2026-09-13 — verified in `.smoke/runs/*/summary.md`
-  and `app.log`; the check needs either a public status route or the
-  harness's token accepted in the isolated smoke world.
-- **Owner hint:** smoke harness / auth middleware.
+### MXL-D-089 — Smoke HTTP probe failures discard transport diagnostics
+- **Area:** `scripts/smoke.sh` packaged health/admin/image-runtime probes.
+- **Status:** source repair independently accepted under TASK-006; no historical failing packaged run replayed.
+- **Analysis (2026-09-15):** the older missing-Bearer case was repaired by `a1bbb3476`. Later clean September13 artifacts contain successful image-runtime status bodies, and the current installed129 endpoint returns200/complete using the exact `smoke-local` bearer. The previous claim that every failure was a401 is withdrawn. Current reproducible defect: ambient proxy settings intercept a loopback probe and `curl -sf ... 2>/dev/null` discards curl/HTTP diagnostic context. A headless real HTTP server proves the proxy failure; the repair bypasses proxies and preserves diagnostics/last-success JSON. No production auth weakening.
+- **Owner:** Agent2; Sol accepted the bounded repair with headless tests and an installed-endpoint read. Full packaged replay remains pending. Historical Keychain SIGTERM failures remain separately tracked as MXL-D-090.
 
 ### MXL-D-076 — First-boot browser download fetches Chromium + Firefox + WebKit (~800 MB) when only chromium-headless-shell is ever launched
 - **Area:** `app/main.py::_ensure_playwright_browsers` (Phase 0b),

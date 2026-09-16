@@ -70,6 +70,11 @@ Pinned by `tests/smoke/test_access_health.py`,
   methods — do not reintroduce them; every request 404s. Versions: local
   SQLite + the cloud `platform._version_capture` trigger. Shares: 501 until
   iam-based sharing.
+  Transport failures are never converted into empty reads: only a successful
+  `200 []` or `204` means no result. The wire client logs a bounded Postgres or
+  PostgREST error code plus method/schema/table/status, never response text,
+  payloads, tokens, or note identifiers, then preserves the original
+  `httpx.HTTPStatusError` for the caller.
 
 The frontend counterpart is `desktop/src/hooks/use-realtime-sync.ts` —
 subscribed to `workbench.notes` / `workbench.note_folders` filtered on

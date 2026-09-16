@@ -7,7 +7,14 @@ let groupID = "group.com.aimatrx.desktop.vault-status"
 /// resolved the entitlement-backed container. The provider never derives this
 /// location from a home directory.
 final class ProviderStore {
-    enum Mode { case explicitConnect, existingOnly }
+    enum Mode {
+        case explicitConnect
+        /// Metadata/status reads must never create a lock inode.
+        case existingOnly
+        /// A provider operation requires the shared generation lock, but must
+        /// refuse if enrollment has not already created its state and lock.
+        case providerAccess
+    }
     private let directoryFD: Int32
     private let mode: Mode
 
@@ -37,7 +44,10 @@ final class ProviderStore {
 
     func locked<T>(_ operation: (PublicState) throws -> T) throws -> T {
         if mode == .existingOnly { return try operation(read()) }
-        let lock = openat(directoryFD, "state.lock", O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        let lockFlags = mode == .explicitConnect
+            ? O_CREAT | O_RDWR | O_NOFOLLOW
+            : O_RDWR | O_NOFOLLOW
+        let lock = openat(directoryFD, "state.lock", lockFlags, 0o600)
         guard lock >= 0 else { throw filesystemFailure() }
         defer { close(lock) }
         var info = stat()

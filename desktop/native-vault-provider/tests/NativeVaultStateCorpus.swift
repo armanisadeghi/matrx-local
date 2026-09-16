@@ -32,6 +32,19 @@ import Foundation
         let initialized = try store.initializeExplicitConnect(invalidatePrivate: {})
         let reopened = try ProviderStore(testRoot: root, mode: .explicitConnect)
         guard try reopened.read().generation == initialized.generation else { throw Failure.missingStateGenerationChanged }
+        let lockURL = root.appendingPathComponent("NativeVault/state.lock")
+        try FileManager.default.removeItem(at: lockURL)
+        let providerAccess = try ProviderStore(testRoot: root, mode: .providerAccess)
+        do {
+            try providerAccess.locked { _ in () }
+            throw Failure.providerAccessCreatedLock
+        } catch Failure.providerAccessCreatedLock {
+            throw Failure.providerAccessCreatedLock
+        } catch let error as EnrollmentError {
+            guard error.errorDescription == "Vault setup is unavailable. Try again." else { throw Failure.wrongErrorCategory }
+        }
+        guard !FileManager.default.fileExists(atPath: lockURL.path) else { throw Failure.changedReadOnlyRoot }
+        try store.locked { _ in () }
         let state = PublicState(version: 1, generation: generation, host_subject: nil, provider_subject: nil)
         try store.write(state)
         guard try store.read().generation == generation else { throw Failure.badRoundTrip }
@@ -44,7 +57,6 @@ import Foundation
         try FileManager.default.removeItem(at: stateURL)
         try FileManager.default.createSymbolicLink(atPath: stateURL.path, withDestinationPath: "/tmp")
         try expectCorrupt { _ = try store.read() }
-        let lockURL = root.appendingPathComponent("NativeVault/state.lock")
         try FileManager.default.removeItem(at: stateURL)
         try FileManager.default.removeItem(at: lockURL)
         try FileManager.default.createSymbolicLink(atPath: lockURL.path, withDestinationPath: "/tmp")
@@ -72,5 +84,5 @@ import Foundation
     static func setPermissions(_ permissions: mode_t, of url: URL) throws {
         guard chmod(url.path, permissions) == 0 else { throw Failure.chmodFailed }
     }
-    enum Failure: Error { case expectedRefusal, changedReadOnlyRoot, badRoundTrip, missingStateGenerationChanged, wrongErrorCategory, legacyModeNotMigrated, changedSpecialMode, statFailed, chmodFailed }
+    enum Failure: Error { case expectedRefusal, changedReadOnlyRoot, providerAccessCreatedLock, badRoundTrip, missingStateGenerationChanged, wrongErrorCategory, legacyModeNotMigrated, changedSpecialMode, statFailed, chmodFailed }
 }

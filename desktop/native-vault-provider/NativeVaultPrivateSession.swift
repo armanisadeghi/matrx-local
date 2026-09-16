@@ -118,6 +118,27 @@ final class NativeVaultPrivateSession {
         }
     }
 
+    /// Consume the active session before a refresh request leaves the provider.
+    /// A crash or an ambiguous network outcome therefore cannot replay its
+    /// refresh token. The caller retains only the returned scoped copy for the
+    /// one request, while the Keychain immediately contains no token strings.
+    func beginRefresh(_ active: PrivateSession, context: LAContext) throws -> PrivateSession {
+        guard active.phase == "active", !active.access_token.isEmpty, !active.refresh_token.isEmpty else {
+            throw corrupt()
+        }
+        let pending = PrivateSession(
+            version: 1,
+            phase: "refresh_pending",
+            subject: active.subject,
+            generation: active.generation,
+            access_token: "",
+            refresh_token: "",
+            expires_at_ms: active.expires_at_ms
+        )
+        try save(pending, context: context)
+        return pending
+    }
+
     func delete(context: LAContext) throws {
         context.interactionNotAllowed = true
         let query = deleteQuery(context: context)

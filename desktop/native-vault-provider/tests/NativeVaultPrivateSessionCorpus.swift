@@ -2,7 +2,7 @@ import Foundation
 import LocalAuthentication
 import Security
 
-private enum Failure: Error { case bad }
+private enum Failure: Error { case bad, refreshPendingRetainedTokens }
 
 @main
 struct NativeVaultPrivateSessionCorpus {
@@ -18,6 +18,7 @@ struct NativeVaultPrivateSessionCorpus {
         try nilKeychainDataIsCorruptAndDeleted()
         try queryMutationWithoutAccountRefuses()
         try saveDeletesThenAddsProtectedExactItem()
+        try refreshPendingReplacesTokenEnvelopeBeforeNetwork()
         try delayedIdentityClearHoldsFilesystemLock()
         print("native private session corpus passed")
     }
@@ -126,6 +127,19 @@ struct NativeVaultPrivateSessionCorpus {
         try required(query, kSecAttrSynchronizable, false)
         guard query[kSecAttrAccessControl as String] != nil, query[kSecAttrAccessible as String] == nil, query[kSecUseAuthenticationContext as String] is LAContext else { throw Failure.bad }
         guard let data = query[kSecValueData as String] as? Data, try VaultEnvelopeCodec.privateSession(data).subject == subject else { throw Failure.bad }
+    }
+    /// Guards the refresh crash boundary: if this save regresses to retain the
+    /// old strings, a failed request could replay a refresh token.
+    static func refreshPendingReplacesTokenEnvelopeBeforeNetwork() throws {
+        let (adapter, recorder) = fake(copy: { _ in errSecItemNotFound }, delete: { _ in errSecItemNotFound })
+        let active = PrivateSession(version: 1, phase: "active", subject: subject, generation: generation, access_token: "access", refresh_token: "refresh", expires_at_ms: 99)
+        let pending = try adapter.beginRefresh(active, context: context())
+        guard pending.phase == "refresh_pending", pending.access_token.isEmpty, pending.refresh_token.isEmpty,
+              recorder.deleteQueries.count == 1, recorder.addQueries.count == 1,
+              let stored = recorder.addQueries[0][kSecValueData as String] as? Data else { throw Failure.refreshPendingRetainedTokens }
+        let decoded = try VaultEnvelopeCodec.privateSession(stored)
+        guard decoded.phase == "refresh_pending", decoded.access_token.isEmpty, decoded.refresh_token.isEmpty,
+              decoded.subject == subject, decoded.generation == generation else { throw Failure.refreshPendingRetainedTokens }
     }
     static func delayedIdentityClearHoldsFilesystemLock() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("native-private-index-\(UUID().uuidString)")

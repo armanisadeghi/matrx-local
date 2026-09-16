@@ -35,6 +35,27 @@ private final class BoundedTransport: NSObject, URLSessionDataDelegate {
 }
 
 private extension Data { func urlSafeBase64() -> String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") } }
+private func formBody(_ parameters: [(String, String)]) -> Data {
+    func encode(_ value: String) -> String {
+        value.utf8.map { byte in
+            switch byte {
+            case 65...90, 97...122, 48...57, 45, 46, 95, 126:
+                return String(UnicodeScalar(byte))
+            default:
+                return String(format: "%%%02X", byte)
+            }
+        }.joined()
+    }
+    return parameters.map { "\(encode($0.0))=\(encode($0.1))" }.joined(separator: "&").data(using: .utf8)!
+}
+private func connectionResponseError(_ status: Int) -> Error {
+    switch status {
+    case 401, 403: return EnrollmentError.message("Vault connection needs reconnect.")
+    case 429: return EnrollmentError.message("Vault connection is busy. Try again later.")
+    case 500...599: return EnrollmentError.message("Vault connection is temporarily unavailable. Try again.")
+    default: return EnrollmentError.message("Vault connection was rejected. Reconnect the provider.")
+    }
+}
 private func constantTimeEqual(_ left: String, _ right: String) -> Bool {
     let lhs = Array(left.utf8), rhs = Array(right.utf8)
     var mismatch = lhs.count ^ rhs.count
@@ -59,6 +80,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var enrollmentGeneration: String?
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
+    private var connectionStatus: NSTextField?
 
     override func prepareInterfaceForExtensionConfiguration() { showConfiguration() }
     override func loadView() { view = NSView() }
@@ -68,11 +90,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         let title = NSTextField(labelWithString: "Connect AI Matrx Vault"); title.font = .systemFont(ofSize: 18, weight: .semibold)
         let text = NSTextField(wrappingLabelWithString: "Connect your AI Matrx account to configure this credential provider. This does not enable credential filling yet."); text.textColor = .secondaryLabelColor
+        let status = NSTextField(wrappingLabelWithString: "Checking the current provider connection…"); status.textColor = .secondaryLabelColor
         let connect = NSButton(title: "Connect account", target: self, action: #selector(begin)); let retry = NSButton(title: "Retry", target: self, action: #selector(begin)); let disconnect = NSButton(title: "Disconnect", target: self, action: #selector(disconnect)); let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        let stack = NSStackView(views: [title, text, connect, retry, disconnect, cancelButton]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView(views: [title, text, status, connect, retry, disconnect, cancelButton]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView(); content.addSubview(stack); window.contentView = content
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.centerYAnchor.constraint(equalTo: content.centerYAnchor)])
-        self.window = window; window.makeKeyAndOrderFront(nil)
+        self.window = window; self.connectionStatus = status; window.makeKeyAndOrderFront(nil)
+        loadCurrentConnection()
     }
     @objc private func begin() {
         do {
@@ -104,12 +128,16 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard session.start() else { throw EnrollmentError.message("Could not open account connection. Try again.") }
         } catch { showError(error) }
     }
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { window ?? NSApp.keyWindow ?? NSWindow() }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        // startAuthorization retains this exact extension window before
+        // starting the session, so this cannot borrow an unrelated app window.
+        return window!
+    }
     private func complete(url: URL?, error: Error?, key: String) {
         defer { transaction = nil; webSession = nil }
         guard error == nil, let url, let transaction else { return }
         do {
-            guard url.scheme == callback.scheme && url.host == callback.host && url.path == callback.path && url.port == nil && url.fragment == nil else { throw EnrollmentError.message("The account callback was rejected. Start connection again.") }
+            guard url.scheme == callback.scheme && url.host == callback.host && url.path == callback.path && url.port == nil && url.fragment == nil && url.user == nil && url.password == nil else { throw EnrollmentError.message("The account callback was rejected. Start connection again.") }
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             guard items.count == 2, Set(items.map(\.name)).count == 2, let returnedState = items.first(where: { $0.name == "state" })?.value, constantTimeEqual(returnedState, transaction.state), let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else { throw EnrollmentError.message("The account callback was rejected. Start connection again.") }
             guard let generation = enrollmentGeneration else { throw EnrollmentError.message("Vault connection expired. Start again.") }
@@ -119,14 +147,15 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     private func exchange(code: String, verifier: String, generation: String, key: String) {
         var request = URLRequest(url: tokenURL); request.httpMethod = "POST"; request.timeoutInterval = 10; request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(key, forHTTPHeaderField: "apikey")
-        let parameters = ["grant_type": "authorization_code", "client_id": clientID, "redirect_uri": callback.absoluteString, "code": code, "code_verifier": verifier]
-        let body = parameters.map { pair in
-            let encoded = pair.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            return "\(pair.key)=\(encoded)"
-        }.joined(separator: "&")
-        request.httpBody = body.data(using: .utf8)
+        request.httpBody = formBody([
+            ("grant_type", "authorization_code"),
+            ("client_id", clientID),
+            ("redirect_uri", callback.absoluteString),
+            ("code", code),
+            ("code_verifier", verifier),
+        ])
         BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Account connection is unavailable. Try again.") }; self?.authenticateAndPersist(try VaultEnvelopeCodec.token(data), generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }; self?.authenticateAndPersist(try VaultEnvelopeCodec.token(data), generation: generation, key: key) } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.start(request)
     }
     private func authenticateAndPersist(_ token: Token, generation: String, key: String) {
@@ -137,8 +166,115 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private func userinfo(_ token: Token, generation: String, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw EnrollmentError.message("Could not verify this account. Try again.") }; let identity = try VaultEnvelopeCodec.userinfo(data); let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try NativeVaultPrivateSession().save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }; let identity = try VaultEnvelopeCodec.userinfo(data); let store = try ProviderStore(); try store.locked { old in guard old.generation == generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }; let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil); try store.write(next); let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000; try NativeVaultPrivateSession().save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context); try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub)) }; DispatchQueue.main.async { self?.window?.close() } } catch { DispatchQueue.main.async { self?.showError(error) } }
         }.start(request)
+    }
+    private enum AccessState {
+        case active(accessToken: String, subject: String, generation: String)
+        case refresh(refreshToken: String, subject: String, generation: String)
+    }
+    // Provider-private session access for configuration only. It returns an
+    // identity label, never an access token, to the UI or the Tauri host.
+    private func loadCurrentConnection() {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else {
+            setConnectionStatus("This build has no public Vault configuration. Install an updated AI Matrx build.")
+            return
+        }
+        let privateSession = NativeVaultPrivateSession()
+        let context: LAContext
+        do { context = try privateSession.authenticatedContext(reason: "Check your AI Matrx Vault connection") }
+        catch { setConnectionStatus("Vault protection is unavailable on this Mac."); return }
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Check your AI Matrx Vault connection") { [weak self] allowed, _ in
+            guard allowed else { self?.setConnectionStatus("Unlock Vault protection to check the connected account."); return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                self?.acquireCurrentConnection(privateSession: privateSession, context: context, key: key)
+            }
+        }
+    }
+    private func acquireCurrentConnection(privateSession: NativeVaultPrivateSession, context: LAContext, key: String) {
+        do {
+            let access = try ProviderStore(mode: .providerAccess).locked { state -> AccessState in
+                guard state.provider_subject != nil, let session = try privateSession.readActive(context: context, matching: state) else {
+                    throw EnrollmentError.message("Vault connection is not configured. Connect an account.")
+                }
+                // Refresh slightly early so a token cannot expire between the
+                // authorized Keychain read and the userinfo request.
+                if session.expires_at_ms > Int64(Date().timeIntervalSince1970 * 1000) + 10_000 {
+                    return .active(accessToken: session.access_token, subject: session.subject, generation: state.generation)
+                }
+                let refreshToken = session.refresh_token
+                _ = try privateSession.beginRefresh(session, context: context)
+                return .refresh(refreshToken: refreshToken, subject: session.subject, generation: state.generation)
+            }
+            switch access {
+            case let .active(accessToken, subject, generation):
+                fetchCurrentIdentity(accessToken: accessToken, expectedSubject: subject, generation: generation, key: key)
+            case let .refresh(refreshToken, subject, generation):
+                refreshCurrentConnection(refreshToken: refreshToken, expectedSubject: subject, generation: generation, key: key, context: context, privateSession: privateSession)
+            }
+        } catch {
+            setConnectionStatus("Vault connection needs reconnect.")
+        }
+    }
+    private func refreshCurrentConnection(refreshToken: String, expectedSubject: String, generation: String, key: String, context: LAContext, privateSession: NativeVaultPrivateSession) {
+        var request = URLRequest(url: tokenURL); request.httpMethod = "POST"; request.timeoutInterval = 10
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(key, forHTTPHeaderField: "apikey")
+        request.httpBody = formBody([("grant_type", "refresh_token"), ("client_id", clientID), ("refresh_token", refreshToken)])
+        BoundedTransport { [weak self] result in
+            do {
+                let (data, http) = try result.get()
+                guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }
+                let token = try VaultEnvelopeCodec.token(data)
+                self?.fetchCurrentIdentity(accessToken: token.access_token, expectedSubject: expectedSubject, generation: generation, key: key) { identity in
+                    let store = try ProviderStore(mode: .providerAccess)
+                    try store.locked { state in
+                        guard state.generation == generation, state.provider_subject == expectedSubject, identity.sub == expectedSubject else {
+                            throw EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider.")
+                        }
+                        let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000
+                        try privateSession.save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context)
+                    }
+                }
+            } catch {
+                // The Keychain remains refresh_pending after every failed or
+                // ambiguous refresh. Never replay the old refresh token.
+                self?.setConnectionFailure(error)
+            }
+        }.start(request)
+    }
+    private func fetchCurrentIdentity(accessToken: String, expectedSubject: String, generation: String, key: String, afterIdentity: ((Identity) throws -> Void)? = nil) {
+        var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        BoundedTransport { [weak self] result in
+            do {
+                let (data, http) = try result.get()
+                guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }
+                let identity = try VaultEnvelopeCodec.userinfo(data)
+                guard identity.sub == expectedSubject else { throw EnrollmentError.message("Vault connection needs reconnect.") }
+                if let afterIdentity {
+                    try afterIdentity(identity)
+                } else {
+                    let store = try ProviderStore(mode: .providerAccess)
+                    try store.locked { state in
+                        guard state.generation == generation, state.provider_subject == identity.sub else {
+                            throw EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider.")
+                        }
+                    }
+                }
+                self?.setConnectionStatus("Connected account: \(identity.email ?? identity.sub)")
+            } catch {
+                self?.setConnectionFailure(error)
+            }
+        }.start(request)
+    }
+    private func setConnectionStatus(_ value: String) {
+        DispatchQueue.main.async { [weak self] in self?.connectionStatus?.stringValue = value }
+    }
+    private func setConnectionFailure(_ error: Error) {
+        let message = (error as? LocalizedError)?.errorDescription ?? "Vault connection is temporarily unavailable. Try again."
+        setConnectionStatus(message)
     }
     private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
     @objc private func disconnect() {

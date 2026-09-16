@@ -169,7 +169,7 @@ class SupabaseDocClient:
             if resp.status_code >= 300:
                 logger.warning(
                     "Supabase PostgREST request rejected method=%s schema=%s "
-                    "table=%s status=%s code=%s",
+                    "table=%s status=%s postgrest_error_id=%s",
                     method.upper(),
                     profile,
                     table,

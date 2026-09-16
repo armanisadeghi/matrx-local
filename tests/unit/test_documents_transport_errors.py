@@ -119,7 +119,7 @@ def test_403_preserves_exception_and_logs_only_safe_transport_fields(
     messages = [record.getMessage() for record in caplog.records]
     assert messages == [
         "Supabase PostgREST request rejected method=GET schema=workbench "
-        "table=notes status=403 code=42501"
+        "table=notes status=403 postgrest_error_id=42501"
     ]
     assert secret_message not in caplog.text
     assert "private detail" not in caplog.text
@@ -137,5 +137,7 @@ def test_malformed_or_unbounded_error_code_is_not_logged(
         with pytest.raises(httpx.HTTPStatusError):
             asyncio.run(_client(isolated_postgrest)._request("GET", "notes", schema="workbench"))
 
-    assert caplog.messages[-1].endswith("status=403 code=unknown")
+    assert caplog.messages[-1].endswith(
+        "status=403 postgrest_error_id=unknown"
+    )
     assert unsafe_code not in caplog.text

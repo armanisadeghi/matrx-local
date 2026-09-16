@@ -19,13 +19,19 @@
 //! app can never cascade into it.
 
 use serde::Serialize;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
 /// The daemon band this build talks to (C7, S21): 22160–22179 live, 22260–22279 dev. The world is
 /// decided the same way the engine's is — `debug_assertions` — so a source run never touches the
 /// installed app's daemon (Hard Rule 9).
-const WORLD: &str = if cfg!(debug_assertions) { "dev" } else { "live" };
+const WORLD: &str = if cfg!(debug_assertions) {
+    "dev"
+} else {
+    "live"
+};
 
 /// What the webview needs to talk to the daemon itself: the loopback base URL and the **read**
 /// token. Deliberately no control token, and no socket path — a browser context can use neither.
@@ -76,6 +82,54 @@ fn base_url() -> Option<String> {
     Some(format!("http://127.0.0.1:{port}"))
 }
 
+fn is_healthy_daemon_response(response: &[u8]) -> bool {
+    const OK_FIELD: &[u8] = b"\"ok\":true";
+    response.starts_with(b"HTTP/1.1 200")
+        && response
+            .windows(OK_FIELD.len())
+            .any(|part| part == OK_FIELD)
+}
+
+/// A discovery file is only a hint.  The daemon can be killed or crash before it removes the
+/// file, and treating that stale file as proof of life leaves the app permanently unable to
+/// sign in.  Prove that the published endpoint is really our daemon with its scoped read token
+/// before skipping the first-run spawn.
+fn daemon_is_reachable() -> bool {
+    let Some(port) = discovery()
+        .and_then(|value| value.get("tcp_port")?.as_u64())
+        .and_then(|value| u16::try_from(value).ok())
+    else {
+        return false;
+    };
+    let Some((_, read_token)) = tokens() else {
+        return false;
+    };
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
+        return false;
+    };
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .is_err()
+        || stream
+            .set_write_timeout(Some(Duration::from_millis(500)))
+            .is_err()
+    {
+        return false;
+    }
+    let request = format!(
+        "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {read_token}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = Vec::with_capacity(512);
+    if stream.read_to_end(&mut response).is_err() {
+        return false;
+    }
+    is_healthy_daemon_response(&response)
+}
+
 /// The host talks to the daemon over the **loopback listener**, not the Unix socket.
 ///
 /// C7 says the Tauri process *prefers* the socket, and it would: it is one fewer listener. But
@@ -88,9 +142,8 @@ async fn call(
     path: &str,
     body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let base = base_url().ok_or_else(|| {
-        "AI Matrx Sync is not running on this computer.".to_string()
-    })?;
+    let base =
+        base_url().ok_or_else(|| "AI Matrx Sync is not running on this computer.".to_string())?;
     let (control, _read) = tokens().ok_or_else(|| {
         "AI Matrx Sync is running but its access token file could not be read.".to_string()
     })?;
@@ -143,7 +196,12 @@ pub fn syncd_client_config() -> SyncdClientConfig {
 /// Start a sign-in. The daemon generates the verifier and returns the URL to open.
 #[tauri::command]
 pub async fn syncd_sign_in() -> Result<serde_json::Value, String> {
-    call(reqwest::Method::POST, "/v1/sign-in", Some(serde_json::json!({}))).await
+    call(
+        reqwest::Method::POST,
+        "/v1/sign-in",
+        Some(serde_json::json!({})),
+    )
+    .await
 }
 
 /// Forward a callback the OS delivered to us. **The code goes to the daemon, never to the
@@ -163,7 +221,12 @@ pub async fn syncd_sign_in_callback(url: String) -> Result<serde_json::Value, St
 /// Sign this device out. Control scope: a page cannot do this (§12).
 #[tauri::command]
 pub async fn syncd_sign_out() -> Result<serde_json::Value, String> {
-    call(reqwest::Method::POST, "/v1/sign-out", Some(serde_json::json!({}))).await
+    call(
+        reqwest::Method::POST,
+        "/v1/sign-out",
+        Some(serde_json::json!({})),
+    )
+    .await
 }
 
 /// Hand the daemon a session this Mac held **before** the custody cutover, once.
@@ -278,7 +341,7 @@ fn daemon_binary() -> Option<PathBuf> {
 /// the binary to be absent — a build without the sidecar simply has no sync, which the Sync
 /// surface reports as `daemon_not_running` with its "Start sync" action rather than a crash.
 pub fn ensure_running() {
-    if base_url().is_some() {
+    if daemon_is_reachable() {
         return;
     }
     let Some(binary) = daemon_binary() else {
@@ -312,7 +375,9 @@ pub fn ensure_running() {
         // hook runs — from cascading into the daemon. Where the containing job forbids breakaway
         // the spawn is retried without it: one pre-sign-in daemon may then be job-bound, and the
         // next start is supervisor-owned anyway (SPEC-ENGINE §1.2).
-        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        command.creation_flags(
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+        );
     }
 
     match command.spawn() {
@@ -328,7 +393,10 @@ pub fn ensure_running() {
                     .stderr(std::process::Stdio::null())
                     .creation_flags(0x0000_0008 | 0x0000_0200);
                 if let Ok(child) = retry.spawn() {
-                    println!("[syncd] started matrx-syncd without job breakaway (pid {})", child.id());
+                    println!(
+                        "[syncd] started matrx-syncd without job breakaway (pid {})",
+                        child.id()
+                    );
                     return;
                 }
             }
@@ -364,7 +432,27 @@ mod tests {
     fn the_world_matches_the_engines_dev_live_rule() {
         // Hard Rule 9: a source build is the dev world, a release build the live one — the same
         // `debug_assertions` split the engine and the webview already use.
-        assert_eq!(WORLD, if cfg!(debug_assertions) { "dev" } else { "live" });
+        assert_eq!(
+            WORLD,
+            if cfg!(debug_assertions) {
+                "dev"
+            } else {
+                "live"
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_successful_syncd_health_response_proves_liveness() {
+        assert!(is_healthy_daemon_response(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\r\n{\"ok\":true}"
+        ));
+        assert!(!is_healthy_daemon_response(
+            b"HTTP/1.1 503 Service Unavailable\r\n\r\n{\"ok\":true}"
+        ));
+        assert!(!is_healthy_daemon_response(
+            b"HTTP/1.1 200 OK\r\n\r\n{\"ok\":false}"
+        ));
     }
 
     #[test]

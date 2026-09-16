@@ -11,6 +11,8 @@ struct NativeVaultEnrollmentLifecycleCorpus {
         try callbackAndPKCEAreStrict()
         try doubleConnectCannotReplaceCallbackOwner()
         try generationChangeCancelsRefreshCommit()
+        try cancelBeforePersistenceLeavesNoWrites()
+        try repeatedRetryCannotCreateSecondOperation()
         try configurationCompletionRequiresCurrentOperation()
         print("native Vault enrollment lifecycle corpus passed")
     }
@@ -21,9 +23,9 @@ struct NativeVaultEnrollmentLifecycleCorpus {
     }
     static func callbackAndPKCEAreStrict() throws {
         let active = try operation()
-        guard NativeVaultEnrollmentLifecycle.pkceChallenge(verifier: active.verifier) == "CGk8HVymQ7dkbDaBljFdKHsCtcHrJRy5N3qiD7z7_LI" else { throw Failure.bad }
+        guard NativeVaultEnrollmentLifecycle.pkceChallenge(verifier: "verifier-abcdefghijklmnopqrstuvwxyz012345") == "CGk8HVymQ7dkbDaBljFdKHsCtcHrJRy5N3qiD7z7_LI" else { throw Failure.bad }
         let valid = URL(string: "matrx-vault-provider://oauth/callback?state=state-abcdefghijklmnopqrstuvwxyz012345&code=one")!
-        guard try NativeVaultEnrollmentLifecycle.callbackCode(valid, for: active, callback: callback) == "one" else { throw Failure.bad }
+        guard try NativeVaultEnrollmentLifecycle.callbackCode(valid, for: active, callback: callback).code == "one" else { throw Failure.bad }
         for invalid in [
             URL(string: "matrx-vault-provider://oauth/callback?state=wrong&code=one")!,
             URL(string: "matrx-vault-provider://oauth/callback?state=state-abcdefghijklmnopqrstuvwxyz012345&code=one&code=two")!,
@@ -34,7 +36,7 @@ struct NativeVaultEnrollmentLifecycleCorpus {
         let first = try operation()
         guard NativeVaultEnrollmentLifecycle.begin(verifier: "second", state: "second", generation: generation, active: first) == nil else { throw Failure.bad }
         let firstCallback = URL(string: "matrx-vault-provider://oauth/callback?state=state-abcdefghijklmnopqrstuvwxyz012345&code=first")!
-        guard try NativeVaultEnrollmentLifecycle.callbackCode(firstCallback, for: first, callback: callback) == "first" else { throw Failure.bad }
+        guard try NativeVaultEnrollmentLifecycle.callbackCode(firstCallback, for: first, callback: callback).code == "first" else { throw Failure.bad }
     }
     static func generationChangeCancelsRefreshCommit() throws {
         let identity = Identity(sub: subject, email: nil, email_verified: nil)
@@ -46,6 +48,24 @@ struct NativeVaultEnrollmentLifecycleCorpus {
     static func configurationCompletionRequiresCurrentOperation() throws {
         let active = try operation()
         guard NativeVaultEnrollmentLifecycle.mayCompleteConfiguration(active: active, operationID: active.id), !NativeVaultEnrollmentLifecycle.mayCompleteConfiguration(active: nil, operationID: active.id), !NativeVaultEnrollmentLifecycle.mayCompleteConfiguration(active: active, operationID: UUID()) else { throw Failure.bad }
+    }
+    static func cancelBeforePersistenceLeavesNoWrites() throws {
+        let commitGuard = NativeVaultOperationCommitGuard()
+        let paused = DispatchSemaphore(value: 0), resume = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+        var writes = 0; var committed = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            paused.signal()
+            _ = resume.wait(timeout: .now() + 2)
+            committed = (try? commitGuard.commit { writes += 1 }) ?? true
+            done.signal()
+        }
+        guard paused.wait(timeout: .now() + 1) == .success, commitGuard.cancel() == .cancelled else { throw Failure.bad }
+        resume.signal()
+        guard done.wait(timeout: .now() + 2) == .success, !committed, writes == 0 else { throw Failure.bad }
+    }
+    static func repeatedRetryCannotCreateSecondOperation() throws {
+        let refresh = try operation()
+        guard NativeVaultEnrollmentLifecycle.begin(verifier: "retry", state: "retry", generation: generation, active: refresh) == nil else { throw Failure.bad }
     }
     static func rejects(_ body: () throws -> Void) throws {
         do { try body(); throw Failure.bad } catch Failure.bad { throw Failure.bad } catch { }

@@ -62,7 +62,7 @@ export function ArtifactsCell({
   return (
     <button
       type="button"
-      title={`${summary.files.toLocaleString()} file${summary.files === 1 ? "" : "s"} kept (${formatFileSize(summary.bytes)}) · ${summary.uploaded.toLocaleString()} confirmed in AI Matrx${summary.deduplicated > 0 ? ` (${summary.deduplicated.toLocaleString()} of them share an identical file already there — AI Matrx holds ${summary.cloud_rows.toLocaleString()} file${summary.cloud_rows === 1 ? "" : "s"} for this session)` : ""}${summary.awaiting_confirmation > 0 ? ` · ${summary.awaiting_confirmation.toLocaleString()} not read back yet` : ""} · ${summary.pending_upload.toLocaleString()} pending${summary.missing_in_cloud > 0 ? ` · ${summary.missing_in_cloud.toLocaleString()} missing in AI Matrx (re-uploading)` : ""}${summary.failed_upload > 0 ? ` · ${summary.failed_upload.toLocaleString()} failed` : ""}. Click to see every file.`}
+      title={`${summary.files.toLocaleString()} file${summary.files === 1 ? "" : "s"} kept (${formatFileSize(summary.bytes)}) · ${summary.uploaded.toLocaleString()} confirmed in AI Matrx${summary.unplaced > 0 ? ` · ${summary.unplaced.toLocaleString()} not listed under this session yet (being re-filed under their own path)` : ""}${summary.placement_failed > 0 ? ` · ${summary.placement_failed.toLocaleString()} AI Matrx would not file under their own path` : ""}${summary.awaiting_confirmation > 0 ? ` · ${summary.awaiting_confirmation.toLocaleString()} not read back yet` : ""} · ${summary.pending_upload.toLocaleString()} pending${summary.missing_in_cloud > 0 ? ` · ${summary.missing_in_cloud.toLocaleString()} missing in AI Matrx (re-uploading)` : ""}${summary.failed_upload > 0 ? ` · ${summary.failed_upload.toLocaleString()} failed` : ""}. Click to see every file.`}
       className="underline decoration-dotted underline-offset-4 hover:decoration-solid"
       onClick={(event) => {
         event.stopPropagation();
@@ -74,6 +74,9 @@ export function ArtifactsCell({
         ({summary.uploaded.toLocaleString()}↑
         {summary.awaiting_confirmation > 0 ? ` ${summary.awaiting_confirmation.toLocaleString()} unconfirmed` : ""}
         {summary.pending_upload > 0 ? ` ${summary.pending_upload.toLocaleString()} pending` : ""}
+        {summary.unplaced > 0 ? (
+          <span className="text-destructive"> {summary.unplaced.toLocaleString()} unlisted</span>
+        ) : null}
         {summary.missing_in_cloud > 0 ? (
           <span className="text-destructive"> {summary.missing_in_cloud.toLocaleString()} missing</span>
         ) : null}

@@ -224,6 +224,14 @@ class FakeNotesRepo:
                 return row
         return None
 
+    async def list_live_by_file_path(self, file_path: str) -> list[dict[str, Any]]:
+        return sorted([
+            row
+            for row in self.rows.values()
+            if row.get("file_path") == file_path
+            and not row.get("is_deleted")
+        ], key=lambda row: row["id"])
+
     async def set_sync_status(
         self, note_id: str, status: str, remote_hash: str | None = None, *, user_id: str | None = None
     ) -> None:

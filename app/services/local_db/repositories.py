@@ -1167,6 +1167,21 @@ class NotesRepo:
             )
         return self._deserialize(row) if row else None
 
+    async def list_live_by_file_path(self, file_path: str) -> list[dict[str, Any]]:
+        """Return every live note identity claiming ``file_path``.
+
+        Callers making overwrite, move, or delete decisions must inspect this
+        complete collision set rather than trusting SQLite's arbitrary first
+        matching row.
+        """
+        rows = await self._db.fetchall(
+            """SELECT * FROM notes
+               WHERE file_path = ? AND is_deleted = 0
+               ORDER BY id""",
+            (file_path,),
+        )
+        return [self._deserialize(row) for row in rows]
+
     async def upsert(self, note: dict[str, Any]) -> None:
         now = _now()
         cursor = await self._db.execute(

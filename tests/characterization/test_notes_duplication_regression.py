@@ -28,8 +28,10 @@ from typing import Any
 import pytest
 
 try:
-    from app.services.documents.file_manager import content_hash
+    from app.services.documents.file_manager import DocumentFileManager, content_hash
     from app.services.documents.sync_engine import SyncEngine
+    from app.services.local_db.database import LocalDatabase
+    from app.services.local_db.repositories import NotesRepo
 except Exception as exc:  # pragma: no cover — env-dependent import guard
     pytest.skip(
         f"documents sync engine not importable in this environment: {exc}",
@@ -97,6 +99,16 @@ class FakeSupabaseFull(FakeSupabase):
         return sum(1 for c in self.calls if c[0] == "upsert_note")
 
 
+class TempDocumentFileManager(DocumentFileManager):
+    """Real file operations rooted in pytest's temporary directory only."""
+
+    def __init__(self, base_dir: Path) -> None:
+        # DocumentFileManager's production constructor creates the configured
+        # application directories. This regression needs real files without
+        # touching any installed-app directory.
+        self._explicit_base = base_dir
+
+
 @pytest.fixture()
 def engine(tmp_path: Path) -> SyncEngine:
     eng = SyncEngine(fm=FakeFileManager(tmp_path), sb=FakeSupabaseFull())  # type: ignore[arg-type]
@@ -129,9 +141,10 @@ def _seed_owner(engine: SyncEngine, fp: str, content: str, note_id: str) -> None
     }
 
 
-def test_contested_pull_identical_content_is_not_materialized(engine: SyncEngine) -> None:
-    """A cloud-side duplicate row (same path, same bytes) must NOT be given a
-    local ``label_2.md`` — materializing it seeded the duplicate factory."""
+def test_contested_pull_identical_content_preserves_both_identities(
+    engine: SyncEngine,
+) -> None:
+    """Identical cloud rows still need separate local identities and paths."""
     _seed_owner(engine, "Draft/idea.md", "same body", "owner-id")
     incoming = {
         "id": "dupe-id",
@@ -141,12 +154,49 @@ def test_contested_pull_identical_content_is_not_materialized(engine: SyncEngine
         "label": "idea",
         "folder_name": "Draft",
     }
+    engine.sb.notes["dupe-id"] = dict(incoming)
     result = _run(engine._pull_note("dupe-id", note=incoming))
-    assert result is not None and result.get("_skipped_duplicate_content") is True
-    assert set(engine.fm.notes) == {"Draft/idea.md"}  # no idea_2.md
-    assert "dupe-id" not in engine._repo.rows  # no local row minted
-    assert engine.sb.cas_writebacks == []
+    assert result is not None
+    duplicate_path = engine._repo.rows["dupe-id"]["file_path"]
+    assert duplicate_path.startswith("Draft/idea--")
+    assert duplicate_path.endswith(".md")
+    assert engine.fm.notes == {
+        "Draft/idea.md": "same body",
+        duplicate_path: "same body",
+    }
+    assert engine.sb.cas_writebacks == [("dupe-id", "Draft/idea.md", duplicate_path)]
+    assert engine.sb.notes["dupe-id"]["file_path"] == duplicate_path
     assert engine.sb.path_writebacks == []
+
+    # Replaying the converged row must retain the same identity and path.
+    result2 = _run(engine._pull_note("dupe-id", note=dict(engine.sb.notes["dupe-id"])))
+    assert result2 is not None
+    assert set(engine.fm.notes) == {"Draft/idea.md", duplicate_path}
+    assert len(engine.sb.cas_writebacks) == 1
+
+
+def test_contested_pull_identical_content_preserves_pending_identity_edit(
+    engine: SyncEngine,
+) -> None:
+    """A retry may not overwrite a locally edited duplicate identity."""
+    _seed_owner(engine, "Draft/idea.md", "same body", "owner-id")
+    incoming = {
+        "id": "dupe-id",
+        "file_path": "Draft/idea.md",
+        "content": "same body",
+        "content_hash": content_hash("same body"),
+        "label": "idea",
+        "folder_name": "Draft",
+    }
+    engine.sb.notes["dupe-id"] = dict(incoming)
+    first = _run(engine._pull_note("dupe-id", note=incoming))
+    assert first is not None
+    duplicate_path = engine._repo.rows["dupe-id"]["file_path"]
+    engine.fm.notes[duplicate_path] = "unsynced local edit"
+
+    result = _run(engine._pull_note("dupe-id", note=dict(engine.sb.notes["dupe-id"])))
+    assert result is not None and result.get("_conflict") is True
+    assert engine.fm.notes[duplicate_path] == "unsynced local edit"
 
 
 def test_contested_pull_divergent_content_reroutes_and_converges_cloud(
@@ -166,16 +216,404 @@ def test_contested_pull_divergent_content_reroutes_and_converges_cloud(
     }
     result = _run(engine._pull_note("other-id", note=dict(engine.sb.notes["other-id"])))
     assert result is not None and result.get("_conflict") is None
-    assert engine.fm.notes["Draft/idea_2.md"] == "different body"
+    rerouted_path = engine._repo.rows["other-id"]["file_path"]
+    assert rerouted_path.startswith("Draft/idea--")
+    assert engine.fm.notes[rerouted_path] == "different body"
     # The cloud row converged on the rerouted path via CAS — not if_null.
-    assert engine.sb.cas_writebacks == [("other-id", "Draft/idea.md", "Draft/idea_2.md")]
-    assert engine.sb.notes["other-id"]["file_path"] == "Draft/idea_2.md"
+    assert engine.sb.cas_writebacks == [("other-id", "Draft/idea.md", rerouted_path)]
+    assert engine.sb.notes["other-id"]["file_path"] == rerouted_path
 
-    # A SECOND pull of the (now converged) row must not allocate idea_3.md.
-    result2 = _run(engine._pull_note("other-id", note=dict(engine.sb.notes["other-id"])))
+    # A second pull of the converged row must retain the same path.
+    result2 = _run(
+        engine._pull_note("other-id", note=dict(engine.sb.notes["other-id"]))
+    )
     assert result2 is not None
-    assert "Draft/idea_3.md" not in engine.fm.notes
+    assert set(engine.fm.notes) == {"Draft/idea.md", rerouted_path}
     assert len(engine.sb.cas_writebacks) == 1  # no second reroute
+
+
+def test_contested_pull_cas_loser_retries_same_identity_path(
+    engine: SyncEngine,
+) -> None:
+    """A CAS loss leaves both local identities intact and never grows suffixes."""
+    _seed_owner(engine, "Draft/idea.md", "same body", "owner-id")
+    incoming = {
+        "id": "dupe-id",
+        "file_path": "Draft/idea.md",
+        "content": "same body",
+        "content_hash": content_hash("same body"),
+        "label": "idea",
+        "folder_name": "Draft",
+    }
+    engine.sb.notes["dupe-id"] = dict(incoming)
+    cas_calls: list[tuple[str, str, str]] = []
+
+    async def lose_cas(
+        note_id: str, expected: str, allocated: str, *_args, **_kwargs
+    ) -> bool:
+        cas_calls.append((note_id, expected, allocated))
+        return False
+
+    engine.sb.set_file_path_if_matches = lose_cas  # type: ignore[method-assign]
+    first = _run(engine._pull_note("dupe-id", note=dict(incoming)))
+    assert first is not None
+    duplicate_path = engine._repo.rows["dupe-id"]["file_path"]
+    second = _run(engine._pull_note("dupe-id", note=dict(incoming)))
+    assert second is not None
+    assert set(engine.fm.notes) == {"Draft/idea.md", duplicate_path}
+    assert cas_calls == [
+        ("dupe-id", "Draft/idea.md", duplicate_path),
+        ("dupe-id", "Draft/idea.md", duplicate_path),
+    ]
+
+
+def test_contested_reroute_keeps_other_identity_real_file_and_mapping(
+    tmp_path: Path,
+) -> None:
+    """Two persisted IDs on one path cannot let B's reroute delete A's file."""
+    fm = TempDocumentFileManager(tmp_path)
+    sb = FakeSupabaseFull()
+    engine = SyncEngine(fm=fm, sb=sb)
+    repo = FakeNotesRepo()
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    engine._device_id = "test-device"
+    engine.configure(user_id="user-1", jwt="jwt-1")
+
+    contested_path = fm.write_note("Draft", "idea", "A unsynced user work")
+    repo.rows["owner-a"] = {
+        "id": "owner-a",
+        "user_id": "user-1",
+        "file_path": contested_path,
+        "content_hash": content_hash("A synced body"),
+        "remote_content_hash": content_hash("A synced body"),
+        "is_deleted": False,
+    }
+    # This is the persisted incoming mapping that previously drove the
+    # unconditional old-path delete after B was rerouted.
+    repo.rows["incoming-b"] = {
+        "id": "incoming-b",
+        "user_id": "user-1",
+        "file_path": contested_path,
+        "content_hash": content_hash("B old body"),
+        "remote_content_hash": content_hash("B old body"),
+        "is_deleted": False,
+    }
+    incoming = {
+        "id": "incoming-b",
+        "file_path": contested_path,
+        "content": "B remote body",
+        "content_hash": content_hash("B remote body"),
+        "label": "idea",
+        "folder_name": "Draft",
+    }
+    sb.notes["incoming-b"] = dict(incoming)
+    state = engine._load_sync_state()
+    state["note_hashes"] = {contested_path: content_hash("A synced body")}
+    engine._save_sync_state(state)
+
+    result = _run(engine._pull_note("incoming-b", note=incoming))
+    assert result is not None
+    rerouted_path = repo.rows["incoming-b"]["file_path"]
+    assert repo.rows["owner-a"]["file_path"] == contested_path
+    assert (tmp_path / contested_path).read_text(encoding="utf-8") == "A unsynced user work"
+    assert (tmp_path / rerouted_path).read_text(encoding="utf-8") == "B remote body"
+
+
+@pytest.mark.parametrize("insert_order", [("incoming-b", "owner-a"), ("owner-a", "incoming-b")])
+@pytest.mark.parametrize("remote_order", [("incoming-b", "owner-a"), ("owner-a", "incoming-b")])
+def test_real_sqlite_collision_set_preserves_both_ids_in_direct_and_full_sync(
+    tmp_path: Path, insert_order: tuple[str, str], remote_order: tuple[str, str]
+) -> None:
+    """Neither SQLite nor cloud arrival order can steal unsynced ownership."""
+
+    async def run_case(mode: str) -> None:
+        root = tmp_path / f"{mode}-{insert_order[0]}-{remote_order[0]}"
+        db = LocalDatabase(root / "notes.db")
+        await db.connect()
+        try:
+            repo = NotesRepo(db)
+            fm = TempDocumentFileManager(root / "files")
+            sb = FakeSupabaseFull()
+            engine = SyncEngine(fm=fm, sb=sb)
+            engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+            engine._device_id = "test-device"
+            engine.configure(user_id="user-1", jwt="jwt-1")
+
+            contested_path = fm.write_note("Draft", "idea", "A unsynced user work")
+            rows = {
+                "owner-a": {
+                    "id": "owner-a",
+                    "user_id": "user-1",
+                    "file_path": contested_path,
+                    "content": "A synced body",
+                    "content_hash": content_hash("A synced body"),
+                    "remote_content_hash": content_hash("A synced body"),
+                    "sync_status": "synced",
+                },
+                "incoming-b": {
+                    "id": "incoming-b",
+                    "user_id": "user-1",
+                    "file_path": contested_path,
+                    "content": "B old body",
+                    "content_hash": content_hash("B old body"),
+                    "remote_content_hash": content_hash("B old body"),
+                    "sync_status": "synced",
+                },
+            }
+            for note_id in insert_order:
+                await repo.upsert(rows[note_id])
+
+            remote_a = {
+                "id": "owner-a",
+                "file_path": contested_path,
+                "content": "A synced body",
+                "content_hash": content_hash("A synced body"),
+                "label": "idea",
+                "folder_name": "Draft",
+            }
+            remote_b = {
+                "id": "incoming-b",
+                "file_path": contested_path,
+                "content": "B remote body",
+                "content_hash": content_hash("B remote body"),
+                "label": "idea",
+                "folder_name": "Draft",
+            }
+            remotes = {"incoming-b": remote_b, "owner-a": remote_a}
+            sb.notes = {note_id: dict(remotes[note_id]) for note_id in remote_order}
+
+            state = engine._load_sync_state()
+            state["note_hashes"] = {contested_path: content_hash("A synced body")}
+            engine._save_sync_state(state)
+
+            if mode == "direct":
+                result = await engine._pull_note("incoming-b", note=remote_b)
+                assert result is not None
+            else:
+                await engine.full_sync()
+
+            owner = await repo.get("owner-a")
+            incoming = await repo.get("incoming-b")
+            assert owner is not None and incoming is not None
+            assert owner["file_path"] == contested_path
+            assert incoming["file_path"] != contested_path
+            assert (root / "files" / contested_path).read_text(encoding="utf-8") == "A unsynced user work"
+            assert (root / "files" / incoming["file_path"]).read_text(encoding="utf-8") == "B remote body"
+        finally:
+            await db.close()
+
+    _run(run_case("direct"))
+    _run(run_case("full"))
+
+
+def test_ambiguous_same_hash_collision_preserves_files_as_conflict(tmp_path: Path) -> None:
+    """Edited bytes with multiple equally plausible owners must not be guessed."""
+
+    async def run_case() -> None:
+        db = LocalDatabase(tmp_path / "notes.db")
+        await db.connect()
+        try:
+            repo = NotesRepo(db)
+            fm = TempDocumentFileManager(tmp_path / "files")
+            sb = FakeSupabaseFull()
+            engine = SyncEngine(fm=fm, sb=sb)
+            engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+            engine._device_id = "test-device"
+            engine.configure(user_id="user-1", jwt="jwt-1")
+
+            contested_path = fm.write_note("Draft", "idea", "edited local corpus")
+            synced_hash = content_hash("shared synced body")
+            for note_id in ("owner-a", "incoming-b"):
+                await repo.upsert({
+                    "id": note_id,
+                    "user_id": "user-1",
+                    "file_path": contested_path,
+                    "content": "shared synced body",
+                    "content_hash": synced_hash,
+                    "remote_content_hash": synced_hash,
+                    "sync_status": "synced",
+                })
+            remote_a = {
+                "id": "owner-a", "file_path": contested_path,
+                "content": "A remote body", "content_hash": content_hash("A remote body"),
+                "label": "idea", "folder_name": "Draft",
+            }
+            remote_b = {
+                "id": "incoming-b", "file_path": contested_path,
+                "content": "B remote body", "content_hash": content_hash("B remote body"),
+                "label": "idea", "folder_name": "Draft",
+            }
+            sb.notes = {"incoming-b": remote_b, "owner-a": remote_a}
+            state = engine._load_sync_state()
+            state["note_hashes"] = {contested_path: synced_hash}
+            engine._save_sync_state(state)
+
+            result = await engine._pull_note("incoming-b", note=remote_b)
+            assert result is not None and result.get("_collision_conflict") is True
+            stats = await engine.full_sync()
+            assert stats["conflicts"] >= 2
+            assert stats["pulled"] == 0
+            assert (tmp_path / "files" / contested_path).read_text(encoding="utf-8") == "edited local corpus"
+            owner = await repo.get("owner-a")
+            incoming = await repo.get("incoming-b")
+            assert owner is not None and owner["file_path"] == contested_path
+            assert incoming is not None and incoming["file_path"] == contested_path
+        finally:
+            await db.close()
+
+    _run(run_case())
+
+
+def test_singleton_remote_sibling_preserves_unmatched_local_keeper(tmp_path: Path) -> None:
+    """A sole remote sibling cannot replace a local keeper missing from cloud."""
+
+    async def run_case() -> None:
+        db = LocalDatabase(tmp_path / "notes.db")
+        await db.connect()
+        try:
+            repo = NotesRepo(db)
+            fm = TempDocumentFileManager(tmp_path / "files")
+            sb = FakeSupabaseFull()
+            engine = SyncEngine(fm=fm, sb=sb)
+            engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+            engine._device_id = "test-device"
+            engine.configure(user_id="user-1", jwt="jwt-1")
+            contested_path = fm.write_note("Draft", "idea", "A unsynced user work")
+            synced_hash = content_hash("A synced body")
+            await repo.upsert({
+                "id": "owner-a", "user_id": "user-1", "file_path": contested_path,
+                "content": "A synced body", "content_hash": synced_hash,
+                "remote_content_hash": synced_hash, "sync_status": "synced",
+            })
+            remote_b = {
+                "id": "incoming-b", "file_path": contested_path,
+                "content": "B remote body", "content_hash": content_hash("B remote body"),
+                "label": "idea", "folder_name": "Draft",
+            }
+            sb.notes = {"incoming-b": remote_b}
+            state = engine._load_sync_state()
+            state["note_hashes"] = {contested_path: synced_hash}
+            engine._save_sync_state(state)
+
+            stats = await engine.full_sync()
+            owner = await repo.get("owner-a")
+            incoming = await repo.get("incoming-b")
+            assert owner is not None and owner["file_path"] == contested_path
+            assert incoming is not None and incoming["file_path"] != contested_path
+            assert (tmp_path / "files" / contested_path).read_text(encoding="utf-8") == "A unsynced user work"
+            assert (tmp_path / "files" / incoming["file_path"]).read_text(encoding="utf-8") == "B remote body"
+            assert stats["pushed"] == 0
+        finally:
+            await db.close()
+
+    _run(run_case())
+
+
+def test_clean_initial_remote_duplicate_group_materializes_all_identities(tmp_path: Path) -> None:
+    """A duplicate cloud group with no local bytes gets a stable initial keeper."""
+
+    async def run_case() -> None:
+        db = LocalDatabase(tmp_path / "notes.db")
+        await db.connect()
+        try:
+            repo = NotesRepo(db)
+            fm = TempDocumentFileManager(tmp_path / "files")
+            sb = FakeSupabaseFull()
+            engine = SyncEngine(fm=fm, sb=sb)
+            engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+            engine._device_id = "test-device"
+            engine.configure(user_id="user-1", jwt="jwt-1")
+            contested_path = "Draft/idea.md"
+            remote_a = {
+                "id": "owner-a", "file_path": contested_path, "content": "A remote body",
+                "content_hash": content_hash("A remote body"), "label": "idea", "folder_name": "Draft",
+            }
+            remote_b = {
+                "id": "incoming-b", "file_path": contested_path, "content": "B remote body",
+                "content_hash": content_hash("B remote body"), "label": "idea", "folder_name": "Draft",
+            }
+            sb.notes = {"incoming-b": remote_b, "owner-a": remote_a}
+            stats = await engine.full_sync()
+            owner = await repo.get("owner-a")
+            incoming = await repo.get("incoming-b")
+            # Stable cloud-ID ordering selects the original-path keeper on a
+            # clean first import; arrival order cannot change it.
+            assert incoming is not None and incoming["file_path"] == contested_path
+            assert owner is not None and owner["file_path"] != contested_path
+            assert (tmp_path / "files" / contested_path).read_text(encoding="utf-8") == "B remote body"
+            assert (tmp_path / "files" / owner["file_path"]).read_text(encoding="utf-8") == "A remote body"
+            assert stats["conflicts"] == 0
+        finally:
+            await db.close()
+
+    _run(run_case())
+
+
+def test_tombstone_keeps_shared_path_owned_by_other_live_identity(tmp_path: Path) -> None:
+    """A B-first SQLite lookup cannot let B's tombstone delete A's file."""
+
+    async def run_case() -> None:
+        db = LocalDatabase(tmp_path / "notes.db")
+        await db.connect()
+        try:
+            repo = NotesRepo(db)
+            fm = TempDocumentFileManager(tmp_path / "files")
+            engine = SyncEngine(fm=fm, sb=FakeSupabaseFull())
+            engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+            engine._device_id = "test-device"
+            engine.configure(user_id="user-1", jwt="jwt-1")
+            contested_path = fm.write_note("Draft", "idea", "A live bytes")
+            for note_id in ("incoming-b", "owner-a"):
+                await repo.upsert({
+                    "id": note_id, "user_id": "user-1", "file_path": contested_path,
+                    "content": "A live bytes", "content_hash": content_hash("A live bytes"),
+                    "remote_content_hash": content_hash("A live bytes"), "sync_status": "synced",
+                })
+            result = await engine._pull_note("incoming-b", note={
+                "id": "incoming-b", "file_path": contested_path, "is_deleted": True,
+                "content_hash": content_hash("A live bytes"),
+            })
+            assert result is not None and result.get("_deleted") is True
+            assert (tmp_path / "files" / contested_path).read_text(encoding="utf-8") == "A live bytes"
+            owner = await repo.get("owner-a")
+            incoming = await repo.get("incoming-b")
+            assert owner is not None and owner["is_deleted"] is False
+            assert incoming is not None and incoming["is_deleted"] is True
+        finally:
+            await db.close()
+
+    _run(run_case())
+
+
+def test_pending_incoming_collision_is_explicit_conflict(tmp_path: Path) -> None:
+    """Rerouting never bypasses pending local work for the incoming identity."""
+
+    fm = TempDocumentFileManager(tmp_path)
+    engine = SyncEngine(fm=fm, sb=FakeSupabaseFull())
+    repo = FakeNotesRepo()
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    engine._device_id = "test-device"
+    engine.configure(user_id="user-1", jwt="jwt-1")
+    contested_path = fm.write_note("Draft", "idea", "A bytes")
+    synced_hash = content_hash("A bytes")
+    repo.rows["owner-a"] = {
+        "id": "owner-a", "user_id": "user-1", "file_path": contested_path,
+        "remote_content_hash": synced_hash, "sync_status": "synced",
+    }
+    repo.rows["incoming-b"] = {
+        "id": "incoming-b", "user_id": "user-1", "file_path": contested_path,
+        "remote_content_hash": content_hash("B old bytes"), "sync_status": "pending_push",
+    }
+    state = engine._load_sync_state()
+    state["note_hashes"] = {contested_path: synced_hash}
+    engine._save_sync_state(state)
+    result = _run(engine._pull_note("incoming-b", note={
+        "id": "incoming-b", "file_path": contested_path, "content": "B remote bytes",
+        "content_hash": content_hash("B remote bytes"), "label": "idea", "folder_name": "Draft",
+    }))
+    assert result is not None and result.get("_collision_conflict") is True
+    assert repo.rows["incoming-b"]["file_path"] == contested_path
+    assert (tmp_path / contested_path).read_text(encoding="utf-8") == "A bytes"
 
 
 # ---------------------------------------------------------------------------

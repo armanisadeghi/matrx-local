@@ -60,6 +60,21 @@ def _note_id_for_path(file_path: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"matrx-note:{file_path}"))
 
 
+def _contested_note_path(file_path: str, note_id: str, attempt: int = 0) -> str:
+    """Return a stable sibling path for one cloud note identity.
+
+    A contested cloud path needs a second local file, but a sequence allocated
+    from arrival order (``_2``, then ``_3``) makes independent devices keep
+    choosing different paths. The cloud note ID gives this replica a stable
+    discriminator without changing either note's content or identity.
+    """
+    path = Path(file_path)
+    suffix = uuid.uuid5(uuid.NAMESPACE_URL, note_id).hex[:12]
+    retry = "" if attempt == 0 else f"-{attempt + 1}"
+    extension = path.suffix or ".md"
+    return str(path.with_name(f"{path.stem}--{suffix}{retry}{extension}"))
+
+
 # ── Mass-delete circuit breaker ──────────────────────────────────────────────
 # A sync client must NEVER be able to silently erase a user's cloud corpus.
 # 2026-08-06 → 08-08: this engine propagated local tombstones as sequential
@@ -590,6 +605,58 @@ class SyncEngine:
         async with self._sync_lock:
             return await self._pull_note(note_id)
 
+    async def _resolve_path_collision_owner(
+        self, file_path: str, actor_user_id: str
+    ) -> dict[str, Any]:
+        """Resolve a live local path collision only when ownership is proven.
+
+        A path can be shared by stale replica rows.  Its current bytes may be
+        unsynced user work, so SQLite row order is never evidence of ownership.
+        The only safe keeper is a sole local identity, or the unique identity
+        whose last remote hash matches the last successful path sync.  When
+        clean identical candidates remain, a stable ID breaks the tie.  Every
+        other case is deliberately deferred as a conflict.
+        """
+        repo = self._get_notes_repo()
+        owners = await repo.list_live_by_file_path(file_path)
+        if any(not self._is_owned_by(owner, actor_user_id) for owner in owners):
+            return {"status": "deferred", "owners": owners}
+        if len(owners) <= 1:
+            return {
+                "status": "keeper" if owners else "none",
+                "keeper_id": owners[0]["id"] if owners else None,
+                "owners": owners,
+            }
+
+        known_hash = self._load_sync_state().get("note_hashes", {}).get(file_path)
+        matching = [
+            owner
+            for owner in owners
+            if known_hash is not None and owner.get("remote_content_hash") == known_hash
+        ]
+        if len(matching) == 1:
+            return {"status": "keeper", "keeper_id": matching[0]["id"], "owners": owners}
+        if len(matching) > 1 and self.fm.note_hash(file_path) == known_hash:
+            keeper = min(matching, key=lambda owner: owner["id"])
+            return {"status": "keeper", "keeper_id": keeper["id"], "owners": owners}
+        return {"status": "ambiguous", "owners": owners}
+
+    @staticmethod
+    def _is_nonmaterialized_pull(result: dict[str, Any] | None) -> bool:
+        """Whether a pull result intentionally did not materialize remote bytes."""
+        return not result or any(
+            result.get(marker)
+            for marker in (
+                "_deleted",
+                "_conflict",
+                "_collision_conflict",
+                "_deferred_account",
+                "_skipped_own_push",
+                "_skipped_local_tombstone",
+                "_path_allocation_failed",
+            )
+        )
+
     async def _pull_note(
         self, note_id: str, note: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
@@ -631,18 +698,21 @@ class SyncEngine:
                 # owned by a DIFFERENT live note (user deleted "Foo", then
                 # created a new "Foo" that was handed the freed path — the
                 # old row's tombstone must not eat the new note's file).
-                owner = None
+                live_owners: list[dict[str, Any]] = []
                 try:
-                    owner = await repo.get_by_file_path(fp)
+                    live_owners = await repo.list_live_by_file_path(fp)
                 except Exception:
                     pass
-                if owner and not self._is_owned_by(owner, actor_user_id):
+                if any(
+                    not self._is_owned_by(owner, actor_user_id)
+                    for owner in live_owners
+                ):
                     return {**note, "_deferred_account": True}
-                if owner and owner["id"] != note_id and not owner.get("is_deleted"):
+                if any(owner["id"] != note_id for owner in live_owners):
                     logger.info(
-                        "Tombstone for note %s skipped file removal — %s now "
-                        "belongs to live note %s",
-                        note_id, fp, owner["id"],
+                        "Tombstone for note %s skipped file removal — %s is "
+                        "still claimed by another live identity",
+                        note_id, fp,
                     )
                 else:
                     try:
@@ -687,37 +757,66 @@ class SyncEngine:
                 file_path = self.fm.unique_file_path(folder_name, label)
                 note["_allocated_path"] = True
         else:
-            owner = await repo.get_by_file_path(file_path)
-            if owner and not self._is_owned_by(owner, actor_user_id):
+            resolution = await self._resolve_path_collision_owner(
+                file_path, actor_user_id
+            )
+            if resolution["status"] == "deferred":
                 return {**note, "_deferred_account": True}
-            if owner and owner["id"] != note_id and not owner.get("is_deleted"):
-                # Two distinct notes claim one path (duplicate labels across
-                # clients). If the incoming note is BYTE-IDENTICAL to the
-                # path's current owner, it is a cloud-side duplicate row —
-                # materializing it locally (allocating label_2.md) is what
-                # seeded the 2026-07 duplicate factory. Leave it untouched;
-                # it carries nothing the replica doesn't already have.
+            if resolution["status"] == "ambiguous":
+                logger.warning(
+                    "Deferring contested note path %s for %s — local ownership "
+                    "is ambiguous and may contain unsynced work",
+                    file_path,
+                    note_id,
+                )
+                return {**note, "_collision_conflict": True}
+            if resolution.get("keeper_id") not in (None, note_id):
                 if (
-                    note.get("content_hash")
-                    and note.get("content_hash") == owner.get("content_hash")
+                    local_row
+                    and local_row.get("file_path") == file_path
+                    and local_row.get("sync_status") in {"pending_push", "failed"}
                 ):
-                    logger.warning(
-                        "Note %s duplicates note %s (identical content, both "
-                        "claim %s) — not materializing locally; cloud-side "
-                        "dedup needed",
-                        note_id,
-                        owner["id"],
-                        file_path,
+                    # A sibling allocation would bypass the ordinary path-hash
+                    # guard. Keep the incoming identity unmoved until this
+                    # local row's pending work is resolved explicitly.
+                    return {**note, "_collision_conflict": True}
+                # Two same-account cloud identities claim one local path.
+                # Preserve BOTH identities even when their bytes match: an
+                # early return here hid the incoming cloud record altogether.
+                # The per-ID path is deterministic, and the existing CAS
+                # repoints only the incoming cloud row, so devices converge
+                # without deleting or deduplicating either cloud note.
+                contested_path = file_path
+                for attempt in range(1_000):
+                    candidate = _contested_note_path(contested_path, note_id, attempt)
+                    candidate_owners = await repo.list_live_by_file_path(candidate)
+                    candidate_content = self.fm.read_note(candidate)
+                    if any(owner["id"] != note_id for owner in candidate_owners):
+                        continue
+                    candidate_is_owned_by_note = any(
+                        owner["id"] == note_id for owner in candidate_owners
                     )
-                    return {**note, "_skipped_duplicate_content": True}
-                # Genuinely different content: reroute to a fresh path AND
-                # converge the cloud row on it (CAS on the contested path).
-                # Without the write-back, every subsequent pull re-detects
-                # this same collision and allocates yet another _2 suffix —
-                # the escalating label_2_2_2.md chain.
-                note["_reroute_from"] = file_path
-                file_path = self.fm.unique_file_path(folder_name, label)
-                note["_allocated_path"] = True
+                    if candidate_content is not None and not (
+                        candidate_is_owned_by_note
+                    ):
+                        # An unindexed local file is user work too. Never
+                        # overwrite it merely to materialize a cloud sibling.
+                        continue
+                    file_path = candidate
+                    note["_reroute_from"] = contested_path
+                    if candidate_is_owned_by_note:
+                        # This identity was already materialized locally. Let
+                        # the normal hash/conflict guard protect a pending edit.
+                        note["_existing_identity_path"] = True
+                    else:
+                        note["_allocated_path"] = True
+                    break
+                else:
+                    logger.error(
+                        "Could not allocate a safe local path for contested note %s",
+                        note_id,
+                    )
+                    return {**note, "_path_allocation_failed": True}
 
         if file_path and not note.get("_allocated_path"):
             local_hash = self.fm.note_hash(file_path)
@@ -774,21 +873,48 @@ class SyncEngine:
         state.setdefault("note_hashes", {})[file_path] = c_hash
 
         # The note moved paths (cross-device rename, or a write-back race lost
-        # to another device's allocation): remove the file at the OLD path —
-        # leaving it orphaned made the next full_sync push it as a brand-new
-        # cloud note (silent duplicate factory).
+        # to another device's allocation). Remove the old file only when this
+        # identity still owns it and its bytes are known clean. A contested
+        # path can still belong to another live note, or hold unindexed user
+        # work; deleting either would turn a path reroute into data loss.
         old_fp = local_row.get("file_path") if local_row else None
         if old_fp and old_fp != file_path:
-            try:
-                self.fm.delete_note(old_fp)
-            except Exception:
-                logger.debug("Could not remove old-path file %s after move", old_fp)
-            state.get("note_hashes", {}).pop(old_fp, None)
-            self._last_push_hashes.pop(old_fp, None)
+            old_path_owners = await repo.list_live_by_file_path(old_fp)
+            other_old_owners = [
+                owner for owner in old_path_owners if owner["id"] != note_id
+            ]
+            old_content = self.fm.read_note(old_fp)
+            old_hash = content_hash(old_content) if old_content is not None else None
+            last_synced_old_hash = state.get("note_hashes", {}).get(old_fp)
+            can_remove_old_path = (
+                old_content is None
+                or (
+                    not other_old_owners
+                    and local_row is not None
+                    and not local_row.get("is_deleted")
+                    and local_row.get("file_path") == old_fp
+                    and last_synced_old_hash is not None
+                    and old_hash == last_synced_old_hash
+                )
+            )
+            if can_remove_old_path:
+                try:
+                    self.fm.delete_note(old_fp)
+                except Exception:
+                    logger.debug("Could not remove old-path file %s after move", old_fp)
+                state.get("note_hashes", {}).pop(old_fp, None)
+                self._last_push_hashes.pop(old_fp, None)
+            else:
+                logger.info(
+                    "Preserving old path %s while rerouting note %s — it is "
+                    "owned by another identity or contains unproven local work",
+                    old_fp,
+                    note_id,
+                )
 
         self._save_sync_state(state)
 
-        if note.get("_allocated_path"):
+        if note.get("_allocated_path") or note.get("_reroute_from"):
             # Write the allocated path back so every device converges on one
             # canonical location. Conditional (file_path still NULL for fresh
             # allocations, CAS on the contested path for reroutes) so two
@@ -904,9 +1030,13 @@ class SyncEngine:
                     deferred = True
                 elif result.get("_deleted"):
                     stats["deleted"] += 1
-                elif result.get("_conflict"):
+                elif result.get("_conflict") or result.get("_collision_conflict"):
                     stats["conflicts"] += 1
-                elif result.get("_skipped_own_push") or result.get("_skipped_local_tombstone"):
+                elif (
+                    result.get("_skipped_own_push")
+                    or result.get("_skipped_local_tombstone")
+                    or result.get("_path_allocation_failed")
+                ):
                     stats["skipped"] += 1
                 else:
                     stats["pulled"] += 1
@@ -1102,7 +1232,11 @@ class SyncEngine:
                 result = await self._pull_note(note_id)
                 if result and result.get("_deferred_account"):
                     stats["deferred_account"] += 1
-                elif result and not result.get("_deleted") and not result.get("_conflict"):
+                elif result and result.get("_collision_conflict"):
+                    stats["conflicts"] += 1
+                elif result and result.get("_path_allocation_failed"):
+                    stats["skipped"] += 1
+                elif result and not self._is_nonmaterialized_pull(result):
                     stats["pulled"] += 1
                 elif result and result.get("_conflict"):
                     stats["conflicts"] += 1
@@ -1122,6 +1256,7 @@ class SyncEngine:
                 "pulled": 0,
                 "conflicts": 0,
                 "unchanged": 0,
+                "skipped": 0,
                 "deleted_local": 0,
                 "deferred_account": 0,
             }
@@ -1135,12 +1270,12 @@ class SyncEngine:
             except Exception:
                 return {**stats, "error": "network_error"}
 
-            remote_by_path: dict[str, dict] = {}
+            remote_path_groups: dict[str, list[dict]] = {}
             remote_by_id: dict[str, dict] = {}
             remote_by_hash: dict[str, list[dict]] = {}
             for n in remote_notes:
                 if n.get("file_path"):
-                    remote_by_path[n["file_path"]] = n
+                    remote_path_groups.setdefault(n["file_path"], []).append(n)
                 remote_by_id[n["id"]] = n
                 if n.get("content_hash"):
                     remote_by_hash.setdefault(n["content_hash"], []).append(n)
@@ -1152,11 +1287,103 @@ class SyncEngine:
             known_hashes = state.get("note_hashes", {})
             repo = self._get_notes_repo()
 
+            # Resolve every contested cloud path before the ordinary
+            # reconciliation loop.  A dict keyed by file path cannot choose a
+            # primary from arrival order: it would bind unsynced bytes to the
+            # wrong cloud identity.  Nonkeepers materialize first; only the
+            # evidence-backed keeper reaches normal pull/push reconciliation.
+            remote_by_path: dict[str, dict] = {}
+            blocked_remote_paths: set[str] = set()
+            processed_primary_ids: set[str] = set()
+
+            async def materialize_collision_remote(remote: dict[str, Any]) -> None:
+                local_note = await repo.get(remote["id"])
+                if local_note and not local_note.get("sync_enabled", True):
+                    stats["skipped"] += 1
+                    return
+                result = await self._pull_note(remote["id"], note=remote)
+                if result and result.get("_deferred_account"):
+                    stats["deferred_account"] += 1
+                elif result and (
+                    result.get("_conflict")
+                    or result.get("_collision_conflict")
+                    or result.get("_path_allocation_failed")
+                ):
+                    stats["conflicts"] += 1
+                elif result and not self._is_nonmaterialized_pull(result):
+                    stats["pulled"] += 1
+
+            for fp, group in remote_path_groups.items():
+                resolution = await self._resolve_path_collision_owner(
+                    fp, self._user_id
+                )
+                if resolution["status"] == "deferred":
+                    stats["deferred_account"] += len(group)
+                    blocked_remote_paths.add(fp)
+                    continue
+                keeper_id = resolution.get("keeper_id")
+                if resolution["status"] == "ambiguous":
+                    stats["conflicts"] += len(group)
+                    blocked_remote_paths.add(fp)
+                    continue
+
+                if keeper_id is None:
+                    if len(group) == 1:
+                        keeper_id = group[0]["id"]
+                    elif self.fm.read_note(fp) is None:
+                        # A clean initial import has no personal bytes to
+                        # protect. A stable cloud ID selects the original-path
+                        # keeper before siblings are materialized.
+                        keeper_id = min(remote["id"] for remote in group)
+                        keeper = next(remote for remote in group if remote["id"] == keeper_id)
+                        await materialize_collision_remote(keeper)
+                        processed_primary_ids.add(keeper_id)
+                    else:
+                        stats["conflicts"] += len(group)
+                        blocked_remote_paths.add(fp)
+                        continue
+
+                group_ids = {remote["id"] for remote in group}
+                if keeper_id not in group_ids:
+                    # The local keeper has no matching live remote row. Keep
+                    # its original bytes and map every incoming identity to a
+                    # sibling; the original path is not local-only work.
+                    for remote in group:
+                        await materialize_collision_remote(remote)
+                    blocked_remote_paths.add(fp)
+                    continue
+
+                if len(group) > 1:
+                    for remote in group:
+                        if remote["id"] != keeper_id:
+                            await materialize_collision_remote(remote)
+                remote_by_path[fp] = next(
+                    remote for remote in group if remote["id"] == keeper_id
+                )
+
             for fp, remote in remote_by_path.items():
                 note_id = remote["id"]
-                path_owner = await repo.get_by_file_path(fp)
-                if path_owner and not self._is_owned_by(path_owner, self._user_id):
+                if note_id in processed_primary_ids:
+                    continue
+                resolution = await self._resolve_path_collision_owner(fp, self._user_id)
+                if resolution["status"] == "deferred":
                     stats["deferred_account"] += 1
+                    continue
+                if resolution["status"] == "ambiguous":
+                    stats["conflicts"] += 1
+                    continue
+                if resolution.get("keeper_id") not in (None, note_id):
+                    result = await self._pull_note(note_id, note=remote)
+                    if result and result.get("_deferred_account"):
+                        stats["deferred_account"] += 1
+                    elif result and (
+                        result.get("_conflict")
+                        or result.get("_collision_conflict")
+                        or result.get("_path_allocation_failed")
+                    ):
+                        stats["conflicts"] += 1
+                    elif result and not self._is_nonmaterialized_pull(result):
+                        stats["pulled"] += 1
                     continue
                 local_note = await repo.get(note_id)
                 if local_note is not None and not self._is_owned_by(local_note, self._user_id):
@@ -1179,9 +1406,13 @@ class SyncEngine:
                             result = await self._pull_note(note_id)
                             if result and result.get("_deferred_account"):
                                 stats["deferred_account"] += 1
-                            elif result and result.get("_conflict"):
+                            elif result and (
+                                result.get("_conflict")
+                                or result.get("_collision_conflict")
+                                or result.get("_path_allocation_failed")
+                            ):
                                 stats["conflicts"] += 1
-                            elif result and not result.get("_deleted"):
+                            elif result and not self._is_nonmaterialized_pull(result):
                                 stats["pulled"] += 1
                             continue
                         if not self.allow_cloud_delete(note_id):
@@ -1202,7 +1433,7 @@ class SyncEngine:
                     result = await self._pull_note(remote["id"])
                     if result and result.get("_deferred_account"):
                         stats["deferred_account"] += 1
-                    elif result and not result.get("_conflict"):
+                    elif result and not self._is_nonmaterialized_pull(result):
                         stats["pulled"] += 1
 
                 elif local["content_hash"] == remote.get("content_hash"):
@@ -1219,7 +1450,7 @@ class SyncEngine:
                     result = await self._pull_note(remote["id"])
                     if result and result.get("_deferred_account"):
                         stats["deferred_account"] += 1
-                    elif result and not result.get("_conflict"):
+                    elif result and not self._is_nonmaterialized_pull(result):
                         stats["pulled"] += 1
 
                 elif known_hashes.get(fp) == remote.get("content_hash"):
@@ -1271,6 +1502,10 @@ class SyncEngine:
                     stats["conflicts"] += 1
 
             for fp, local in local_by_path.items():
+                if fp in blocked_remote_paths:
+                    # A collision/deferred group has remote identities at this
+                    # path. It is not local-only and must never be pushed.
+                    continue
                 if fp not in remote_by_path:
                     # Resolve the REAL SQLite row for this path — API-created
                     # notes use uuid4 ids, so deriving a fresh uuid5/uuid4 here
@@ -1432,7 +1667,7 @@ class SyncEngine:
                 result = await self._pull_note(note_id)
                 if result and result.get("_deferred_account"):
                     stats["deferred_account"] += 1
-                elif result and not result.get("_deleted") and not result.get("_conflict"):
+                elif result and not self._is_nonmaterialized_pull(result):
                     stats["pulled"] += 1
                     imported += 1
                     if imported % 100 == 0:
@@ -1440,7 +1675,11 @@ class SyncEngine:
                             "full_sync: imported %d pathless cloud notes so far…",
                             imported,
                         )
-                elif result and result.get("_conflict"):
+                elif result and (
+                    result.get("_conflict")
+                    or result.get("_collision_conflict")
+                    or result.get("_path_allocation_failed")
+                ):
                     stats["conflicts"] += 1
 
             if stats.get("skipped_duplicate") or stats.get("adopted"):

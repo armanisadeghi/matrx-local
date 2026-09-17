@@ -109,6 +109,12 @@ bound by the same contract).
 - **`note_hashes` = hash at last SUCCESSFUL sync.** It is written only after
   a push actually reaches Supabase (or a pull writes the file). Recording it
   optimistically makes offline edits look synced and lets pulls clobber them.
+- **Contested cloud paths preserve BOTH note identities.** The engine chooses
+  an original-path keeper only from a sole local identity or successful-sync
+  hash evidence; uncertain edited bytes remain an explicit conflict. A proven
+  incoming nonkeeper receives a deterministic per-ID sibling path and only its
+  cloud row is CAS-repointed. Equal content never justifies hiding, deleting,
+  or merging either identity.
 - Cloud is durable truth; local is the first-access replica the user actually
   touches. Never invert that.
 - **Cloud-delete propagation is budgeted — the mass-delete circuit breaker

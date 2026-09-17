@@ -15,6 +15,12 @@ vi.mock("@ai-matrx/design-system", () => ({
     <button {...props}>{children}</button>
   ),
 }));
+// This suite was RED on origin/main before CS-25 touched it: importing the
+// dialog pulls in `@/lib/org/active-org`, which constructs a Supabase client at
+// module load and throws "supabaseUrl is required" under vitest. The org picker
+// is a click-through this suite never exercises, so it is stubbed here rather
+// than the production import being contorted for a test.
+vi.mock("@/lib/org/active-org", () => ({ requestOrganizationPicker: vi.fn() }));
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,

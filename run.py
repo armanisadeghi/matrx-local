@@ -706,6 +706,66 @@ def _teardown_join_seconds() -> int:
     return 15 if _is_tauri_sidecar() else 25
 
 
+def _format_server_thread_stack(thread_ident: int | None) -> str | None:
+    """Return a bounded, path-free snapshot of the server thread's stack.
+
+    This is deliberately limited to function names and filename basenames with
+    line numbers.  Shutdown diagnostics must identify the blocked code without
+    recording locals, source text, or user paths in system logs.
+    """
+    if thread_ident is None:
+        return None
+
+    try:
+        frame = sys._current_frames().get(thread_ident)
+        if frame is None:
+            return None
+
+        entries: list[str] = []
+        output_limit = 1_024
+        while frame is not None and len(entries) < 8:
+            code = frame.f_code
+            entry = f"{code.co_name} ({os.path.basename(code.co_filename)}:{frame.f_lineno})"
+            projected = " <- ".join([*entries, entry])
+            if len(projected) > output_limit:
+                break
+            entries.append(entry)
+            frame = frame.f_back
+
+        return " <- ".join(entries) or None
+    except Exception:
+        # A diagnostic snapshot must never interfere with forced cleanup.
+        return None
+
+
+def _capture_server_thread_shutdown_timeout_stack() -> str | None:
+    """Capture stack evidence before forced cleanup, without performing I/O."""
+    try:
+        thread_ident = _server_thread.ident if _server_thread is not None else None
+        return _format_server_thread_stack(thread_ident)
+    except Exception:
+        return None
+
+
+def _log_shutdown_timeout(stack: str | None, join_s: int) -> None:
+    """Best-effort timeout diagnostics after mandatory forced cleanup."""
+    try:
+        logger.error(
+            "[shutdown] Lifespan teardown did NOT complete within %ds — "
+            "forced cleanup ran because uvicorn drain or service teardown is blocked.",
+            join_s,
+        )
+        if stack is None:
+            logger.error(
+                "[shutdown] Server thread did not stop; stack snapshot was unavailable"
+            )
+            return
+        logger.error("[shutdown] Server thread stack at teardown timeout: %s", stack)
+    except Exception:
+        # Diagnostics must never affect the already-completed forced cleanup.
+        pass
+
+
 def _wait_forever() -> None:
     """Block the main thread until SIGTERM, SIGINT, or the server exits.
 
@@ -734,15 +794,10 @@ def _wait_forever() -> None:
             teardown_clean = _server_stopped_event.wait(timeout=join_s)
     if not teardown_clean:
         # Lifespan teardown did not finish — clean up our own children.
-        logger.error(
-            "[shutdown] Lifespan teardown did NOT complete within %ds — "
-            "force-killing engine-owned children and exiting. This is a bug: "
-            "something blocked uvicorn's drain or a service teardown. "
-            "Check the last '[launcher]' lines above for the stuck service.",
-            join_s,
-        )
+        stack = _capture_server_thread_shutdown_timeout_stack()
         remove_discovery_file()
         _kill_child_subprocesses()
+        _log_shutdown_timeout(stack, join_s)
     # Do not log or perform any other potentially blocking I/O on the clean
     # path after the completion barrier. The lifespan already emitted
     # "Shutdown complete" and the server thread published its barrier; the

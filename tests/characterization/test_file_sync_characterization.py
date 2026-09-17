@@ -74,6 +74,8 @@ class FakeFilesClient:
         self.pages = list(pages or [])
         self.folders = list(folders or [])
         self.records: dict[str, dict[str, Any]] = {}
+        # checksum -> the canonical row id that holds those bytes
+        self._canonical_by_content: dict[str, str] = {}
         self.calls: dict[str, list[Any]] = {
             "sync_changes": [],
             "sync_folders": [],
@@ -126,15 +128,41 @@ class FakeFilesClient:
         filename: str,
         mime_type: str | None = None,
         visibility: str = "private",
+        intent: str | None = None,
+        reason: str | None = None,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        """The door as MEASURED against production on 2026-09-17.
+
+        An UNDECLARED write is implicitly ``alias_existing``: bytes this
+        account already holds resolve to the CANONICAL row — one row, one id,
+        and the requested path is recorded nowhere, while the response happily
+        echoes that path back. ``intent="force_new_copy"`` instead writes a row
+        of this path's own, linked to the canonical by ``duplicate_of_file_id``.
+        """
         self.calls["upload"].append(
-            {"file_path": file_path, "content": content, "filename": filename}
+            {
+                "file_path": file_path,
+                "content": content,
+                "filename": filename,
+                "intent": intent,
+                "reason": reason,
+            }
         )
-        file_id = f"cloud-{len(self.calls['upload'])}"
         checksum = _sha(content)
+        canonical = self._canonical_by_content.get(checksum)
+        if canonical is not None and intent != "force_new_copy":
+            # No new row, no PUT: the caller's path is thrown away and only
+            # the echo pretends otherwise.
+            return {"file_id": canonical, "file_path": file_path, "checksum": checksum}
+        file_id = f"cloud-{len(self.calls['upload'])}"
+        if canonical is None:
+            self._canonical_by_content[checksum] = file_id
         self.records[file_id] = {
             "file_id": file_id,
             "file_path": file_path,
+            "duplicate_of_file_id": canonical,
             "file_name": filename,
             "mime_type": mime_type or "application/octet-stream",
             "size_bytes": len(content),
@@ -719,8 +747,17 @@ def test_push_drain_upload_rekeys_local_id_and_records_synced_hash(
         result = await engine._drain_pending()
         assert result == {"sent": 1, "failed": 0}
 
+        # CONTRACT CHANGE 2026-09-17: every push DECLARES the placement, so a
+        # path whose bytes the account already holds still gets a row of its
+        # own instead of being aliased away (and its path recorded nowhere).
         assert fake.calls["upload"] == [
-            {"file_path": "up.txt", "content": content, "filename": "up.txt"}
+            {
+                "file_path": "up.txt",
+                "content": content,
+                "filename": "up.txt",
+                "intent": "force_new_copy",
+                "reason": "file mirror placement: up.txt",
+            }
         ]
         # local: id re-keyed to the cloud id the upload returned.
         assert await _state(db, local_id) is None

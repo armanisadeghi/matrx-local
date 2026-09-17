@@ -1437,6 +1437,19 @@ _V34_DROP_AUTH_TOKENS = """
 DROP TABLE IF EXISTS auth_tokens;
 """
 
+# ── V35: the mirror counts its attempts to get a path its own cloud row ──────
+#
+# An undeclared matrx-files write is implicitly alias_existing: bytes the
+# account already holds resolve to the canonical row and the path this mirror
+# asked for is recorded NOWHERE, while the index called the path synced to a
+# row whose file_path is a DIFFERENT path. The push now declares the placement
+# and only believes the row the server says it wrote — and it needs somewhere
+# to count the rounds so a door that will not honour the declaration is
+# announced instead of re-uploading the same bytes forever.
+_V35_FILE_SYNC_PLACEMENT_ATTEMPTS = """
+ALTER TABLE file_sync_state ADD COLUMN placement_attempts INTEGER NOT NULL DEFAULT 0;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1472,4 +1485,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (32, _V32_AGENTS_PLATFORM_CATALOG),
     (33, _V33_CATALOG_SUPERSET_AND_EXECUTION_DETAIL),
     (34, _V34_DROP_AUTH_TOKENS),
+    (35, _V35_FILE_SYNC_PLACEMENT_ATTEMPTS),
 ]

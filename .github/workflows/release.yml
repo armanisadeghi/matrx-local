@@ -584,6 +584,9 @@ jobs:
           # the updater-asset repair job complete successfully.
           releaseDraft: true
           prerelease: false
+          # GitHub asset uploads can fail transiently after a successful signed build.
+          # Retry the action's upload path before discarding a platform matrix job.
+          retryAttempts: 3
           includeUpdaterJson: true
           # Sealed: the release config adds the provider + host profile. Absent:
           # the host-only config REMOVES the provider mapping that

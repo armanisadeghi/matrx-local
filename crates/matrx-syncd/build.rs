@@ -15,6 +15,9 @@
 
 use std::path::PathBuf;
 
+#[path = "src/version_metadata.rs"]
+mod version_metadata;
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let bundled = manifest
@@ -25,6 +28,25 @@ fn main() {
     println!("cargo:rerun-if-changed={}", bundled.display());
     println!("cargo:rerun-if-env-changed=MATRX_SUPABASE_URL");
     println!("cargo:rerun-if-env-changed=MATRX_SUPABASE_PUBLISHABLE_KEY");
+
+    let tauri_config = manifest
+        .join("..")
+        .join("..")
+        .join("desktop")
+        .join("src-tauri")
+        .join("tauri.conf.json");
+    println!("cargo:rerun-if-changed={}", tauri_config.display());
+    let app_version_source = std::fs::read_to_string(&tauri_config).unwrap_or_else(|error| {
+        panic!(
+            "matrx-syncd cannot be built without the canonical desktop app version. {} could not be read: {error}",
+            tauri_config.display()
+        )
+    });
+    let app_version = version_metadata::app_version_from_tauri_config(&app_version_source)
+        .unwrap_or_else(|error| {
+            panic!("matrx-syncd cannot embed its desktop app version: {error}")
+        });
+    println!("cargo:rustc-env=MATRX_SYNCD_APP_VERSION={app_version}");
 
     let source = std::fs::read_to_string(&bundled).unwrap_or_else(|e| {
         panic!(

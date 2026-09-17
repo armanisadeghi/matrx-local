@@ -19,6 +19,8 @@ mod api;
 mod bootstrap;
 mod discovery;
 mod paths;
+#[cfg(test)]
+mod version_metadata;
 #[cfg(windows)]
 mod windows_user;
 
@@ -29,7 +31,8 @@ use paths::Paths;
 use std::sync::{Arc, Mutex};
 
 const NAME: &str = env!("CARGO_PKG_NAME");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The desktop app payload version baked in by `build.rs`, not this crate's workspace version.
+const VERSION: &str = env!("MATRX_SYNCD_APP_VERSION");
 
 /// SPEC-ENGINE §1.3's teardown budget knob (`sync.shutdown_budget_s`), default 20 s, range 5–120.
 const DEFAULT_SHUTDOWN_BUDGET_S: u64 = 20;

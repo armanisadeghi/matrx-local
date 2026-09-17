@@ -51,3 +51,6 @@ tempfile = "3"
 # free of an async runtime they would otherwise only need for the request.
 reqwest = { workspace = true, features = ["blocking"] }
 serde_json = "1.0.151"
+
+[build-dependencies]
+serde_json = "1.0.151"

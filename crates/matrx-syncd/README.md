@@ -77,19 +77,23 @@ touched (Hard Rule 9). The isolated packaged smoke harness also selects the dev 
 even though its app binary is a release build, so its private home never selects the live Keychain
 service.
 
+`daemon_version` is the desktop payload version baked from `desktop/src-tauri/tauri.conf.json` at
+build time. It is deliberately distinct from the independent `matrx-sync` crate version, so an
+app update can identify an older running daemon.
+
 ### Start, discovery and file modes
 
 ```
 $ matrx-syncd --version
-matrx-syncd 0.1.0 (matrx-sync 0.1.0)
+matrx-syncd 1.4.141 (matrx-sync 0.1.0)
 
 $ matrx-syncd &
-[syncd] matrx-syncd 0.1.0 serving the dev world on /Users/…/.matrx-dev/run/syncd.sock (loopback 22262)
+[syncd] matrx-syncd 1.4.141 serving the dev world on /Users/…/.matrx-dev/run/syncd.sock (loopback 22262)
 [syncd] session state on start: signed_out (Sign in on this computer to start syncing your folders.)
 
 $ cat ~/.matrx-dev/syncd.json
 {"version":1,"world":"dev","pid":27684,"socket_path":"/Users/…/.matrx-dev/run/syncd.sock",
- "tcp_port":22262,"daemon_version":"0.1.0","started_at":"2026-09-15T06:36:05Z"}
+ "tcp_port":22262,"daemon_version":"1.4.141","started_at":"2026-09-15T06:36:05Z"}
 
 $ ls -l ~/.matrx-dev/syncd.json ~/.matrx-dev/syncd.token ~/.matrx-dev/run/syncd.sock
 srw-------  …  /Users/…/.matrx-dev/run/syncd.sock
@@ -119,7 +123,7 @@ allocator skipped the reserved OAuth port 22261.
 ```
 $ curl --unix-socket ~/.matrx-dev/run/syncd.sock -H "Authorization: Bearer $CONTROL" \
        -H "X-Matrx-Client: engine" http://localhost/v1/version
-{"daemon_version":"0.1.0","protocol_version":1,"min_protocol_version":1,
+{"daemon_version":"1.4.141","protocol_version":1,"min_protocol_version":1,
  "executable_path":"…/target/debug/matrx-syncd","world":"dev"}
 ```
 

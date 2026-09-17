@@ -1349,6 +1349,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _tm = _get_tm()
             _tunnel_url = await _tm.start(port=main_server_port)
             if _tunnel_url:
+                if not await _tm.publish_active_registration(_tunnel_url):
+                    raise RuntimeError("tunnel exited before its cloud registration")
                 logger.info("[app/main.py] Phase 5: Tunnel active ✓ → %s", _tunnel_url)
                 print(f"[phase:tunnel] Tunnel active: {_tunnel_url}", flush=True)
                 _registry.ready(
@@ -1356,17 +1358,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     url=_tunnel_url,
                     mode="named" if _tm._token else "quick",
                 )
-                try:
-                    from app.services.cloud_sync.instance_manager import (
-                        get_instance_manager as _get_im,
-                    )
-
-                    await _get_im().update_tunnel_url(_tunnel_url, active=True)
-                except Exception:
-                    logger.warning(
-                        "[app/main.py] Phase 5: failed to publish tunnel URL to Supabase",
-                        exc_info=True,
-                    )
                 # Write the tunnel URL into the discovery file — this is the
                 # documented contract for matrx-extend; previously only the
                 # manual POST /tunnel/start route did it, so a normal boot
@@ -1994,38 +1985,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if tm.running:
                 await asyncio.wait_for(tm.stop(), timeout=7.0)
                 logger.info("[app/main.py] Tunnel stopped ✓")
-                try:
-                    from app.services.cloud_sync.instance_manager import (
-                        get_instance_manager as _get_im,
-                    )
+            if not await asyncio.wait_for(tm.publish_inactive_registration(), timeout=2.0):
+                logger.warning("[app/main.py] Shutdown: failed to clear tunnel URL in Supabase")
+            # Mirror the inactive state into the runtime singleton.
+            try:
+                from app.api.tunnel_state import mark_tunnel_inactive
 
-                    await asyncio.wait_for(
-                        _get_im().update_tunnel_url(None, active=False), timeout=2.0
-                    )
-                except (asyncio.TimeoutError, Exception):
-                    logger.warning(
-                        "[app/main.py] Shutdown: failed to clear tunnel URL in Supabase",
-                        exc_info=True,
-                    )
-                # Mirror the inactive state into the runtime singleton.
-                try:
-                    from app.api.tunnel_state import mark_tunnel_inactive
+                mark_tunnel_inactive()
+            except Exception:
+                pass
+            # Clear the tunnel fields from the discovery file so
+            # matrx-extend doesn't read a dead URL after shutdown.
+            try:
+                import sys as _sys
 
-                    mark_tunnel_inactive()
-                except Exception:
-                    pass
-                # Clear the tunnel fields from the discovery file so
-                # matrx-extend doesn't read a dead URL after shutdown.
-                try:
-                    import sys as _sys
-
-                    _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
-                    if _run_mod is not None and hasattr(
-                        _run_mod, "update_discovery_tunnel"
-                    ):
-                        _run_mod.update_discovery_tunnel(None)
-                except Exception:
-                    pass
+                _run_mod = _sys.modules.get("run") or _sys.modules.get("__main__")
+                if _run_mod is not None and hasattr(
+                    _run_mod, "update_discovery_tunnel"
+                ):
+                    _run_mod.update_discovery_tunnel(None)
+            except Exception:
+                pass
             # Surface cloudflared's exit code + last lines into the registry so
             # diagnostic dumps reveal "exit code 1" reasons instead of swallowing them.
             _registry.stopped(

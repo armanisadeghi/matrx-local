@@ -252,6 +252,12 @@ class TunnelManager:
         # can withdraw a stale quick-tunnel URL immediately without duplicating
         # the deliberate-stop write.
         self._stopping = False
+        # All cloud registration writes flow through this lock.  A tunnel can
+        # expose a URL, close its output streams, and exit while a caller is
+        # still preparing its active registration; serializing the writes and
+        # re-checking liveness inside the lock makes the final state follow the
+        # child lifecycle rather than HTTP scheduling.
+        self._registration_lock = asyncio.Lock()
         # Start/stop mutate one subprocess handle and one discovery identity.
         # Serialize them so concurrent API calls cannot spawn an untracked
         # second child or clear the identity for the wrong process.
@@ -518,6 +524,34 @@ class TunnelManager:
         async with self._lifecycle_lock:
             await self._stop_locked()
 
+    async def publish_active_registration(self, url: str) -> bool:
+        """Publish ``url`` only while it still belongs to a live child.
+
+        Callers must use this instead of writing ``app_instances`` directly;
+        the spontaneous-exit reader uses the same lock for its inactive write.
+        """
+        async with self._registration_lock:
+            if not self.running or self._url != url:
+                return False
+            try:
+                from app.services.cloud_sync.instance_manager import get_instance_manager
+
+                return await get_instance_manager().update_tunnel_url(url, active=True)
+            except Exception:
+                logger.warning("Failed to publish active cloud tunnel registration", exc_info=True)
+                return False
+
+    async def publish_inactive_registration(self) -> bool:
+        """Withdraw the cloud registration, serialized with active writes."""
+        async with self._registration_lock:
+            try:
+                from app.services.cloud_sync.instance_manager import get_instance_manager
+
+                return await get_instance_manager().update_tunnel_url(None, active=False)
+            except Exception:
+                logger.warning("Failed to withdraw cloud tunnel registration", exc_info=True)
+                return False
+
     async def _stop_locked(self) -> None:
         """Stop the tunnel subprocess.
 
@@ -648,10 +682,23 @@ class TunnelManager:
         except Exception as exc:
             logger.error("cloudflared output reader error: %s", exc)
 
-        rc = self._process.returncode if self._process else "N/A"
+        process = self._process
+        if process is not None and process.returncode is None:
+            # EOF on the combined output pipe does not prove the child exited:
+            # a process can close stdout/stderr and keep servicing work for a
+            # moment.  Wait for its actual exit before withdrawing the cloud
+            # route so the stale registration is repaired even in that order.
+            try:
+                await process.wait()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Failed while waiting for cloudflared after output EOF", exc_info=True)
+
+        rc = process.returncode if process else "N/A"
         if (
-            self._process is not None
-            and self._process.returncode is not None
+            process is not None
+            and process.returncode is not None
             and not self._stopping
         ):
             # A spontaneous child exit has no API stop route to repair state.
@@ -660,15 +707,7 @@ class TunnelManager:
             # tunnel's now-unresolvable hostname as an online device until the
             # next five-minute heartbeat.
             self._clear_local_tunnel_state()
-            try:
-                from app.services.cloud_sync.instance_manager import get_instance_manager
-
-                await get_instance_manager().update_tunnel_url(None, active=False)
-            except Exception:
-                logger.warning(
-                    "Failed to withdraw cloud tunnel registration after spontaneous exit",
-                    exc_info=True,
-                )
+            await self.publish_inactive_registration()
         logger.info(
             "[cloudflared] output reader finished — %d lines read, exit code: %s, url found: %s",
             line_count, rc, bool(self._url),

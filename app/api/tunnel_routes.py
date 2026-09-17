@@ -87,13 +87,10 @@ async def tunnel_start(body: TunnelStartRequest | None = None) -> TunnelStatus:
     except Exception:
         logger.warning("[tunnel] Could not persist tunnel_enabled=True", exc_info=True)
 
-    # Push the new URL to Supabase asynchronously (best-effort)
-    try:
-        from app.services.cloud_sync.instance_manager import get_instance_manager
-        mgr = get_instance_manager()
-        await mgr.update_tunnel_url(url, active=True)
-    except Exception:
-        logger.warning("[tunnel] Could not push tunnel URL to Supabase", exc_info=True)
+    # The manager serializes this write with a spontaneous-exit withdrawal.
+    if not await tm.publish_active_registration(url):
+        logger.warning("[tunnel] Tunnel exited before its cloud registration")
+        raise HTTPException(status_code=503, detail="Tunnel exited before registration completed.")
 
     # Update the discovery file through the central atomic writer (the old
     # direct write_text bypassed preflight's tmp+replace and never updated
@@ -166,12 +163,8 @@ async def tunnel_stop() -> TunnelStatus:
     except Exception:
         logger.warning("[tunnel] Could not persist tunnel_enabled=False", exc_info=True)
 
-    # Clear tunnel URL in Supabase (best-effort)
-    try:
-        from app.services.cloud_sync.instance_manager import get_instance_manager
-        mgr = get_instance_manager()
-        await mgr.update_tunnel_url(None, active=False)
-    except Exception:
-        logger.warning("[tunnel] Could not clear tunnel URL in Supabase", exc_info=True)
+    # Clear tunnel URL in Supabase (best-effort), serialized against a late
+    # spontaneous child exit.
+    await tm.publish_inactive_registration()
 
     return TunnelStatus(**tm.get_status())

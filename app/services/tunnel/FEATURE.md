@@ -50,21 +50,23 @@ Binary resolution: bundled → preinstalled discovery
 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`).
 
 Start/stop are single-flight under one lifecycle lock. Cancellation during
-startup terminates and reaps the spawned child. Normal stop publishes its
-inactive cloud state from the lifespan teardown; a spontaneous process exit
-withdraws that cloud registration from the output reader immediately, as well
-as clearing local discovery/runtime state. This prevents a dead quick-tunnel
+startup terminates and reaps the spawned child. Cloud registration writes are
+serialized by `TunnelManager`: callers publish an active URL only while its
+child is still live, and a spontaneous exit waits for the actual child exit
+after output EOF before withdrawing the registration. Normal shutdown also
+withdraws even when the child already died. This prevents a dead quick-tunnel
 hostname from remaining selectable until the next heartbeat.
 Named-tunnel tokens are argv-only secrets and are never included in logs or
 discovery metadata.
 
 ## Who writes `app_instances` (cloud)
 
-Two writers, on purpose — keep them consistent:
+Two writer paths, on purpose — keep them consistent:
 
-1. `instance_manager.update_tunnel_url(url, active=...)` — on explicit
-   start/stop (sets `tunnel_url`/`tunnel_ws_url`/`tunnel_active`/
-   `tunnel_updated_at`).
+1. `TunnelManager.publish_active_registration` /
+   `publish_inactive_registration` — on explicit start/stop and spontaneous
+   exit (sets `tunnel_url`/`tunnel_ws_url`/`tunnel_active`/
+   `tunnel_updated_at` through `instance_manager.update_tunnel_url`).
 2. `settings_sync.heartbeat` — re-asserts the tunnel fields every 5 min so a
    recovered cloud row converges.
 

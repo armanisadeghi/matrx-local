@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -201,3 +202,64 @@ async def test_normal_stop_leaves_cloud_withdrawal_to_lifespan_teardown(
     await manager.stop()
 
     assert withdrawn == []
+
+
+@pytest.mark.anyio
+async def test_reader_waits_for_real_child_exit_after_output_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A child can close its combined output before it actually exits."""
+    withdrawn: list[tuple[str | None, bool]] = []
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            withdrawn.append((url, active))
+            return True
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    monkeypatch.setattr(tunnel_manager, "_ensure_binary", lambda: Path(sys.executable))
+    manager = tunnel_manager.TunnelManager()
+    script = (
+        "import os, sys, time; "
+        "print('INF | https://owned.trycloudflare.com |', flush=True); "
+        "os.close(sys.stdout.fileno()); os.close(sys.stderr.fileno()); "
+        "time.sleep(0.05); os._exit(1)"
+    )
+    monkeypatch.setattr(manager, "_build_command", lambda _bin, _port: [sys.executable, "-c", script])
+
+    assert await manager.start(22140) == "https://owned.trycloudflare.com"
+    assert manager._reader_task is not None
+    await manager._reader_task
+
+    assert manager.last_exit_code is None  # no stop() has overwritten the child result
+    assert withdrawn == [(None, False)]
+
+
+@pytest.mark.anyio
+async def test_late_active_publication_cannot_restore_exited_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    published: list[tuple[str | None, bool]] = []
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            published.append((url, active))
+            return True
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    monkeypatch.setattr(tunnel_manager, "_ensure_binary", lambda: Path(sys.executable))
+    manager = tunnel_manager.TunnelManager()
+    script = (
+        "import os, sys; "
+        "print('INF | https://owned.trycloudflare.com |', flush=True); "
+        "os.close(sys.stdout.fileno()); os.close(sys.stderr.fileno()); os._exit(1)"
+    )
+    monkeypatch.setattr(manager, "_build_command", lambda _bin, _port: [sys.executable, "-c", script])
+
+    url = await manager.start(22140)
+    assert url == "https://owned.trycloudflare.com"
+    assert manager._reader_task is not None
+    await manager._reader_task
+
+    assert await manager.publish_active_registration(url) is False
+    assert published == [(None, False)]

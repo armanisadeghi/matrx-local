@@ -13,8 +13,13 @@ import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from app.services.scraper.remote_client import get_remote_scraper
+from pydantic import BaseModel, Field
+from app.services.scraper.remote_client import (
+    RESEARCH_CAPABILITY_NOTICE,
+    get_remote_scraper,
+    quick_scrape_payload,
+    search_and_scrape_payload,
+)
 from app.services.scraper.result_contract import from_page_dict
 from app.common.system_logger import get_logger
 
@@ -38,13 +43,13 @@ class ScrapeRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     keywords: list[str]
-    count: int = 20
+    count: int = Field(default=20, ge=1, le=100)
     country: str = "US"
 
 
 class SearchAndScrapeRequest(BaseModel):
     keywords: list[str]
-    total_results_per_keyword: int = 10
+    total_results_per_keyword: int = Field(default=10, ge=10, le=30)
     options: dict | None = None
 
 
@@ -75,6 +80,7 @@ async def remote_scraper_status():
 
 # ── Scrape ────────────────────────────────────────────────────────────────────
 
+
 @router.post("/scrape")
 async def remote_scrape(req: ScrapeRequest, request: Request):
     """Scrape URLs via the remote server. Results are stored server-side.
@@ -86,13 +92,17 @@ async def remote_scrape(req: ScrapeRequest, request: Request):
     """
     client = _get_client_or_raise()
     try:
-        resp = await client.scrape(req.urls, req.options, auth_token=_get_user_token(request))
+        resp = await client.scrape(
+            req.urls, req.options, auth_token=_get_user_token(request)
+        )
     except Exception as e:
         logger.error("Remote scrape failed: %s", e)
         raise HTTPException(502, f"Remote scraper error: {e}")
 
     elapsed_ms = int(resp.get("execution_time_ms") or 0)
-    pages = [from_page_dict(p, elapsed_ms=elapsed_ms) for p in resp.get("results") or []]
+    pages = [
+        from_page_dict(p, elapsed_ms=elapsed_ms) for p in resp.get("results") or []
+    ]
     return {
         "results": pages,
         "total": len(pages),
@@ -101,26 +111,47 @@ async def remote_scrape(req: ScrapeRequest, request: Request):
     }
 
 
-async def _scrape_sse(urls: list[str], options: dict | None, auth_token: str | None):
-    """Translate the scraper server's NDJSON stream into canonical SSE frames.
+def _sse_frame(event: str, payload: object) -> bytes:
+    """Encode one browser-readable SSE frame."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _failure_reason(data: object) -> str:
+    """Select the user-facing reason from a remote error envelope."""
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        return str(
+            data.get("user_message") or data.get("message") or data.get("error") or data
+        )
+    return str(data)
+
+
+async def _remote_scraper_sse(
+    path: str,
+    payload: dict,
+    auth_token: str | None,
+    timeout: float = 300.0,
+):
+    """Translate the scraper server's NDJSON stream into browser SSE frames.
 
     The server streams NDJSON envelopes (`{"event":"data","data":{"type":
     "fetch_results","results":[page,…]}}`) — not SSE. Forwarding those raw
     under a `text/event-stream` content type gave the browser lines its SSE
-    parser silently dropped, so remote streaming produced nothing. Here each
-    page becomes one `page_result` event carrying exactly the client contract,
-    identical to what the local lane returns.
+    parser silently dropped, so remote streaming produced nothing. Each page
+    becomes a canonical `page_result`; search, progress, and lifecycle events
+    retain their package event names and payloads.
     """
     client = _get_client_or_raise()
-
-    def frame(event: str, payload: dict) -> bytes:
-        return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+    saw_end = False
+    terminal_error = False
 
     try:
         async for raw in client.stream_sse(
-            "/api/scraper/quick-scrape",
-            {"urls": urls, "options": options or {}},
+            path,
+            payload,
             auth_token=auth_token,
+            timeout=timeout,
         ):
             line = raw.decode("utf-8", "replace").strip()
             if not line:
@@ -129,22 +160,76 @@ async def _scrape_sse(urls: list[str], options: dict | None, auth_token: str | N
                 envelope = json.loads(line)
             except json.JSONDecodeError:
                 logger.warning("Remote scrape stream: unparseable line %r", line[:200])
-                continue
+                yield _sse_frame(
+                    "error",
+                    {"failure_reason": "Remote scraper sent malformed stream data."},
+                )
+                terminal_error = True
+                break
+            if not isinstance(envelope, dict):
+                logger.warning(
+                    "Remote scrape stream: malformed envelope %r", line[:200]
+                )
+                yield _sse_frame(
+                    "error",
+                    {"failure_reason": "Remote scraper sent malformed stream data."},
+                )
+                terminal_error = True
+                break
 
             kind = envelope.get("event")
             data = envelope.get("data")
-            if kind == "data" and isinstance(data, dict) and data.get("type") == "fetch_results":
-                elapsed_ms = int((data.get("metadata") or {}).get("execution_time_ms") or 0)
+            response_type = (
+                data.get("type") or data.get("response_type")
+                if isinstance(data, dict)
+                else None
+            )
+            if kind == "data" and response_type == "fetch_results":
+                elapsed_ms = int(
+                    (data.get("metadata") or {}).get("execution_time_ms") or 0
+                )
                 for page in data.get("results") or []:
-                    yield frame("page_result", from_page_dict(page, elapsed_ms=elapsed_ms))
+                    yield _sse_frame(
+                        "page_result", from_page_dict(page, elapsed_ms=elapsed_ms)
+                    )
             elif kind == "error":
-                message = data if isinstance(data, str) else json.dumps(data)
-                yield frame("error", {"failure_reason": message})
+                yield _sse_frame("error", {"failure_reason": _failure_reason(data)})
+                terminal_error = True
+                break
+            elif response_type == "search_error":
+                # One keyword can fail while the package continues to scrape
+                # results from the other keywords in this same stream.
+                yield _sse_frame("error", {"failure_reason": _failure_reason(data)})
+            elif kind == "end":
+                # This proxy emits one terminal event below for every outcome.
+                saw_end = True
+                break
+            elif kind == "data" and response_type:
+                yield _sse_frame(response_type, data)
+            elif isinstance(kind, str):
+                yield _sse_frame(kind, data)
     except Exception as e:
         logger.error("Remote scrape stream failed: %s", e)
-        yield frame("error", {"failure_reason": f"Remote scraper error: {e}"})
+        yield _sse_frame("error", {"failure_reason": f"Remote scraper error: {e}"})
+        terminal_error = True
 
-    yield frame("done", {})
+    if not saw_end and not terminal_error:
+        yield _sse_frame(
+            "error",
+            {"failure_reason": "Remote scraper stream ended before completion."},
+        )
+
+    yield _sse_frame("done", {})
+
+
+async def _scrape_sse(urls: list[str], options: dict | None, auth_token: str | None):
+    """Stream a remote quick scrape through the shared NDJSON-to-SSE adapter."""
+    async for frame in _remote_scraper_sse(
+        "/api/scraper/quick-scrape",
+        quick_scrape_payload(urls, options),
+        auth_token,
+    ):
+        yield frame
 
 
 @router.post("/scrape/stream")
@@ -159,13 +244,17 @@ async def remote_scrape_stream(req: ScrapeRequest, request: Request):
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
+
 @router.post("/search")
 async def remote_search(req: SearchRequest, request: Request):
     """Search via Brave Search API on the remote server."""
     client = _get_client_or_raise()
     try:
         return await client.search(
-            req.keywords, req.count, req.country, auth_token=_get_user_token(request),
+            req.keywords,
+            req.count,
+            req.country,
+            auth_token=_get_user_token(request),
         )
     except Exception as e:
         logger.error("Remote search failed: %s", e)
@@ -174,13 +263,16 @@ async def remote_search(req: SearchRequest, request: Request):
 
 # ── Search + Scrape ───────────────────────────────────────────────────────────
 
+
 @router.post("/search-and-scrape")
 async def remote_search_and_scrape(req: SearchAndScrapeRequest, request: Request):
     """Search then scrape top results. Results stored server-side."""
     client = _get_client_or_raise()
     try:
         return await client.search_and_scrape(
-            req.keywords, req.total_results_per_keyword, req.options,
+            req.keywords,
+            req.total_results_per_keyword,
+            req.options,
             auth_token=_get_user_token(request),
         )
     except Exception as e:
@@ -189,17 +281,16 @@ async def remote_search_and_scrape(req: SearchAndScrapeRequest, request: Request
 
 
 @router.post("/search-and-scrape/stream")
-async def remote_search_and_scrape_stream(req: SearchAndScrapeRequest, request: Request):
-    """Search + scrape via SSE stream."""
-    client = _get_client_or_raise()
+async def remote_search_and_scrape_stream(
+    req: SearchAndScrapeRequest, request: Request
+):
+    """Search + scrape via browser-readable SSE events."""
     return StreamingResponse(
-        client.stream_sse(
+        _remote_scraper_sse(
             "/api/scraper/search-and-scrape",
-            {
-                "keywords": req.keywords,
-                "total_results_per_keyword": req.total_results_per_keyword,
-                "options": req.options or {},
-            },
+            search_and_scrape_payload(
+                req.keywords, req.total_results_per_keyword, req.options
+            ),
             auth_token=_get_user_token(request),
             timeout=300.0,
         ),
@@ -210,13 +301,17 @@ async def remote_search_and_scrape_stream(req: SearchAndScrapeRequest, request: 
 
 # ── Research ──────────────────────────────────────────────────────────────────
 
+
 @router.post("/research")
 async def remote_research(req: ResearchRequest, request: Request):
-    """Deep research — iterative search + scrape + compile."""
+    """Search-and-scrape fallback for the legacy research route."""
     client = _get_client_or_raise()
     try:
         return await client.research(
-            req.query, req.effort, req.country, auth_token=_get_user_token(request),
+            req.query,
+            req.effort,
+            req.country,
+            auth_token=_get_user_token(request),
         )
     except Exception as e:
         logger.error("Remote research failed: %s", e)
@@ -225,27 +320,36 @@ async def remote_research(req: ResearchRequest, request: Request):
 
 @router.post("/research/stream")
 async def remote_research_stream(req: ResearchRequest, request: Request):
-    """Deep research via SSE stream."""
-    client = _get_client_or_raise()
-    # Research endpoint not present on the new standalone scraper; use
-    # search-and-scrape with research-mode options as the closest equivalent.
+    """Stream the available search-and-scrape research fallback."""
     return StreamingResponse(
-        client.stream_sse(
-            "/api/scraper/search-and-scrape",
-            {
-                "keywords": [req.query],
-                "country": req.country,
-                "options": {"fast": True, "effort": req.effort},
-            },
-            auth_token=_get_user_token(request),
-            timeout=300.0,
-        ),
+        _research_sse(req, _get_user_token(request)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
+async def _research_sse(req: ResearchRequest, auth_token: str | None):
+    """Stream the available search-and-scrape fallback with an honest notice."""
+    yield _sse_frame(
+        "info",
+        {
+            "code": "research_capability_notice",
+            "system_message": RESEARCH_CAPABILITY_NOTICE,
+            "user_message": RESEARCH_CAPABILITY_NOTICE,
+            "metadata": {"capability": "search_and_scrape_fallback"},
+        },
+    )
+    async for frame in _remote_scraper_sse(
+        "/api/scraper/search-and-scrape",
+        search_and_scrape_payload([req.query], 10, country_code=req.country),
+        auth_token=auth_token,
+        timeout=300.0,
+    ):
+        yield frame
+
+
 # ── Content save-back ─────────────────────────────────────────────────────────
+
 
 @router.post("/content/save")
 async def save_content(req: ContentSaveRequest, request: Request):
@@ -272,12 +376,15 @@ async def save_content(req: ContentSaveRequest, request: Request):
 
 # ── Retry queue ───────────────────────────────────────────────────────────────
 
+
 @router.get("/queue/pending")
 async def queue_pending(request: Request, tier: str = "desktop", limit: int = 10):
     """Get URLs the server failed to scrape that need local retry."""
     client = _get_client_or_raise()
     try:
-        return await client.get_pending(tier=tier, limit=limit, auth_token=_get_user_token(request))
+        return await client.get_pending(
+            tier=tier, limit=limit, auth_token=_get_user_token(request)
+        )
     except Exception as e:
         raise HTTPException(502, f"Remote scraper error: {e}")
 
@@ -296,10 +403,12 @@ async def queue_stats(request: Request):
 async def queue_poller_stats():
     """Local retry queue poller statistics (this engine's activity)."""
     from app.services.scraper.retry_queue import get_stats
+
     return get_stats()
 
 
 # ── Domain config ─────────────────────────────────────────────────────────────
+
 
 @router.get("/config/domains")
 async def get_domain_configs(request: Request):

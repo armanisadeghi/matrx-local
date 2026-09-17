@@ -460,65 +460,86 @@ export function useScrapeMany() {
         const isStopped = () =>
           controller.signal.aborted || abortRef.current === null;
 
-        const streamController = await engine.scrapeRemotelyStream(
-          urls,
-          { use_cache: useCache },
-          (event, data) => {
-            if (isStopped()) return;
-            const d = data as Record<string, unknown>;
-            if (event === "page_result") {
-              const result = toScrapeResult(d);
-              const url = result.url;
+        const batchUrls = new Set(urls);
+        let finished = false;
+        const failUnfinished = (message: string, url?: string) => {
+          setEntries((prev) => prev.map((entry) =>
+            batchUrls.has(entry.url) && (!url || entry.url === url) &&
+            (entry.status === "running" || entry.status === "pending")
+              ? { ...entry, status: "error", result: makeFallbackResult(entry.url, message), completedAt: new Date() }
+              : entry,
+          ));
+        };
+        const finish = (message: string) => {
+          if (isStopped() || finished) return;
+          failUnfinished(message);
+          finished = true;
+          abortRef.current = null;
+          setRunning(false);
+        };
 
-              if (result.success) {
-                logSuccess(url, result, method);
-              } else {
-                logFailure(url, method, useCache, new Error(result.failure_reason ?? "Remote error"), result);
+        try {
+          const streamController = await engine.scrapeRemotelyStream(
+            urls,
+            { use_cache: useCache },
+            (event, data) => {
+              if (isStopped()) return;
+              const d = data as Record<string, unknown>;
+              if (event === "page_result") {
+                const result = toScrapeResult(d);
+                const url = result.url;
+
+                if (result.success) {
+                  logSuccess(url, result, method);
+                } else {
+                  logFailure(url, method, useCache, new Error(result.failure_reason ?? "Remote error"), result);
+                }
+
+                addToHistory({
+                  url,
+                  success: result.success,
+                  title: result.title,
+                  elapsed_ms: result.elapsed_ms,
+                  savedAt: new Date().toISOString(),
+                  content: result.text_data.slice(0, 2000),
+                  status_code: result.status_code,
+                  method,
+                });
+
+                markDone(url, result);
+              } else if (event === "error") {
+                const url = String(d.url ?? "");
+                const errMsg = String(d.failure_reason ?? d.error ?? d.message ?? "Remote stream error");
+                console.error("[scrape] STREAM ERROR", {
+                  url,
+                  method,
+                  event,
+                  data: d,
+                  timestamp: new Date().toISOString(),
+                });
+                failUnfinished(errMsg, url || undefined);
               }
-
-              addToHistory({
-                url,
-                success: result.success,
-                title: result.title,
-                elapsed_ms: result.elapsed_ms,
-                savedAt: new Date().toISOString(),
-                content: result.text_data.slice(0, 2000),
-                status_code: result.status_code,
+            },
+            () => {
+              finish("The remote stream ended before returning a result for this page. Please retry.");
+            },
+            (err) => {
+              console.error("[scrape] STREAM FAILED", {
                 method,
-              });
-
-              markDone(url, result);
-            } else if (event === "error") {
-              const url = String(d.url ?? "");
-              const errMsg = String(d.error ?? d.message ?? "Remote stream error");
-              console.error("[scrape] STREAM ERROR", {
-                url,
-                method,
-                event,
-                data: d,
+                urls,
+                error: err.message,
+                stack: err.stack,
                 timestamp: new Date().toISOString(),
               });
-              markDone(url, makeFallbackResult(url, errMsg));
-            }
-          },
-          () => {
-            abortRef.current = null;
-            setRunning(false);
-          },
-          (err) => {
-            console.error("[scrape] STREAM FAILED", {
-              method,
-              urls,
-              error: err.message,
-              stack: err.stack,
-              timestamp: new Date().toISOString(),
-            });
-            abortRef.current = null;
-            setRunning(false);
-          },
-        );
+              finish(err.message);
+            },
+          );
 
-        abortRef.current = streamController;
+          if (isStopped() || finished) streamController.abort();
+          else abortRef.current = streamController;
+        } catch (err) {
+          finish(err instanceof Error ? err.message : String(err));
+        }
         return;
       }
 

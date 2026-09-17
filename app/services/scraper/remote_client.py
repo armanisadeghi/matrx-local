@@ -20,6 +20,7 @@ aidream-current repo for the full diff.
 from __future__ import annotations
 
 import logging
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -31,6 +32,75 @@ from app.services.app_config import get_scraper_server_url
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 60.0
+
+# Keep this list beside the HTTP client rather than importing the server router
+# at runtime. The focused proxy tests validate these payloads against the
+# package's actual Pydantic request models.
+UPSTREAM_SCRAPE_OPTION_FIELDS = frozenset(
+    {
+        "get_organized_data",
+        "get_structured_data",
+        "get_overview",
+        "get_text_data",
+        "get_main_image",
+        "get_links",
+        "get_content_filter_removal_details",
+        "include_highlighting_markers",
+        "include_media",
+        "include_media_links",
+        "include_media_description",
+        "include_anchors",
+        "anchor_size",
+    }
+)
+RESEARCH_CAPABILITY_NOTICE = "This service searches and scrapes pages; it does not support research effort selection."
+
+
+def flatten_scrape_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    """Select the package's flat scrape-option fields from the public options bag."""
+    return {
+        key: value
+        for key, value in (options or {}).items()
+        if key in UPSTREAM_SCRAPE_OPTION_FIELDS
+    }
+
+
+def search_and_scrape_payload(
+    keywords: list[str],
+    total_results_per_keyword: int,
+    options: dict[str, Any] | None = None,
+    country_code: str = "all",
+) -> dict[str, Any]:
+    """Build the standalone scraper's flat search-and-scrape request body."""
+    return {
+        **flatten_scrape_options(options),
+        "keywords": keywords,
+        "country_code": country_code,
+        "total_results_per_keyword": total_results_per_keyword,
+    }
+
+
+def quick_scrape_payload(
+    urls: list[str], options: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build the standalone scraper's flat quick-scrape streaming body."""
+    return {
+        **flatten_scrape_options(options),
+        "urls": urls,
+        "use_cache": (options or {}).get("use_cache", True),
+        "stream": True,
+    }
+
+
+def _stream_failure_reason(data: object) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        return str(
+            data.get("user_message") or data.get("message") or data.get("error") or data
+        )
+    return str(data)
+
 
 # All scrape/queue endpoints live under this prefix on the standalone
 # matrx-scraper microservice. Health endpoints live at the app root.
@@ -187,34 +257,33 @@ class RemoteScraperClient:
         country: str = "US",
         auth_token: str | None = None,
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.post(
-                f"{self._server_url}{API_PREFIX}/search",
-                headers=await self._auth_headers(auth_token),
-                json={"keywords": keywords, "count": count, "country": country},
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return await self.collect_stream(
+            f"{API_PREFIX}/search",
+            {
+                "keywords": keywords,
+                "total_results_per_keyword": count,
+                "country_code": country,
+            },
+            auth_token=auth_token,
+            timeout=DEFAULT_TIMEOUT,
+        )
 
     async def search_and_scrape(
         self,
         keywords: list[str],
-        total_results_per_keyword: int = 5,
+        total_results_per_keyword: int = 10,
         options: dict[str, Any] | None = None,
         auth_token: str | None = None,
+        country_code: str = "all",
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self._server_url}{API_PREFIX}/search-and-scrape",
-                headers=await self._auth_headers(auth_token),
-                json={
-                    "keywords": keywords,
-                    "total_results_per_keyword": total_results_per_keyword,
-                    "options": options or {},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return await self.collect_stream(
+            f"{API_PREFIX}/search-and-scrape",
+            search_and_scrape_payload(
+                keywords, total_results_per_keyword, options, country_code
+            ),
+            auth_token=auth_token,
+            timeout=120.0,
+        )
 
     async def research(
         self,
@@ -223,23 +292,77 @@ class RemoteScraperClient:
         country: str = "US",
         auth_token: str | None = None,
     ) -> dict[str, Any]:
-        # The standalone scraper does not currently expose a dedicated
-        # /research endpoint — the closest semantic equivalent is
-        # search-and-scrape with `fast=true` (research-mode flag that skips
-        # link extraction and hashing). Caller should treat the response as
-        # search-and-scrape output, not the legacy research shape.
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(
-                f"{self._server_url}{API_PREFIX}/search-and-scrape",
-                headers=await self._auth_headers(auth_token),
-                json={
-                    "keywords": [query],
-                    "country": country,
-                    "options": {"fast": True, "effort": effort},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()
+        # The standalone scraper has no dedicated research endpoint. This is a
+        # search-and-scrape fallback; effort is accepted by the public API for
+        # compatibility but has no upstream equivalent.
+        response = await self.collect_stream(
+            f"{API_PREFIX}/search-and-scrape",
+            search_and_scrape_payload([query], 10, country_code=country),
+            auth_token=auth_token,
+            timeout=180.0,
+        )
+        return {**response, "capability_notice": RESEARCH_CAPABILITY_NOTICE}
+
+    async def collect_stream(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        auth_token: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Collect a scraper NDJSON response into its stable batch view."""
+        results: list[dict[str, Any]] = []
+        search_results: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        saw_end = False
+        async for raw in self.stream_sse(path, payload, auth_token, timeout):
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Remote scraper sent malformed stream data.") from exc
+            if not isinstance(envelope, dict):
+                raise ValueError("Remote scraper sent malformed stream data.")
+            data = envelope.get("data")
+            kind = envelope.get("event")
+            if kind == "error":
+                raise ValueError(
+                    f"Remote scraper error: {_stream_failure_reason(data)}"
+                )
+            if kind == "end":
+                saw_end = True
+                break
+            if kind != "data":
+                continue
+            if not isinstance(data, dict):
+                raise ValueError("Remote scraper sent malformed stream data.")
+            response_type = data.get("type") or data.get("response_type")
+            if response_type == "fetch_results":
+                pages = data.get("results")
+                if not isinstance(pages, list):
+                    raise ValueError("Remote scraper sent malformed stream data.")
+                results.extend(pages)
+            elif response_type == "search_results":
+                entries = data.get("results")
+                if not isinstance(entries, list):
+                    raise ValueError("Remote scraper sent malformed stream data.")
+                search_results.append(
+                    {"metadata": data.get("metadata") or {}, "results": entries}
+                )
+            elif response_type == "search_error":
+                errors.append(
+                    {
+                        "metadata": data.get("metadata") or {},
+                        "failure_reason": _stream_failure_reason(data),
+                    }
+                )
+            else:
+                raise ValueError("Remote scraper sent malformed stream data.")
+        if not saw_end:
+            raise ValueError("Remote scraper stream ended before completion.")
+        return {"results": results, "search_results": search_results, "errors": errors}
 
     async def stream_sse(
         self,
@@ -255,7 +378,9 @@ class RemoteScraperClient:
         `/api/scraper/search-and-scrape`.
         """
         headers = await self._auth_headers(auth_token)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=10.0)
+        ) as client:
             async with client.stream(
                 "POST",
                 f"{self._server_url}{path}",

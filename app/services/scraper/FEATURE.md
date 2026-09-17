@@ -59,13 +59,9 @@ real, but the client that provoked them has since been fixed. It is reachable
 only from an explicit trigger (`POST /scrapes/sync`, or `sync_after_sign_in`),
 never from the background loop.
 
-`POST /auth/token` calls `sync_after_sign_in()`, because signing in is
-literally the blocker clearing for every auth-deferred row.
-
-> **Correction (2026-09-15, lane CS-18):** `POST /auth/token` was removed in the FS-C5b
-> custody cutover (commit 7faafcff2); the engine now gets its session from the sync
-> daemon (`app/services/sync_client/client.py`), and `sync_after_sign_in()`'s real
-> trigger needs re-establishing by whoever next owns this file.
+`app/services/daemon_session_reconciler.py::_adopt_once()` calls
+`sync_after_sign_in()` after the session daemon has restored a usable session,
+because signing in is literally the blocker clearing for every auth-deferred row.
 
 ---
 
@@ -177,18 +173,31 @@ to a client: **the client sees ONE shape, whichever lane ran.**
 [`result_contract.py`](result_contract.py) is the only place a scrape result
 becomes a client payload. The `Scrape` / `FetchWithBrowser` tools emit it as
 `metadata["results"]` (always a list, single URL or bulk), and
-`/remote-scraper/scrape` + `/scrape/stream` run the server's pages through the
-same converter before they leave the proxy. The client reads it in exactly one
+`/remote-scraper/scrape` + every `/remote-scraper/*/stream` route run the
+server's pages through the same converter before they leave the proxy. The client reads it in exactly one
 place, `desktop/src/lib/scrape-result.ts` — adding a second mapping at a call
 site re-forks the contract one layer up, which is what the `status`-string shim
 used to do (deleted 2026-08-09).
 `tests/unit/test_scrape_result_contract.py` fails if the Python and TypeScript
 field lists drift.
 
-**The scraper server streams NDJSON, not SSE.** The scrape proxy translates it
-into real SSE frames (`event: page_result` carrying the contract); never
-forward server envelopes raw under a `text/event-stream` content type — the
-browser's SSE parser drops every line and the stream silently produces nothing.
+**The scraper server streams NDJSON, not SSE.** Every remote stream proxy
+translates it into real SSE frames (`event: page_result` carries the contract),
+while forwarding package search/progress events under their named event type.
+Never forward server envelopes raw under a `text/event-stream` content type —
+the browser's SSE parser drops every line and the stream silently produces
+nothing.
+
+The standalone server accepts flat scrape-option fields and `country_code` for
+search-and-scrape. The proxy preserves the desktop's `options` bag at its
+public boundary, then forwards only package-supported option fields. The
+non-streaming and streaming request builders share that conversion. The
+standalone server has no iterative-research endpoint or effort control;
+`/remote-scraper/research` is an explicitly labelled search-and-scrape
+fallback. The remote `/search` and `/search-and-scrape` batch routes collect
+the package's NDJSON events into flat fetched pages, grouped search results,
+and per-keyword errors; a fatal, malformed, or incomplete stream remains an
+explicit failure rather than a partial success.
 
 ---
 

@@ -943,6 +943,34 @@ as `cancelled`, outbox drained to zero with validated receipts.
 
 ## Change log
 
+- 2026-09-17 — **Every artifact PATH gets a placement of its own in AI Matrx.** Sharing a
+  cloud row by content was not neutral: the web Artifacts panel lists `files.files` rows
+  carrying `metadata.cli_session_id`, so a path aliased onto another session's row is
+  invisible under its own session — 115 / 144 / 28 entries of the three biggest sessions
+  lived under another session's row, and within a session identical files at different
+  paths collapsed to one entry. Bytes were never lost; the placement was. Every upload now
+  declares `intent="force_new_copy"` with a reason naming the session and path, so the
+  door writes a row of this placement's own linked to the canonical content by
+  `cld_files.duplicate_of_file_id` — the platform's existing "one content, many
+  placements" primitive, no schema change (server half: aidream `453fd1adb`, which also
+  made `POST /files/upload` accept the declaration and report the path of the row it
+  actually wrote instead of echoing the request). `_queue_placement_repairs()` re-files
+  every entry an older build aliased away: idempotent (an entry whose row reads back at
+  its own path is never queued again), bounded (after `MAX_PLACEMENT_REPAIRS` rounds it
+  stops and says the door is not honouring the placement rather than re-uploading
+  forever). Status and per-session summaries carry `unplaced` and `placement_failed`; the
+  dialog shows a per-file "Not listed under this session" state naming the other path, and
+  "Check AI Matrx" re-files as well as re-uploads. Guards:
+  `tests/unit/test_coding_session_artifacts.py`
+  (`test_identical_bytes_across_two_sessions_each_get_their_own_placement`,
+  `test_identical_bytes_two_paths_same_session_each_get_their_own_placement`,
+  `test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased`,
+  `test_placement_repair_gives_up_loudly_after_max_rounds`). NOT fixed here and filed as
+  its own bug: `app/services/file_sync/engine.py` uploads the user's mirrored files with no
+  declaration, so two identical local files at different paths leave the second path
+  recorded nowhere while the index calls it synced (feedback
+  `75e2ae34-5ec6-45fb-ad1b-e909c86eb3f8`).
+
 - 2026-09-17 — **Artifact counts are cloud-confirmed, and "uploaded" no longer means
   "the response had an id".** Measured that day: the engine reported 31,164 files ALL
   uploaded while `files.files` held 24,938 artifact rows. The whole gap is matrx-files'

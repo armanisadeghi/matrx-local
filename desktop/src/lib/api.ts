@@ -96,40 +96,69 @@ export interface EngineHealth {
   app_config?: AppConfigStatus;
 }
 
-export interface CodexUsageMetric {
-  model: string; effort?: string; project?: string; conversation_id?: string;
-  conversation_title?: string; root_id?: string; input_tokens: number;
-  cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
-  reasoning_output_tokens: number; total_tokens: number; response_count: number;
-  peer_message_call_ids?: number; peer_message_invocations?: number;
-  collaboration_message_calls?: number; child_call_ids?: number; child_invocations?: number;
-  estimated_standard_credits?: number | null; credit_rate_known?: boolean;
+/**
+ * ONE usage shape for every coding-agent provider — the engine's
+ * `usage_report.UsageReport`. The Usage tab renders this and nothing
+ * provider-specific; what a provider does not expose is a STATE here
+ * (`metrics`, `source.kind`, `cost.reason`, `limits.reason`), never a blank.
+ */
+export interface UsageRow {
+  key: string;
+  label: string;
+  model: string | null;
+  project: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  requests: number;
+  /** In `cost.unit`; null when any part of the row is unpriced. */
+  cost: number | null;
+  /** Provider measures that are not tokens (Cursor's lines). */
+  extra: Record<string, number>;
 }
-
-export interface CodexUsageSnapshot {
-  collected_at: string;
-  range: { start: string; end: string };
-  collection: { state: "cached" | "refreshed" | "resumed"; in_progress: boolean };
-  coverage: { complete: boolean; scan_exhausted: boolean; index_available: boolean; scanned_files: number; indexed_files: number; successfully_read_candidates: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
-  totals: CodexUsageMetric & { estimated_standard_credits: number };
-  credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
-  models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
-  cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
-  qualification: string[];
-  activity: { classification: string; outbound_peer_calls: number; collaboration_message_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
-}
-
-export interface CodexAllowanceLimit {
+export interface UsageLimitWindow {
+  label: string;
   used_percent: number | null;
   remaining_percent: number | null;
   window_minutes: number | null;
-  resets_at: number | null;
+  resets_at: string | null;
 }
-export interface CodexAllowance {
-  status: "available" | "unavailable";
-  observed_at: string;
-  reason?: string;
-  limits: CodexAllowanceLimit[];
+export interface UsageReport {
+  provider: CodingSessionProvider;
+  generated_at: string;
+  range: { start: string; end: string };
+  tz_offset_minutes: number;
+  source: {
+    kind: "local_transcripts" | "local_rollouts" | "local_state_db" | "none";
+    description: string;
+    complete: boolean;
+    can_resume: boolean;
+    pending_sessions: number | null;
+    updated_at: string | null;
+    notes: string[];
+  };
+  metrics: { tokens: boolean; requests: boolean; cost: boolean; lines: boolean };
+  totals: UsageRow;
+  by_day: UsageRow[];
+  by_model: UsageRow[];
+  by_session: UsageRow[];
+  by_project: UsageRow[];
+  cost: {
+    available: boolean;
+    unit: "usd" | "credits" | null;
+    label: string;
+    reason: string | null;
+    unpriced_models: string[];
+  };
+  limits: {
+    status: "available" | "unavailable";
+    observed_at: string | null;
+    reason: string | null;
+    plan: string | null;
+    windows: UsageLimitWindow[];
+  };
 }
 
 export interface ToolInfo {
@@ -1511,13 +1540,28 @@ class EngineAPI {
     return resp.json();
   }
 
-  async getCodexUsage(input: { start: string; end: string; grouping: "model" | "model_effort"; refresh?: boolean }): Promise<CodexUsageSnapshot> {
-    const params = new URLSearchParams({ start: input.start, end: input.end, grouping: input.grouping, refresh: String(Boolean(input.refresh)) });
-    return this.request<CodexUsageSnapshot>(`/codex-usage?${params.toString()}`);
-  }
-
-  async getCodexAllowance(refresh = false): Promise<CodexAllowance> {
-    return this.request<CodexAllowance>(`/codex-usage/allowance?refresh=${String(refresh)}`);
+  /**
+   * Usage for one provider over one range, in the ONE shape every provider
+   * shares. `tzOffsetMinutes` is the viewer's minutes ahead of UTC
+   * (`-new Date().getTimezoneOffset()`), so day rows are the viewer's days.
+   * A Codex refresh can take up to a minute (bounded collection), so this
+   * call carries its own ceiling.
+   */
+  async getCodingSessionUsage(input: {
+    provider: CodingSessionProvider;
+    start: string;
+    end: string;
+    refresh?: boolean;
+    tzOffsetMinutes?: number;
+  }): Promise<UsageReport> {
+    const params = new URLSearchParams({
+      provider: input.provider,
+      start: input.start,
+      end: input.end,
+      refresh: String(Boolean(input.refresh)),
+      tz_offset: String(input.tzOffsetMinutes ?? 0),
+    });
+    return this.request<UsageReport>(`/coding-session/usage?${params.toString()}`, undefined, 90_000);
   }
 
   /** Update engine runtime settings. */

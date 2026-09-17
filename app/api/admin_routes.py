@@ -54,10 +54,10 @@ import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.launcher import dump_diagnostics, get_registry
+from app.launcher import capture_status_thread_snapshot, dump_diagnostics, get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -77,13 +77,22 @@ _shutdown_lock = threading.Lock()
 
 
 @router.get("/status")
-async def admin_status() -> dict[str, Any]:
+async def admin_status(
+    include_thread_stacks: bool = Query(default=False),
+    thread_limit: int = Query(default=8, ge=1, le=32),
+    frame_limit: int = Query(default=8, ge=1, le=20),
+) -> dict[str, Any]:
     """Return a snapshot of every managed service plus engine process info.
 
     Cheap — does not walk all OS processes or read psutil network connections.
     Safe to poll every few seconds. For the heavy snapshot use POST /admin/diagnose.
     """
-    return get_registry().snapshot()
+    snapshot = get_registry().snapshot()
+    if include_thread_stacks:
+        snapshot["thread_snapshot"] = capture_status_thread_snapshot(
+            thread_limit=thread_limit, frame_limit=frame_limit
+        )
+    return snapshot
 
 
 @router.get("/recovery")

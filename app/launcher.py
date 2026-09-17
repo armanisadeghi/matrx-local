@@ -666,6 +666,84 @@ def _capture_threads() -> list[dict[str, Any]]:
     return out
 
 
+def capture_status_thread_snapshot(
+    *, thread_limit: int = 8, frame_limit: int = 8
+) -> dict[str, Any]:
+    """Return a bounded, value-free thread snapshot for opt-in status diagnostics.
+
+    CPU values are cumulative per-thread user/system seconds from psutil, not an
+    instantaneous utilization sample. Stack entries deliberately contain only a
+    function name, file basename, and line number.
+    """
+    try:
+        process_threads = psutil.Process(os.getpid()).threads()
+    except (psutil.Error, OSError) as exc:
+        return {
+            "available": False,
+            "unavailable": type(exc).__name__,
+            "threads": [],
+            "truncated": False,
+        }
+
+    cpu_by_native_id = {
+        item.id: {"user_seconds": item.user_time, "system_seconds": item.system_time}
+        for item in process_threads
+    }
+    try:
+        frames = sys._current_frames()
+        threads = list(threading.enumerate())
+        rows: list[dict[str, Any]] = []
+        for thread in threads:
+            native_id = thread.native_id
+            cpu = cpu_by_native_id.get(native_id, {"user_seconds": None, "system_seconds": None})
+            frame = frames.get(thread.ident)
+            stack: list[dict[str, Any]] = []
+            try:
+                while frame is not None and len(stack) < frame_limit:
+                    code = frame.f_code
+                    stack.append(
+                        {
+                            "function": code.co_name,
+                            "file": Path(code.co_filename).name,
+                            "line": frame.f_lineno,
+                        }
+                    )
+                    frame = frame.f_back
+            finally:
+                del frame
+            rows.append(
+                {
+                    "thread_id": thread.ident,
+                    "native_thread_id": native_id,
+                    "cpu": cpu,
+                    "stack": stack,
+                }
+            )
+        rows.sort(
+            key=lambda row: (row["cpu"]["user_seconds"] or 0) + (row["cpu"]["system_seconds"] or 0),
+            reverse=True,
+        )
+        truncated = len(rows) > thread_limit
+        return {
+            "available": True,
+            "cpu_units": "cumulative_seconds",
+            "threads": rows[:thread_limit],
+            "truncated": truncated,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "unavailable": type(exc).__name__,
+            "threads": [],
+            "truncated": False,
+        }
+    finally:
+        try:
+            del frames
+        except UnboundLocalError:
+            pass
+
+
 def _capture_disk_usage() -> dict[str, Any]:
     """Capture free-disk numbers for ~/.matrx and the system temp dir."""
     out: dict[str, Any] = {}

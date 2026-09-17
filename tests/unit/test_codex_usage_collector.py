@@ -95,6 +95,7 @@ def test_snapshot_estimates_cells_bins_and_mixed_projects_without_fabricating_un
         "unknown": {"title": "Unknown model", "project": "unknown-rate"},
     }, {"terra": "sol"}, [])
     scan.cells[("sol", "gpt-5.6-sol", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=77)
+    scan.cells[("sol", "unknown", "unknown")].update(peer_message_call_ids=1, peer_message_invocations=1)
     scan.cells[("terra", "gpt-5.6-terra", "low")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=1)
     scan.cells[("unknown", "future-model", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=1)
     scan.bins[(start, "sol", "gpt-5.6-sol", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=77)
@@ -109,6 +110,9 @@ def test_snapshot_estimates_cells_bins_and_mixed_projects_without_fabricating_un
     priced_project = next(row for row in result["projects"] if row["project"] == "priced")
     assert priced_project["estimated_standard_credits"] == 950
     assert priced_project["credit_rate_known"] is True
+    activity = by_model["unknown"]
+    assert activity["estimated_standard_credits"] is None
+    assert activity["credit_rate_known"] is False
     unknown = by_model["future-model"]
     assert unknown["estimated_standard_credits"] is None
     assert unknown["credit_rate_known"] is False

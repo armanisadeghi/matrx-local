@@ -225,7 +225,7 @@ def _aggregate(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[s
         for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count"): grouped[tuple(row[key] for key in keys)][key] += int(row.get(key, 0))
         if row.get("credit_rate_known") is True:
             estimates[group_key] += float(row["estimated_standard_credits"])
-        else:
+        elif int(row.get("response_count", 0)) > 0 or any(int(row.get(field, 0)) != 0 for field in FIELDS):
             fully_priced[group_key] = False
     output = []
     for key, value in grouped.items():

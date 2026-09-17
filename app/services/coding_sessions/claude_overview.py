@@ -39,6 +39,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -608,9 +609,83 @@ def _cloud_meta_with_age(
     cached: tuple[float, dict[str, dict[str, Any]], dict[str, Any]]
 ) -> dict[str, Any]:
     meta = dict(cached[2])
-    meta["age_seconds"] = round(max(0.0, time.monotonic() - cached[0]), 1)
+    # A refresh failure keeps confirmed rows for diagnosis, but its tuple time
+    # is the failed attempt. Carry the already elapsed age forward so retained
+    # rows never become fresh merely because the failed check was recent.
+    if meta.get("checked_at") is None:
+        meta["age_seconds"] = None
+    else:
+        base_age = meta.get("age_seconds")
+        try:
+            retained_age = float(base_age) if base_age is not None else 0.0
+        except (TypeError, ValueError):
+            retained_age = 0.0
+        meta["age_seconds"] = round(
+            retained_age + max(0.0, time.monotonic() - cached[0]), 1
+        )
     meta["refreshing"] = _CLOUD_TASK is not None and not _CLOUD_TASK.done()
     return meta
+
+
+def _cache_cloud_inventory_refresh_failure() -> None:
+    """Record an unexpected inventory failure without mislabeling old rows.
+
+    A successful inventory remains useful evidence after a later transport or
+    parsing failure, but it cannot establish present cloud state. Its original
+    check time and accumulated age remain visible while the 45-second cache TTL
+    prevents every request from retrying the same failing call.
+    """
+    global _CLOUD_CACHE
+    now = time.monotonic()
+    cached = _CLOUD_CACHE
+    if cached is None:
+        _CLOUD_CACHE = (
+            now,
+            {},
+            {
+                "checked": False,
+                "reason": "cloud_inventory_refresh_failed",
+                "detail": "AI Matrx could not complete the cloud inventory check.",
+                "sessions": 0,
+                "checked_at": None,
+                "age_seconds": None,
+            },
+        )
+        return
+
+    prior_meta = cached[2]
+    # Only a success, or a prior failure explicitly retaining that success,
+    # has a truthful last-confirmed check time. Expected blocked states do not
+    # acquire one just because a later refresh also fails.
+    had_success = bool(prior_meta.get("checked")) or (
+        prior_meta.get("reason") == "cloud_inventory_refresh_failed"
+        and prior_meta.get("checked_at") is not None
+    )
+    checked_at = prior_meta.get("checked_at") if had_success else None
+    if checked_at is None:
+        retained_age: float | None = None
+    else:
+        try:
+            base_age = float(prior_meta.get("age_seconds") or 0.0)
+        except (TypeError, ValueError):
+            base_age = 0.0
+        retained_age = round(base_age + max(0.0, now - cached[0]), 1)
+
+    _CLOUD_CACHE = (
+        now,
+        cached[1],
+        {
+            "checked": False,
+            "reason": "cloud_inventory_refresh_failed",
+            "detail": (
+                "AI Matrx could not complete the cloud inventory check. "
+                "Previous cloud results are retained but may be out of date."
+            ),
+            "sessions": len(cached[1]),
+            "checked_at": checked_at,
+            "age_seconds": retained_age,
+        },
+    )
 
 
 async def _refresh_cloud_inventory() -> None:
@@ -618,8 +693,24 @@ async def _refresh_cloud_inventory() -> None:
     async with _CLOUD_LOCK:
         try:
             await _fetch_cloud_inventory()
+        except asyncio.CancelledError:
+            raise
         except Exception:  # noqa: BLE001 — the screen keeps its previous answer
-            logger.exception("[claude_overview] cloud inventory refresh failed")
+            _cache_cloud_inventory_refresh_failure()
+            # Exception text can contain an HTTP body, token, or user data.
+            # Preserve an actionable ERROR cause without emitting it: the tail
+            # is function, basename, and line only, with no source or locals.
+            exception = sys.exception()
+            frames = traceback.extract_tb(exception.__traceback__) if exception else []
+            trace = " > ".join(
+                f"{frame.name}@{Path(frame.filename).name}:{frame.lineno}"
+                for frame in frames[-6:]
+            ) or "no_traceback"
+            logger.error(
+                "[claude_overview] cloud inventory refresh failed (%s; %s)",
+                type(exception).__name__,
+                trace,
+            )
 
 
 async def _fetch_cloud_inventory() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -802,6 +893,8 @@ def _session_state(
 ) -> str:
     if queue.get("quarantined", 0) > 0:
         return "failed"
+    if not cloud_checked:
+        return "queued" if queue.get("pending", 0) > 0 else "unknown"
     if binding is not None:
         seen_ns = _parse_iso_ns(binding.get("last_seen_at"))
         if (
@@ -813,8 +906,6 @@ def _session_state(
         return "in_cloud"
     if queue.get("pending", 0) > 0:
         return "queued"
-    if not cloud_checked:
-        return "unknown"
     return "not_in_cloud"
 
 

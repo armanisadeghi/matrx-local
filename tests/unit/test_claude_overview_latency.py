@@ -212,6 +212,157 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
 
 
 @pytest.mark.anyio
+async def test_failed_cold_inventory_is_terminal_not_in_flight(
+    isolated_index: ClaudeIndexStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpected first-read failure must stop polling rather than spin."""
+    from app.services.coding_sessions import claude_overview
+
+    private_error = "jwt-and-personal-data-must-not-escape"
+
+    async def _failed_fetch():
+        raise RuntimeError(private_error)
+
+    logged: list[tuple[object, ...]] = []
+
+    def _record_error(_message: object, *args: object) -> None:
+        logged.append((_message, *args))
+
+    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
+    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
+    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _failed_fetch)
+    monkeypatch.setattr(claude_overview.logger, "error", _record_error)
+
+    await claude_overview._refresh_cloud_inventory()
+
+    rows, meta = await claude_overview.cloud_inventory()
+    assert rows == {}
+    assert meta["checked"] is False
+    assert meta["reason"] == "cloud_inventory_refresh_failed"
+    assert meta["refreshing"] is False
+    assert meta["checked_at"] is None
+    assert meta["age_seconds"] is None
+    assert len(logged) == 1
+    rendered = " ".join(str(part) for part in logged[0])
+    assert private_error not in rendered
+    assert "RuntimeError" in rendered
+    assert "_failed_fetch@" in rendered
+
+
+@pytest.mark.anyio
+async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_failure(
+    isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed refresh preserves its last success as stale evidence only."""
+    from app.services.coding_sessions import claude_overview
+
+    checked_at = "2026-09-15T00:00:00+00:00"
+    old_rows = {"bound-session": {"provider_session_id": "bound-session"}}
+    old_meta = {
+        "checked": True,
+        "reason": None,
+        "detail": None,
+        "sessions": 1,
+        "checked_at": checked_at,
+    }
+    monkeypatch.setattr(
+        claude_overview,
+        "_CLOUD_CACHE",
+        (time.monotonic() - 600, old_rows, old_meta),
+        raising=False,
+    )
+    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
+
+    async def _failed_fetch():
+        raise OSError("transport unavailable")
+
+    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _failed_fetch)
+    await claude_overview._refresh_cloud_inventory()
+
+    retained_rows, retained_meta = await claude_overview.cloud_inventory()
+    assert retained_rows == old_rows
+    assert retained_meta["checked"] is False
+    assert retained_meta["reason"] == "cloud_inventory_refresh_failed"
+    assert retained_meta["checked_at"] == checked_at
+    assert retained_meta["age_seconds"] >= 600
+    assert retained_meta["refreshing"] is False
+    assert (
+        claude_overview._session_state(
+            cloud_checked=False,
+            binding=old_rows["bound-session"],
+            activity_ns=0,
+            queue={},
+        )
+        == "unknown"
+    )
+
+    async def _successful_fetch():
+        fresh_rows = {"new-session": {"provider_session_id": "new-session"}}
+        fresh_meta = {
+            "checked": True,
+            "reason": None,
+            "detail": None,
+            "sessions": 1,
+            "checked_at": "2026-09-16T00:00:00+00:00",
+        }
+        claude_overview._CLOUD_CACHE = (time.monotonic(), fresh_rows, fresh_meta)
+        return fresh_rows, fresh_meta
+
+    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _successful_fetch)
+    await claude_overview._refresh_cloud_inventory()
+    _, fresh_meta = await claude_overview.cloud_inventory()
+    assert fresh_meta["checked"] is True
+    assert fresh_meta["reason"] is None
+    assert fresh_meta["age_seconds"] is not None
+
+
+@pytest.mark.anyio
+async def test_inventory_refresh_cancellation_propagates(
+    isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation is control flow, not a terminal cloud failure."""
+    from app.services.coding_sessions import claude_overview
+
+    async def _cancelled_fetch():
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
+    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _cancelled_fetch)
+    with pytest.raises(asyncio.CancelledError):
+        await claude_overview._refresh_cloud_inventory()
+    assert claude_overview._CLOUD_CACHE is None
+
+
+@pytest.mark.anyio
+async def test_expected_inventory_block_is_not_reclassified_as_refresh_failure(
+    isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known identity block remains its own checked-false answer."""
+    from app.services.coding_sessions import claude_overview
+
+    blocked_meta = {
+        "checked": False,
+        "reason": "identity_inventory_unavailable",
+        "detail": "Sign in to check cloud sessions.",
+        "sessions": 0,
+        "checked_at": "2026-09-16T00:00:00+00:00",
+    }
+
+    async def _known_block():
+        claude_overview._CLOUD_CACHE = (time.monotonic(), {}, blocked_meta)
+        return {}, blocked_meta
+
+    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
+    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _known_block)
+    await claude_overview._refresh_cloud_inventory()
+    _, meta = await claude_overview.cloud_inventory()
+    assert meta["checked"] is False
+    assert meta["reason"] == "identity_inventory_unavailable"
+    assert meta["checked_at"] == blocked_meta["checked_at"]
+
+
+@pytest.mark.anyio
 async def test_the_whole_response_is_built_without_touching_the_disk(
     tmp_path: Path, isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

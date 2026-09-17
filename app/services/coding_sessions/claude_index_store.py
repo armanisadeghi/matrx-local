@@ -54,8 +54,25 @@ from app.services.coding_sessions.claude_session_index import (
     record_focused_at,
     record_is_starred,
 )
+from app.services.coding_sessions.claude_usage import (
+    PENDING_STAMP,
+    USAGE_FIELDS,
+    UsageCursor,
+    UsageIncrement,
+    read_usage_increment,
+)
 
+# 2: is_starred (pin truth). The transcript_usage / transcript_usage_cursor
+# tables (2026-09-17, CS-24) are ADDITIVE: _migrate creates them on any write
+# connection, so they never need a version bump of their own.
 SCHEMA_VERSION = 2
+
+# Transcript bytes one refresh may read for usage before handing the rest to
+# the next refresh. 10 GB of transcripts on this Mac (2026-09-17) become
+# complete over ~14 refreshes at the 20 s cadence, in a worker thread, while
+# the screen already shows every session read so far and says how many are
+# still pending.
+DEFAULT_USAGE_BYTE_BUDGET = 768 * 1024 * 1024
 
 # One chunk of record files is read, parsed and written under a single worker
 # thread hop. 256 × ~46 KB is ~12 MB and tens of milliseconds, which is what
@@ -197,6 +214,30 @@ class ClaudeIndexStore:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+            -- Per-turn usage, deduplicated per message, one row per
+            -- (session, UTC hour, model). Read by GET /coding-session/usage.
+            CREATE TABLE IF NOT EXISTS transcript_usage (
+                session_id TEXT NOT NULL,
+                hour TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                requests INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (session_id, hour, model)
+            );
+            CREATE INDEX IF NOT EXISTS transcript_usage_hour
+                ON transcript_usage (hour);
+            -- Where the usage reader stopped in each transcript: a stamp that
+            -- differs from the walk's means the tail is still to be read.
+            CREATE TABLE IF NOT EXISTS transcript_usage_cursor (
+                session_id TEXT PRIMARY KEY,
+                offset INTEGER NOT NULL DEFAULT 0,
+                size INTEGER NOT NULL DEFAULT -1,
+                mtime_ns INTEGER NOT NULL DEFAULT -1,
+                recent_keys TEXT NOT NULL DEFAULT '[]'
+            );
             """
         )
         connection.execute(
@@ -211,6 +252,8 @@ class ClaudeIndexStore:
                 "DROP TABLE IF EXISTS records;"
                 "DROP TABLE IF EXISTS sessions;"
                 "DROP TABLE IF EXISTS transcripts;"
+                "DROP TABLE IF EXISTS transcript_usage;"
+                "DROP TABLE IF EXISTS transcript_usage_cursor;"
                 "DROP TABLE IF EXISTS meta;"
             )
             self._migrate(connection)
@@ -642,6 +685,179 @@ class ClaudeIndexStore:
                 connection.execute("COMMIT")
         return len(gone)
 
+    # ── usage ───────────────────────────────────────────────────────────
+    #
+    # Token usage per (session, UTC hour, model), read from the transcripts
+    # the walk above already stats. The reader keeps a byte cursor per
+    # transcript, so after the first build a refresh reads only the tails
+    # that grew — see claude_usage.py for the record shape and the dedupe.
+
+    def usage_cursors(self) -> dict[str, UsageCursor]:
+        if not self.path.exists():
+            return {}
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    "SELECT session_id, offset, size, mtime_ns, recent_keys "
+                    "FROM transcript_usage_cursor"
+                ).fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+        cursors: dict[str, UsageCursor] = {}
+        for row in rows:
+            try:
+                keys = json.loads(row["recent_keys"] or "[]")
+            except (TypeError, ValueError):
+                keys = []
+            cursors[str(row["session_id"])] = UsageCursor(
+                offset=int(row["offset"] or 0),
+                size=int(row["size"] if row["size"] is not None else PENDING_STAMP),
+                mtime_ns=int(row["mtime_ns"] if row["mtime_ns"] is not None else PENDING_STAMP),
+                recent_keys=[str(key) for key in keys] if isinstance(keys, list) else [],
+            )
+        return cursors
+
+    def apply_usage_increments(
+        self, increments: Sequence[tuple[str, UsageIncrement]]
+    ) -> None:
+        """Add each increment's cells to the store, in one transaction."""
+        if not increments:
+            return
+        with self.connect(write=True) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for session_id, increment in increments:
+                if increment.restarted:
+                    connection.execute(
+                        "DELETE FROM transcript_usage WHERE session_id = ?",
+                        (session_id,),
+                    )
+                for (hour, model), cell in increment.cells.items():
+                    connection.execute(
+                        """
+                        INSERT INTO transcript_usage (
+                            session_id, hour, model, input_tokens, output_tokens,
+                            cache_creation_tokens, cache_read_tokens, requests
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (session_id, hour, model) DO UPDATE SET
+                            input_tokens = input_tokens + excluded.input_tokens,
+                            output_tokens = output_tokens + excluded.output_tokens,
+                            cache_creation_tokens =
+                                cache_creation_tokens + excluded.cache_creation_tokens,
+                            cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+                            requests = requests + excluded.requests
+                        """,
+                        (
+                            session_id,
+                            hour,
+                            model,
+                            int(cell["input_tokens"]),
+                            int(cell["output_tokens"]),
+                            int(cell["cache_creation_tokens"]),
+                            int(cell["cache_read_tokens"]),
+                            int(cell["requests"]),
+                        ),
+                    )
+                cursor = increment.cursor
+                connection.execute(
+                    "INSERT OR REPLACE INTO transcript_usage_cursor "
+                    "(session_id, offset, size, mtime_ns, recent_keys) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        cursor.offset,
+                        cursor.size,
+                        cursor.mtime_ns,
+                        json.dumps(cursor.recent_keys),
+                    ),
+                )
+            connection.execute("COMMIT")
+
+    def prune_usage(self, alive: Iterable[str]) -> int:
+        alive_set = set(alive)
+        with self.connect(write=True) as connection:
+            stored = [
+                str(row["session_id"])
+                for row in connection.execute(
+                    "SELECT session_id FROM transcript_usage_cursor"
+                )
+            ]
+            gone = [value for value in stored if value not in alive_set]
+            if gone:
+                connection.execute("BEGIN IMMEDIATE")
+                for start in range(0, len(gone), 500):
+                    batch = gone[start : start + 500]
+                    marks = ",".join("?" * len(batch))
+                    connection.execute(
+                        f"DELETE FROM transcript_usage WHERE session_id IN ({marks})", batch
+                    )
+                    connection.execute(
+                        f"DELETE FROM transcript_usage_cursor WHERE session_id IN ({marks})",
+                        batch,
+                    )
+                connection.execute("COMMIT")
+        return len(gone)
+
+    def usage_rows(self, start_hour: str, end_hour: str) -> list[dict[str, Any]]:
+        """Every usage cell with ``start_hour <= hour < end_hour``, labelled.
+
+        Hour keys are ``YYYY-MM-DDTHH`` (UTC), so the comparison is textual.
+        The session's title and project come from the same rows the Sessions
+        tab shows, so the two tabs never name one conversation two ways.
+        """
+        if not self.path.exists():
+            return []
+        try:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT u.session_id, u.hour, u.model, u.input_tokens,
+                           u.output_tokens, u.cache_creation_tokens,
+                           u.cache_read_tokens, u.requests,
+                           COALESCE(s.title, t.title) AS title,
+                           COALESCE(s.workspace_name, t.project) AS project
+                    FROM transcript_usage u
+                    LEFT JOIN sessions s ON s.cli_session_id = u.session_id
+                    LEFT JOIN transcripts t ON t.session_id = u.session_id
+                    WHERE u.hour >= ? AND u.hour < ?
+                    """,
+                    (start_hour, end_hour),
+                ).fetchall()
+        except sqlite3.DatabaseError:
+            return []
+        return [
+            {
+                "session_id": str(row["session_id"]),
+                "hour": str(row["hour"]),
+                "model": str(row["model"]),
+                "input_tokens": int(row["input_tokens"] or 0),
+                "output_tokens": int(row["output_tokens"] or 0),
+                "cache_creation_tokens": int(row["cache_creation_tokens"] or 0),
+                "cache_read_tokens": int(row["cache_read_tokens"] or 0),
+                "requests": int(row["requests"] or 0),
+                "title": row["title"],
+                "project": row["project"],
+            }
+            for row in rows
+        ]
+
+    def usage_status(self) -> dict[str, Any]:
+        """How far the usage read has got, from meta. No walk."""
+        if not self.path.exists():
+            return {"built": False, "pending_sessions": None, "updated_at": None}
+        try:
+            with self.connect() as connection:
+                meta = self._meta(connection)
+        except sqlite3.DatabaseError:
+            return {"built": False, "pending_sessions": None, "updated_at": None}
+        pending = meta.get("usage_pending_sessions", "")
+        read = meta.get("usage_sessions_read", "")
+        return {
+            "built": meta.get("usage_updated_at") is not None,
+            "pending_sessions": int(pending) if pending.isdigit() else None,
+            "sessions_read": int(read) if read.isdigit() else None,
+            "updated_at": meta.get("usage_updated_at"),
+            "unreadable": meta.get("usage_unreadable", ""),
+        }
+
     def write_meta(self, values: dict[str, Any]) -> None:
         with self.connect(write=True) as connection:
             connection.executemany(
@@ -874,6 +1090,7 @@ def refresh_transcripts_sync(
     sidebar_ids: set[str],
     root: Path | None = None,
     read_summary: Any = None,
+    usage_byte_budget: int = DEFAULT_USAGE_BYTE_BUDGET,
 ) -> dict[str, Any]:
     """Persist transcript sizes, and titles for the ones Claude never indexed.
 
@@ -926,6 +1143,7 @@ def refresh_transcripts_sync(
         )
     store.upsert_transcripts(rows)
     removed = store.prune_transcripts(found.keys())
+    usage = refresh_usage_sync(store, found, byte_budget=usage_byte_budget)
     duration = time.monotonic() - started
     store.write_meta(
         {
@@ -941,6 +1159,88 @@ def refresh_transcripts_sync(
         "summaries_read": summaries_read,
         "removed": removed,
         "duration_seconds": round(duration, 3),
+        "usage": usage,
+    }
+
+
+def refresh_usage_sync(
+    store: ClaudeIndexStore,
+    found: dict[str, tuple[int, int, Path]],
+    *,
+    byte_budget: int = DEFAULT_USAGE_BYTE_BUDGET,
+) -> dict[str, Any]:
+    """The usage half of a transcript refresh: read the tails that grew.
+
+    ``found`` is the walk :func:`refresh_transcripts_sync` already did — this
+    never stats the tree again. A transcript is pending when its cursor stamp
+    is not the walk's stamp; pending ones are read oldest-first within
+    ``byte_budget`` and the rest wait for the next refresh, which the meta
+    counters say plainly.
+    """
+    started = time.monotonic()
+    cursors = store.usage_cursors()
+    pending = [
+        (session_id, size, mtime_ns, path)
+        for session_id, (size, mtime_ns, path) in found.items()
+        if (cursor := cursors.get(session_id)) is None
+        or (cursor.size, cursor.mtime_ns) != (size, mtime_ns)
+    ]
+    # Oldest transcripts first: the first ever build then lands history in
+    # order, and the sessions a person is working in right now are small
+    # tails that fit any refresh.
+    pending.sort(key=lambda item: item[2])
+    increments: list[tuple[str, UsageIncrement]] = []
+    bytes_read = 0
+    unreadable = 0
+    read_sessions = 0
+    exhausted = False
+    for session_id, size, mtime_ns, path in pending:
+        remaining = byte_budget - bytes_read
+        if remaining <= 0:
+            exhausted = True
+            break
+        try:
+            increment = read_usage_increment(
+                path,
+                cursors.get(session_id),
+                size=size,
+                mtime_ns=mtime_ns,
+                byte_budget=remaining,
+            )
+        except OSError:
+            unreadable += 1
+            continue
+        bytes_read += increment.bytes_read
+        increments.append((session_id, increment))
+        if increment.truncated:
+            exhausted = True
+            break
+        read_sessions += 1
+        if len(increments) >= 64:
+            store.apply_usage_increments(increments)
+            increments = []
+    store.apply_usage_increments(increments)
+    removed = store.prune_usage(found.keys())
+    still_pending = len(pending) - read_sessions
+    duration = time.monotonic() - started
+    store.write_meta(
+        {
+            "usage_updated_at": _now_iso(),
+            "usage_pending_sessions": still_pending,
+            "usage_sessions_read": len(found) - still_pending,
+            "usage_unreadable": unreadable,
+            "usage_bytes_read": bytes_read,
+            "usage_duration_seconds": round(duration, 3),
+        }
+    )
+    return {
+        "pending_sessions": still_pending,
+        "sessions_read": read_sessions,
+        "bytes_read": bytes_read,
+        "unreadable": unreadable,
+        "removed": removed,
+        "budget_exhausted": exhausted,
+        "duration_seconds": round(duration, 3),
     }
 
 
@@ -952,6 +1252,8 @@ def _now_iso() -> str:
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_USAGE_BYTE_BUDGET",
+    "refresh_usage_sync",
     "finalize_refresh",
     "default_transcripts_root",
     "refresh_transcripts_sync",

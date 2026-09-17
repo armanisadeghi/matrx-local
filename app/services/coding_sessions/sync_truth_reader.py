@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dataclasses import replace
+
 from app.services.coding_sessions.sync_truth import (
     CloudFacts,
     DeliveryFacts,
@@ -28,6 +30,7 @@ from app.services.coding_sessions.sync_truth import (
     TranscriptFacts,
     as_payload,
     decide,
+    fill_server_sentence,
 )
 
 _ACCOUNT_CONFLICT = "provider_account_conflict"
@@ -261,6 +264,9 @@ async def read_cloud(session_id: str) -> CloudFacts:
         messages=diagnosis.get("messages"),
         last_position=diagnosis.get("last_position"),
         last_message_at=diagnosis.get("last_message_at"),
+        cloud_verdict=diagnosis.get("cloud_verdict"),
+        cloud_sentence=diagnosis.get("cloud_sentence"),
+        cloud_remedy=diagnosis.get("cloud_remedy"),
     )
 
 
@@ -312,6 +318,14 @@ async def sync_truth(session_id: str) -> dict[str, Any] | None:
         # Nothing on disk and nothing we can confirm in the cloud: the caller
         # gets a 404 rather than a confident-looking empty answer.
         return None
+    # The server leaves {transcript_entries} unfilled on purpose. Fill it now,
+    # while the transcript count is in hand, so nothing downstream has to.
+    cloud = replace(
+        cloud,
+        cloud_sentence=fill_server_sentence(
+            cloud.cloud_sentence, transcript_entries=transcript.entries
+        ),
+    )
     delivery = await read_delivery(session_id, cloud=cloud)
     mirror = await read_mirror(cloud.conversation_id)
     facts = SyncFacts(

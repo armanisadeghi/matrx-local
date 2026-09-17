@@ -41,6 +41,7 @@ import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 import { confirm } from "@ai-matrx/kit/confirm-opener";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
 import { laneBlockerTone } from "@/lib/lane-blocker";
+import { SyncTruthSection } from "@/components/coding-sessions/SyncTruthSection";
 
 export const SESSION_STATE_LABEL: Record<ClaudeSessionState, string> = {
   in_cloud: "In AI Matrx",
@@ -204,6 +205,11 @@ export function SessionDiagnosisDialog({
 
         {data && (
           <div className="flex max-h-[68vh] flex-col gap-3 overflow-y-auto pr-1">
+            {/* FIRST, because "does this match AI Matrx?" is the question the
+                person opened this dialog with. Everything below explains the
+                answer; this states it. */}
+            {sessionId && <SyncTruthSection sessionId={sessionId} onChanged={onChanged} />}
+
             <div
               className={`rounded-lg border p-3 text-sm ${
                 data.state === "failed"

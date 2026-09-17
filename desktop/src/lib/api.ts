@@ -96,40 +96,69 @@ export interface EngineHealth {
   app_config?: AppConfigStatus;
 }
 
-export interface CodexUsageMetric {
-  model: string; effort?: string; project?: string; conversation_id?: string;
-  conversation_title?: string; root_id?: string; input_tokens: number;
-  cached_input_tokens: number; uncached_input_tokens: number; output_tokens: number;
-  reasoning_output_tokens: number; total_tokens: number; response_count: number;
-  peer_message_call_ids?: number; peer_message_invocations?: number;
-  collaboration_message_calls?: number; child_call_ids?: number; child_invocations?: number;
-  estimated_standard_credits?: number | null; credit_rate_known?: boolean;
+/**
+ * ONE usage shape for every coding-agent provider — the engine's
+ * `usage_report.UsageReport`. The Usage tab renders this and nothing
+ * provider-specific; what a provider does not expose is a STATE here
+ * (`metrics`, `source.kind`, `cost.reason`, `limits.reason`), never a blank.
+ */
+export interface UsageRow {
+  key: string;
+  label: string;
+  model: string | null;
+  project: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  requests: number;
+  /** In `cost.unit`; null when any part of the row is unpriced. */
+  cost: number | null;
+  /** Provider measures that are not tokens (Cursor's lines). */
+  extra: Record<string, number>;
 }
-
-export interface CodexUsageSnapshot {
-  collected_at: string;
-  range: { start: string; end: string };
-  collection: { state: "cached" | "refreshed" | "resumed"; in_progress: boolean };
-  coverage: { complete: boolean; scan_exhausted: boolean; index_available: boolean; scanned_files: number; indexed_files: number; successfully_read_candidates: number; completed_candidates: number; total_candidates: number; can_resume: boolean; notes: string[] };
-  totals: CodexUsageMetric & { estimated_standard_credits: number };
-  credits: { estimated_standard: number | null; measured_allowance: null; label: string; unknown_models: string[] };
-  models: CodexUsageMetric[]; model_effort: CodexUsageMetric[]; projects: CodexUsageMetric[];
-  cells: CodexUsageMetric[]; conversations: CodexUsageMetric[]; workers: CodexUsageMetric[];
-  qualification: string[];
-  activity: { classification: string; outbound_peer_calls: number; collaboration_message_calls: number; child_calls: number; inbound_peer_wakes: "unknown"; causal_cost: "unknown" };
-}
-
-export interface CodexAllowanceLimit {
+export interface UsageLimitWindow {
+  label: string;
   used_percent: number | null;
   remaining_percent: number | null;
   window_minutes: number | null;
-  resets_at: number | null;
+  resets_at: string | null;
 }
-export interface CodexAllowance {
-  status: "available" | "unavailable";
-  observed_at: string;
-  reason?: string;
-  limits: CodexAllowanceLimit[];
+export interface UsageReport {
+  provider: CodingSessionProvider;
+  generated_at: string;
+  range: { start: string; end: string };
+  tz_offset_minutes: number;
+  source: {
+    kind: "local_transcripts" | "local_rollouts" | "local_state_db" | "none";
+    description: string;
+    complete: boolean;
+    can_resume: boolean;
+    pending_sessions: number | null;
+    updated_at: string | null;
+    notes: string[];
+  };
+  metrics: { tokens: boolean; requests: boolean; cost: boolean; lines: boolean };
+  totals: UsageRow;
+  by_day: UsageRow[];
+  by_model: UsageRow[];
+  by_session: UsageRow[];
+  by_project: UsageRow[];
+  cost: {
+    available: boolean;
+    unit: "usd" | "credits" | null;
+    label: string;
+    reason: string | null;
+    unpriced_models: string[];
+  };
+  limits: {
+    status: "available" | "unavailable";
+    observed_at: string | null;
+    reason: string | null;
+    plan: string | null;
+    windows: UsageLimitWindow[];
+  };
 }
 
 export interface ToolInfo {
@@ -930,6 +959,109 @@ export class ClaudeOverviewReadError extends Error {
   }
 }
 
+/** The CLOSED verdict vocabulary of per-conversation sync truth (CS-25 §1). */
+export type SyncVerdictCode =
+  | "in_sync"
+  | "partial_by_design"
+  | "behind_local"
+  | "behind_cloud"
+  | "mirror_stale"
+  | "diverged"
+  | "quarantined"
+  | "not_in_cloud"
+  | "unknown";
+
+/**
+ * The four counts, side by side. `null` means THAT LAYER COULD NOT BE READ and
+ * must render as such — never as 0. "0 entries" is a claim, and it would be a
+ * false one.
+ */
+export interface SyncTruthCounts {
+  transcript: number | null;
+  delivered: number | null;
+  cloud_messages: number | null;
+  mirror_messages: number | null;
+}
+
+export interface ClaudeSessionSyncTruth {
+  schema_version: 1;
+  session_id: string;
+  provider: string;
+  verdict: {
+    code: SyncVerdictCode;
+    reason: string | null;
+    sentence: string;
+    remedy: string | null;
+    /** Whether the Reconcile button can actually help this state. */
+    reconcilable: boolean;
+  };
+  count_labels: [string, string, string, string];
+  counts: SyncTruthCounts;
+  transcript: {
+    checked: boolean;
+    reason: string | null;
+    on_disk: boolean;
+    entries: number | null;
+    last_entry_at: string | null;
+    last_entry_id: string | null;
+    unreadable_lines: number;
+    bytes: number;
+    modified_at: string | null;
+  };
+  delivered: {
+    checked: boolean;
+    reason: string | null;
+    accepted_entries: number | null;
+    last_receipt_at: string | null;
+    pending_entries: number;
+    quarantined_entries: number;
+    quarantine_reasons: { code: string; message: string; count: number }[];
+    publisher_blocker: unknown;
+  };
+  cloud: {
+    checked: boolean;
+    reason: string | null;
+    session_present: boolean;
+    conversation_id: string | null;
+    fidelity: string | null;
+    entries: number | null;
+    projected_entries: number | null;
+    skipped_entries: number | null;
+    pending_entries: number | null;
+    error_entries: number | null;
+    projection_errors: { code: string | null; detail: string | null; count: number }[];
+    last_entry_at: string | null;
+    last_entry_id: string | null;
+    messages: number | null;
+    last_position: number | null;
+    last_message_at: string | null;
+    /** The SERVER's own claim about its half, already placeholder-filled. */
+    cloud_verdict: string | null;
+    cloud_sentence: string | null;
+    cloud_remedy: string | null;
+  };
+  mirror: {
+    checked: boolean;
+    reason: string | null;
+    conversation_row: boolean;
+    messages: number | null;
+    last_pulled_at: string | null;
+  };
+  computed_at: string;
+}
+
+export interface ClaudeSessionReconcileReport {
+  schema_version: 1;
+  session_id: string;
+  actions: {
+    step: "deliver" | "reproject" | "pull";
+    outcome: "queued" | "done" | "nothing_to_do" | "skipped" | "refused" | "failed";
+    detail: string;
+    result?: unknown;
+  }[];
+  truth: ClaudeSessionSyncTruth;
+}
+
 export interface ClaudeSessionDiagnosisEnvelope {
   receipt_id: number;
   state: "pending" | "quarantine";
@@ -1511,13 +1643,28 @@ class EngineAPI {
     return resp.json();
   }
 
-  async getCodexUsage(input: { start: string; end: string; grouping: "model" | "model_effort"; refresh?: boolean }): Promise<CodexUsageSnapshot> {
-    const params = new URLSearchParams({ start: input.start, end: input.end, grouping: input.grouping, refresh: String(Boolean(input.refresh)) });
-    return this.request<CodexUsageSnapshot>(`/codex-usage?${params.toString()}`);
-  }
-
-  async getCodexAllowance(refresh = false): Promise<CodexAllowance> {
-    return this.request<CodexAllowance>(`/codex-usage/allowance?refresh=${String(refresh)}`);
+  /**
+   * Usage for one provider over one range, in the ONE shape every provider
+   * shares. `tzOffsetMinutes` is the viewer's minutes ahead of UTC
+   * (`-new Date().getTimezoneOffset()`), so day rows are the viewer's days.
+   * A Codex refresh can take up to a minute (bounded collection), so this
+   * call carries its own ceiling.
+   */
+  async getCodingSessionUsage(input: {
+    provider: CodingSessionProvider;
+    start: string;
+    end: string;
+    refresh?: boolean;
+    tzOffsetMinutes?: number;
+  }): Promise<UsageReport> {
+    const params = new URLSearchParams({
+      provider: input.provider,
+      start: input.start,
+      end: input.end,
+      refresh: String(Boolean(input.refresh)),
+      tz_offset: String(input.tzOffsetMinutes ?? 0),
+    });
+    return this.request<UsageReport>(`/coding-session/usage?${params.toString()}`, undefined, 90_000);
   }
 
   /** Update engine runtime settings. */
@@ -3138,6 +3285,29 @@ class EngineAPI {
   async getClaudeSessionDiagnosis(sessionId: string): Promise<ClaudeSessionDiagnosis> {
     return this.request(
       `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/diagnosis`,
+    );
+  }
+
+  /**
+   * Whether ONE conversation matches AI Matrx, in numbers, with a remedy.
+   *
+   * The sibling `getClaudeSessionDiagnosis` answers "is there a row for this
+   * session?" — presence. This compares CONTENT across all four layers a
+   * conversation lives in, which is the question a person actually has
+   * (Arman, 2026-09-17: "a chat in Claude Code that simply doesn't match what
+   * I see in AI Matrx… this thing is a dead fish").
+   */
+  async getClaudeSessionSyncTruth(sessionId: string): Promise<ClaudeSessionSyncTruth> {
+    return this.request(
+      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/sync-truth`,
+    );
+  }
+
+  /** Close the gap the sync truth named, then return the freshly re-read truth. */
+  async reconcileClaudeSession(sessionId: string): Promise<ClaudeSessionReconcileReport> {
+    return this.request(
+      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/reconcile`,
+      { method: "POST" },
     );
   }
 

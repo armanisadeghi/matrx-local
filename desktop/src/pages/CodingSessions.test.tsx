@@ -89,8 +89,8 @@ vi.mock("@/components/coding-sessions/SessionArtifactsDialog", () => ({
   ArtifactsCell: () => <span>—</span>,
   SessionArtifactsDialog: () => null,
 }));
-vi.mock("@/components/coding-sessions/CodexUsagePanel", () => ({
-  CodexUsagePanel: () => <div data-testid="codex-usage-panel" />,
+vi.mock("@/components/coding-sessions/tabs/UsageTab", () => ({
+  UsageTab: () => <div data-testid="usage-tab" />,
 }));
 vi.mock("@/lib/org/active-org", () => ({ requestOrganizationPicker: vi.fn() }));
 vi.mock("@/lib/app-config", () => ({
@@ -231,7 +231,7 @@ describe("Coding Sessions tabs", () => {
   it("shows the session list by default", async () => {
     await render("/coding-sessions");
     expect(container.querySelector("[data-testid='sessions-table'] tbody")).not.toBeNull();
-    expect(container.querySelector("[data-testid='codex-usage-panel']")).toBeNull();
+    expect(container.querySelector("[data-testid='usage-tab']")).toBeNull();
     expect(container.textContent).toContain("First session");
   });
 
@@ -246,19 +246,8 @@ describe("Coding Sessions tabs", () => {
 
   it("renders usage inside this feature when the URL asks for that tab", async () => {
     await render("/coding-sessions?tab=usage");
-    expect(container.querySelector("[data-testid='codex-usage-panel']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='usage-tab']")).not.toBeNull();
     expect(container.querySelector("[data-testid='sessions-table']")).toBeNull();
-  });
-
-  it("says plainly that a provider has no usage source instead of hiding it", async () => {
-    await render("/coding-sessions?tab=usage");
-    const claudeChip = findButton("Claude Code");
-    await act(async () => {
-      claudeChip.click();
-    });
-    expect(container.querySelector("[data-testid='usage-no-source']")?.textContent).toContain(
-      "No usage source for Claude Code yet",
-    );
   });
 
   it("puts the operational blocks on the settings tab, not over the list", async () => {

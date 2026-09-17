@@ -139,6 +139,15 @@ class CloudFacts:
     messages: int | None = None
     last_position: int | None = None
     last_message_at: str | None = None
+    # The server's OWN claim about its half, carried through so the dialog can
+    # show what AI Matrx says beside what this Mac found. The server leaves
+    # {transcript_entries} as a literal placeholder on purpose -- it cannot see
+    # the transcript and will not fabricate a count -- so the engine fills it
+    # before this ever reaches a person. A brace on screen is a broken
+    # sentence, so an unfilled one is dropped rather than displayed.
+    cloud_verdict: str | None = None
+    cloud_sentence: str | None = None
+    cloud_remedy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +183,26 @@ class Verdict:
 
 def _n(value: int | None) -> int:
     return int(value) if value is not None else 0
+
+
+def fill_server_sentence(sentence: str | None, *, transcript_entries: int | None) -> str | None:
+    """Substitute the one placeholder the server deliberately leaves unfilled.
+
+    aidream renders its cloud-half sentence with `{transcript_entries}` intact
+    because the server cannot see this Mac's transcript and refuses to invent a
+    number. This engine can see it, so it fills it here. If anything is still
+    unsubstituted afterwards -- a placeholder a newer server added that this
+    build does not know -- the sentence is DROPPED rather than shown: a curly
+    brace on screen is a broken sentence, and a broken sentence is how a screen
+    starts lying again.
+    """
+    if not sentence:
+        return None
+    if transcript_entries is not None:
+        sentence = sentence.replace("{transcript_entries}", str(transcript_entries))
+    if "{" in sentence:
+        return None
+    return sentence
 
 
 def ago(then: str | None, now: datetime) -> str:
@@ -550,6 +579,9 @@ def as_payload(facts: SyncFacts, verdict: Verdict, *, now: datetime) -> dict[str
             "messages": facts.cloud.messages,
             "last_position": facts.cloud.last_position,
             "last_message_at": facts.cloud.last_message_at,
+            "cloud_verdict": facts.cloud.cloud_verdict,
+            "cloud_sentence": facts.cloud.cloud_sentence,
+            "cloud_remedy": facts.cloud.cloud_remedy,
         },
         "mirror": {
             "checked": facts.mirror.checked,

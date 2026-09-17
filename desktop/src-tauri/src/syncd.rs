@@ -33,6 +33,23 @@ const WORLD: &str = if cfg!(debug_assertions) {
     "live"
 };
 
+/// The world this host exposes and passes to its daemon.
+///
+/// A packaged smoke app is still a release binary, but its private test home
+/// must never select the live Keychain service.  The existing isolated-test
+/// authority is the only exception to the normal debug/live build split.
+fn syncd_world_for(isolated_test: bool) -> &'static str {
+    if isolated_test {
+        "dev"
+    } else {
+        WORLD
+    }
+}
+
+fn syncd_world() -> &'static str {
+    syncd_world_for(crate::isolated_test_run())
+}
+
 /// What the webview needs to talk to the daemon itself: the loopback base URL and the **read**
 /// token. Deliberately no control token, and no socket path — a browser context can use neither.
 #[derive(Debug, Clone, Serialize)]
@@ -189,7 +206,7 @@ pub fn syncd_client_config() -> SyncdClientConfig {
     SyncdClientConfig {
         base_url: base_url(),
         read_token,
-        world: WORLD,
+        world: syncd_world(),
     }
 }
 
@@ -351,6 +368,7 @@ pub fn ensure_running() {
 
     let mut command = std::process::Command::new(&binary);
     command
+        .args(["--world", syncd_world()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -388,6 +406,7 @@ pub fn ensure_running() {
                 let mut retry = std::process::Command::new(&binary);
                 use std::os::windows::process::CommandExt;
                 retry
+                    .args(["--world", syncd_world()])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -440,6 +459,12 @@ mod tests {
                 "live"
             }
         );
+    }
+
+    #[test]
+    fn an_isolated_packaged_smoke_run_selects_dev_for_config_and_spawn() {
+        assert_eq!(syncd_world_for(true), "dev");
+        assert_eq!(syncd_world_for(false), WORLD);
     }
 
     #[test]

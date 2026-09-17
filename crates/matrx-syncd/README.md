@@ -73,7 +73,9 @@ documentation and are **unproven by execution**. They are named here rather than
 Every command below was run on this machine, in the **dev world** (`~/.matrx-dev`, daemon band
 22260–22279), against the debug build at
 `desktop/src-tauri/target/debug/matrx-syncd`. The packaged app and its live world were never
-touched (Hard Rule 9).
+touched (Hard Rule 9). The isolated packaged smoke harness also selects the dev world explicitly,
+even though its app binary is a release build, so its private home never selects the live Keychain
+service.
 
 ### Start, discovery and file modes
 

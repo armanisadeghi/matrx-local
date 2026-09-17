@@ -105,8 +105,9 @@ def test_smoke_holds_build_lock_through_artifact_consumption() -> None:
     build_branch = packaged.index('if [ "$NO_BUILD" -eq 0 ]')
     find_binary = packaged.index("bin=\"$(find_app_binary)\"")
     launch = packaged.index('env "${SMOKE_ISOLATED_ENV[@]}" "$bin"')
-    shutdown = packaged.index('terminate_pid "$pid"')
+    shutdown = packaged.index("smoke_stop_owned_app")
+    syncd_cleanup = packaged.index("smoke_cleanup_private_syncd", shutdown)
     release = packaged.rindex("smoke_release_build_lock")
 
     assert early_acquire < marker_read
-    assert acquire < build_branch < find_binary < launch < shutdown < release
+    assert acquire < build_branch < find_binary < launch < shutdown < syncd_cleanup < release

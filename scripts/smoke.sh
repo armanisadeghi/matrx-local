@@ -45,8 +45,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 source "$REPO_ROOT/scripts/smoke-environment.sh"
 source "$REPO_ROOT/scripts/smoke-http.sh"
+source "$REPO_ROOT/scripts/smoke-syncd.sh"
 SMOKE_BUILD_LOCK_OWNED=0
+# The full app/daemon cleanup handler is installed after its helpers below.
+# Keep this minimal handler for preflight exits that happen before then.
 trap smoke_release_build_lock EXIT
+SMOKE_SYNCD_CLEANUP_NEEDED=0
+SMOKE_APP_CLEANUP_NEEDED=0
+SMOKE_APP_PID=""
+SMOKE_APP_QUIESCED=1
+SMOKE_APP_GRACEFUL=1
 
 MODE="${1:-web}"
 [[ "$MODE" == -* ]] && MODE="web"
@@ -126,6 +134,71 @@ FAILURES=0
 
 record_fail() { FAILURES=$((FAILURES + 1)); echo "## ❌ $1" >> "$SUMMARY"; echo >> "$SUMMARY"; { [ -n "${2:-}" ] && { echo '```'; echo "$2"; echo '```'; echo; }; } >> "$SUMMARY"; fail "$1"; }
 record_ok()   { echo "## ✅ $1" >> "$SUMMARY"; echo >> "$SUMMARY"; ok "$1"; }
+
+smoke_cleanup_private_syncd() {
+  [ "$SMOKE_SYNCD_CLEANUP_NEEDED" -eq 1 ] || return 0
+  if smoke_shutdown_private_syncd "$SMOKE_MATRX_HOME"; then
+    SMOKE_SYNCD_CLEANUP_NEEDED=0
+    record_ok "packaged: private dev sync daemon stopped and removed its boundary"
+    return 0
+  fi
+  record_fail "packaged: private sync daemon cleanup failed"
+  return 1
+}
+
+smoke_stop_owned_app() {
+  [ "$SMOKE_APP_CLEANUP_NEEDED" -eq 1 ] || return 0
+  local waited=0 forced_waited=0
+  if pid_alive "$SMOKE_APP_PID"; then
+    terminate_pid "$SMOKE_APP_PID"
+    while pid_alive "$SMOKE_APP_PID" && [ "$waited" -lt 40 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
+  if pid_alive "$SMOKE_APP_PID"; then
+    force_kill_pid "$SMOKE_APP_PID"
+    while pid_alive "$SMOKE_APP_PID" && [ "$forced_waited" -lt 5 ]; do
+      sleep 1
+      forced_waited=$((forced_waited + 1))
+    done
+  fi
+  if pid_alive "$SMOKE_APP_PID"; then
+    SMOKE_APP_QUIESCED=0
+    record_fail "packaged: app remained alive after its owned force-kill"
+    return 1
+  fi
+  SMOKE_APP_CLEANUP_NEEDED=0
+  SMOKE_APP_QUIESCED=1
+  if [ "$forced_waited" -gt 0 ] || [ "$waited" -ge 40 ]; then
+    SMOKE_APP_GRACEFUL=0
+    record_fail "packaged: app did not exit within 40s of a graceful quit signal (had to force-kill)"
+    return 1
+  fi
+  SMOKE_APP_GRACEFUL=1
+  record_ok "packaged: app exited cleanly on a graceful quit signal in ${waited}s"
+  return 0
+}
+
+smoke_on_exit() {
+  local original_status="$?" cleanup_status=0
+  trap - EXIT
+  if ! smoke_stop_owned_app; then
+    cleanup_status=1
+  fi
+  if [ "$SMOKE_APP_QUIESCED" -eq 1 ]; then
+    smoke_cleanup_private_syncd || cleanup_status=1
+  else
+    cleanup_status=1
+  fi
+  smoke_release_build_lock
+  if [ "$original_status" -ne 0 ] || [ "$cleanup_status" -ne 0 ]; then
+    exit 1
+  fi
+  exit 0
+}
+
+trap smoke_on_exit EXIT
 
 # ── Log triage ───────────────────────────────────────────────────────────────
 # Lines that mean "this build is broken". Kept deliberately tight: a smoke
@@ -413,6 +486,11 @@ run_packaged() {
   fi
   env "${SMOKE_ISOLATED_ENV[@]}" "$bin" > "$log" 2>&1 &
   local pid=$!
+  SMOKE_APP_PID="$pid"
+  SMOKE_APP_CLEANUP_NEEDED=1
+  SMOKE_APP_QUIESCED=0
+  SMOKE_APP_GRACEFUL=0
+  SMOKE_SYNCD_CLEANUP_NEEDED=1
 
   # Give it a real startup window: Rust setup + sidecar spawn + engine boot.
   # A cold machine may load the Whisper model and a large local LLM before the
@@ -540,17 +618,9 @@ $(smoke_http_diagnostic "$RUN_DIR/health.curl.log")"
   # a user would — the app's own graceful shutdown chain is what we're testing.
   sleep 8
   info "Quitting the app and checking for orphans…"
-  terminate_pid "$pid"
-  local t=0
-  # graceful_shutdown_sync contains a 20-second engine TERM→KILL ladder and
-  # the detached ownership safety net completes at T+26s. Allow both contracts
-  # to finish, with headroom for Whisper/LLM teardown, before declaring a hang.
-  while pid_alive "$pid" && [ $t -lt 40 ]; do sleep 1; t=$((t + 1)); done
-  if pid_alive "$pid"; then
-    force_kill_pid "$pid"
-    record_fail "packaged: app did not exit within 40s of a graceful quit signal (had to force-kill)"
-  else
-    record_ok "packaged: app exited cleanly on a graceful quit signal in ${t}s"
+  smoke_stop_owned_app || true
+  if [ "$SMOKE_APP_QUIESCED" -eq 1 ]; then
+    smoke_cleanup_private_syncd || true
   fi
 
   # Lifecycle-ownership contract (CLAUDE.md): when the app goes down it takes

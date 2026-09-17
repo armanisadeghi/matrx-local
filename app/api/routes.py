@@ -8,8 +8,24 @@ from pathlib import Path
 from typing import Optional
 
 def _read_version() -> str:
-    """Read version — tries importlib.metadata first (works in packaged binary),
-    then falls back to parsing pyproject.toml (works in dev mode and PyInstaller)."""
+    """Resolve the version of the build **this process is running**.
+
+    Called exactly once, at import, and the result is frozen into
+    ``_APP_VERSION`` for the life of the process — that is the whole contract.
+    An auto-update replaces the app bundle underneath a running engine, so any
+    re-read after boot would report the build on DISK while this process keeps
+    serving the build it started with. ``/health`` answering "which build is
+    serving you" with a number read off replaceable files is the lie this
+    function must never tell (measured 2026-09-17: the bundle went to 1.4.147
+    at 03:30 while the engine spawned at 01:28 was still serving 1.4.145 —
+    correct, and it must stay correct).
+
+    Guard: ``tests/unit/test_engine_health_version_is_running_build.py``.
+
+    Resolution order: ``importlib.metadata`` first (works when the package is
+    installed — dev, and PyInstaller when the dist-info is bundled), then
+    ``pyproject.toml`` from the frozen bundle or the source tree.
+    """
     # importlib.metadata works when the package is installed (dev: uv install, prod: PyInstaller)
     try:
         from importlib.metadata import version as _meta_version, PackageNotFoundError
@@ -43,6 +59,10 @@ def _read_version() -> str:
 
     return "0.0.0"
 
+#: The build serving this process — snapshotted at import, never re-read.
+#: THE one version resolver for the engine (`/health`, `/version`, the
+#: extension pairing handshake, instance registration). Read it; never call
+#: `_read_version()` again at runtime.
 _APP_VERSION = _read_version()
 # Process identity, distinct from the durable device/app instance.
 _ENGINE_BOOT_ID = str(uuid.uuid4())

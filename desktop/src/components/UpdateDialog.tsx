@@ -17,6 +17,7 @@ import { Badge, Button, Progress } from "@ai-matrx/design-system";
 import { Download, RefreshCw, Loader2, ArrowUpCircle, X, CheckCircle2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";
+import { useVersionStateOrNull } from "@/contexts/VersionStateContext";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
@@ -37,19 +38,28 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
   // says so, because `*_length` almost everywhere else in this fleet is a
   // CHARACTER count (see the note on UpdateStatus in lib/sidecar.ts).
   const totalBytes = status?.content_length;
-  const isInstalled = status?.status === "installed";
+  // Same rule as the banner: "installed but not running" is a derived truth
+  // from the bundle on disk, not an in-memory status that a reload can lose.
+  const versions = useVersionStateOrNull();
+  const isInstalled =
+    (versions?.restartRequired ?? false) || status?.status === "installed";
+  const pendingVersion = versions?.pendingVersion ?? status?.version ?? null;
   const showAsAvailable =
     status?.status === "available" ||
     (status?.status === "downloading" && !showDownloadProgress);
 
+  // "Ready to Install" was a lie in the other direction: it is already
+  // installed on disk. What is left is the restart.
   const titleText = isInstalled
-    ? "Ready to Install"
+    ? "Restart to Finish Update"
     : isDownloadingUi
       ? "Downloading Update"
       : "Update Available";
 
   const descriptionText = isInstalled
-    ? "The update has been downloaded. Restart to apply the new version."
+    ? pendingVersion
+      ? `Version ${pendingVersion.replace(/^v/i, "")} is installed on disk. This window keeps running ${APP_VERSION} until AI Matrx restarts.`
+      : "A newer build is installed on disk. AI Matrx keeps running the previous build until it restarts."
     : isDownloadingUi
       ? "Downloading the update…"
       : "A new version of AI Matrx is available. If you already checked for updates, the download may be running in the background — tap Install to see progress or finish setup.";
@@ -71,16 +81,23 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
           <div className="space-y-4 py-2">
-            {status?.version && (
+            {/* Same vocabulary as About: "Running" is never called
+                "Current", because after an install the current build on disk
+                is the one that is NOT running. */}
+            {pendingVersion && (
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Current</span>
+                  <span className="text-muted-foreground">Running</span>
                   <Badge variant="secondary">{APP_VERSION}</Badge>
                 </div>
                 <span className="text-muted-foreground">→</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">New</span>
-                  <Badge variant="default">v{status.version}</Badge>
+                  <span className="text-muted-foreground">
+                    {isInstalled ? "Installed on disk" : "New"}
+                  </span>
+                  <Badge variant="default">
+                    v{pendingVersion.replace(/^v/i, "")}
+                  </Badge>
                 </div>
               </div>
             )}

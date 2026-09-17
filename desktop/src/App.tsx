@@ -59,6 +59,10 @@ import { CompactRecorderWindow } from "@/components/CompactRecorderWindow";
 import { MenuEventBridge } from "@/components/MenuEventBridge";
 import { PermissionsProvider } from "@/contexts/PermissionsContext";
 import { AccessHealthProvider } from "@/contexts/AccessHealthContext";
+import {
+  VersionStateProvider,
+  useVersionFactReporter,
+} from "@/contexts/VersionStateContext";
 import { AudioDevicesProvider } from "@/contexts/AudioDevicesContext";
 import { LlmProvider } from "@/contexts/LlmContext";
 import { WakeWordProvider } from "@/contexts/WakeWordContext";
@@ -128,6 +132,11 @@ if (
 export default function App() {
   return (
     <ErrorBoundary>
+      {/* ONE owner of "which build is which" — mounted above the startup,
+          first-run and login screens so every ambient version chip is honest
+          before the engine is even up, and so a build sitting on disk waiting
+          for a restart can never be read as the build that is running. */}
+      <VersionStateProvider>
       <DevTerminalProvider>
         <DownloadManagerProvider>
           {/* Media: ONE library store, ONE vault store, ONE action set + the
@@ -177,6 +186,7 @@ export default function App() {
           </MediaGenProvider>
         </DownloadManagerProvider>
       </DevTerminalProvider>
+      </VersionStateProvider>
     </ErrorBoundary>
   );
 }
@@ -204,6 +214,15 @@ function AppInner() {
 
   const notif = useNotifications();
   const [updateState, updateActions] = useAutoUpdate();
+
+  // The engine's own `/health` version and the updater's verdict are the two
+  // facts only this shell can see. They go to the one version owner so About,
+  // the update banner and every ambient chip read the same three labelled
+  // builds instead of each inventing an answer.
+  useVersionFactReporter({
+    engineVersion,
+    updateStatus: updateState.status,
+  });
 
   // ---------------------------------------------------------------------------
   // Compact recorder mode
@@ -568,7 +587,6 @@ function AppInner() {
           <Settings
             engineStatus={status}
             engineUrl={url}
-            engineVersion={engineVersion}
             onRefresh={refresh}
             auth={auth}
             theme={themeCtx.theme}

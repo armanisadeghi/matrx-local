@@ -1,8 +1,13 @@
 """Characterization: the /extension/rpc HANDLERS registry (matrx-extend surface).
 
 Pins the exact set of registered RPC commands and the routing/validation
-behavior of the `tool` handler as of 2026-07-10. The Chrome extension speaks
-this contract — any change here must be coordinated with matrx-extend
+behavior of the `tool` handler as of 2026-08-17 (cc90625ba added the
+`coding_runtime.*` commands for the local Claude Code runtime — see that
+commit's message: "Cloud->local relay is the EXISTING per-user Supabase
+Broadcast bridge channel: coding_runtime.{capabilities,start,status,cancel,
+resumable} register in the same transport-agnostic command registry as the
+tool dispatcher."). The Chrome extension speaks this contract — any change
+here must be coordinated with matrx-extend
 (/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md).
 
 Runs without an engine, network, or credentials. `dispatch` is monkeypatched
@@ -20,8 +25,18 @@ from app.api import extension_handlers
 from app.api.extension_handlers import HANDLERS, register
 from app.tools.types import ToolResult, ToolResultType
 
-# The extension RPC command surface — exact, as of 2026-07-10.
-EXPECTED_COMMANDS = {"health", "version", "capabilities", "tool"}
+# The extension RPC command surface — exact, as of 2026-08-17.
+EXPECTED_COMMANDS = {
+    "health",
+    "version",
+    "capabilities",
+    "tool",
+    "coding_runtime.capabilities",
+    "coding_runtime.start",
+    "coding_runtime.status",
+    "coding_runtime.cancel",
+    "coding_runtime.resumable",
+}
 
 # handle_* signatures take (args, req) but none of the current handlers read
 # the Request object — a plain sentinel is sufficient and keeps this suite

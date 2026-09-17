@@ -79,3 +79,56 @@ async def coding_runtime_resumable(
     if not isinstance(provider_session_id, str) or not provider_session_id:
         raise ValueError("provider_session_id is required")
     return await get_local_claude_runtime().resumable(provider_session_id)
+
+
+# ---------------------------------------------------------------------------
+# Per-conversation sync truth, reachable from the web.
+#
+# The browser cannot see this Mac's transcript, delivery ledger or local copy,
+# so the web half of the sync panel can only ever show the cloud's side. These
+# two commands let the /work conversation page ask the owning Mac for the whole
+# truth and to repair it -- over the SAME bridge channel that already carries
+# the runtime commands above. If the Mac is asleep, the caller's timeout is the
+# honest answer ("not reachable"), never a claim that everything is in sync.
+
+
+@register("coding_session.sync_truth")
+async def coding_session_sync_truth(
+    args: Dict[str, Any], req: Optional[Request]
+) -> Dict[str, Any]:
+    from app.services.coding_sessions.sync_truth_reader import sync_truth
+
+    provider_session_id = args.get("provider_session_id")
+    if not isinstance(provider_session_id, str) or not provider_session_id:
+        raise ValueError("provider_session_id is required")
+    result = await sync_truth(provider_session_id)
+    if result is None:
+        return {
+            "found": False,
+            "detail": (
+                "That conversation is not on this Mac, and AI Matrx could not "
+                "be asked about it from here."
+            ),
+        }
+    return {"found": True, **result}
+
+
+@register("coding_session.reconcile")
+async def coding_session_reconcile(
+    args: Dict[str, Any], req: Optional[Request]
+) -> Dict[str, Any]:
+    from app.services.coding_sessions.sync_truth_reader import reconcile
+
+    provider_session_id = args.get("provider_session_id")
+    if not isinstance(provider_session_id, str) or not provider_session_id:
+        raise ValueError("provider_session_id is required")
+    result = await reconcile(provider_session_id)
+    if result is None:
+        return {
+            "found": False,
+            "detail": (
+                "That conversation is not on this Mac, so there is nothing "
+                "here to reconcile."
+            ),
+        }
+    return {"found": True, **result}

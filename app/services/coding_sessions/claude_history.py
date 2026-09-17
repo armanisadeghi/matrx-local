@@ -154,6 +154,77 @@ def _safe_json(raw: bytes) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+@dataclass(frozen=True)
+class TranscriptCensus:
+    """How many entries a transcript file really holds, and which was last.
+
+    This is the same definition of "an entry" the importer uses a few hundred
+    lines below -- a line that is within MAX_LINE_BYTES and parses as a JSON
+    object -- deliberately sharing `_safe_json` and `MAX_LINE_BYTES` with it so
+    the number a person is shown can never drift from the number that actually
+    gets delivered. Counting entries is the whole point: the old diagnosis
+    reported only the file's byte size, which is why a 3526-entry transcript
+    could sit next to 55 delivered entries and still read as "held".
+    """
+
+    entries: int
+    unreadable_lines: int
+    last_entry_id: str | None
+    last_entry_at: str | None
+    bytes: int
+
+
+def transcript_census(path: Path) -> TranscriptCensus:
+    """Count a Claude transcript's entries without building any envelopes."""
+    entries = 0
+    unreadable = 0
+    sequence = 0
+    last_entry_id: str | None = None
+    last_entry_at: str | None = None
+    total_bytes = 0
+    with path.open("rb") as handle:
+        while True:
+            raw = handle.readline(MAX_LINE_BYTES + 1)
+            if not raw:
+                break
+            total_bytes += len(raw)
+            if len(raw) > MAX_LINE_BYTES:
+                # Drain the rest of the oversized line exactly as the importer
+                # does, so the sequence numbers stay comparable.
+                while not raw.endswith(b"\n"):
+                    fragment = handle.readline(65_536)
+                    if not fragment:
+                        break
+                    total_bytes += len(fragment)
+                    raw = fragment
+                unreadable += 1
+                sequence += 1
+                continue
+            payload = _safe_json(raw)
+            if payload is None:
+                unreadable += 1
+                sequence += 1
+                continue
+            candidate = payload.get("uuid")
+            last_entry_id = (
+                candidate
+                if isinstance(candidate, str) and candidate
+                else f"line:{sequence}"
+            )
+            timestamp = payload.get("timestamp")
+            if isinstance(timestamp, str) and timestamp:
+                last_entry_at = timestamp
+            entries += 1
+            sequence += 1
+    return TranscriptCensus(
+        entries=entries,
+        unreadable_lines=unreadable,
+        last_entry_id=last_entry_id,
+        last_entry_at=last_entry_at,
+        bytes=total_bytes,
+    )
+
+
 def _aggregate_revision(parts: list[tuple[str, str, int]]) -> str:
     digest = hashlib.sha256()
     for stream_key, stream_digest, stream_bytes in parts:
@@ -1484,7 +1555,9 @@ __all__ = [
     "ClaudeHistoryImportRequest",
     "ClaudeHistoryPrepareRequest",
     "ClaudeHistoryPrepareSelection",
+    "TranscriptCensus",
     "ClaudeHistorySelection",
     "account_label",
     "derive_account_key",
+    "transcript_census",
 ]

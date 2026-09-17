@@ -48,8 +48,11 @@ from app.services.coding_sessions.claude_session_index import (
     MAX_INDEX_FILE_BYTES,
     MAX_INDEX_FILES,
     ClaudeSessionIndexEntry,
+    LivePins,
     entry_from_record,
     merge_entries,
+    record_focused_at,
+    record_is_starred,
 )
 from app.services.coding_sessions.claude_usage import (
     PENDING_STAMP,
@@ -59,11 +62,10 @@ from app.services.coding_sessions.claude_usage import (
     read_usage_increment,
 )
 
-# The transcript_usage / transcript_usage_cursor tables (2026-09-17, CS-24)
-# are ADDITIVE: _migrate creates them on any write connection, so an existing
-# store gains them without the reset a version bump would force (a reset
-# re-reads 67,224 record files; the usage tables need none of that).
-SCHEMA_VERSION = 1
+# 2: is_starred (pin truth). The transcript_usage / transcript_usage_cursor
+# tables (2026-09-17, CS-24) are ADDITIVE: _migrate creates them on any write
+# connection, so they never need a version bump of their own.
+SCHEMA_VERSION = 2
 
 # Transcript bytes one refresh may read for usage before handing the rest to
 # the next refresh. 10 GB of transcripts on this Mac (2026-09-17) become
@@ -123,6 +125,11 @@ _RECORD_COLUMNS = (
     "worktree_name",
     "is_archived",
     "local_cwd",
+    # The app's own pin field, and the signal that identifies which
+    # account+org scope the app is signed into. Both are per RECORD FILE:
+    # pins are per scope, so the winning record alone cannot answer them.
+    "is_starred",
+    "lastrecord_focused_at",
     "unreadable",
 )
 
@@ -162,6 +169,8 @@ class ClaudeIndexStore:
                 worktree_name TEXT,
                 is_archived INTEGER,
                 local_cwd TEXT,
+                is_starred INTEGER,
+                lastrecord_focused_at INTEGER NOT NULL DEFAULT 0,
                 unreadable INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS records_session
@@ -182,7 +191,15 @@ class ClaudeIndexStore:
                 git_branch TEXT,
                 worktree_name TEXT,
                 is_archived INTEGER,
-                local_cwd TEXT
+                local_cwd TEXT,
+                -- The pin, resolved at refresh time from the record in the
+                -- scope the app is SIGNED INTO — not from the winning record,
+                -- which is whichever account touched the conversation last.
+                -- ``in_active_scope`` separates "the app says not pinned"
+                -- from "the app has never seen this conversation": only the
+                -- first is an unpin the server should be told about.
+                in_active_scope INTEGER NOT NULL DEFAULT 0,
+                active_is_starred INTEGER
             );
             CREATE TABLE IF NOT EXISTS transcripts (
                 session_id TEXT PRIMARY KEY,
@@ -316,7 +333,8 @@ class ClaudeIndexStore:
                 rows = connection.execute(
                     "SELECT cli_session_id, path, mtime_ns, record_count, "
                     "last_activity_at, title, title_source, workspace_name, "
-                    "git_branch, worktree_name, is_archived, local_cwd FROM sessions"
+                    "git_branch, worktree_name, is_archived, local_cwd, "
+                    "in_active_scope, active_is_starred FROM sessions"
                 ).fetchall()
                 paths_by_session: dict[str, list[Path]] = {}
                 if record_paths:
@@ -334,9 +352,15 @@ class ClaudeIndexStore:
 
         record_counts: dict[str, int] = {}
         candidates: list[tuple[Path, int, ClaudeSessionIndexEntry]] = []
+        # The pin observation, rebuilt from the scope-resolved columns so the
+        # store and the full scan apply ONE rule (LivePins) to one input.
+        observed: dict[str, bool | None] = {}
         for row in rows:
             session_id = str(row["cli_session_id"])
             record_counts[session_id] = int(row["record_count"] or 1)
+            if int(row["in_active_scope"] or 0):
+                starred = row["active_is_starred"]
+                observed[session_id] = None if starred is None else bool(starred)
             local_cwd = row["local_cwd"]
             archived = row["is_archived"]
             candidates.append(
@@ -359,7 +383,9 @@ class ClaudeIndexStore:
         # The ledger is read at LOAD time, not refresh time: it is one small
         # JSON file, and a pin or a rename the sync agent lands there must
         # reach the screen without waiting for 67,224 files to be re-stated.
-        entries = merge_entries(candidates, ledger=ledger)
+        entries = merge_entries(
+            candidates, ledger=ledger, live_pins=LivePins(observed)
+        )
         if record_paths:
             entries = {
                 session_id: replace(
@@ -419,11 +445,13 @@ class ClaudeIndexStore:
                 INSERT INTO sessions (
                     cli_session_id, path, mtime_ns, record_count,
                     last_activity_at, title, title_source, workspace_name,
-                    git_branch, worktree_name, is_archived, local_cwd
+                    git_branch, worktree_name, is_archived, local_cwd,
+                    in_active_scope, active_is_starred
                 )
                 SELECT cli_session_id, path, mtime_ns, record_count,
                        last_activity_at, title, title_source, workspace_name,
-                       git_branch, worktree_name, is_archived, local_cwd
+                       git_branch, worktree_name, is_archived, local_cwd,
+                       0, NULL
                 FROM (
                   SELECT *, ROW_NUMBER() OVER (
                       PARTITION BY cli_session_id
@@ -435,6 +463,44 @@ class ClaudeIndexStore:
                 )
                 WHERE rank_in_session = 1
                 """
+            )
+            # Resolve the pin from the scope the app is signed into. The
+            # winning record above is the one touched most recently by ANY
+            # account; the pin belongs to one specific scope, so it is a
+            # second pass. See :func:`claude_session_index.active_index_scope`.
+            scope_row = connection.execute(
+                "SELECT path FROM records WHERE lastrecord_focused_at > 0 "
+                "AND cli_session_id IS NOT NULL AND unreadable = 0 "
+                "ORDER BY lastrecord_focused_at DESC, path ASC LIMIT 1"
+            ).fetchone()
+            active_scope = (
+                str(Path(str(scope_row["path"])).parent) if scope_row else None
+            )
+            if active_scope:
+                connection.execute(
+                    """
+                    UPDATE sessions SET
+                        in_active_scope = 1,
+                        active_is_starred = (
+                            SELECT r.is_starred FROM records r
+                            WHERE r.cli_session_id = sessions.cli_session_id
+                              AND r.unreadable = 0
+                              AND r.path LIKE ? || '/%'
+                            ORDER BY r.path ASC LIMIT 1
+                        )
+                    WHERE EXISTS (
+                        SELECT 1 FROM records r
+                        WHERE r.cli_session_id = sessions.cli_session_id
+                          AND r.unreadable = 0
+                          AND r.path LIKE ? || '/%'
+                    )
+                    """,
+                    (active_scope, active_scope),
+                )
+            connection.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES "
+                "('active_scope', ?)",
+                (active_scope or "",),
             )
             accounts = {
                 str(row["account"]): int(row["n"])
@@ -868,6 +934,8 @@ def read_record_rows(
             "worktree_name": None,
             "is_archived": None,
             "local_cwd": None,
+            "is_starred": None,
+            "lastrecord_focused_at": 0,
             "unreadable": 0,
         }
         if size > MAX_INDEX_FILE_BYTES:
@@ -901,6 +969,12 @@ def read_record_rows(
                 "worktree_name": entry.worktree_name,
                 "is_archived": None if entry.is_archived is None else int(entry.is_archived),
                 "local_cwd": str(entry.local_cwd) if entry.local_cwd else None,
+                "is_starred": (
+                    None
+                    if record_is_starred(record) is None
+                    else int(record_is_starred(record))
+                ),
+                "lastrecord_focused_at": record_focused_at(record),
             }
         )
         rows.append(row)

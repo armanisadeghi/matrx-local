@@ -1,0 +1,25 @@
+{
+  "_source": "Claude desktop session-index record, captured 2026-09-17 from the app's active account+org scope. Paths/ids scrubbed; KEY NAMES and value types are verbatim. `isStarred` is the app's pin field (verified 28/28 against the app's own reported pin state).",
+  "_observed": {
+    "records_in_scope": 1568,
+    "isStarred_true": 218,
+    "isStarred_false": 19,
+    "isStarred_absent": 1331
+  },
+  "record": {
+    "sessionId": "local_00000000-0000-0000-0000-000000000000",
+    "cliSessionId": "00000000-0000-0000-0000-000000000000",
+    "cwd": "/example/workspace",
+    "originCwd": "/example/workspace",
+    "lastFocusedAt": 1789231055948,
+    "createdAt": 1789002704979,
+    "lastActivityAt": 1789002709853,
+    "model": "claude-fable-5-1",
+    "effort": "low",
+    "isArchived": false,
+    "title": "Example conversation",
+    "titleSource": "auto",
+    "permissionMode": "auto",
+    "isStarred": false
+  }
+}

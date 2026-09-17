@@ -3,6 +3,15 @@
  *
  * Appears when an update is available or ready to restart. Background downloads
  * do not show a progress bar here until the user taps Install / View progress.
+ *
+ * Two different things are on screen here, and only one of them is a
+ * notification. "Update available" / "Downloading" are notifications: the user
+ * may dismiss them. "A newer build is installed and you are still running the
+ * old one" is a STATE — derived from the bundle on disk, not from an in-memory
+ * updater status — so it cannot be dismissed, it comes back in every window and
+ * after every renderer reload, and it carries the one-click restart. That state
+ * silently evaporating is what left About saying "No updates available" on
+ * 2026-09-17 while 1.4.147 sat on disk and 1.4.145 kept running.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +19,7 @@ import { Button, Progress } from "@ai-matrx/design-system";
 import { ArrowUpCircle, Download, RefreshCw, X, Loader2 } from "lucide-react";
 import type { AutoUpdateState, AutoUpdateActions } from "@/hooks/use-auto-update";
 import { APP_VERSION } from "@/lib/app-version";
+import { useVersionStateOrNull } from "@/contexts/VersionStateContext";
 
 // THE package byte-size formatter (`@ai-matrx/kit/format`, duplication
 // census H1 2026-09-07). This repo alone carried THIRTEEN `formatBytes`
@@ -26,8 +36,16 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const dismissedVersionRef = useRef<string | null>(null);
+  const versions = useVersionStateOrNull();
 
-  const isInstalled = status?.status === "installed";
+  // The derived truth wins over the ephemeral status: the bundle on disk is
+  // ahead of this process whether or not this renderer watched it happen.
+  // EITHER signal is enough, and neither may mask the other: the derived state
+  // is the durable one, the updater status is the instant one, and outside the
+  // provider there is no derived state at all.
+  const isInstalled =
+    (versions?.restartRequired ?? false) || status?.status === "installed";
+  const pendingVersion = versions?.pendingVersion ?? status?.version ?? null;
   const isDownloadingUi = showDownloadProgress && status?.status === "downloading";
   // BYTES. The Tauri updater's `content_length` IS the HTTP Content-Length of
   // the artifact; the byte-size formatter is right here and the local name
@@ -39,6 +57,14 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     (status?.status === "downloading" && !showDownloadProgress);
 
   useEffect(() => {
+    // A pending restart outranks everything, including a dismissal and an
+    // "up to date" verdict that is only true of the disk.
+    if (isInstalled) {
+      setVisible(true);
+      setDismissed(false);
+      return;
+    }
+
     if (status?.status === "up_to_date") {
       setVisible(false);
       return;
@@ -76,8 +102,13 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     actions.openDialog();
   };
 
-  if (!visible || dismissed) return null;
-  if (!showAsAvailable && !isDownloadingUi && !isInstalled) return null;
+  // The restart state renders on the FIRST paint, with no effect in between:
+  // it is derived from the bundle on disk, and a state that has to wait for an
+  // effect is a state that a fast reload can skip.
+  if (!isInstalled) {
+    if (!visible || dismissed) return null;
+    if (!showAsAvailable && !isDownloadingUi) return null;
+  }
 
   return (
     <div
@@ -103,18 +134,19 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold leading-tight">
             {isInstalled
-              ? "Update ready to install"
+              ? (versions?.restartHeadline ??
+                "Update installed — restart AI Matrx to finish")
               : isDownloadingUi
                 ? "Downloading update…"
                 : "Update available"}
           </p>
-          {status?.version && (
+          {(pendingVersion ?? status?.version) && (
             <p className="text-xs text-muted-foreground mt-0.5">
               {isInstalled
-                ? `v${status.version} — restart to apply`
+                ? `v${(pendingVersion ?? "").replace(/^v/i, "")} is installed on disk — this window still runs ${APP_VERSION}`
                 : isDownloadingUi
-                  ? `v${status.version}`
-                  : `${APP_VERSION} → v${status.version}`}
+                  ? `v${status?.version}`
+                  : `${APP_VERSION} → v${status?.version}`}
             </p>
           )}
           {showAsAvailable && !isDownloadingUi && !isInstalled && (
@@ -124,7 +156,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
           )}
         </div>
 
-        {!isDownloadingUi && (
+        {!isDownloadingUi && !isInstalled && (
           <button
             onClick={handleDismiss}
             className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"

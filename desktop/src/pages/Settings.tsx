@@ -51,10 +51,11 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
+import { VersionFacts } from "@/components/settings/VersionFacts";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
-import { APP_VERSION } from "@/lib/app-version";
+import { useVersionState } from "@/contexts/VersionStateContext";
 import {
   Select,
   SelectContent,
@@ -219,7 +220,6 @@ const VERDICT_STYLES: Record<
 interface SettingsProps {
   engineStatus: EngineStatus;
   engineUrl: string | null;
-  engineVersion: string;
   onRefresh: () => void;
   auth: AuthActions;
   theme: Theme;
@@ -231,7 +231,6 @@ interface SettingsProps {
 export function Settings({
   engineStatus,
   engineUrl,
-  engineVersion,
   onRefresh,
   auth,
   theme,
@@ -240,6 +239,10 @@ export function Settings({
   updateActions,
 }: SettingsProps) {
   const location = useLocation();
+  // THE version helper. About must never show one unlabelled number: there are
+  // three simultaneous truths (running / installed on disk / latest offered)
+  // and a restart is what closes the gap between the first two.
+  const versions = useVersionState();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [activeTab, setActiveTab] = useState(() => {
     const params = new URLSearchParams(location.search);
@@ -659,7 +662,6 @@ export function Settings({
   // Derive convenience variables from the props.
   const updateStatus = updateState?.status ?? null;
   const checking = updateState?.busy ?? false;
-  const updateShowDownloadProgress = updateState?.showDownloadProgress ?? false;
   const updateRestarting = updateState?.restarting ?? false;
 
   const updateSetting = <K extends keyof AppSettings>(
@@ -4561,20 +4563,14 @@ export function Settings({
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">
-                      Version
-                    </span>
-                    <Badge variant="secondary">{APP_VERSION}</Badge>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">
-                      Engine Version
-                    </span>
-                    <Badge variant="secondary">
-                      {engineVersion || "\u2014"}
-                    </Badge>
-                  </div>
+                  {/* Three labelled builds — running / installed on disk /
+                      latest available — plus the engine build, and the loud
+                      restart state when the disk is ahead of this process. */}
+                  <VersionFacts
+                    versions={versions}
+                    restarting={updateRestarting}
+                    onRestart={() => void updateActions?.restart()}
+                  />
                   <Separator />
 
                   {isTauri() && (
@@ -4582,23 +4578,18 @@ export function Settings({
                       <div className="flex items-center justify-between">
                         <div>
                           <Label>Updates</Label>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {updateStatus?.status === "installed"
-                              ? "Update installed \u2014 restart to apply"
-                              : updateShowDownloadProgress &&
-                                  updateStatus?.status === "downloading"
-                                ? "Downloading update…"
-                                : updateStatus?.status === "available" ||
-                                    (updateStatus?.status === "downloading" &&
-                                      !updateShowDownloadProgress)
-                                  ? `v${updateStatus.version} available — preparing in the background; use Install when ready`
-                                  : updateStatus?.status === "up_to_date"
-                                    ? "You're on the latest version"
-                                    : "Check for new releases"}
+                          {/* ONE sentence, from the ONE helper. It can never
+                              say "latest" while a newer build sits on disk —
+                              the bug Arman read as the app lying to him. */}
+                          <p
+                            className="text-xs text-muted-foreground mt-0.5"
+                            data-testid="update-summary"
+                          >
+                            {versions.updateSummary}
                           </p>
                         </div>
                         <div className="flex gap-2">
-                          {updateStatus?.status === "installed" ? (
+                          {versions.restartRequired ? (
                             <Button
                               size="sm"
                               disabled={updateRestarting}
@@ -4657,7 +4648,8 @@ export function Settings({
                             >
                               {checking ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : updateStatus?.status === "up_to_date" ? (
+                              ) : updateStatus?.status === "up_to_date" &&
+                                !versions.restartRequired ? (
                                 <CheckCircle2 className="h-4 w-4" />
                               ) : (
                                 <RefreshCw className="h-4 w-4" />

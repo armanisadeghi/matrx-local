@@ -82,10 +82,10 @@ def _run_overview(monkeypatch: pytest.MonkeyPatch) -> dict:
         return {}, {"checked": False, "reason": "test"}
 
     async def _no_queue():
-        return {}
+        return {}, {"checked": True, "reason": None, "detail": None}
 
     async def _no_totals():
-        return 0, 0
+        return (0, 0), {"checked": True, "reason": None, "detail": None}
 
     monkeypatch.setattr(overview_module, "cloud_inventory", _no_cloud)
     monkeypatch.setattr(overview_module, "_queue_by_session", _no_queue)
@@ -121,6 +121,131 @@ def test_cli_only_rows_are_marked_and_titled_by_their_opening_message(
     assert cli_only["project"] == "demo"
     assert cli_only["on_disk"] is True
     assert cli_only["pinned"] is False
+
+
+def test_delivery_ledger_failure_is_unknown_not_zero(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A list remains useful when its local delivery evidence cannot be read."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    async def _cloud():
+        return {
+            claude_tree["indexed"]: {
+                "last_seen_at": "2026-09-16T00:00:00+00:00",
+                "fidelity": "event_mirror",
+            }
+        }, {"checked": True, "reason": None, "detail": None, "sessions": 1}
+
+    async def _unavailable_queue():
+        return None, overview_module._delivery_ledger_meta(checked=False)
+
+    async def _known_totals():
+        return (9, 4), overview_module._delivery_ledger_meta(checked=True)
+
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+    monkeypatch.setattr(overview_module, "_queue_by_session", _unavailable_queue)
+    monkeypatch.setattr(overview_module, "_queue_totals", _known_totals)
+
+    out = asyncio.run(overview_module.overview())
+    rows = {row["session_id"]: row for row in out["conversations"]}
+
+    assert set(rows) == {claude_tree["indexed"], claude_tree["cli_only"]}
+    assert out["delivery_ledger"]["checked"] is False
+    assert out["delivery_ledger"]["reason"] == "local_delivery_ledger_unavailable"
+    assert out["totals"]["waiting"] is None
+    assert out["totals"]["quarantined"] is None
+    assert out["totals"]["queued"] is None
+    assert out["totals"]["failed"] is None
+    assert rows[claude_tree["indexed"]]["state"] == "in_cloud"
+    assert rows[claude_tree["cli_only"]]["state"] == "unknown"
+    assert all(row["delivery"] == {"pending": None, "quarantined": None} for row in rows.values())
+
+
+def test_delivery_total_failure_invalidates_row_delivery_counts(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial ledger read cannot combine real rows with invented totals."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    async def _cloud():
+        return {}, {"checked": True, "reason": None, "detail": None, "sessions": 0}
+
+    async def _queue():
+        return {
+            claude_tree["indexed"]: {"pending": 2, "quarantined": 0}
+        }, overview_module._delivery_ledger_meta(checked=True)
+
+    async def _unavailable_totals():
+        return None, overview_module._delivery_ledger_meta(checked=False)
+
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+    monkeypatch.setattr(overview_module, "_queue_by_session", _queue)
+    monkeypatch.setattr(overview_module, "_queue_totals", _unavailable_totals)
+
+    out = asyncio.run(overview_module.overview())
+    indexed = next(row for row in out["conversations"] if row["session_id"] == claude_tree["indexed"])
+    assert out["delivery_ledger"]["checked"] is False
+    assert out["totals"]["waiting"] is None
+    assert out["totals"]["queued"] is None
+    assert indexed["state"] == "unknown"
+    assert indexed["delivery"] == {"pending": None, "quarantined": None}
+
+
+def test_delivery_ledger_error_log_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local database error reports its class and operation, never its text."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    secret = "query-and-user-data-must-not-escape"
+
+    class _FailingDb:
+        async def fetchall(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    logged: list[tuple[object, ...]] = []
+
+    def _record_error(message: object, *args: object) -> None:
+        logged.append((message, *args))
+
+    monkeypatch.setattr(overview_module, "get_db", lambda: _FailingDb())
+    monkeypatch.setattr(overview_module.logger, "error", _record_error)
+    rows, meta = asyncio.run(overview_module._queue_by_session())
+
+    assert rows is None
+    assert meta["checked"] is False
+    assert len(logged) == 1
+    rendered = " ".join(str(part) for part in logged[0])
+    assert "queue-by-session" in rendered
+    assert "RuntimeError" in rendered
+    assert "fetchall@" in rendered
+    assert secret not in rendered
+
+
+def test_delivery_ledger_reports_database_initialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opening the local database is itself a ledger read that can fail."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    secret = "database-path-must-not-escape"
+    logged: list[tuple[object, ...]] = []
+
+    def _unavailable_db():
+        raise OSError(secret)
+
+    def _record_error(message: object, *args: object) -> None:
+        logged.append((message, *args))
+
+    monkeypatch.setattr(overview_module, "get_db", _unavailable_db)
+    monkeypatch.setattr(overview_module.logger, "error", _record_error)
+    totals, meta = asyncio.run(overview_module._queue_totals())
+
+    assert totals is None
+    assert meta["checked"] is False
+    rendered = " ".join(str(part) for part in logged[0])
+    assert "queue-totals" in rendered
+    assert "OSError" in rendered
+    assert secret not in rendered
 
 
 def test_the_screen_never_walks_the_index_tree(
@@ -204,16 +329,26 @@ def test_a_cli_only_session_opens_a_diagnosis_instead_of_a_404(
         return {}, {"checked": False, "reason": "test"}
 
     async def _none(*_a, **_k):
-        return []
+        return [], {"checked": True, "reason": None, "detail": None}
 
-    async def _empty(*_a, **_k):
-        return {}
+    async def _empty_capture(*_a, **_k):
+        return [], {"checked": True, "reason": None, "detail": None}
+
+    async def _empty_labels(*_a, **_k):
+        return (
+            {"metadata_sent": None, "title_pushed": None},
+            {"checked": True, "reason": None, "detail": None},
+        )
 
     monkeypatch.setattr(overview_module, "cloud_inventory", _no_cloud)
     monkeypatch.setattr(overview_module, "_session_envelopes", _none)
-    monkeypatch.setattr(overview_module, "_capture_facts", _empty)
-    monkeypatch.setattr(overview_module, "_label_facts", _empty)
-    monkeypatch.setattr(overview_module, "_delivered_by_this_mac", _empty)
+    monkeypatch.setattr(overview_module, "_capture_facts", _empty_capture)
+    monkeypatch.setattr(overview_module, "_label_facts", _empty_labels)
+
+    async def _no_acknowledgements(*_a, **_k):
+        return {}, {"checked": True, "reason": None, "detail": None}
+
+    monkeypatch.setattr(overview_module, "_delivered_by_this_mac", _no_acknowledgements)
 
     class _Outbox:
         publisher_blocker = None
@@ -231,3 +366,113 @@ def test_a_cli_only_session_opens_a_diagnosis_instead_of_a_404(
     # And a session that exists nowhere is still unknown.
     missing = asyncio.run(overview_module.session_diagnosis("99999999-9999-4999-8999-999999999999"))
     assert missing is None
+
+
+def test_diagnosis_marks_delivery_evidence_unavailable_instead_of_empty(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    async def _cloud():
+        return {}, {"checked": True, "reason": None, "detail": None, "sessions": 0}
+
+    async def _unavailable_envelopes(*_args, **_kwargs):
+        return None, overview_module._delivery_ledger_meta(checked=False)
+
+    async def _unavailable_acknowledgements(*_args, **_kwargs):
+        return None, overview_module._delivery_ledger_meta(checked=False)
+
+    async def _empty(*_args, **_kwargs):
+        return [], {"checked": True, "reason": None, "detail": None}
+
+    async def _empty_labels(*_args, **_kwargs):
+        return (
+            {"metadata_sent": None, "title_pushed": None},
+            {"checked": True, "reason": None, "detail": None},
+        )
+
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+    monkeypatch.setattr(overview_module, "_session_envelopes", _unavailable_envelopes)
+    monkeypatch.setattr(overview_module, "_delivered_by_this_mac", _unavailable_acknowledgements)
+    monkeypatch.setattr(overview_module, "_capture_facts", _empty)
+    monkeypatch.setattr(overview_module, "_label_facts", _empty_labels)
+
+    class _Outbox:
+        publisher_blocker = None
+
+    import app.services.coding_sessions.service as service_module
+    monkeypatch.setattr(service_module, "get_coding_session_bridge_outbox", lambda: _Outbox())
+
+    out = asyncio.run(overview_module.session_diagnosis(claude_tree["cli_only"]))
+    assert out is not None
+    assert out["delivery"]["ledger"]["checked"] is False
+    assert out["delivery"]["envelopes"] is None
+    assert out["delivery"]["delivered_by_this_mac_at"] is None
+    assert "delivery ledger" in out["verdict"]["summary"]
+
+
+def test_full_diagnosis_marks_every_local_database_section_unavailable(
+    claude_tree: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No sibling diagnosis read can convert a failed DB open into an empty fact."""
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    async def _cloud():
+        return {}, {"checked": True, "reason": None, "detail": None, "sessions": 0}
+
+    def _unavailable_db():
+        raise OSError("private database path")
+
+    class _Outbox:
+        publisher_blocker = None
+
+    import app.services.coding_sessions.service as service_module
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+    monkeypatch.setattr(overview_module, "get_db", _unavailable_db)
+    monkeypatch.setattr(service_module, "get_coding_session_bridge_outbox", lambda: _Outbox())
+
+    out = asyncio.run(overview_module.session_diagnosis(claude_tree["cli_only"]))
+    assert out is not None
+    assert out["delivery"]["ledger"]["checked"] is False
+    assert out["delivery"]["envelopes"] is None
+    assert out["capture"] is None
+    assert out["capture_ledger"]["checked"] is False
+    assert out["labels"] is None
+    assert out["labels_ledger"]["checked"] is False
+
+
+def test_malformed_ledger_rows_become_unavailable_not_server_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    class _MalformedDb:
+        async def fetchall(self, *_args, **_kwargs):
+            return [{"session_key": "session", "queue_state": "pending", "n": "not-a-number"}]
+
+    monkeypatch.setattr(overview_module, "get_db", lambda: _MalformedDb())
+    rows, meta = asyncio.run(overview_module._queue_by_session())
+    assert rows is None
+    assert meta["checked"] is False
+
+
+def test_malformed_envelope_rows_become_unavailable_not_server_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.coding_sessions.claude_overview as overview_module
+
+    class _MalformedEnvelopeDb:
+        calls = 0
+
+        async def fetchall(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return [{"session_key": "session"}]
+            if self.calls == 2:
+                return [{"id": "not-an-id"}]
+            return []
+
+    monkeypatch.setattr(overview_module, "get_db", _MalformedEnvelopeDb)
+    envelopes, meta = asyncio.run(overview_module._session_envelopes("session"))
+    assert envelopes is None
+    assert meta["checked"] is False

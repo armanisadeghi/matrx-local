@@ -161,6 +161,12 @@ export function SessionDiagnosisDialog({
   };
 
   const blocker = data?.delivery.publisher_blocker ?? null;
+  // Older engines omit every availability block; their established concrete
+  // values remain valid rather than being retroactively called unavailable.
+  const deliveryLedger = data?.delivery.ledger;
+  const deliveryLedgerUnavailable = deliveryLedger?.checked === false;
+  const captureUnavailable = data?.capture_ledger?.checked === false;
+  const labelsUnavailable = data?.labels_ledger?.checked === false;
 
   return (
     <Dialog open={Boolean(sessionId)} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -258,6 +264,14 @@ export function SessionDiagnosisDialog({
             </Section>
 
             <Section title="Delivery from this Mac">
+              {deliveryLedgerUnavailable && (
+                <div className="my-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm">
+                  <p className="font-medium">This Mac could not read its delivery ledger</p>
+                  <p className="mt-1 text-muted-foreground">
+                    {deliveryLedger?.detail}
+                  </p>
+                </div>
+              )}
               {blocker && (
                 <div
                   className={
@@ -275,8 +289,18 @@ export function SessionDiagnosisDialog({
                   {blocker.remedy && <p className="text-muted-foreground">{blocker.remedy}</p>}
                 </div>
               )}
-              <Row label="Accepted via this Mac">{data.delivery.delivered_by_this_mac_at ? when(data.delivery.delivered_by_this_mac_at) : "Never (a hook-mirrored session is delivered by Claude Code itself, not by this Mac)"}</Row>
-              {data.delivery.envelopes.length === 0 ? (
+              <Row label="Accepted via this Mac">
+                {deliveryLedgerUnavailable
+                  ? "Unavailable while this Mac's delivery ledger cannot be read."
+                  : data.delivery.delivered_by_this_mac_at
+                    ? when(data.delivery.delivered_by_this_mac_at)
+                    : "Never (a hook-mirrored session is delivered by Claude Code itself, not by this Mac)"}
+              </Row>
+              {deliveryLedgerUnavailable || data.delivery.envelopes === null ? (
+                <Row label="Deliveries">
+                  Unavailable while this Mac's delivery ledger cannot be read.
+                </Row>
+              ) : data.delivery.envelopes.length === 0 ? (
                 <Row label="Deliveries">None queued or preserved for this session.</Row>
               ) : (
                 <div className="my-2 overflow-auto rounded-md border">
@@ -334,7 +358,11 @@ export function SessionDiagnosisDialog({
             </Section>
 
             <Section title="Automatic import attempts (capture reconciler)">
-              {data.capture.length === 0 ? (
+              {captureUnavailable || data.capture === null ? (
+                <Row label="Attempts">
+                  Unavailable while this Mac's session diagnostics cannot be read.
+                </Row>
+              ) : data.capture.length === 0 ? (
                 <Row label="Attempts">None recorded — the reconciler has not needed to import this session.</Row>
               ) : (
                 data.capture.map((row) => (
@@ -347,8 +375,16 @@ export function SessionDiagnosisDialog({
             </Section>
 
             <Section title="Label sync ledgers">
-              <Row label="Labels sent to AI Matrx">{data.labels.metadata_sent ? `Yes · ${when(String(data.labels.metadata_sent.updated_at ?? ""))}` : "Not yet (sent only once the server holds the session)"}</Row>
-              <Row label="AI Matrx title pushed into Claude">{data.labels.title_pushed ? `Yes · ${when(String(data.labels.title_pushed.updated_at ?? ""))}` : "No"}</Row>
+              {labelsUnavailable || data.labels === null ? (
+                <Row label="Label records">
+                  Unavailable while this Mac's session diagnostics cannot be read.
+                </Row>
+              ) : (
+                <>
+                  <Row label="Labels sent to AI Matrx">{data.labels.metadata_sent ? `Yes · ${when(String(data.labels.metadata_sent.updated_at ?? ""))}` : "Not yet (sent only once the server holds the session)"}</Row>
+                  <Row label="AI Matrx title pushed into Claude">{data.labels.title_pushed ? `Yes · ${when(String(data.labels.title_pushed.updated_at ?? ""))}` : "No"}</Row>
+                </>
+              )}
             </Section>
           </div>
         )}

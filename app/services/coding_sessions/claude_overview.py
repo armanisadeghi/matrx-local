@@ -824,64 +824,105 @@ def _explain_inventory_block(reason: str) -> str:
 # ── Local delivery ledgers ──────────────────────────────────────────────────
 
 
-async def _queue_by_session() -> dict[str, dict[str, int]]:
+def _delivery_ledger_meta(*, checked: bool) -> dict[str, Any]:
+    if checked:
+        return {"checked": True, "reason": None, "detail": None}
+    return {
+        "checked": False,
+        "reason": "local_delivery_ledger_unavailable",
+        "detail": "AI Matrx could not read this Mac's delivery ledger. Refresh to try again.",
+    }
+
+
+def _log_delivery_ledger_failure(operation: str) -> None:
+    """Report an actionable local-ledger failure without exposing its contents."""
+    exception = sys.exception()
+    frames = traceback.extract_tb(exception.__traceback__) if exception else []
+    trace = " > ".join(
+        f"{frame.name}@{Path(frame.filename).name}:{frame.lineno}"
+        for frame in frames[-6:]
+    ) or "no_traceback"
+    logger.error(
+        "[claude_overview] local delivery ledger %s failed (%s; %s)",
+        operation,
+        type(exception).__name__,
+        trace,
+    )
+
+
+async def _queue_by_session() -> tuple[dict[str, dict[str, int]] | None, dict[str, Any]]:
     """raw session id -> {pending, quarantined} for Claude Code envelopes."""
-    db = get_db()
     counts: dict[str, dict[str, int]] = {}
     try:
+        db = get_db()
         rows = await db.fetchall(
             """SELECT queue_state, session_key, COUNT(*) AS n
                FROM coding_session_bridge_queue_metadata
                WHERE provider = 'claude_code' AND session_key IS NOT NULL
                GROUP BY queue_state, session_key"""
         )
-    except Exception:
-        return counts
-    for row in rows:
-        key = raw_session_id(str(row["session_key"]))
-        bucket = counts.setdefault(key, {"pending": 0, "quarantined": 0})
-        if str(row["queue_state"]) == "quarantine":
-            bucket["quarantined"] += int(row["n"])
-        else:
-            bucket["pending"] += int(row["n"])
-    return counts
+    except Exception:  # noqa: BLE001 — report an unavailable ledger, never zeroes
+        _log_delivery_ledger_failure("queue-by-session")
+        return None, _delivery_ledger_meta(checked=False)
+    try:
+        for row in rows:
+            key = raw_session_id(str(row["session_key"]))
+            bucket = counts.setdefault(key, {"pending": 0, "quarantined": 0})
+            if str(row["queue_state"]) == "quarantine":
+                bucket["quarantined"] += int(row["n"])
+            else:
+                bucket["pending"] += int(row["n"])
+    except Exception:  # noqa: BLE001 — malformed rows are unavailable evidence
+        _log_delivery_ledger_failure("queue-by-session-decode")
+        return None, _delivery_ledger_meta(checked=False)
+    return counts, _delivery_ledger_meta(checked=True)
 
 
-async def _delivered_by_this_mac() -> dict[str, int]:
+async def _delivered_by_this_mac() -> tuple[dict[str, int] | None, dict[str, Any]]:
     """raw session id -> ns of the last acknowledgement THIS engine recorded.
 
     Supplementary: it explains how an import got there, it does not decide
     whether a session is in the cloud (the server decides that).
     """
-    db = get_db()
     acked: dict[str, int] = {}
     try:
+        db = get_db()
         rows = await db.fetchall(
             "SELECT provider_session_id, last_synced_at FROM claude_session_synced"
         )
-    except Exception:
-        rows = []
-    for row in rows:
-        stamp = _parse_iso_ns(row["last_synced_at"])
-        if stamp is not None:
-            acked[raw_session_id(str(row["provider_session_id"]))] = stamp
-    return acked
+    except Exception:  # noqa: BLE001 — an acknowledgement gap is not "never"
+        _log_delivery_ledger_failure("acknowledgements")
+        return None, _delivery_ledger_meta(checked=False)
+    try:
+        for row in rows:
+            stamp = _parse_iso_ns(row["last_synced_at"])
+            if stamp is not None:
+                acked[raw_session_id(str(row["provider_session_id"]))] = stamp
+    except Exception:  # noqa: BLE001 — malformed rows are not absent acknowledgements
+        _log_delivery_ledger_failure("acknowledgements-decode")
+        return None, _delivery_ledger_meta(checked=False)
+    return acked, _delivery_ledger_meta(checked=True)
 
 
-async def _queue_totals() -> tuple[int, int]:
-    db = get_db()
-
-    async def _count(table: str) -> int:
-        try:
-            row = await db.fetchone(f"SELECT COUNT(*) AS n FROM {table}")
-        except Exception:
-            return 0
-        return int(row["n"]) if row else 0
-
-    return (
-        await _count("coding_session_bridge_outbox"),
-        await _count("coding_session_bridge_quarantine"),
-    )
+async def _queue_totals() -> tuple[tuple[int, int] | None, dict[str, Any]]:
+    try:
+        db = get_db()
+        waiting = await db.fetchone("SELECT COUNT(*) AS n FROM coding_session_bridge_outbox")
+        quarantined = await db.fetchone(
+            "SELECT COUNT(*) AS n FROM coding_session_bridge_quarantine"
+        )
+    except Exception:  # noqa: BLE001 — a partial total cannot safely become zero
+        _log_delivery_ledger_failure("queue-totals")
+        return None, _delivery_ledger_meta(checked=False)
+    try:
+        counts = (
+            int(waiting["n"]) if waiting else 0,
+            int(quarantined["n"]) if quarantined else 0,
+        )
+    except Exception:  # noqa: BLE001 — malformed totals are not zero
+        _log_delivery_ledger_failure("queue-totals-decode")
+        return None, _delivery_ledger_meta(checked=False)
+    return counts, _delivery_ledger_meta(checked=True)
 
 
 def _session_state(
@@ -889,12 +930,12 @@ def _session_state(
     cloud_checked: bool,
     binding: dict[str, Any] | None,
     activity_ns: int,
-    queue: dict[str, int],
+    queue: dict[str, int] | None,
 ) -> str:
-    if queue.get("quarantined", 0) > 0:
+    if queue is not None and queue.get("quarantined", 0) > 0:
         return "failed"
     if not cloud_checked:
-        return "queued" if queue.get("pending", 0) > 0 else "unknown"
+        return "queued" if queue is not None and queue.get("pending", 0) > 0 else "unknown"
     if binding is not None:
         seen_ns = _parse_iso_ns(binding.get("last_seen_at"))
         if (
@@ -904,6 +945,8 @@ def _session_state(
         ):
             return "changed"
         return "in_cloud"
+    if queue is None:
+        return "unknown"
     if queue.get("pending", 0) > 0:
         return "queued"
     return "not_in_cloud"
@@ -960,8 +1003,19 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     entries, totals = snapshot.entries, snapshot.totals
     transcripts = snapshot.transcripts
     cloud, cloud_meta = await cloud_inventory()
-    queue = await _queue_by_session()
-    waiting, quarantined = await _queue_totals()
+    queue, queue_meta = await _queue_by_session()
+    queue_totals, totals_meta = await _queue_totals()
+    delivery_checked = bool(queue_meta["checked"]) and bool(totals_meta["checked"])
+    delivery_meta = _delivery_ledger_meta(checked=delivery_checked)
+    # A count and its per-session evidence are one claim. If either read
+    # failed, keep independent cloud/list facts but do not mix known values
+    # with unknown delivery facts or turn the latter into zeroes.
+    if not delivery_checked:
+        queue = None
+        waiting = quarantined = None
+    else:
+        assert queue is not None and queue_totals is not None
+        waiting, quarantined = queue_totals
 
     conversations: list[dict[str, Any]] = []
     counts = {state: 0 for state in SESSION_STATES}
@@ -969,7 +1023,11 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     for session_id, entry in entries.items():
         size, mtime_ns = transcripts.get(session_id, (0, 0))
         binding = cloud.get(session_id)
-        session_queue = queue.get(session_id, {"pending": 0, "quarantined": 0})
+        session_queue = (
+            queue.get(session_id, {"pending": 0, "quarantined": 0})
+            if queue is not None
+            else None
+        )
         state = _session_state(
             cloud_checked=bool(cloud_meta["checked"]),
             binding=binding,
@@ -1006,8 +1064,14 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
                     else None
                 ),
                 "delivery": {
-                    "pending": int(session_queue.get("pending", 0)),
-                    "quarantined": int(session_queue.get("quarantined", 0)),
+                    "pending": (
+                        int(session_queue.get("pending", 0)) if session_queue is not None else None
+                    ),
+                    "quarantined": (
+                        int(session_queue.get("quarantined", 0))
+                        if session_queue is not None
+                        else None
+                    ),
                 },
             }
         )
@@ -1018,7 +1082,11 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
     for row in _transcript_only_rows(orphan_ids, transcripts, snapshot.orphan_summaries):
         session_id = row["session_id"]
         binding = cloud.get(session_id)
-        session_queue = queue.get(session_id, {"pending": 0, "quarantined": 0})
+        session_queue = (
+            queue.get(session_id, {"pending": 0, "quarantined": 0})
+            if queue is not None
+            else None
+        )
         state = _session_state(
             cloud_checked=bool(cloud_meta["checked"]),
             binding=binding,
@@ -1054,12 +1122,21 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
                     else None
                 ),
                 "delivery": {
-                    "pending": int(session_queue.get("pending", 0)),
-                    "quarantined": int(session_queue.get("quarantined", 0)),
+                    "pending": (
+                        int(session_queue.get("pending", 0)) if session_queue is not None else None
+                    ),
+                    "quarantined": (
+                        int(session_queue.get("quarantined", 0))
+                        if session_queue is not None
+                        else None
+                    ),
                 },
             }
         )
     conversations.sort(key=lambda item: item["last_activity_at"], reverse=True)
+    if not delivery_checked:
+        counts["queued"] = None
+        counts["failed"] = None
 
     return {
         "schema_version": 2,
@@ -1070,6 +1147,7 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         "listed_providers": ["claude_code"],
         "accounts": list_accounts(snapshot.accounts),
         "cloud": cloud_meta,
+        "delivery_ledger": delivery_meta,
         # How current the rows below are, and whether a newer read is running.
         # The screen shows the last known list immediately and says so — it
         # never holds the response open for a disk walk again.
@@ -1123,25 +1201,32 @@ def _index_facts(entry: ClaudeSessionIndexEntry) -> dict[str, Any]:
     }
 
 
-async def _session_envelopes(session_id: str) -> list[dict[str, Any]]:
+async def _session_envelopes(
+    session_id: str,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
     """Every queued or preserved envelope whose session reduces to this id."""
     from app.services.coding_sessions.service import _safe_delivery_error
 
-    db = get_db()
     try:
+        db = get_db()
         keys = await db.fetchall(
             """SELECT DISTINCT session_key FROM coding_session_bridge_queue_metadata
                WHERE provider = 'claude_code' AND session_key IS NOT NULL"""
         )
-    except Exception:
-        return []
-    matching = [
-        str(row["session_key"])
-        for row in keys
-        if raw_session_id(str(row["session_key"])) == session_id
-    ]
+    except Exception:  # noqa: BLE001 — unavailable evidence is not an empty queue
+        _log_delivery_ledger_failure("session-envelope-keys")
+        return None, _delivery_ledger_meta(checked=False)
+    try:
+        matching = [
+            str(row["session_key"])
+            for row in keys
+            if raw_session_id(str(row["session_key"])) == session_id
+        ]
+    except Exception:  # noqa: BLE001 — malformed metadata is unavailable evidence
+        _log_delivery_ledger_failure("session-envelope-keys-decode")
+        return None, _delivery_ledger_meta(checked=False)
     if not matching:
-        return []
+        return [], _delivery_ledger_meta(checked=True)
     placeholders = ",".join("?" for _ in matching)
     items: list[dict[str, Any]] = []
     try:
@@ -1165,54 +1250,70 @@ async def _session_envelopes(session_id: str) -> list[dict[str, Any]]:
                 ORDER BY q.id""",
             tuple(matching),
         )
-    except Exception:
-        logger.exception("[claude_overview] could not read envelopes for %s", session_id)
-        return []
-    now = time.time()
-    for row in pending:
-        next_attempt = float(row["next_attempt_at"] or 0)
-        items.append(
-            {
-                "receipt_id": int(row["id"]),
-                "state": "pending",
-                "action": row["action"],
-                "source": row["source"],
-                "enqueue_origin": row["enqueue_origin"],
-                "item_count": int(row["item_count"] or 0),
-                "payload_bytes": int(row["payload_bytes"] or 0),
-                "created_at": row["created_at"],
-                "attempts": int(row["attempts"] or 0),
-                "retry_in_seconds": max(0.0, next_attempt - now),
-                "http_status": None,
-                "quarantined_at": None,
-                "error": _safe_delivery_error(row["last_error"]),
-            }
-        )
-    for row in preserved:
-        items.append(
-            {
-                "receipt_id": int(row["id"]),
-                "state": "quarantine",
-                "action": row["action"],
-                "source": row["source"],
-                "enqueue_origin": row["enqueue_origin"],
-                "item_count": int(row["item_count"] or 0),
-                "payload_bytes": int(row["payload_bytes"] or 0),
-                "created_at": row["original_created_at"],
-                "attempts": int(row["attempts"] or 0),
-                "retry_in_seconds": 0.0,
-                "http_status": row["http_status"],
-                "quarantined_at": row["quarantined_at"],
-                "error": _safe_delivery_error(row["last_error"]),
-            }
-        )
-    return items
-
-
-async def _capture_facts(session_id: str) -> list[dict[str, Any]]:
-    """The capture reconciler's attempts to import this transcript."""
-    db = get_db()
+    except Exception:  # noqa: BLE001 — do not log the session id or error body
+        _log_delivery_ledger_failure("session-envelopes")
+        return None, _delivery_ledger_meta(checked=False)
     try:
+        now = time.time()
+        for row in pending:
+            next_attempt = float(row["next_attempt_at"] or 0)
+            items.append(
+                {
+                    "receipt_id": int(row["id"]),
+                    "state": "pending",
+                    "action": row["action"],
+                    "source": row["source"],
+                    "enqueue_origin": row["enqueue_origin"],
+                    "item_count": int(row["item_count"] or 0),
+                    "payload_bytes": int(row["payload_bytes"] or 0),
+                    "created_at": row["created_at"],
+                    "attempts": int(row["attempts"] or 0),
+                    "retry_in_seconds": max(0.0, next_attempt - now),
+                    "http_status": None,
+                    "quarantined_at": None,
+                    "error": _safe_delivery_error(row["last_error"]),
+                }
+            )
+        for row in preserved:
+            items.append(
+                {
+                    "receipt_id": int(row["id"]),
+                    "state": "quarantine",
+                    "action": row["action"],
+                    "source": row["source"],
+                    "enqueue_origin": row["enqueue_origin"],
+                    "item_count": int(row["item_count"] or 0),
+                    "payload_bytes": int(row["payload_bytes"] or 0),
+                    "created_at": row["original_created_at"],
+                    "attempts": int(row["attempts"] or 0),
+                    "retry_in_seconds": 0.0,
+                    "http_status": row["http_status"],
+                    "quarantined_at": row["quarantined_at"],
+                    "error": _safe_delivery_error(row["last_error"]),
+                }
+            )
+    except Exception:  # noqa: BLE001 — malformed envelope rows are unavailable
+        _log_delivery_ledger_failure("session-envelopes-decode")
+        return None, _delivery_ledger_meta(checked=False)
+    return items, _delivery_ledger_meta(checked=True)
+
+
+def _diagnostic_facts_meta(*, checked: bool) -> dict[str, Any]:
+    if checked:
+        return {"checked": True, "reason": None, "detail": None}
+    return {
+        "checked": False,
+        "reason": "local_diagnostic_facts_unavailable",
+        "detail": "AI Matrx could not read this Mac's session diagnostics. Refresh to try again.",
+    }
+
+
+async def _capture_facts(
+    session_id: str,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
+    """The capture reconciler's attempts to import this transcript."""
+    try:
+        db = get_db()
         rows = await db.fetchall(
             """SELECT session_key, attempts, last_error, enqueued_at, updated_at
                FROM claude_capture_backfill
@@ -1220,42 +1321,42 @@ async def _capture_facts(session_id: str) -> list[dict[str, Any]]:
                ORDER BY updated_at DESC LIMIT 5""",
             (f"%:{session_id}",),
         )
-    except Exception:
-        return []
-    return [
-        {
-            "session_key": row["session_key"],
-            "attempts": int(row["attempts"] or 0),
-            "last_error": row["last_error"],
-            "enqueued_at": row["enqueued_at"],
-            "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
+        facts = [
+            {
+                "session_key": row["session_key"],
+                "attempts": int(row["attempts"] or 0),
+                "last_error": row["last_error"],
+                "enqueued_at": row["enqueued_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+    except Exception:  # noqa: BLE001 — unavailable attempts are not no attempts
+        _log_delivery_ledger_failure("capture-facts")
+        return None, _diagnostic_facts_meta(checked=False)
+    return facts, _diagnostic_facts_meta(checked=True)
 
 
-async def _label_facts(session_id: str) -> dict[str, Any]:
-    db = get_db()
+async def _label_facts(session_id: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     facts: dict[str, Any] = {"metadata_sent": None, "title_pushed": None}
     try:
+        db = get_db()
         row = await db.fetchone(
             "SELECT * FROM claude_session_metadata_sent WHERE provider_session_id = ?",
             (session_id,),
         )
         if row:
             facts["metadata_sent"] = {k: row[k] for k in row.keys()}
-    except Exception:
-        pass
-    try:
         row = await db.fetchone(
             "SELECT * FROM claude_session_title_pushed WHERE provider_session_id = ?",
             (session_id,),
         )
         if row:
             facts["title_pushed"] = {k: row[k] for k in row.keys()}
-    except Exception:
-        pass
-    return facts
+    except Exception:  # noqa: BLE001 — no label evidence is not no label activity
+        _log_delivery_ledger_failure("label-facts")
+        return None, _diagnostic_facts_meta(checked=False)
+    return facts, _diagnostic_facts_meta(checked=True)
 
 
 def _verdict(
@@ -1263,8 +1364,9 @@ def _verdict(
     state: str,
     cloud_meta: dict[str, Any],
     binding: dict[str, Any] | None,
-    envelopes: list[dict[str, Any]],
-    capture: list[dict[str, Any]],
+    envelopes: list[dict[str, Any]] | None,
+    delivery_checked: bool,
+    capture: list[dict[str, Any]] | None,
     publisher_blocker: dict[str, Any] | None,
     on_disk: bool,
 ) -> dict[str, str | None]:
@@ -1272,7 +1374,7 @@ def _verdict(
     if state == "failed":
         errors = [
             item["error"]["message"]
-            for item in envelopes
+            for item in (envelopes or [])
             if item["state"] == "quarantine" and item.get("error")
         ]
         reason = errors[0] if errors else "AI Matrx refused at least one delivery for this session."
@@ -1308,7 +1410,7 @@ def _verdict(
                 ),
                 "remedy": publisher_blocker.get("remedy"),
             }
-        pending = [item for item in envelopes if item["state"] == "pending"]
+        pending = [item for item in (envelopes or []) if item["state"] == "pending"]
         first = pending[0] if pending else None
         detail = (
             f" Last attempt: {first['error']['message']}"
@@ -1320,11 +1422,27 @@ def _verdict(
             "remedy": "Delivery retries on its own. Open the envelopes below to retry now or see each attempt.",
         }
     if state == "unknown":
+        if cloud_meta.get("checked") and not delivery_checked:
+            return {
+                "summary": (
+                    "AI Matrx could not read this Mac's delivery ledger, so it cannot tell "
+                    "whether a delivery is waiting or preserved for this conversation."
+                ),
+                "remedy": "Refresh after the local database is available again.",
+            }
         return {
             "summary": f"AI Matrx could not be asked whether it holds this conversation: {cloud_meta.get('detail') or cloud_meta.get('reason')}",
             "remedy": "Fix the connection or sign-in named above, then refresh.",
         }
     # not_in_cloud
+    if capture is None:
+        return {
+            "summary": (
+                "AI Matrx does not hold this conversation, but this Mac could not read "
+                "the automatic import record."
+            ),
+            "remedy": "Refresh after the local database is available again.",
+        }
     exhausted = [item for item in capture if item.get("last_error")]
     if exhausted:
         return {
@@ -1369,11 +1487,11 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
         summary = None
     cloud, cloud_meta = await cloud_inventory()
     binding = cloud.get(session_id)
-    envelopes = await _session_envelopes(session_id)
+    envelopes, envelopes_meta = await _session_envelopes(session_id)
     queue = {
         "pending": sum(1 for item in envelopes if item["state"] == "pending"),
         "quarantined": sum(1 for item in envelopes if item["state"] == "quarantine"),
-    }
+    } if envelopes is not None else None
     state = _session_state(
         cloud_checked=bool(cloud_meta["checked"]),
         binding=binding,
@@ -1382,11 +1500,14 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
         ),
         queue=queue,
     )
-    capture = await _capture_facts(session_id)
-    labels = await _label_facts(session_id)
-    delivered = await _delivered_by_this_mac()
+    capture, capture_meta = await _capture_facts(session_id)
+    labels, labels_meta = await _label_facts(session_id)
+    delivered, delivered_meta = await _delivered_by_this_mac()
+    delivery_meta = _delivery_ledger_meta(
+        checked=bool(envelopes_meta["checked"]) and bool(delivered_meta["checked"])
+    )
     publisher_blocker = get_coding_session_bridge_outbox().publisher_blocker
-    delivered_ns = delivered.get(session_id)
+    delivered_ns = delivered.get(session_id) if delivered is not None else None
     return {
         "schema_version": 1,
         "session_id": session_id,
@@ -1396,6 +1517,7 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
             cloud_meta=cloud_meta,
             binding=binding,
             envelopes=envelopes,
+            delivery_checked=bool(delivery_meta["checked"]),
             capture=capture,
             publisher_blocker=publisher_blocker,
             on_disk=size > 0,
@@ -1439,16 +1561,19 @@ async def session_diagnosis(session_id: str) -> dict[str, Any] | None:
         },
         "cloud": {**cloud_meta, "binding": binding},
         "delivery": {
+            "ledger": delivery_meta,
             "publisher_blocker": publisher_blocker,
             "envelopes": envelopes,
             "delivered_by_this_mac_at": (
                 datetime.fromtimestamp(delivered_ns / 1_000_000_000, timezone.utc).isoformat(
                     timespec="seconds"
                 )
-                if delivered_ns
+                if delivered_ns and delivered is not None
                 else None
             ),
         },
         "capture": capture,
+        "capture_ledger": capture_meta,
         "labels": labels,
+        "labels_ledger": labels_meta,
     }

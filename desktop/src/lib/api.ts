@@ -790,7 +790,23 @@ export interface ClaudeConversation {
     fidelity: string | null;
     last_seen_at: string | null;
   } | null;
-  delivery: { pending: number; quarantined: number };
+  /** Null when this Mac could not read its local delivery ledger. */
+  delivery: { pending: number | null; quarantined: number | null };
+}
+
+/** Local queue and acknowledgement evidence behind delivery-derived counts. */
+export interface ClaudeDeliveryLedger {
+  /** False means delivery counts and absence claims are unavailable, not zero. */
+  checked: boolean;
+  reason: "local_delivery_ledger_unavailable" | null;
+  detail: string | null;
+}
+
+/** Read state for one non-delivery local diagnosis section. */
+export interface ClaudeDiagnosticFactsLedger {
+  checked: boolean;
+  reason: "local_diagnostic_facts_unavailable" | null;
+  detail: string | null;
 }
 
 export interface ClaudeAccount {
@@ -861,6 +877,8 @@ export interface ClaudeOverview {
   listed_providers?: CodingSessionProvider[];
   accounts: ClaudeAccount[];
   cloud: ClaudeCloudCheck;
+  /** Optional for engines before delivery-ledger availability was explicit. */
+  delivery_ledger?: ClaudeDeliveryLedger;
   /**
    * The index behind `conversations`. Optional: engines before 1.4.125 read the
    * whole tree inside the request and had no state to report, so an absent
@@ -880,14 +898,16 @@ export interface ClaudeOverview {
     unreadable: number;
     in_cloud: number;
     changed: number;
-    queued: number;
-    failed: number;
+    /** Null when the local delivery ledger could not be read. */
+    queued: number | null;
+    /** Null when the local delivery ledger could not be read. */
+    failed: number | null;
     not_in_cloud: number;
     unknown: number;
     /** Whole-queue, every provider: envelopes still to send. */
-    waiting: number;
+    waiting: number | null;
     /** Whole-queue, every provider: envelopes preserved after a refusal. */
-    quarantined: number;
+    quarantined: number | null;
   };
 }
 
@@ -961,21 +981,30 @@ export interface ClaudeSessionDiagnosis {
     } | null;
   };
   delivery: {
+    /** Absent on engines before local delivery reads reported availability. */
+    ledger?: ClaudeDeliveryLedger;
     publisher_blocker: CodingSessionBridgeStatus["publisher"]["blocker"];
-    envelopes: ClaudeSessionDiagnosisEnvelope[];
+    /** Null when this Mac could not read the envelope ledger. */
+    envelopes: ClaudeSessionDiagnosisEnvelope[] | null;
     delivered_by_this_mac_at: string | null;
   };
+  /** Null when the local capture record could not be read. */
   capture: Array<{
     session_key: string;
     attempts: number;
     last_error: string | null;
     enqueued_at: string | null;
     updated_at: string | null;
-  }>;
+  }> | null;
+  /** Absent on engines before capture availability was explicit. */
+  capture_ledger?: ClaudeDiagnosticFactsLedger;
+  /** Null when the local label records could not be read. */
   labels: {
     metadata_sent: Record<string, unknown> | null;
     title_pushed: Record<string, unknown> | null;
-  };
+  } | null;
+  /** Absent on engines before label availability was explicit. */
+  labels_ledger?: ClaudeDiagnosticFactsLedger;
 }
 
 export interface ClaudeSyncResult {

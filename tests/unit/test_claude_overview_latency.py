@@ -389,10 +389,10 @@ async def test_the_whole_response_is_built_without_touching_the_disk(
                     "checked_at": "2026-09-15T00:00:00+00:00"}
 
     async def _no_queue():
-        return {}
+        return {}, {"checked": True, "reason": None, "detail": None}
 
     async def _no_totals():
-        return 0, 0
+        return (0, 0), {"checked": True, "reason": None, "detail": None}
 
     monkeypatch.setattr(claude_overview, "cloud_inventory", _cloud)
     monkeypatch.setattr(claude_overview, "_queue_by_session", _no_queue)

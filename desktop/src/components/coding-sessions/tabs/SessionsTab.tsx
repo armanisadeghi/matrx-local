@@ -150,6 +150,8 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
 
   const data = snapshot.overview;
   const cloud = data?.cloud;
+  const deliveryLedger = data?.delivery_ledger;
+  const deliveryLedgerUnavailable = deliveryLedger?.checked === false;
   const notice = indexNotice(data);
   const cloudPending = cloudCheckPending(cloud);
   // Counts belong to an index that has been read. While it is cold they are
@@ -300,10 +302,10 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           data-testid={quietUnknown(row) ? "state-checking" : undefined}
         >
           {quietUnknown(row) ? "Checking…" : SESSION_STATE_LABEL[row.state]}
-          {row.delivery.quarantined > 0 && (
+          {row.delivery.quarantined !== null && row.delivery.quarantined > 0 && (
             <span className="ml-1 text-xs">({row.delivery.quarantined} refused)</span>
           )}
-          {row.state === "queued" && row.delivery.pending > 0 && (
+          {row.state === "queued" && row.delivery.pending !== null && row.delivery.pending > 0 && (
             <span className="ml-1 text-xs">({row.delivery.pending} waiting)</span>
           )}
         </span>
@@ -397,6 +399,23 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         </div>
       )}
 
+      {deliveryLedgerUnavailable && (
+        <div
+          className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
+          role="alert"
+          data-testid="delivery-ledger-unavailable"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div>
+            <p className="font-medium">This Mac could not read its delivery ledger</p>
+            <p className="mt-1">{deliveryLedger.detail}</p>
+            <p className="mt-1 text-muted-foreground">
+              Waiting and refused delivery counts are unavailable until it can be read again.
+            </p>
+          </div>
+        </div>
+      )}
+
       {blocked && (
         <div
           className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
@@ -422,17 +441,21 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
 
       {totals && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {STATE_CARDS.map((state) => (
-            <Stat
-              key={state}
-              value={totals[state]}
-              label={SESSION_STATE_LABEL[state]}
-              hint={`${SESSION_STATE_HINT[state]} Click to show only these.`}
-              tone={totals[state] > 0 ? SESSION_STATE_TONE[state] : undefined}
-              selected={filter === state}
-              onClick={() => toggleFilter(state)}
-            />
-          ))}
+          {STATE_CARDS.map((state) => {
+            const value = totals[state];
+            if (value === null) return null;
+            return (
+              <Stat
+                key={state}
+                value={value}
+                label={SESSION_STATE_LABEL[state]}
+                hint={`${SESSION_STATE_HINT[state]} Click to show only these.`}
+                tone={value > 0 ? SESSION_STATE_TONE[state] : undefined}
+                selected={filter === state}
+                onClick={() => toggleFilter(state)}
+              />
+            );
+          })}
           <Stat
             value={totals.pinned}
             label="Pinned in the coding agent"

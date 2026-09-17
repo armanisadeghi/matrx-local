@@ -40,6 +40,7 @@ from app.api.extension_metrics import record as record_metric
 from app.api.extension_ws_manager import (
     register_session,
     resolve_pending_future,
+    send_to_extension_session,
     unregister_session,
 )
 from app.api.routes import _APP_VERSION
@@ -307,9 +308,14 @@ async def extension_websocket(websocket: WebSocket) -> None:
 
             msg_t0 = time.perf_counter()
             try:
-                await _handle_extension_message(session.session_id, msg)
+                keep_open = await _handle_extension_message(session.session_id, msg)
                 msg_latency_ms = (time.perf_counter() - msg_t0) * 1000.0
                 await record_metric("ws:message", msg_latency_ms, ok=True)
+                if not keep_open:
+                    # A heartbeat write proved the peer is gone. Leave the
+                    # loop so finally unregisters instead of reading a socket
+                    # Starlette has already marked disconnected.
+                    break
             except Exception as msg_exc:
                 msg_latency_ms = (time.perf_counter() - msg_t0) * 1000.0
                 await record_metric(
@@ -352,7 +358,7 @@ async def extension_websocket(websocket: WebSocket) -> None:
         )
 
 
-async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> None:
+async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> bool:
     """Dispatch a single inbound envelope by `type`."""
     msg_type = msg.get("type")
 
@@ -363,7 +369,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
                 "[extension_ws] extension.result missing callId session=%s",
                 session_id,
             )
-            return
+            return True
         resolved = resolve_pending_future(call_id, msg)
         publish_event(
             "ws.extension.result",
@@ -381,7 +387,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
                 call_id,
                 session_id,
             )
-        return
+        return True
 
     if msg_type == "ping":
         # Heartbeat — respond inline. The send goes through the same
@@ -391,11 +397,12 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
 
         session = get_registry().get(session_id)
         if session is None:
-            return
+            return False
         touch_session(session_id)
         publish_event("ws.ping", "in", {"session_id": session_id})
-        await session.send(_build_pong(msg.get("timestamp")))
-        return
+        return await send_to_extension_session(
+            session_id, _build_pong(msg.get("timestamp"))
+        )
 
     if msg_type == "extension.identify":
         from app.api.extension_ws_manager import identify_session
@@ -410,7 +417,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
             logger.warning(
                 "[extension_ws] invalid extension.identify session=%s", session_id
             )
-            return
+            return True
         identified = identify_session(
             session_id,
             extension_id=extension_id,
@@ -427,10 +434,11 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> Non
                 "identified": identified,
             },
         )
-        return
+        return True
 
     logger.warning(
         "[extension_ws] unknown message type=%r session=%s",
         msg_type,
         session_id,
     )
+    return True

@@ -44,10 +44,19 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from app.common.system_logger import get_logger
 
 logger = get_logger()
+
+
+def socket_is_disconnected(websocket: WebSocket) -> bool:
+    """Whether Starlette has recorded either half of the socket as closed."""
+    return (
+        websocket.client_state is WebSocketState.DISCONNECTED
+        or websocket.application_state is WebSocketState.DISCONNECTED
+    )
 
 
 @dataclass
@@ -77,6 +86,7 @@ class ExtensionSession:
     extension_version: Optional[str] = None
     extension_name: Optional[str] = None
     identified_at: Optional[float] = None
+    _closed: bool = False
 
     async def send(self, payload: Dict[str, Any]) -> bool:
         """Serialize + send a JSON payload. Returns True on success.
@@ -85,18 +95,25 @@ class ExtensionSession:
         sends from corrupting the WebSocket frame stream. Callers may
         invoke `send` from any task without external coordination.
         """
+        serialized = json.dumps(payload)
         async with self._send_lock:
-            try:
-                await self.websocket.send_text(json.dumps(payload))
-                return True
-            except Exception as exc:
-                logger.warning(
-                    "[extension_ws] send failed session=%s type=%s err=%s",
-                    self.session_id,
-                    payload.get("type"),
-                    exc,
-                )
+            if self._closed or socket_is_disconnected(self.websocket):
+                self._closed = True
                 return False
+            try:
+                await self.websocket.send_text(serialized)
+                return True
+            except WebSocketDisconnect:
+                self._closed = True
+                return False
+            except RuntimeError:
+                # Starlette raises RuntimeError for a send after its state
+                # machine has already closed. Do not hide unrelated runtime
+                # errors such as a programming or serialization defect.
+                if socket_is_disconnected(self.websocket):
+                    self._closed = True
+                    return False
+                raise
 
     def cancel_pending(self, reason: str) -> int:
         """Cancel every pending Future on disconnect. Returns count.
@@ -236,7 +253,13 @@ async def send_to_extension_session(
             payload.get("type"),
         )
         return False
-    return await session.send(payload)
+    sent = await session.send(payload)
+    if not sent:
+        # A failed send is terminal for this session. Removing it now prevents
+        # another caller from selecting the same dead socket, and releases any
+        # reverse-invocation waiters without waiting for the route receive loop.
+        unregister_session(session_id)
+    return sent
 
 
 def create_pending_future(

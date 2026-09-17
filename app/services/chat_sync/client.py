@@ -84,10 +84,20 @@ class SupabaseChatClient:
         url = f"{_REST_BASE}/{table}"
         # Cloud ops must never block local-first UX: 5s connect / 20s total
         # (pull pages can be larger than a single note write).
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
-            resp = await client.request(
-                method, url, params=params, json=json_body, headers=headers
-            )
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+                resp = await client.request(
+                    method, url, params=params, json=json_body, headers=headers
+                )
+        except httpx.TransportError:
+            # A dropped connection has no HTTP response to classify, but it
+            # must still enter the per-table sync error path.  Do not expose
+            # transport exception text: it can contain proxy or endpoint
+            # details.  Status 0 explicitly means that no HTTP response was
+            # received; it remains retryable on the next bounded sync cycle.
+            raise ChatSyncHTTPError(
+                method.upper(), table, 0, "transport failure (no HTTP response)"
+            ) from None
         if resp.status_code == 204:
             return []
         if resp.status_code >= 400:

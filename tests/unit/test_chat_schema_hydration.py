@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import aiosqlite
+import httpx
 import pytest
 
 from app.services.chat_sync import engine as chat_engine_module
-from app.services.chat_sync.client import ChatSyncHTTPError
+from app.services.chat_sync import client as chat_client_module
+from app.services.chat_sync.client import ChatSyncHTTPError, SupabaseChatClient
 from app.services.chat_sync.engine import ChatSyncEngine
 from app.services.local_db import database as database_module
 from app.services.local_db import mirror as mirror_module
@@ -368,5 +370,132 @@ def test_hydration_resumes_after_a_page_error(tmp_path: Path, monkeypatch: pytes
         await engine._hydrate_marked_columns(table, MIRROR_TABLES["chat"][table], "updated_at")
         assert requests[2] == ("2026-09-14T00:00:00+00:00", "trace-1")
         assert await _marker(db, table) is None
+
+    _run(tmp_path, scenario)
+
+
+def test_existing_conversation_recovers_host_value_names_without_overwriting_local_work(
+    tmp_path: Path,
+) -> None:
+    """The new cloud column reaches old populated mirrors through the generic recovery path."""
+    mirror_dir = tmp_path / "mirror"
+    mirror_dir.mkdir()
+    _old_table(mirror_dir / "chat.db", "conversation", {"host_value_names"})
+
+    async def scenario(db: LocalDatabase) -> None:
+        table = "conversation"
+        assert await _marker(db, table) == {"columns": ["host_value_names"]}
+        engine = ChatSyncEngine()
+
+        async def populated_remote(*_args, **_kwargs):
+            return [
+                {
+                    "id": "conversation-1",
+                    "updated_at": "2026-09-14T00:00:00+00:00",
+                    "host_value_names": ["rulebook_id"],
+                }
+            ]
+
+        engine._client.get_rows_since = populated_remote  # type: ignore[method-assign]
+        await engine._hydrate_marked_columns(table, MIRROR_TABLES["chat"][table], "updated_at")
+        hydrated = await db.fetchone(
+            'SELECT host_value_names FROM chat.conversation WHERE id=?', ("conversation-1",)
+        )
+        assert hydrated["host_value_names"] == '["rulebook_id"]'
+        assert await _marker(db, table) is None
+
+        await db.execute(
+            'INSERT INTO chat.conversation (id, updated_at, host_value_names) VALUES (?, ?, ?)',
+            ("pending-1", "2026-09-14T00:00:00Z", '["local_name"]'),
+        )
+        await db.execute(
+            "INSERT INTO sync_queue (entity_type, entity_id, action, payload) VALUES (?, ?, 'upsert', '{}')",
+            ("chat.conversation", "pending-1"),
+        )
+        await _mark(db, table, ["host_value_names"])
+
+        async def pending_remote(*_args, **_kwargs):
+            return [
+                {
+                    "id": "pending-1",
+                    "updated_at": "2026-09-14T00:00:00+00:00",
+                    "host_value_names": ["cloud_name"],
+                }
+            ]
+
+        engine._client.get_rows_since = pending_remote  # type: ignore[method-assign]
+        await engine._hydrate_marked_columns(table, MIRROR_TABLES["chat"][table], "updated_at")
+        pending = await db.fetchone(
+            'SELECT host_value_names FROM chat.conversation WHERE id=?', ("pending-1",)
+        )
+        assert pending["host_value_names"] == '["local_name"]'
+
+        await db.execute("DELETE FROM sync_queue WHERE entity_id=?", ("pending-1",))
+        await db.execute(
+            'DELETE FROM chat._mirror_meta WHERE key=?',
+            ("column_hydration:conversation",),
+        )
+        await db.execute(
+            'INSERT INTO chat.conversation (id, updated_at, host_value_names) VALUES (?, ?, ?)',
+            ("newer-1", "2026-09-15T00:00:00Z", '["newer_local_name"]'),
+        )
+        await _mark(db, table, ["host_value_names"])
+
+        async def older_remote(*_args, **_kwargs):
+            return [
+                {
+                    "id": "newer-1",
+                    "updated_at": "2026-09-14T00:00:00+00:00",
+                    "host_value_names": ["older_cloud_name"],
+                }
+            ]
+
+        engine._client.get_rows_since = older_remote  # type: ignore[method-assign]
+        await engine._hydrate_marked_columns(table, MIRROR_TABLES["chat"][table], "updated_at")
+        newer = await db.fetchone(
+            'SELECT host_value_names FROM chat.conversation WHERE id=?', ("newer-1",)
+        )
+        assert newer["host_value_names"] == '["newer_local_name"]'
+
+    _run(tmp_path, scenario)
+
+
+def test_transport_failure_is_private_per_table_error_and_later_tables_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DroppedConnection:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            raise httpx.ReadError("proxy.internal.example: credentials")
+
+    monkeypatch.setattr(chat_client_module.httpx, "AsyncClient", lambda **_kwargs: DroppedConnection())
+
+    async def scenario(_db: LocalDatabase) -> None:
+        client = SupabaseChatClient()
+        client.set_jwt("test-jwt")
+        with pytest.raises(ChatSyncHTTPError) as raised:
+            await client.get_rows("conversation")
+        assert raised.value.status_code == 0
+        assert raised.value.body == "transport failure (no HTTP response)"
+        assert "proxy.internal.example" not in str(raised.value)
+
+        engine = ChatSyncEngine()
+        pulled: list[str] = []
+
+        async def page(table: str, **_kwargs):
+            pulled.append(table)
+            if table == "conversation":
+                raise raised.value
+            return []
+
+        engine._client.get_rows_since = page  # type: ignore[method-assign]
+        result = await engine._pull_changes()
+        assert result["conversation"] == {"error": 0}
+        assert "message" in pulled
 
     _run(tmp_path, scenario)

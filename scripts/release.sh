@@ -831,19 +831,23 @@ else
     warn "Tool-registry drift detected — release continues, but treat the report above as a bug."
 fi
 
-# ── Mirror snapshot drift (loud, deliberately non-blocking) ──────────────────
+# ── Mirror snapshot drift (confirmed drift blocks; unavailable is loud) ──────
 # The cloud schema is the spec for the local chat replica, and schema_mirror/
 # snapshot.json is how this build knows it. When the cloud grows a column the
 # snapshot lacks, chat_sync DROPS that value on every pulled row: 8,566 such
 # rows in the 72h to 2026-09-14, for a snapshot a month stale. Self-test first
 # so a green run means the detector can still fail.
-info "Checking the mirror snapshot against the live cloud schema (non-blocking)..."
+info "Checking the mirror snapshot against the live cloud schema..."
 uv run --frozen python scripts/check_mirror_snapshot_drift.py --self-test \
     || fail "The mirror snapshot drift detector cannot detect drift — fix scripts/check_mirror_snapshot_drift.py before releasing."
 if uv run --frozen python scripts/check_mirror_snapshot_drift.py; then
     ok "The mirror snapshot knows every column the cloud sends."
 else
-    warn "Mirror snapshot drift detected — release continues, but cloud values in those columns are being dropped locally. Refresh the snapshot (see above)."
+    mirror_snapshot_status=$?
+    if [ "$mirror_snapshot_status" -eq 1 ]; then
+        fail "Confirmed mirror snapshot drift — cloud values in those columns would be dropped locally. Refresh the snapshot before releasing."
+    fi
+    warn "The mirror snapshot check was incomplete (for example, no readable row). Release continues without claiming the snapshot is current."
 fi
 
 # pyproject.toml is the one release authority. The other manifests are derived

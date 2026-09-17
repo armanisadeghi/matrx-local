@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-14",
+ "generated_at": "2026-09-16",
  "schemas": {
   "ai": {
    "api": {
@@ -3921,9 +3921,9 @@
      },
      {
       "data_type": "timestamp with time zone",
-      "default": "now()",
+      "default": null,
       "name": "last_seen_at",
-      "nullable": false,
+      "nullable": true,
       "udt": "timestamptz"
      },
      {
@@ -4487,6 +4487,13 @@
       "name": "origin_class",
       "nullable": false,
       "udt": "text"
+     },
+     {
+      "data_type": "ARRAY",
+      "default": "'{}'::text[]",
+      "name": "host_value_names",
+      "nullable": false,
+      "udt": "_text"
      }
     ],
     "kind": "table",
@@ -10575,6 +10582,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "content_preview",
+      "nullable": true,
+      "udt": "text"
      }
     ],
     "kind": "table",
@@ -11409,6 +11423,13 @@
       "name": "changed_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "reason",
+      "nullable": true,
+      "udt": "text"
      }
     ],
     "kind": "table",

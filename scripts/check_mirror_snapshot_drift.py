@@ -26,9 +26,9 @@ against the generated contract. That is precisely the comparison chat_sync
 makes per row at runtime, so a green run here means the runtime warning cannot
 fire.
 
-Posture (matching scripts/check_tool_db_drift.py): read-only, exits 1 on real
-drift so the signal is visible, and exits 0 after a prominent warning when it
-could not verify — "could not verify" is never evidence of no drift.
+Posture: read-only, exits 1 on confirmed drift, exits 2 when any relation
+could not be verified, and exits 0 only after every mirrored relation was
+read. "Could not verify" is never evidence of no drift.
 
 Usage:
     python scripts/check_mirror_snapshot_drift.py
@@ -38,7 +38,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -162,37 +161,32 @@ def main() -> int:
                 if missing:
                     drift[f"{schema}.{table}"] = missing
 
+    if drift:
+        print(f"\n✗ SNAPSHOT DRIFT — the cloud has {sum(len(v) for v in drift.values())} "
+              f"column(s) this build cannot store, across {len(drift)} relation(s):")
+        for relation, columns in sorted(drift.items()):
+            print(f"    {relation}: {', '.join(columns)}")
+        print(
+            "\nEvery value in those columns is being DROPPED by chat_sync on every "
+            "pulled row (one WARNING per row, and no other signal).\n"
+            "WHAT TO DO: refresh schema_mirror/snapshot.json from the live schema "
+            "(the SQL is in schema_mirror/README.md), add any column the cloud "
+            "REMOVED to schema_mirror/retired_columns.json, run "
+            "`python scripts/generate_mirror_schema.py`, and commit all three "
+            "together."
+        )
+        return 1
+
     if unverified:
         print(
-            f"  ! {len(unverified)} relation(s) had no readable row to introspect: "
-            + ", ".join(unverified)
+            f"\n⚠ INCOMPLETE CHECK — {checked} relation(s) checked, but "
+            f"{len(unverified)} could not be read: " + ", ".join(unverified)
         )
+        print("This is NOT evidence that the mirror snapshot is current.")
+        return 2
 
-    if not checked:
-        print(
-            "\n⚠ COULD NOT VERIFY ANY RELATION — no readable rows and/or no "
-            "developer login. This is NOT evidence that the snapshot is current."
-        )
-        return 0
-
-    if not drift:
-        print(f"\n✓ {checked} mirrored relation(s) checked; the snapshot knows every column.")
-        return 0
-
-    print(f"\n✗ SNAPSHOT DRIFT — the cloud has {sum(len(v) for v in drift.values())} "
-          f"column(s) this build cannot store, across {len(drift)} relation(s):")
-    for relation, columns in sorted(drift.items()):
-        print(f"    {relation}: {', '.join(columns)}")
-    print(
-        "\nEvery value in those columns is being DROPPED by chat_sync on every "
-        "pulled row (one WARNING per row, and no other signal).\n"
-        "WHAT TO DO: refresh schema_mirror/snapshot.json from the live schema "
-        "(the SQL is in schema_mirror/README.md), add any column the cloud "
-        "REMOVED to schema_mirror/retired_columns.json, run "
-        "`python scripts/generate_mirror_schema.py`, and commit all three "
-        "together."
-    )
-    return 1
+    print(f"\n✓ {checked} mirrored relation(s) checked; the snapshot knows every column.")
+    return 0
 
 
 def self_test() -> int:

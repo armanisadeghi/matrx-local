@@ -6,8 +6,8 @@ Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
-SNAPSHOT_HASH = "202cc11e477a2d166328250e74685e5f293c3a666ecb8ea60d7fdb215ac173f2"
-SNAPSHOT_GENERATED_AT = "2026-09-14"
+SNAPSHOT_HASH = "13bac9dff7c893054157adc805d8b1d001cc0ef62711744ca22edbd607910597"
+SNAPSHOT_GENERATED_AT = "2026-09-16"
 
 # Cloud columns removed after older app versions created them locally. The
 # mirror preserves their data but excludes them from every sync contract.
@@ -533,6 +533,7 @@ MIRROR_TABLES = {
                 "exclude_from_kg": "INTEGER",
                 "forked_at_position": "INTEGER",
                 "forked_from_id": "TEXT",
+                "host_value_names": "TEXT",
                 "id": "TEXT",
                 "initial_agent_id": "TEXT",
                 "initial_agent_version_id": "TEXT",
@@ -562,7 +563,7 @@ MIRROR_TABLES = {
                 "version": "INTEGER",
                 "visibility": "TEXT"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"conversation\" (\n    \"id\" TEXT NOT NULL,\n    \"title\" TEXT,\n    \"system_instruction\" TEXT,\n    \"config\" TEXT,\n    \"status\" TEXT,\n    \"message_count\" INTEGER,\n    \"forked_from_id\" TEXT,\n    \"forked_at_position\" INTEGER,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"last_model_id\" TEXT,\n    \"parent_conversation_id\" TEXT,\n    \"variables\" TEXT,\n    \"overrides\" TEXT,\n    \"description\" TEXT,\n    \"keywords\" TEXT,\n    \"organization_id\" TEXT,\n    \"task_id\" TEXT,\n    \"source_app\" TEXT,\n    \"source_feature\" TEXT,\n    \"is_ephemeral\" INTEGER,\n    \"initial_agent_id\" TEXT,\n    \"initial_agent_version_id\" TEXT,\n    \"is_favorite\" INTEGER,\n    \"cache_state\" TEXT,\n    \"last_context_breakdown\" TEXT,\n    \"sandbox_instance_id\" TEXT,\n    \"last_request_status\" TEXT,\n    \"last_request_id\" TEXT,\n    \"app_instance_id\" TEXT,\n    \"exclude_from_kg\" INTEGER,\n    \"conversation_type\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"version\" INTEGER,\n    \"visibility\" TEXT,\n    \"origin_class\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"conversation\" (\n    \"id\" TEXT NOT NULL,\n    \"title\" TEXT,\n    \"system_instruction\" TEXT,\n    \"config\" TEXT,\n    \"status\" TEXT,\n    \"message_count\" INTEGER,\n    \"forked_from_id\" TEXT,\n    \"forked_at_position\" INTEGER,\n    \"created_at\" TEXT,\n    \"updated_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"metadata\" TEXT,\n    \"last_model_id\" TEXT,\n    \"parent_conversation_id\" TEXT,\n    \"variables\" TEXT,\n    \"overrides\" TEXT,\n    \"description\" TEXT,\n    \"keywords\" TEXT,\n    \"organization_id\" TEXT,\n    \"task_id\" TEXT,\n    \"source_app\" TEXT,\n    \"source_feature\" TEXT,\n    \"is_ephemeral\" INTEGER,\n    \"initial_agent_id\" TEXT,\n    \"initial_agent_version_id\" TEXT,\n    \"is_favorite\" INTEGER,\n    \"cache_state\" TEXT,\n    \"last_context_breakdown\" TEXT,\n    \"sandbox_instance_id\" TEXT,\n    \"last_request_status\" TEXT,\n    \"last_request_id\" TEXT,\n    \"app_instance_id\" TEXT,\n    \"exclude_from_kg\" INTEGER,\n    \"conversation_type\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"version\" INTEGER,\n    \"visibility\" TEXT,\n    \"origin_class\" TEXT,\n    \"host_value_names\" TEXT, PRIMARY KEY (\"id\")\n)",
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
@@ -582,6 +583,7 @@ MIRROR_TABLES = {
                 "exclude_from_kg": "bool",
                 "forked_at_position": "int4",
                 "forked_from_id": "uuid",
+                "host_value_names": "_text",
                 "id": "uuid",
                 "initial_agent_id": "uuid",
                 "initial_agent_version_id": "uuid",

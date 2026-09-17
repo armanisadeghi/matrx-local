@@ -122,3 +122,35 @@ def test_the_live_drift_detector_can_still_fail() -> None:
     assert module.unknown_columns(
         "chat", "request_snapshot", known | {"a_column_from_tomorrow"}
     ) == ["a_column_from_tomorrow"]
+
+
+def test_unreadable_relations_are_incomplete_not_a_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sampled empty/RLS-hidden table cannot certify the whole snapshot."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "check_mirror_snapshot_drift.py"
+    spec = importlib.util.spec_from_file_location("check_mirror_snapshot_drift_incomplete", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(module.httpx, "Client", lambda **_kwargs: Client())
+    monkeypatch.setattr(module, "_admin_jwt", lambda _client: None)
+    monkeypatch.setattr(module, "live_columns", lambda *_args: None)
+    monkeypatch.setattr(sys, "argv", ["check_mirror_snapshot_drift.py"])
+
+    assert module.main() == 2
+    output = capsys.readouterr().out
+    assert "INCOMPLETE CHECK" in output
+    assert "snapshot knows every column" not in output

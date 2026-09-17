@@ -47,6 +47,12 @@ export interface ClientLogLine {
   level: LogLevel;
   message: string;
   source?: string;
+  /** Every engine transport that carried this one occurrence. */
+  transportSources?: string[];
+  /** Evidence attached to a preceding error, rather than a new incident. */
+  diagnosticContext?: boolean;
+  /** The incident this diagnostic evidence explains, when still buffered. */
+  diagnosticParentId?: number;
   /** Present only on source="access" lines — raw structured data for rich display. */
   accessEntry?: AccessEntry;
 }
@@ -63,6 +69,26 @@ let _lineId = 0;
 const MAX_TEXT_BUFFERED = 5000;
 const MAX_ACCESS_BUFFERED = 1000;
 const _buffer: ClientLogLine[] = [];
+
+type EngineTransport = "tauri" | "server" | "syslog";
+
+interface EngineOccurrence {
+  firstSeenAt: number;
+  eventTimestamp: string | null;
+  sources: Set<EngineTransport>;
+  line: ClientLogLine;
+}
+
+// The desktop receives the same system.log line through the setup history,
+// authenticated syslog tail, and Tauri's sidecar IPC. Keep one incident for
+// one occurrence while retaining which transports corroborated it. A source
+// may only join an occurrence once, so two same-source repetitions remain two
+// occurrences instead of disappearing into a time-window dedupe.
+const ENGINE_TRANSPORT_WINDOW_MS = 30_000;
+const MAX_ENGINE_OCCURRENCES = 1_000;
+const _engineOccurrences = new Map<string, EngineOccurrence[]>();
+const _tracebackParents = new Map<EngineTransport, number>();
+const _lastEngineEvents = new Map<EngineTransport, ClientLogLine>();
 
 // Separate ring of raw access entries for consumers that want the full struct
 const _accessBuffer: AccessEntry[] = [];
@@ -178,6 +204,17 @@ export function emitClientLog(
   accessEntry?: AccessEntry,
 ): void {
   if (_isDuplicate(level, message)) return;
+  _emitClientLog(level, message, source, accessEntry);
+}
+
+function _emitClientLog(
+  level: LogLevel,
+  message: string,
+  source?: string,
+  accessEntry?: AccessEntry,
+  diagnosticContext = false,
+  diagnosticParentId?: number,
+): ClientLogLine {
   const line: ClientLogLine = {
     id: ++_lineId,
     time: _makeTime(),
@@ -185,15 +222,18 @@ export function emitClientLog(
     message,
     ...(source !== undefined ? { source } : {}),
     ...(accessEntry !== undefined ? { accessEntry } : {}),
+    ...(diagnosticContext ? { diagnosticContext: true } : {}),
+    ...(diagnosticParentId !== undefined ? { diagnosticParentId } : {}),
   };
   _push(line);
-  if (level === "warn" || level === "error") {
+  if (!diagnosticContext && (level === "warn" || level === "error")) {
     enqueueDurableClientError({
       level,
       message,
       ...(source !== undefined ? { source } : {}),
     });
   }
+  return line;
 }
 
 let _globalErrorCaptureInstalled = false;
@@ -233,6 +273,9 @@ export function getAccessBuffer(): AccessEntry[] {
 export function clearClientLog(): void {
   _buffer.splice(0, _buffer.length);
   _accessBuffer.splice(0, _accessBuffer.length);
+  _engineOccurrences.clear();
+  _tracebackParents.clear();
+  _lastEngineEvents.clear();
   _bus.dispatchEvent(new CustomEvent(_CLEAR_EVENT, { detail: null }));
 }
 
@@ -335,6 +378,181 @@ function cleanTauriMessage(rawText: string): string {
 
   msg = msg.replace(/^(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*-\s*/, "");
   return msg.trim();
+}
+
+function cleanEngineMessage(source: EngineTransport, rawText: string): string {
+  return source === "tauri"
+    ? cleanTauriMessage(rawText)
+    : cleanSyslogMessage(stripAnsi(rawText));
+}
+
+function engineLevel(
+  source: EngineTransport,
+  rawText: string,
+  declaredLevel?: LogLevel,
+): LogLevel {
+  if (declaredLevel !== undefined) return declaredLevel;
+  if (source === "tauri" && isOrdinaryLifecycleLine(rawText)) return "info";
+  return source === "tauri"
+    ? (parseTauriLogLevel(rawText) ?? inferServerLevel(rawText))
+    : (parseSyslogLevel(stripAnsi(rawText)) ?? inferServerLevel(rawText));
+}
+
+function isOrdinaryLifecycleLine(text: string): boolean {
+  const normalized = stripAnsi(text).trim().toLowerCase();
+  return (
+    normalized.includes("[preflight]") ||
+    normalized.includes("[launcher]") ||
+    normalized.includes("[cloudflared]") ||
+    (/^\[terminated\]\s+process exited:/.test(normalized) &&
+      (/\bexpected=true\b/.test(normalized) ||
+        /unix_wait_status\(0\)|code:\s*some\(0\)|exitstatus\(0\)/.test(
+        normalized,
+      )))
+  );
+}
+
+function engineIdentity(level: LogLevel, message: string, context: boolean): string {
+  // Transport wrappers and Python logger prefixes are removed before this
+  // point. Keep the rest exact: IDs, paths, and repeated messages can identify
+  // separate real events and must never be fuzzy-deduped here.
+  return `${context ? "context" : "event"}|${level}|${message}`;
+}
+
+function sourceEventTimestamp(rawText: string): string | null {
+  const match = stripAnsi(rawText).match(
+    /^(?:\[std(?:out|err)\]\s*)?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,.]\d{3,6})\b/,
+  );
+  return match?.[1] ?? null;
+}
+
+function findTracebackParent(source: EngineTransport): number | undefined {
+  const line = _lastEngineEvents.get(source);
+  return line?.level === "error" && !line.diagnosticContext ? line.id : undefined;
+}
+
+function isTracebackMarker(message: string): boolean {
+  return /^(?:traceback \(most recent call last\):|traceback:)$/i.test(
+    message.trim(),
+  );
+}
+
+function isNewPythonLogRecord(source: EngineTransport, rawText: string): boolean {
+  if (source === "tauri") return parseTauriLogLevel(rawText) !== null;
+  return parseSyslogLevel(stripAnsi(rawText)) !== null;
+}
+
+function emitCanonicalEngineLine(
+  source: EngineTransport,
+  level: LogLevel,
+  message: string,
+  eventTimestamp: string | null,
+  diagnosticContext: boolean,
+  diagnosticParentId?: number,
+): ClientLogLine {
+  const key = engineIdentity(level, message, diagnosticContext);
+  const now = Date.now();
+  pruneEngineOccurrences(now);
+  const recent = (_engineOccurrences.get(key) ?? []).filter(
+    (occurrence) => now - occurrence.firstSeenAt <= ENGINE_TRANSPORT_WINDOW_MS,
+  );
+  const existing = recent.find(
+    (occurrence) =>
+      !occurrence.sources.has(source) &&
+      // A system-log timestamp is the occurrence identity whenever a feed
+      // supplies it. Tauri does not always retain that prefix, so its mirror
+      // joins the oldest still-unpaired occurrence of the same exact message.
+      (eventTimestamp === null ||
+        occurrence.eventTimestamp === null ||
+        occurrence.eventTimestamp === eventTimestamp),
+  );
+  if (existing) {
+    existing.sources.add(source);
+    existing.line.transportSources = [...existing.sources];
+    if (!diagnosticContext) _lastEngineEvents.set(source, existing.line);
+    _engineOccurrences.set(key, recent);
+    return existing.line;
+  }
+
+  const line = _emitClientLog(
+    level,
+    message,
+    source,
+    undefined,
+    diagnosticContext,
+    diagnosticParentId,
+  );
+  line.transportSources = [source];
+  if (!diagnosticContext) _lastEngineEvents.set(source, line);
+  recent.push({ firstSeenAt: now, eventTimestamp, sources: new Set([source]), line });
+  _engineOccurrences.set(key, recent);
+  return line;
+}
+
+function pruneEngineOccurrences(now: number): void {
+  const retained: Array<{ key: string; occurrence: EngineOccurrence }> = [];
+  for (const [key, occurrences] of _engineOccurrences) {
+    const recent = occurrences.filter(
+      (occurrence) => now - occurrence.firstSeenAt <= ENGINE_TRANSPORT_WINDOW_MS,
+    );
+    if (recent.length === 0) _engineOccurrences.delete(key);
+    else {
+      _engineOccurrences.set(key, recent);
+      recent.forEach((occurrence) => retained.push({ key, occurrence }));
+    }
+  }
+  // Leave one slot for the occurrence currently being recorded. Eviction can
+  // only make a late mirror visible as a new line; it never drops an event.
+  if (retained.length < MAX_ENGINE_OCCURRENCES) return;
+  retained
+    .sort((left, right) => left.occurrence.firstSeenAt - right.occurrence.firstSeenAt)
+    .slice(0, retained.length - MAX_ENGINE_OCCURRENCES + 1)
+    .forEach(({ key, occurrence }) => {
+      const occurrences = _engineOccurrences.get(key);
+      if (!occurrences) return;
+      const next = occurrences.filter((candidate) => candidate !== occurrence);
+      if (next.length === 0) _engineOccurrences.delete(key);
+      else _engineOccurrences.set(key, next);
+    });
+}
+
+/**
+ * Records one engine log occurrence across the redundant Tauri, setup-log,
+ * and syslog feeds. Tracebacks remain visible as linked diagnostic evidence;
+ * only their owning ERROR record is an Error Inspector incident.
+ */
+export function emitEngineLog(
+  source: EngineTransport,
+  rawText: string,
+  declaredLevel?: LogLevel,
+): ClientLogLine {
+  const message = cleanEngineMessage(source, rawText);
+  const level = engineLevel(source, rawText, declaredLevel);
+  const eventTimestamp = sourceEventTimestamp(rawText);
+  const marker = isTracebackMarker(message);
+  const activeParent = _tracebackParents.get(source);
+
+  if (marker) {
+    const parentId = activeParent ?? findTracebackParent(source) ?? emitCanonicalEngineLine(
+      source,
+      "error",
+      "[traceback] exception details follow",
+      eventTimestamp,
+      false,
+    ).id;
+    _tracebackParents.set(source, parentId);
+    return emitCanonicalEngineLine(source, "info", message, eventTimestamp, true, parentId);
+  }
+
+  if (activeParent !== undefined) {
+    if (isNewPythonLogRecord(source, rawText)) {
+      _tracebackParents.delete(source);
+    } else {
+      return emitCanonicalEngineLine(source, "info", message, eventTimestamp, true, activeParent);
+    }
+  }
+
+  return emitCanonicalEngineLine(source, level, message, eventTimestamp, false);
 }
 
 function inferServerLevel(text: string): LogLevel {
@@ -462,10 +680,10 @@ function startSetupLogsStream(engineUrl: string): () => void {
                 const data = JSON.parse(raw.slice(6));
                 if (eventType === "log") {
                   const d = data as { line: string; level: string };
-                  emitClientLog(
-                    SETUP_LOG_LEVEL_MAP[d.level] ?? "info",
-                    d.line,
+                  emitEngineLog(
                     "server",
+                    d.line,
+                    SETUP_LOG_LEVEL_MAP[d.level] ?? "info",
                   );
                 } else if (eventType === "history_end") {
                   emitClientLog(
@@ -555,9 +773,7 @@ async function startSyslogStream(
     es.onmessage = (evt) => {
       if (_state.paused) return;
       const raw = stripAnsi(evt.data);
-      const level = parseSyslogLevel(raw) ?? inferServerLevel(raw);
-      const msg = cleanSyslogMessage(raw);
-      emitClientLog(level, msg, "syslog");
+      emitEngineLog("syslog", raw);
     };
 
     es.onerror = () => {
@@ -713,7 +929,7 @@ function _trackRecentLine(text: string): void {
   }
 }
 
-function _isCrashSignal(text: string): boolean {
+export function isEngineCrashSignal(text: string): boolean {
   const stripped = stripAnsi(text);
 
   // Lines from the preflight and launcher subsystems are by-design
@@ -740,15 +956,62 @@ function _isCrashSignal(text: string): boolean {
     return false;
   }
 
-  const t = stripped.toLowerCase();
-  return (
-    t.includes("process exited") ||
-    t.includes("terminated") ||
-    t.includes("signal: some(9)") ||
-    t.includes("sigkill") ||
-    t.includes("panic!") ||
-    (t.includes("signal:") && t.includes("some("))
-  );
+  const t = stripped.trim().toLowerCase();
+  // `CommandEvent::Terminated` is also emitted for a deliberate stop. Only
+  // treat the explicit abnormal statuses as a crash; lifecycle messages and
+  // quoted output containing words such as "terminated" are ordinary logs.
+  if (!/^\[terminated\]\s+process exited:/.test(t)) return false;
+  if (/\bexpected=true\b|unix_wait_status\(0\)|code:\s*some\(0\)|exitstatus\(0\)/.test(t)) {
+    return false;
+  }
+  if (/\bexpected=false\b/.test(t)) {
+    return /signal:\s*some\([1-9]\d*\)|code:\s*some\([1-9]\d*\)/.test(t);
+  }
+  // Legacy payloads did not carry expected-exit provenance. Keep the former
+  // high-confidence crash signals, while leaving ambiguous SIGTERM visible as
+  // an error line without manufacturing a crash-context burst.
+  return /signal:\s*some\((?:6|9|11)\)|sig(?:kill|abrt|segv)|code:\s*some\([1-9]\d*\)/.test(t);
+}
+
+/** Record one live sidecar line, preserving crash evidence without turning its
+ * context burst into additional Error Inspector incidents. */
+export function recordTauriSidecarLog(text: string): ClientLogLine {
+  _trackRecentLine(text);
+  if (isEngineCrashSignal(text)) {
+    const crash = _emitClientLog(
+      "error",
+      `[CRASH DETECTED] ${cleanTauriMessage(text)}`,
+      "tauri",
+    );
+    _emitClientLog(
+      "info",
+      `━━━ Last ${_recentTauriLines.length} engine lines before crash ━━━`,
+      "tauri",
+      undefined,
+      true,
+      crash.id,
+    );
+    [..._recentTauriLines].forEach((line) => {
+      _emitClientLog(
+        "info",
+        `  ${cleanTauriMessage(line)}`,
+        "tauri",
+        undefined,
+        true,
+        crash.id,
+      );
+    });
+    _emitClientLog(
+      "info",
+      `━━━ End of crash context ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      "tauri",
+      undefined,
+      true,
+      crash.id,
+    );
+    return crash;
+  }
+  return emitEngineLog("tauri", text);
 }
 
 async function startTauriStream(): Promise<() => void> {
@@ -761,11 +1024,7 @@ async function startTauriStream(): Promise<() => void> {
     );
     historical.forEach((text) => {
       _trackRecentLine(text);
-      emitClientLog(
-        parseTauriLogLevel(text) ?? inferServerLevel(text),
-        cleanTauriMessage(text),
-        "tauri",
-      );
+      emitEngineLog("tauri", text);
     });
   } catch {
     /* not in Tauri */
@@ -779,35 +1038,7 @@ async function startTauriStream(): Promise<() => void> {
         typeof event.payload === "string"
           ? event.payload
           : String(event.payload);
-      _trackRecentLine(text);
-
-      // If this line is a crash signal, immediately dump recent context
-      if (_isCrashSignal(text)) {
-        emitClientLog(
-          "error",
-          `[CRASH DETECTED] ${cleanTauriMessage(text)}`,
-          "tauri",
-        );
-        emitClientLog(
-          "error",
-          `━━━ Last ${_recentTauriLines.length} engine lines before crash ━━━`,
-          "tauri",
-        );
-        [..._recentTauriLines].forEach((line) => {
-          emitClientLog("error", `  ${cleanTauriMessage(line)}`, "tauri");
-        });
-        emitClientLog(
-          "error",
-          `━━━ End of crash context ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-          "tauri",
-        );
-      } else {
-        emitClientLog(
-          parseTauriLogLevel(text) ?? inferServerLevel(text),
-          cleanTauriMessage(text),
-          "tauri",
-        );
-      }
+      recordTauriSidecarLog(text);
     });
     unlistenFn = unlisten;
   } catch {

@@ -974,7 +974,21 @@ async fn start_sidecar(
                     let _ = app_handle.emit("sidecar-log", format!("[stderr] {}", text));
                 }
                 CommandEvent::Terminated(status) => {
-                    let msg = format!("[terminated] Process exited: {:?}", status);
+                    // Read the existing generation ownership before notifying
+                    // the renderer. The later clearing block remains the sole
+                    // mutation, so a delayed event cannot affect a newer PID.
+                    let sidecar_state = app_handle.state::<SidecarState>();
+                    let expected_exit = sidecar_state
+                        .child
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|current| current.pid())
+                        != Some(spawned_pid);
+                    let msg = format!(
+                        "[terminated] Process exited: {:?} expected={}",
+                        status, expected_exit
+                    );
                     // Durable record of EVERY engine exit Rust observes — with
                     // the exit code/signal. An engine death with no matching
                     // [graceful-shutdown]/[stop_sidecar]/[orphan-sweep] line
@@ -995,7 +1009,6 @@ async fn start_sidecar(
                     // Terminated event from generation N must never erase a
                     // newly spawned generation N+1. This is also the Windows
                     // stale-handle liveness mechanism.
-                    let sidecar_state = app_handle.state::<SidecarState>();
                     let we_asked_for_it = {
                         let mut child = sidecar_state.child.lock().unwrap();
                         let ours = child.as_ref().map(|current| current.pid()) == Some(spawned_pid);

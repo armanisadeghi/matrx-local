@@ -113,6 +113,11 @@ class FakeFilesClient:
         self.calls["get_url_envelope"].append(file_id)
         return {"download_url": f"https://files.fake/{file_id}"}
 
+    async def auth_header(self) -> dict[str, str]:
+        """Mirrors MatrxFilesClient.auth_header — the Bearer + org headers the
+        DownloadManager attaches to a direct byte fetch of a durable file URL."""
+        return {"Authorization": f"Bearer {self._jwt}"}
+
     async def get_record(self, file_id: str) -> dict[str, Any]:
         self.calls["get_record"].append(file_id)
         if file_id not in self.records:

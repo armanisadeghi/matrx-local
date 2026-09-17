@@ -189,15 +189,27 @@ class MatrxFilesClient:
         metadata: dict[str, Any] | None = None,
         request_id: str | None = None,
         idempotency_key: str | None = None,
+        intent: str | None = None,
+        reason: str | None = None,
     ) -> dict[str, Any]:
         """Buffered multipart upload. Same file_path ⇒ the canonical managed
-        write version-bumps the existing logical file."""
+        write version-bumps the existing logical file.
+
+        ``intent`` is the server's strict dedup declaration. Left unset, a
+        write whose BYTES the account already holds is aliased onto that
+        existing row and this ``file_path`` is recorded nowhere. A caller for
+        whom the path IS the point — one placement of one content — sends
+        ``intent="force_new_copy"`` with a ``reason`` and gets its own row,
+        linked to the canonical content by ``duplicate_of_file_id``.
+        """
         return await self._request(
             "POST",
             "/files/upload",
             data={
                 "file_path": file_path,
                 "visibility": visibility,
+                **({"intent": intent} if intent else {}),
+                **({"reason": reason} if reason else {}),
                 **(
                     {"metadata_json": json.dumps(metadata, separators=(",", ":"))}
                     if metadata

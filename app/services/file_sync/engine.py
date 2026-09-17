@@ -62,6 +62,9 @@ _MAX_PAGES_PER_CYCLE = 20
 _HYDRATE_BACKFILL_PER_CYCLE = 25
 _HYDRATE_TIMEOUT_SECONDS = 300.0
 _UPLOAD_MAX_BYTES = 512 * 1024 * 1024  # hard sanity ceiling for buffered uploads
+# Rounds a path gets to obtain a cloud row of its OWN before the mirror stops
+# re-uploading and says the door is not honouring the declared placement.
+_MAX_PLACEMENT_ATTEMPTS = 3
 _SYNC_ADMIN_DIR = ".sync"
 
 
@@ -801,24 +804,42 @@ class FileSyncEngine:
             file_path=state["rel_path"],
             content=content,
             filename=abs_path.name,
+            # THE PATH IS THE MIRROR'S IDENTITY. Without a declaration the door
+            # treats every write as alias_existing: bytes the account already
+            # holds resolve to the canonical row and THIS path is recorded
+            # nowhere, while the response echoes it back as if it had landed.
+            # Two copies of one document in two folders is an ordinary thing to
+            # have, and before this the second folder's file existed in the
+            # cloud only as the first one's.
+            intent="force_new_copy",
+            reason=f"file mirror placement: {state['rel_path']}",
         )
         cloud_id = str(resp.get("file_id") or "")
         checksum = resp.get("checksum") or local_hash
         if not cloud_id:
             raise RuntimeError(f"upload of {state['rel_path']} returned no file_id")
+        # Believe the ROW, never the response. The row the server serves back is
+        # the only thing that says which path actually landed; the response's
+        # own file_path merely echoed the request on older builds.
+        record: dict[str, Any] | None = None
+        try:
+            record = await self._client.get_record(cloud_id)
+        except FileSyncHTTPError as exc:
+            logger.warning("[file_sync] post-upload record fetch failed (%s) — the next pull realigns", exc)
+        cloud_path = str((record or {}).get("file_path") or "")
+        if record is not None and cloud_path and cloud_path != state["rel_path"]:
+            await self._refuse_foreign_placement(state, cloud_path=cloud_path)
+            return
         if state["file_id"] != cloud_id:
             await self._index.rekey_state(state["file_id"], cloud_id)
         # Echo the cloud record into the mirror so the next pull doesn't see
         # our own push as a foreign change.
-        try:
-            record = await self._client.get_record(cloud_id)
+        if record is not None:
             # A record names its id `id`, not `file_id` — one converter owns
             # that translation (see index.record_to_feed_entry).
             await self._index.upsert_remote_file(
                 record_to_feed_entry(record, checksum=checksum)
             )
-        except FileSyncHTTPError as exc:
-            logger.warning("[file_sync] post-upload record fetch failed (%s) — the next pull realigns", exc)
         # Guarded completion: if the file changed again locally while the
         # upload was in flight (the watcher re-stamped local_hash), the fresh
         # edit must stay pending — an unconditional flip to 'synced' would
@@ -841,6 +862,46 @@ class FileSyncEngine:
                 "[file_sync] %s changed again during upload — the newer edit stays queued",
                 state["rel_path"],
             )
+        else:
+            await self._index.upsert_state(cloud_id, placement_attempts=0)
+
+    async def _refuse_foreign_placement(
+        self, state: dict[str, Any], *, cloud_path: str
+    ) -> None:
+        """The upload landed on a row filed under ANOTHER path — say so.
+
+        The bytes are in the cloud, but as somebody else's file: this path has
+        no row of its own, so it is not this path in AI Matrx and the index must
+        not call it synced. Keeping the state pending re-sends it declaring the
+        placement again; after ``_MAX_PLACEMENT_ATTEMPTS`` rounds the mirror
+        stops re-uploading the same bytes and leaves the reason on the row,
+        which is what a door that does not honour the declaration looks like.
+        """
+        attempts = int(state.get("placement_attempts") or 0) + 1
+        exhausted = attempts >= _MAX_PLACEMENT_ATTEMPTS
+        reason = (
+            f"AI Matrx filed these bytes under {cloud_path}, not under this file's own "
+            f"path, so this path has no file of its own there."
+        )
+        remedy = (
+            " The copy on this Mac is intact; nothing was lost."
+            if exhausted
+            else " Re-sending it under its own path."
+        )
+        await self._index.upsert_state(
+            state["file_id"],
+            pending_op=None if exhausted else "upload",
+            error=(reason + remedy)[:300],
+            placement_attempts=attempts,
+        )
+        log = logger.error if exhausted else logger.warning
+        log(
+            "[file_sync] %s has no file of its own in AI Matrx (the bytes are filed "
+            "under %s)%s",
+            state["rel_path"],
+            cloud_path,
+            "" if not exhausted else " — giving up after %d attempts" % attempts,
+        )
 
     async def _push_delete(self, state: dict[str, Any]) -> None:
         if state["file_id"].startswith(LOCAL_ID_PREFIX):

@@ -1066,6 +1066,11 @@ export interface CodingSessionArtifactsTick {
   captured: number;
   uploaded: number;
   failed: number;
+  confirmed: number;
+  missing_in_cloud: number;
+  /** Paths found filed under another path and queued to be re-filed under
+   * their own. */
+  queued_for_refiling: number;
 }
 
 export interface CodingSessionArtifactsStatus {
@@ -1075,7 +1080,25 @@ export interface CodingSessionArtifactsStatus {
   sessions: number;
   files: number;
   bytes: number;
+  /** Entries whose cloud file id was read back successfully — never a count
+   * of upload responses. */
   uploaded: number;
+  /** Accepted by AI Matrx but not yet read back. */
+  awaiting_confirmation: number;
+  /** Paths AI Matrx aliased onto an existing byte-identical file (no new row). */
+  deduplicated: number;
+  /** Paths whose AI Matrx row is filed under ANOTHER path, so this session
+   * cannot list them: the lane re-files each one under its own path. */
+  unplaced: number;
+  /** Paths AI Matrx would not give a row of their own after every repair
+   * round. The file is safe; the listing under this session is not. */
+  placement_failed: number;
+  /** Distinct rows AI Matrx actually holds for these paths. */
+  cloud_rows: number;
+  distinct_content: number;
+  superseded_versions: number;
+  /** Recorded ids AI Matrx no longer serves; queued for re-upload. */
+  missing_in_cloud: number;
   pending_upload: number;
   failed_upload: number;
   abandoned_upload: number;
@@ -1093,6 +1116,8 @@ export interface CodingSessionArtifactsStatus {
     max_files_per_session: number;
     uploads_per_tick: number;
     max_upload_attempts: number;
+    verify_per_tick: number;
+    max_placement_repairs: number;
     scan_interval_seconds: number;
   };
 }
@@ -1105,7 +1130,25 @@ export interface CodingSessionArtifactsSessionSummary {
   durable_dir: string;
   files: number;
   bytes: number;
+  /** Entries whose cloud file id was read back successfully — never a count
+   * of upload responses. */
   uploaded: number;
+  /** Accepted by AI Matrx but not yet read back. */
+  awaiting_confirmation: number;
+  /** Paths AI Matrx aliased onto an existing byte-identical file (no new row). */
+  deduplicated: number;
+  /** Paths whose AI Matrx row is filed under ANOTHER path, so this session
+   * cannot list them: the lane re-files each one under its own path. */
+  unplaced: number;
+  /** Paths AI Matrx would not give a row of their own after every repair
+   * round. The file is safe; the listing under this session is not. */
+  placement_failed: number;
+  /** Distinct rows AI Matrx actually holds for these paths. */
+  cloud_rows: number;
+  distinct_content: number;
+  superseded_versions: number;
+  /** Recorded ids AI Matrx no longer serves; queued for re-upload. */
+  missing_in_cloud: number;
   pending_upload: number;
   failed_upload: number;
   abandoned_upload: number;
@@ -1122,6 +1165,15 @@ export interface CodingSessionArtifactEntry {
   uploaded_at: string | null;
   upload_error: string | null;
   upload_attempts: number;
+  previous_file_ids?: string[];
+  deduplicated?: boolean | null;
+  cloud_file_path?: string | null;
+  verified_at?: string | null;
+  verify_error?: string | null;
+  /** Rounds spent trying to get this path a row of its own. */
+  placement_repairs?: number;
+  /** Set while this path has no row of its own, and after the lane gives up. */
+  placement_error?: string | null;
 }
 
 export interface CodingSessionArtifactsSessionDetail
@@ -3149,6 +3201,25 @@ class EngineAPI {
   /** POST /coding-session/artifacts/sync — one capture+publish tick, now. */
   async syncCodingSessionArtifacts(): Promise<CodingSessionArtifactsTick> {
     return this.request("/coding-session/artifacts/sync", { method: "POST" });
+  }
+
+  /**
+   * POST /coding-session/artifacts/verify — read recorded artifact file ids
+   * back from AI Matrx and re-upload anything it no longer serves.
+   */
+  async verifyCodingSessionArtifacts(): Promise<{
+    confirmed: number;
+    missing_in_cloud: number;
+    queued_for_refiling: number;
+    re_uploaded?: number;
+    re_upload_failed?: number;
+    files: number;
+    uploaded: number;
+    awaiting_confirmation: number;
+    still_missing_in_cloud: number;
+    still_unplaced: number;
+  }> {
+    return this.request("/coding-session/artifacts/verify", { method: "POST" });
   }
 
   async getClaudeSessionDetailOperation(operationId: string, afterSessionRef?: string): Promise<ClaudeSessionDetailOperationPage> {

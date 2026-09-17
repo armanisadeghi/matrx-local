@@ -324,6 +324,12 @@ class FileSyncIndex:
         out["pending_ops"] = pending["cnt"] if pending else 0
         tracked = await db.fetchone("SELECT COUNT(*) AS cnt FROM file_sync_state")
         out["tracked"] = tracked["cnt"] if tracked else 0
+        # Paths whose bytes are in AI Matrx only as ANOTHER path's file, so the
+        # path itself has no file there. Never folded into "synced".
+        unplaced = await db.fetchone(
+            "SELECT COUNT(*) AS cnt FROM file_sync_state WHERE placement_attempts > 0"
+        )
+        out["unplaced"] = unplaced["cnt"] if unplaced else 0
         return out
 
     async def find_pending_delete_by_hash(self, local_hash: str) -> dict[str, Any] | None:

@@ -52,6 +52,22 @@ Doctrine: `docs/SYNC_CONTRACT.md` (this feature has a row in its matrix).
   with `index.record_to_feed_entry` — reading feed names off a record payload
   yields `file_id=None`, which the mirror refuses (guard:
   `tests/unit/test_file_sync_record_echo.py`, incl. a census of the echo sites).
+- **THE PATH IS THE IDENTITY, so every push DECLARES its placement.** An
+  undeclared matrx-files write is implicitly `alias_existing`: bytes the
+  account already holds resolve to the canonical row and the requested path is
+  recorded NOWHERE, while the response echoes that path back. Two copies of one
+  document in two folders is ordinary, and before 2026-09-17 the second folder's
+  file existed in the cloud only as the first one's while the index called it
+  `synced`. Pushes now send `intent="force_new_copy"` with a reason naming the
+  path (the row is linked to the canonical content by `duplicate_of_file_id` —
+  the platform's "one content, many placements" primitive, aidream `453fd1adb`),
+  and the mirror **believes the ROW, never the response**: it reads
+  `GET /files/{id}` and, if that row is filed under a different path, refuses to
+  rekey or finalize, names the other path in `file_sync_state.error`, and
+  re-sends. `placement_attempts` bounds that at `_MAX_PLACEMENT_ATTEMPTS`
+  rounds, after which it stops and says the local copy is intact; `counts()`
+  reports them as `unplaced`, never as `synced`. Guard:
+  `tests/unit/test_file_sync_placement.py`.
 - **An entry the mirror cannot key is named ONCE per path**, with its remedy,
   and the repeats accrue in `unmirrorable_entry_state()` — never one ERROR per
   occurrence. A skipped entry is counted as `skipped`, never as `applied`.

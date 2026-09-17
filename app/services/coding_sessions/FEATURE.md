@@ -961,6 +961,54 @@ as `cancelled`, outbox drained to zero with validated receipts.
 
 ## Change log
 
+- 2026-09-17 — **Every artifact PATH gets a placement of its own in AI Matrx.** Sharing a
+  cloud row by content was not neutral: the web Artifacts panel lists `files.files` rows
+  carrying `metadata.cli_session_id`, so a path aliased onto another session's row is
+  invisible under its own session — 115 / 144 / 28 entries of the three biggest sessions
+  lived under another session's row, and within a session identical files at different
+  paths collapsed to one entry. Bytes were never lost; the placement was. Every upload now
+  declares `intent="force_new_copy"` with a reason naming the session and path, so the
+  door writes a row of this placement's own linked to the canonical content by
+  `cld_files.duplicate_of_file_id` — the platform's existing "one content, many
+  placements" primitive, no schema change (server half: aidream `453fd1adb`, which also
+  made `POST /files/upload` accept the declaration and report the path of the row it
+  actually wrote instead of echoing the request). `_queue_placement_repairs()` re-files
+  every entry an older build aliased away: idempotent (an entry whose row reads back at
+  its own path is never queued again), bounded (after `MAX_PLACEMENT_REPAIRS` rounds it
+  stops and says the door is not honouring the placement rather than re-uploading
+  forever). Status and per-session summaries carry `unplaced` and `placement_failed`; the
+  dialog shows a per-file "Not listed under this session" state naming the other path, and
+  "Check AI Matrx" re-files as well as re-uploads. Guards:
+  `tests/unit/test_coding_session_artifacts.py`
+  (`test_identical_bytes_across_two_sessions_each_get_their_own_placement`,
+  `test_identical_bytes_two_paths_same_session_each_get_their_own_placement`,
+  `test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased`,
+  `test_placement_repair_gives_up_loudly_after_max_rounds`). NOT fixed here and filed as
+  its own bug: `app/services/file_sync/engine.py` uploads the user's mirrored files with no
+  declaration, so two identical local files at different paths leave the second path
+  recorded nowhere while the index calls it synced (feedback
+  `75e2ae34-5ec6-45fb-ad1b-e909c86eb3f8`).
+
+- 2026-09-17 — **Artifact counts are cloud-confirmed, and "uploaded" no longer means
+  "the response had an id".** Measured that day: the engine reported 31,164 files ALL
+  uploaded while `files.files` held 24,938 artifact rows. The whole gap is matrx-files'
+  implicit `alias_existing` dedupe (`packages/matrx-files/matrx_files/dedup.py`): the
+  manifest keeps one record per relative PATH, the cloud keeps one row per CONTENT, so
+  byte-identical copies share a row and return `is_new=false`. Joined ledger against DB
+  for the three biggest sessions (10,635 / 4,279 / 3,997 entries): every entry resolved
+  to a live row — 0 deleted, 0 missing, 4,902 / 401 / 223 sharing a row by content, 335
+  superseded earlier rows. Nothing was lost; the wording was. Now each entry records
+  `deduplicated`, `cloud_file_path`, `previous_file_ids`, `verified_at`, `verify_error`;
+  an entry counts as in AI Matrx only after its file id READS BACK (`GET /files/{id}`)
+  — immediately after upload, plus `VERIFY_PER_TICK` older entries per tick; an id the
+  server no longer serves is cleared, reported as `missing_in_cloud` and re-uploaded
+  from the durable copy. `POST /coding-session/artifacts/verify` (the dialog's "Check AI
+  Matrx" button) runs that check-and-repair now. Status/summaries carry `uploaded`
+  (confirmed), `awaiting_confirmation`, `deduplicated`, `cloud_rows`, `distinct_content`,
+  `superseded_versions`, `missing_in_cloud`. Guard:
+  `tests/unit/test_coding_session_artifacts.py` (`test_a_returned_file_id_counts_only_once_it_reads_back`,
+  `test_verify_now_repairs_a_row_the_cloud_stopped_serving`).
+
 - 2026-09-13 — Coding-session artifact publishing overrides the operating system MIME registry
   for `.ts`, `.tsx`, `.mts`, and `.cts`. Python classifies `.ts`/`.mts` as MPEG transport-stream
   video on macOS, which sent TypeScript deliverables into media players; all TypeScript-family

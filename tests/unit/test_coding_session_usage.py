@@ -209,26 +209,23 @@ def test_usage_rows_carry_the_session_tab_labels(tmp_path: Path) -> None:
     store = ClaudeIndexStore(tmp_path / "index.sqlite3")
     store.ensure_ready()
     session_id = next(FIXTURES.glob("*.jsonl")).stem
-    store.upsert(
-        [
-            {
-                "path": str(tmp_path / "record.json"),
-                "mtime_ns": 1,
-                "size": 1,
-                "account": "acct",
-                "cli_session_id": session_id,
-                "last_activity_at": 1,
-                "title": "The title the Sessions tab shows",
-                "title_source": "user",
-                "workspace_name": "common-docs",
-                "git_branch": None,
-                "worktree_name": None,
-                "is_archived": 0,
-                "local_cwd": None,
-                "unreadable": 0,
-            }
-        ]
+    record = {column: None for column in store_module._RECORD_COLUMNS}  # noqa: SLF001 — same package
+    record.update(
+        {
+            "path": str(tmp_path / "record.json"),
+            "mtime_ns": 1,
+            "size": 1,
+            "account": "acct",
+            "cli_session_id": session_id,
+            "last_activity_at": 1,
+            "title": "The title the Sessions tab shows",
+            "title_source": "user",
+            "workspace_name": "common-docs",
+            "is_archived": 0,
+            "unreadable": 0,
+        }
     )
+    store.upsert([record])
     store.rebuild_sessions()
     refresh_transcripts_sync(store, sidebar_ids={session_id}, root=root)
     rows = [row for row in store.usage_rows("0000-00-00T00", "9999-12-31T23") if row["session_id"] == session_id]

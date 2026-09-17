@@ -43,6 +43,15 @@ def _completed_process_factory(*outputs: bytes):
     return factory
 
 
+def _oauth_record(path: Path, *, email: str | None, org_id: str | None) -> None:
+    account: dict[str, str] = {}
+    if email is not None:
+        account["emailAddress"] = email
+    if org_id is not None:
+        account["organizationUuid"] = org_id
+    path.write_text(json.dumps({"oauthAccount": account}))
+
+
 def test_packaged_gui_path_finds_official_native_launcher(tmp_path: Path) -> None:
     launcher = _write_cli(tmp_path / ".local" / "bin" / "claude", "exit 0\n")
 
@@ -279,6 +288,117 @@ async def test_oauth_fallback_trims_org_and_rejects_whitespace_only_org(
     )
     assert unavailable.available is False
     assert unavailable.reason == "claude_not_signed_in"
+
+
+async def test_known_subscription_without_cli_identity_uses_oauth_record(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "claude.json"
+    _oauth_record(record, email="User@Example.com", org_id="org-1234")
+    snapshot = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"firstParty","authMethod":"claude.ai"}',
+            b"2.1.271",
+        ),
+    )
+
+    assert snapshot.account_key == derive_account_key(
+        api_provider="firstParty",
+        auth_method="claude.ai",
+        org_id="org-1234",
+        email="user@example.com",
+    )
+    assert snapshot.client_version == "2.1.271"
+    assert snapshot.diagnostic is not None and "desktop OAuth" in snapshot.diagnostic
+
+
+@pytest.mark.parametrize("record_body", [None, "{invalid"])
+async def test_known_subscription_without_cli_identity_needs_readable_oauth_record(
+    tmp_path: Path, record_body: str | None
+) -> None:
+    record = tmp_path / "claude.json"
+    if record_body is not None:
+        record.write_text(record_body)
+    snapshot = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"firstParty","authMethod":"claude.ai"}',
+            b"2.1.271",
+        ),
+    )
+
+    assert snapshot.available is False
+    assert snapshot.reason == "claude_account_identity_unavailable"
+    assert snapshot.client_version == "2.1.271"
+
+
+async def test_partial_cli_identity_is_not_mixed_with_oauth_record(tmp_path: Path) -> None:
+    record = tmp_path / "claude.json"
+    _oauth_record(record, email="other@example.com", org_id="other-org")
+    snapshot = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"firstParty","authMethod":"claude.ai",'
+            b'"email":"User@Example.com"}',
+            b"2.1.271",
+        ),
+    )
+
+    assert snapshot.account_key == derive_account_key(
+        api_provider="firstParty",
+        auth_method="claude.ai",
+        org_id=None,
+        email="user@example.com",
+    )
+    assert snapshot.diagnostic is None
+
+
+async def test_complete_cli_and_non_subscription_login_do_not_use_oauth_record(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "claude.json"
+    _oauth_record(record, email="other@example.com", org_id="other-org")
+    complete = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"firstParty","authMethod":"claude.ai",'
+            b'"orgId":"cli-org","email":"cli@example.com"}',
+            b"2.1.271",
+        ),
+    )
+    api_key = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"apiKey","authMethod":"api_key"}',
+            b"2.1.271",
+        ),
+    )
+    unknown = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(
+            b'{"loggedIn":true,"apiProvider":"unknown","authMethod":"unknown"}',
+            b"2.1.271",
+        ),
+    )
+
+    assert complete.account_key == derive_account_key(
+        api_provider="firstParty",
+        auth_method="claude.ai",
+        org_id="cli-org",
+        email="cli@example.com",
+    )
+    assert complete.diagnostic is None
+    assert api_key.available is False
+    assert api_key.reason == "claude_account_identity_unavailable"
+    assert unknown.available is False
+    assert unknown.reason == "claude_account_identity_unavailable"
 
 
 async def test_invalid_auth_command_is_execution_failure(tmp_path: Path) -> None:

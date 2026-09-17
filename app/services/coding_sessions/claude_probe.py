@@ -454,6 +454,36 @@ async def read_account_snapshot(
         org_id.strip() if isinstance(org_id, str) and org_id.strip() else None
     )
     if normalized_org_id is None and email is None:
+        # Claude 2.1.271 can report a healthy first-party subscription login
+        # without either identity field.  Only that complete, known login shape
+        # may use the desktop OAuth record: never combine a partial CLI identity
+        # with a record, and never infer identity for another auth provider.
+        if api_provider == "firstParty" and auth_method == "claude.ai":
+            fallback = _desktop_oauth_identity(oauth_record_path)
+            if fallback is not None:
+                fallback_email, fallback_org_id = fallback
+                account_key = derive_account_key(
+                    api_provider="firstParty",
+                    auth_method="claude.ai",
+                    org_id=fallback_org_id,
+                    email=fallback_email,
+                )
+                return AccountSnapshot(
+                    True,
+                    account_key,
+                    account_key[:12],
+                    client_version,
+                    None,
+                    account_label=account_label(
+                        email=fallback_email, org_id=fallback_org_id
+                    ),
+                    executable_path=executable_path,
+                    probe_status="ready",
+                    diagnostic=(
+                        "identity from the desktop OAuth record; `claude auth "
+                        "status` omitted organization and email"
+                    ),
+                )
         return AccountSnapshot(
             False,
             None,

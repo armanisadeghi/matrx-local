@@ -42,6 +42,7 @@ from app.services.app_config.models import (
     AppConfigNotice,
     AppConfigRow,
     CodingSessionRuntimeConfig,
+    EngineLivenessConfig,
     ResolvedAppConfig,
     Tier,
     parse_row,
@@ -105,6 +106,7 @@ _COMPILED_DEFAULTS_ROW: dict = {
         "coding_session_runtime": CodingSessionRuntimeConfig().model_dump(
             mode="json"
         ),
+        "engine_liveness": EngineLivenessConfig().model_dump(mode="json"),
     },
     "updated_at": None,
 }

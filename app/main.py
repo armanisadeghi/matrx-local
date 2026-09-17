@@ -64,6 +64,7 @@ from app.config import (
     MATRX_HOME_DIR,
 )
 from app.common.background_tasks import fire_and_forget
+from app.common.event_loop_liveness import arm_or_pulse, disarm
 from app.common.system_logger import get_logger
 from app.common.process_shutdown import ShutdownCancellationMiddleware
 import app.common.access_log as access_log
@@ -1569,7 +1570,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     print(f"[phase:ready] Engine ready in {elapsed:.1f}s", flush=True)
 
-    yield
+    # The parent watchdog owns passive stall capture outside this server thread.
+    # Arm it only after startup is ready; a startup gap is not a serving-loop
+    # stall. The task does no I/O and publishes only monotonic process-local
+    # progress for the watchdog to inspect.
+    from app.services.app_config import get_app_config
+
+    async def _event_loop_liveness_loop() -> None:
+        while True:
+            config = get_app_config().row.config.engine_liveness
+            if config.enabled:
+                arm_or_pulse(
+                    now=_startup_time.monotonic(),
+                    stall_after_seconds=config.stall_after_seconds,
+                )
+            else:
+                disarm()
+            await asyncio.sleep(config.heartbeat_interval_seconds)
+
+    _liveness_config = get_app_config().row.config.engine_liveness
+    if _liveness_config.enabled:
+        arm_or_pulse(
+            now=_startup_time.monotonic(),
+            stall_after_seconds=_liveness_config.stall_after_seconds,
+        )
+    else:
+        disarm()
+    event_loop_liveness_task = asyncio.create_task(
+        _event_loop_liveness_loop(), name="event-loop-liveness"
+    )
+
+    try:
+        yield
+    finally:
+        # Cancel before disarming without an await between them: a task already
+        # scheduled to pulse cannot re-arm capture during a long teardown.
+        event_loop_liveness_task.cancel()
+        disarm()
+        try:
+            await event_loop_liveness_task
+        except asyncio.CancelledError:
+            pass
 
     logger.info(
         "[app/main.py] ── Matrx Local shutdown ────────────────────────────────────"

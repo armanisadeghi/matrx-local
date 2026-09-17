@@ -10,6 +10,7 @@ from app.services.app_config.models import (
     AppConfigNotice,
     AppConfigRow,
     AppConfigV1,
+    EngineLivenessConfig,
     ResolvedAppConfig,
 )
 from app.services.app_config.service import (
@@ -29,6 +30,7 @@ __all__ = [
     "AppConfigRow",
     "AppConfigService",
     "AppConfigV1",
+    "EngineLivenessConfig",
     "ResolvedAppConfig",
     "get_aidream_server_url",
     "get_app_config",

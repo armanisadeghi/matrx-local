@@ -200,6 +200,34 @@ def test_runtime_controls_have_offline_defaults_and_reject_unsafe_values() -> No
         parse_row(row)
 
 
+def test_engine_liveness_controls_default_disable_and_reject_unsafe_values() -> None:
+    parsed = parse_row(REMOTE_ROW)
+    assert parsed.config.engine_liveness.enabled is True
+    assert parsed.config.engine_liveness.heartbeat_interval_seconds == 1.0
+    assert parsed.config.engine_liveness.stall_after_seconds == 10.0
+
+    row = dict(REMOTE_ROW)
+    row["config"] = {
+        **REMOTE_ROW["config"],
+        "engine_liveness": {
+            "enabled": False,
+            "heartbeat_interval_seconds": 2.0,
+            "stall_after_seconds": 8.0,
+        },
+    }
+    assert parse_row(row).config.engine_liveness.enabled is False
+
+    for invalid in (
+        {"heartbeat_interval_seconds": 0.0},
+        {"heartbeat_interval_seconds": "1.0"},
+        {"heartbeat_interval_seconds": float("inf")},
+        {"heartbeat_interval_seconds": 2.0, "stall_after_seconds": 5.0},
+    ):
+        row["config"]["engine_liveness"] = invalid
+        with pytest.raises(AppConfigValidationError):
+            parse_row(row)
+
+
 def test_non_https_url_rejected() -> None:
     row = dict(REMOTE_ROW)
     row["config"] = {

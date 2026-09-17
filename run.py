@@ -249,6 +249,7 @@ if _sys.platform == "win32":
     _logging.getLogger("asyncio").addFilter(_ProactorPipeFilter())
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.common.event_loop_liveness import check as check_event_loop_liveness
 
 def _read_version() -> str:
     """Read version — tries importlib.metadata first (works in packaged binary),
@@ -658,10 +659,6 @@ def _start_parent_watchdog() -> None:
                 parent_gone = (current_ppid == 1 or current_ppid != parent_pid)
 
             if parent_gone:
-                logger.warning(
-                    "Parent process (PID %d) is gone — self-terminating to avoid orphan",
-                    parent_pid,
-                )
                 remove_discovery_file()
                 _request_process_shutdown()
                 if _uvicorn_server is not None:
@@ -671,7 +668,30 @@ def _start_parent_watchdog() -> None:
                 # old 10s force-exit preempted the join mid-teardown — the
                 # very bug the 2026-07-13 shutdown overhaul removed elsewhere.
                 _schedule_force_exit(20)
+                logger.warning(
+                    "Parent process (PID %d) is gone — self-terminating to avoid orphan",
+                    parent_pid,
+                )
                 return
+
+            transition = check_event_loop_liveness(now=time.monotonic())
+            if transition is not None:
+                if transition.kind == "stalled":
+                    thread_ident = (
+                        _server_thread.ident if _server_thread is not None else None
+                    )
+                    stack = _format_server_thread_stack(thread_ident)
+                    logger.error(
+                        "[liveness] Server event loop made no progress for %.1fs; "
+                        "server-thread stack: %s",
+                        transition.age_seconds,
+                        stack or "unavailable",
+                    )
+                else:
+                    logger.info(
+                        "[liveness] Server event loop recovered after a %.1fs stall",
+                        transition.age_seconds,
+                    )
 
     watchdog = threading.Thread(target=_watch, daemon=True, name="parent-watchdog")
     watchdog.start()

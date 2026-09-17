@@ -51,6 +51,14 @@ rejects the row atomically. Coding Sessions capability/status APIs surface the
 effective values with per-field provenance, so a field supplied by remote or
 cache is distinguishable from a compiled fallback inside a partial/older row.
 
+`config.engine_liveness` is the typed public control plane for passive event-loop
+stall capture. It controls whether capture is armed, its async heartbeat interval,
+and the minimum no-progress threshold. Missing keys in an older remote/cache row
+use validated compiled defaults; invalid known values reject the whole row. The
+server publishes process-local monotonic progress only after it is ready, and the
+existing parent watchdog logs one bounded, path-free stack snapshot per observed
+stall plus one recovery. It never restarts, signals, or writes remotely.
+
 ## Wiring
 
 - **Startup:** `app/main.py` Phase 00 (before every sync engine that consumes
@@ -115,7 +123,9 @@ cache is distinguishable from a compiled fallback inside a partial/older row.
 ## Tests
 
 - `tests/unit/test_app_config.py` — precedence chain, tolerant/strict parsing,
-  version gate, atomic cache round trip.
+  version gate, liveness controls, atomic cache round trip.
+- `tests/unit/test_event_loop_liveness.py` — process-local state transitions,
+  sleep-safe watchdog rebasing, lifecycle wiring, and bounded stack redaction.
 - `tests/characterization/test_app_config_offline.py` — total network failure
   still boots on compiled defaults.
 - `tests/parity/test_app_config_live.py` — release validation: live row via

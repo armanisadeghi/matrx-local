@@ -16,6 +16,7 @@ Parsing rules:
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -99,6 +100,29 @@ class CodingSessionRuntimeConfig(BaseModel):
         return self
 
 
+class EngineLivenessConfig(BaseModel):
+    """Operator controls for passive server-loop stall capture."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    enabled: StrictBool = True
+    heartbeat_interval_seconds: float = Field(default=1.0, gt=0.0, le=5.0)
+    stall_after_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+
+    @model_validator(mode="after")
+    def _finite_and_separated(self) -> "EngineLivenessConfig":
+        if not all(
+            math.isfinite(value)
+            for value in (self.heartbeat_interval_seconds, self.stall_after_seconds)
+        ):
+            raise ValueError("engine liveness intervals must be finite")
+        if self.stall_after_seconds < self.heartbeat_interval_seconds * 3:
+            raise ValueError(
+                "engine liveness stall_after_seconds must cover at least three heartbeats"
+            )
+        return self
+
+
 def _validate_service_url(value: str) -> str:
     """Require an http(s) URL; https for anything that isn't loopback.
 
@@ -132,6 +156,7 @@ class AppConfigV1(BaseModel):
     coding_session_runtime: CodingSessionRuntimeConfig = Field(
         default_factory=CodingSessionRuntimeConfig
     )
+    engine_liveness: EngineLivenessConfig = Field(default_factory=EngineLivenessConfig)
 
     @field_validator(
         "aidream_server_url",

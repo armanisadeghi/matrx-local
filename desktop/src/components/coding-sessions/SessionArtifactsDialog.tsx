@@ -124,10 +124,27 @@ export function SessionArtifactsDialog({
     setVerifyResult(null);
     try {
       const result = await engine.verifyCodingSessionArtifacts();
+      const refiling = result.queued_for_refiling ?? 0;
+      const parts = [`${result.confirmed.toLocaleString()} confirmed`];
+      if (result.missing_in_cloud > 0) {
+        parts.push(
+          `${result.missing_in_cloud.toLocaleString()} were missing from AI Matrx${(result.still_missing_in_cloud ?? 0) > 0 ? ` (${result.still_missing_in_cloud.toLocaleString()} still to go)` : ""}`,
+        );
+      }
+      if (refiling > 0) {
+        parts.push(
+          `${refiling.toLocaleString()} were filed under another path and are being re-filed under this session's own${(result.still_unplaced ?? 0) > 0 ? ` (${result.still_unplaced.toLocaleString()} still to go)` : ""}`,
+        );
+      }
+      if (result.missing_in_cloud > 0 || refiling > 0) {
+        parts.push(
+          `${(result.re_uploaded ?? 0).toLocaleString()} re-uploaded from the durable copy`,
+        );
+      }
       setVerifyResult(
-        result.missing_in_cloud > 0
-          ? `${result.confirmed.toLocaleString()} confirmed · ${result.missing_in_cloud.toLocaleString()} were missing from AI Matrx and ${(result.re_uploaded ?? 0).toLocaleString()} were re-uploaded from the durable copy${(result.still_missing_in_cloud ?? 0) > 0 ? ` · ${result.still_missing_in_cloud.toLocaleString()} still to go` : ""}.`
-          : `${result.confirmed.toLocaleString()} file id${result.confirmed === 1 ? "" : "s"} read back from AI Matrx; nothing was missing.`,
+        result.missing_in_cloud > 0 || refiling > 0
+          ? `${parts.join(" · ")}.`
+          : `${result.confirmed.toLocaleString()} file id${result.confirmed === 1 ? "" : "s"} read back from AI Matrx; every path has its own file there.`,
       );
       await load();
     } catch (nextError) {
@@ -168,6 +185,12 @@ export function SessionArtifactsDialog({
                 ? `, ${detail.deduplicated.toLocaleString()} of these paths share an identical file`
                 : ""}
               {")"}
+              {detail.unplaced > 0
+                ? ` · ${detail.unplaced.toLocaleString()} not listed under this session yet (being re-filed under their own path)`
+                : ""}
+              {detail.placement_failed > 0
+                ? ` · ${detail.placement_failed.toLocaleString()} AI Matrx would not file under their own path`
+                : ""}
               {detail.superseded_versions > 0
                 ? ` · ${detail.superseded_versions.toLocaleString()} earlier version${detail.superseded_versions === 1 ? "" : "s"}`
                 : ""}
@@ -193,7 +216,7 @@ export function SessionArtifactsDialog({
               size="sm"
               onClick={() => void verify()}
               disabled={verifying || loading}
-              title="Read every recorded file id back from AI Matrx and re-upload anything it no longer serves."
+              title="Read every recorded file id back from AI Matrx, re-upload anything it no longer serves, and re-file any path filed under another file."
             >
               {verifying ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -270,17 +293,22 @@ export function SessionArtifactsDialog({
                               </Badge>
                               {entry.deduplicated && (
                                 <Badge
-                                  variant="outline"
+                                  variant="destructive"
                                   className="ml-1"
-                                  title={`AI Matrx already held these exact bytes${entry.cloud_file_path ? ` at ${entry.cloud_file_path}` : ""}, so this path shares that file instead of adding a copy.`}
+                                  title={`AI Matrx filed these bytes${entry.cloud_file_path ? ` at ${entry.cloud_file_path}` : " under another path"}, so this session's own path is not recorded there and the Artifacts panel cannot list it here. The lane re-files it under its own path.`}
                                 >
-                                  Shares an identical file
+                                  Not listed under this session
                                 </Badge>
                               )}
                               <div className="mt-1 text-muted-foreground">
                                 {whenLocal(entry.uploaded_at)} · file{" "}
                                 <span className="font-mono">{entry.file_id}</span>
                               </div>
+                              {entry.placement_error && (
+                                <div className="mt-1 max-w-96 break-words text-destructive">
+                                  {entry.placement_error}
+                                </div>
+                              )}
                             </>
                           ) : (
                             <>

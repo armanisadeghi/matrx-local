@@ -35,11 +35,19 @@ class _FakeFilesClient:
     """Models the real matrx-files door as MEASURED against production on
     2026-09-17, not as its response model advertises:
 
-    * identical bytes are aliased onto the CANONICAL row (`matrx_files/dedup.py`
-      implicit ``alias_existing``) — one row, one id, many logical paths;
-    * the response says nothing useful about that: ``is_new`` comes back null
-      and ``file_path`` merely echoes the request, so only ``GET /files/{id}``
-      reveals the row's real path;
+    * WITHOUT a declared ``intent``, identical bytes are aliased onto the
+      CANONICAL row (`matrx_files/dedup.py` implicit ``alias_existing``) —
+      one row, one id, many logical paths;
+    * WITH ``intent="force_new_copy"``, the door instead writes a NEW row of
+      its own at the requested ``file_path`` — a fresh id every call, never
+      aliased — and, when byte-identical content already had a canonical
+      row, that new row also carries ``duplicate_of_file_id`` pointing at it
+      (the platform's "one content, many placements" primitive the header
+      comment on ``artifacts.py`` describes). ``reason`` travels along for
+      audit only; it never changes what row gets written;
+    * the response says nothing useful about which branch fired: ``is_new``
+      comes back null and ``file_path`` merely echoes the request, so only
+      ``GET /files/{id}`` reveals the row's real path;
     * a repeated ``X-Idempotency-Key`` REPLAYS the stored response without
       doing any work — even after the row it named went to the trash.
     """
@@ -63,6 +71,34 @@ class _FakeFilesClient:
             return dict(self._replay[key])
         content = kwargs["content"]
         canonical = self._by_content.get(content)
+        if kwargs.get("intent") == "force_new_copy":
+            # A placement the caller declares as the point: always its own
+            # new row at its own requested path, never aliased onto an
+            # existing one — even when the bytes match one exactly.
+            self._next_id += 1
+            new_id = f"file-{self._next_id}"
+            row: dict[str, Any] = {
+                "id": new_id,
+                "file_path": kwargs["file_path"],
+                "deleted_at": None,
+            }
+            if canonical is not None:
+                row["duplicate_of_file_id"] = canonical
+            else:
+                # The first row ever written for this content becomes the
+                # canonical one later aliasing (an undeclared-intent write)
+                # would land on.
+                self._by_content[content] = new_id
+            self.rows[new_id] = row
+            response = {
+                "file_id": new_id,
+                "file_path": kwargs["file_path"],  # echo, not the row's path
+                "is_new": None,
+                "size_bytes": len(content),
+            }
+            if key:
+                self._replay[key] = dict(response)
+            return response
         if canonical is None:
             self._next_id += 1
             canonical = f"file-{self._next_id}"
@@ -209,11 +245,15 @@ async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_pat
         }
         status = lane.status()
         assert status["uploaded"] == 6 and status["pending_upload"] == 0 and status["blocker"] is None
-        # 4 of the 6 paths hold identical bytes, so matrx-files aliased 3 of
-        # them onto ONE row: the screen may never call 6 paths 6 cloud files.
-        assert status["deduplicated"] == 3
-        assert status["cloud_rows"] == 3 == len(client.rows)
+        # 4 of the 6 paths hold identical bytes. They are STILL six placements:
+        # the publish wave declares the placement, so each path gets a row of
+        # its own at its own path (linked to the one canonical content) and the
+        # session's panel can list all six. Before 2026-09-17 three of them
+        # were aliased away and recorded nowhere.
+        assert status["deduplicated"] == 0 and status["unplaced"] == 0
+        assert status["cloud_rows"] == 6 == len(client.rows)
         assert status["distinct_content"] == 3
+        assert sum(1 for row in client.rows.values() if row.get("duplicate_of_file_id")) == 3
         assert status["awaiting_confirmation"] == 0 and status["missing_in_cloud"] == 0
 
         # Second tick: nothing new, nothing re-uploaded; manifest remembers file ids.
@@ -340,5 +380,166 @@ async def test_a_changed_file_keeps_the_version_it_superseded(tmp_path: Path, mo
         entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
         assert entry["previous_file_ids"] == [first]
         assert lane.status()["superseded_versions"] == 1
+    finally:
+        await db.close()
+
+
+async def test_identical_bytes_across_two_sessions_each_get_their_own_placement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The bug this closes: without a declared placement intent, matrx-files
+    aliases byte-identical content onto ONE row — so a second session's
+    scratchpad could resolve to the first session's file id and never be
+    listed under its own conversation. ``force_new_copy`` means two DIFFERENT
+    sessions capturing the same bytes each still get a row of their own, at
+    their own cloud path."""
+    session_a = "11111111-2222-3333-4444-555555555555"
+    session_b = "66666666-7777-8888-9999-000000000000"
+    _scratchpad(tmp_path, session=session_a)
+    _scratchpad(tmp_path, session=session_b)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        entries_a = lane.session_detail(session_a)["entries"]
+        entries_b = lane.session_detail(session_b)["entries"]
+        for rel in ("qd/page/desk.html", "report.md"):
+            id_a, id_b = entries_a[rel]["file_id"], entries_b[rel]["file_id"]
+            assert id_a and id_b and id_a != id_b
+            assert entries_a[rel]["deduplicated"] is False
+            assert entries_b[rel]["deduplicated"] is False
+            assert client.rows[id_a]["file_path"] == f"coding-sessions/claude_code/{session_a}/{rel}"
+            assert client.rows[id_b]["file_path"] == f"coding-sessions/claude_code/{session_b}/{rel}"
+    finally:
+        await db.close()
+
+
+async def test_identical_bytes_two_paths_same_session_each_get_their_own_placement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Same guard, one session: two different relative paths that happen to
+    hold identical bytes must not collapse onto one cloud row either."""
+    pad = _scratchpad(tmp_path)
+    (pad / "report-copy.md").write_text("# report")  # byte-identical to report.md
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        entries = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]
+        id_report, id_copy = entries["report.md"]["file_id"], entries["report-copy.md"]["file_id"]
+        assert id_report and id_copy and id_report != id_copy
+        assert entries["report.md"]["deduplicated"] is False
+        assert entries["report-copy.md"]["deduplicated"] is False
+        assert client.rows[id_report]["file_path"] == (
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md"
+        )
+        assert client.rows[id_copy]["file_path"] == (
+            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report-copy.md"
+        )
+    finally:
+        await db.close()
+
+
+async def test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The repair path for the exact damage an older (no-intent) build left
+    behind: a confirmed entry whose row sits under ANOTHER path. Repairing
+    it clears the id and re-files it — through the same force_new_copy
+    publish wave every other upload uses — until it has a placement of its
+    own; a further repair pass then leaves it alone."""
+    _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        own_path = "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md"
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert client.rows[entry["file_id"]]["file_path"] == own_path
+
+        # Simulate exactly what an older, no-intent build left behind: the
+        # recorded file id resolves to a row filed under someone else's path.
+        alien_id = "file-alien"
+        client.rows[alien_id] = {
+            "id": alien_id,
+            "file_path": "coding-sessions/claude_code/other-session/report.md",
+            "deleted_at": None,
+        }
+        entry["file_id"] = alien_id
+        entry["deduplicated"] = True
+        entry["cloud_file_path"] = "coding-sessions/claude_code/other-session/report.md"
+        entry["placement_error"] = None
+
+        queued = lane._queue_placement_repairs()
+        assert queued == 1
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert entry["file_id"] is None
+        assert entry["placement_error"] is not None
+
+        tick = await lane.run_once()
+        assert tick["uploaded"] == 1
+
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert entry["file_id"] is not None
+        assert client.rows[entry["file_id"]]["file_path"] == own_path
+        assert entry["deduplicated"] is False
+        assert entry["placement_error"] is None
+
+        # Idempotent: nothing left to repair, never queued again.
+        assert lane._queue_placement_repairs() == 0
+    finally:
+        await db.close()
+
+
+class _AlwaysAliasing(_FakeFilesClient):
+    """A door that never honours a declared placement — every write, intent
+    or not, aliases byte-identical content onto the canonical row. Models an
+    old matrx-files build the repair loop must eventually stop trusting."""
+
+    async def upload(self, **kwargs: Any) -> dict[str, Any]:
+        kwargs = dict(kwargs)
+        kwargs.pop("intent", None)
+        kwargs.pop("reason", None)
+        return await super().upload(**kwargs)
+
+
+async def test_placement_repair_gives_up_loudly_after_max_rounds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An entry the door refuses to ever place keeps being reported — not
+    retried forever. After MAX_PLACEMENT_REPAIRS rounds the lane stops
+    re-queuing it, names the path it is stuck sharing, and status() counts
+    it as a loud, visible failure."""
+    session_a = "11111111-2222-3333-4444-555555555555"
+    session_b = "66666666-7777-8888-9999-000000000000"
+    _scratchpad(tmp_path, session=session_a)
+    _scratchpad(tmp_path, session=session_b)
+    client = _AlwaysAliasing()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        for _ in range(mod.MAX_PLACEMENT_REPAIRS + 2):
+            await lane.run_once()
+
+        entries_a = lane.session_detail(session_a)["entries"]
+        entries_b = lane.session_detail(session_b)["entries"]
+        a, b = entries_a["report.md"], entries_b["report.md"]
+        # Whichever session's write landed second is the one aliased onto
+        # the other's row — order is a race across the two scratchpads, so
+        # pick out whichever entry ended up deduplicated rather than
+        # assuming which session it is.
+        victim, canonical = (a, b) if a.get("deduplicated") else (b, a)
+        assert victim.get("deduplicated") is True
+        assert not canonical.get("deduplicated")
+        assert victim["placement_repairs"] == mod.MAX_PLACEMENT_REPAIRS
+        assert victim["placement_error"] is not None
+        assert canonical["cloud_file_path"] in victim["placement_error"]
+
+        # Bounded, not silent: a further repair pass never queues it again.
+        assert lane._queue_placement_repairs() == 0
+        assert lane.status()["placement_failed"] >= 1
     finally:
         await db.close()

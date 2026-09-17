@@ -1068,6 +1068,9 @@ export interface CodingSessionArtifactsTick {
   failed: number;
   confirmed: number;
   missing_in_cloud: number;
+  /** Paths found filed under another path and queued to be re-filed under
+   * their own. */
+  queued_for_refiling: number;
 }
 
 export interface CodingSessionArtifactsStatus {
@@ -1084,6 +1087,12 @@ export interface CodingSessionArtifactsStatus {
   awaiting_confirmation: number;
   /** Paths AI Matrx aliased onto an existing byte-identical file (no new row). */
   deduplicated: number;
+  /** Paths whose AI Matrx row is filed under ANOTHER path, so this session
+   * cannot list them: the lane re-files each one under its own path. */
+  unplaced: number;
+  /** Paths AI Matrx would not give a row of their own after every repair
+   * round. The file is safe; the listing under this session is not. */
+  placement_failed: number;
   /** Distinct rows AI Matrx actually holds for these paths. */
   cloud_rows: number;
   distinct_content: number;
@@ -1108,6 +1117,7 @@ export interface CodingSessionArtifactsStatus {
     uploads_per_tick: number;
     max_upload_attempts: number;
     verify_per_tick: number;
+    max_placement_repairs: number;
     scan_interval_seconds: number;
   };
 }
@@ -1127,6 +1137,12 @@ export interface CodingSessionArtifactsSessionSummary {
   awaiting_confirmation: number;
   /** Paths AI Matrx aliased onto an existing byte-identical file (no new row). */
   deduplicated: number;
+  /** Paths whose AI Matrx row is filed under ANOTHER path, so this session
+   * cannot list them: the lane re-files each one under its own path. */
+  unplaced: number;
+  /** Paths AI Matrx would not give a row of their own after every repair
+   * round. The file is safe; the listing under this session is not. */
+  placement_failed: number;
   /** Distinct rows AI Matrx actually holds for these paths. */
   cloud_rows: number;
   distinct_content: number;
@@ -1154,6 +1170,10 @@ export interface CodingSessionArtifactEntry {
   cloud_file_path?: string | null;
   verified_at?: string | null;
   verify_error?: string | null;
+  /** Rounds spent trying to get this path a row of its own. */
+  placement_repairs?: number;
+  /** Set while this path has no row of its own, and after the lane gives up. */
+  placement_error?: string | null;
 }
 
 export interface CodingSessionArtifactsSessionDetail
@@ -3190,12 +3210,14 @@ class EngineAPI {
   async verifyCodingSessionArtifacts(): Promise<{
     confirmed: number;
     missing_in_cloud: number;
+    queued_for_refiling: number;
     re_uploaded?: number;
     re_upload_failed?: number;
     files: number;
     uploaded: number;
     awaiting_confirmation: number;
     still_missing_in_cloud: number;
+    still_unplaced: number;
   }> {
     return this.request("/coding-session/artifacts/verify", { method: "POST" });
   }

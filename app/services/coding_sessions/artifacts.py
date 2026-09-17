@@ -27,18 +27,28 @@ size, mtime, sha256, captured_at, file_id, uploaded_at, upload_error.
 Nothing here is ever deleted: a file that disappears from the scratchpad
 stays in the durable folder (that is the point).
 
-**One record per PATH, one cloud row per CONTENT — and the screen says so.**
-matrx-files writes are implicitly ``alias_existing``: uploading bytes that
-already exist for this owner/organization returns the canonical row's
-``file_id`` with ``is_new=false`` and creates NO new row (measured
-2026-09-17: 10,635 captured paths in one session resolved to 5,633 cloud
-rows — 4,902 of those paths are byte-identical copies sharing one row, and
-none of the bytes were missing). So "31,164 uploaded" next to 24,938 cloud
-rows was never loss; it was this lane calling captured paths "files
-uploaded". Since then an entry counts as IN AI Matrx only once the returned
-``file_id`` has been READ BACK successfully (``verified_at``); a file id the
-server no longer serves is cleared, announced as ``missing_in_cloud`` and
-re-uploaded by the ordinary publish wave.
+**One record per PATH, one cloud ROW per path, one content behind them.**
+An undeclared matrx-files write is implicitly ``alias_existing``: bytes the
+account already holds return the canonical row's ``file_id`` with no new row,
+and the path this lane asked for is recorded NOWHERE (measured 2026-09-17:
+10,635 captured paths in one session resolved to 5,633 cloud rows; 287
+artifacts of three sessions were filed under ANOTHER session's row, so the
+app's Artifacts panel — which lists rows carrying this session's id — could
+not show them). Bytes were never lost; the PLACEMENT was.
+
+So every upload here now DECLARES ``intent=force_new_copy``: the door writes
+a row of this placement's own, at this session's path, carrying this
+session's id, linked to the canonical content by
+``cld_files.duplicate_of_file_id`` — the platform's existing "one content,
+many placements" primitive. Nothing new was invented and no schema changed.
+
+An entry counts as IN AI Matrx only once the returned ``file_id`` has been
+READ BACK successfully (``verified_at``); a file id the server no longer
+serves is cleared, announced as ``missing_in_cloud`` and re-uploaded. A row
+read back at a DIFFERENT path has no placement of its own: it is announced as
+``unplaced`` and re-filed by ``_queue_placement_repairs`` — the repair for
+every entry an older build aliased away. After ``MAX_PLACEMENT_REPAIRS``
+rounds the entry stops and says the door is not honouring the placement.
 """
 
 from __future__ import annotations
@@ -83,6 +93,10 @@ MAX_UPLOAD_ATTEMPTS = 8
 # older builds (which believed a returned file id without ever checking it).
 VERIFY_PER_TICK = 240
 VERIFY_CONCURRENCY = 6
+# Rounds an entry gets to obtain a placement of its own before the lane stops
+# re-uploading and says the door is not honouring the declared placement (an
+# old server build is exactly what that looks like).
+MAX_PLACEMENT_REPAIRS = 3
 _EXCLUDED_DIR_NAMES = frozenset(
     {
         ".git",
@@ -181,6 +195,23 @@ class SessionArtifacts:
         return sum(1 for f in self.files.values() if f.get("file_id") and f.get("deduplicated"))
 
     @property
+    def unplaced_count(self) -> int:
+        """Confirmed entries whose cloud row is filed under ANOTHER path, so
+        the session's own path is recorded nowhere and the app cannot list it
+        here. The repair pass re-files them; this is how many are still owed."""
+        return sum(
+            1
+            for f in self.files.values()
+            if f.get("file_id") and f.get("deduplicated")
+        )
+
+    @property
+    def placement_failed_count(self) -> int:
+        """Entries the door refused to give their own placement after every
+        repair round. Loud, never silent — the file is safe, the listing is not."""
+        return sum(1 for f in self.files.values() if f.get("placement_error") and f.get("deduplicated"))
+
+    @property
     def cloud_rows_count(self) -> int:
         """Distinct cloud rows this session's confirmed entries resolve to —
         the number of rows the cloud actually holds for it."""
@@ -230,6 +261,8 @@ class SessionArtifacts:
             "uploaded": self.uploaded_count,
             "awaiting_confirmation": self.awaiting_confirmation_count,
             "deduplicated": self.deduplicated_count,
+            "unplaced": self.unplaced_count,
+            "placement_failed": self.placement_failed_count,
             "cloud_rows": self.cloud_rows_count,
             "distinct_content": self.distinct_content_count,
             "superseded_versions": self.superseded_version_count,
@@ -340,6 +373,8 @@ class CodingSessionArtifactsLane:
             "uploaded": sum(s.uploaded_count for s in sessions),
             "awaiting_confirmation": sum(s.awaiting_confirmation_count for s in sessions),
             "deduplicated": sum(s.deduplicated_count for s in sessions),
+            "unplaced": sum(s.unplaced_count for s in sessions),
+            "placement_failed": sum(s.placement_failed_count for s in sessions),
             "cloud_rows": len(
                 {
                     f["file_id"]
@@ -383,6 +418,7 @@ class CodingSessionArtifactsLane:
                 "uploads_per_tick": UPLOADS_PER_TICK,
                 "max_upload_attempts": MAX_UPLOAD_ATTEMPTS,
                 "verify_per_tick": VERIFY_PER_TICK,
+                "max_placement_repairs": MAX_PLACEMENT_REPAIRS,
                 "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
             },
         }
@@ -406,6 +442,11 @@ class CodingSessionArtifactsLane:
             captured = await asyncio.to_thread(self._capture_all)
             uploaded, failed = await self._publish_pending()
             confirmed, missing = await self._verify_backlog()
+            # Entries the read-back found filed under ANOTHER path have no
+            # placement of their own; queue them and let the next publish
+            # wave re-file them. Ordering matters: the queue is drained by
+            # _publish_pending, so a repair queued now is sent next tick.
+            refiling = self._queue_placement_repairs()
             self._last_run_at = _utc_now_iso()
             self._last_run_seconds = round((datetime.now(UTC) - started).total_seconds(), 3)
             self._last_tick = {
@@ -416,6 +457,7 @@ class CodingSessionArtifactsLane:
                 "failed": failed,
                 "confirmed": confirmed,
                 "missing_in_cloud": missing,
+                "queued_for_refiling": refiling,
             }
             return dict(self._last_tick)
 
@@ -524,6 +566,8 @@ class CodingSessionArtifactsLane:
                     "cloud_file_path": None,
                     "verified_at": None,
                     "verify_error": None,
+                    "placement_repairs": int((record or {}).get("placement_repairs") or 0),
+                    "placement_error": None,
                 }
                 captured += 1
                 changed = True
@@ -594,6 +638,19 @@ class CodingSessionArtifactsLane:
                             "relative_path": rel,
                             "sha256": record["sha256"],
                         },
+                        # THE PATH IS THE POINT. Without a declared intent the
+                        # door treats every write as alias_existing: bytes the
+                        # account already holds resolve to that row and this
+                        # (session, path) is recorded NOWHERE — measured
+                        # 2026-09-17, 287 artifacts of three sessions filed
+                        # under another session's row. force_new_copy gives
+                        # this placement its own row, linked to the canonical
+                        # content by duplicate_of_file_id.
+                        intent="force_new_copy",
+                        reason=(
+                            "coding-session artifact placement: session "
+                            f"{session.cli_session_id} path {rel}"
+                        ),
                         request_id=f"csa:{session.cli_session_id}:{record['sha256'][:12]}",
                         # A REPAIR is a new operation, never a replay. Measured
                         # 2026-09-17 against production: re-sending the same
@@ -705,10 +762,71 @@ class CodingSessionArtifactsLane:
         if isinstance(cloud_path, str) and cloud_path:
             record["cloud_file_path"] = cloud_path
             if expected_path is not None:
-                record["deduplicated"] = cloud_path != expected_path
+                shares_another_row = cloud_path != expected_path
+                record["deduplicated"] = shares_another_row
+                if not shares_another_row:
+                    # It has its own placement now — nothing left to announce.
+                    record["placement_error"] = None
         record["verified_at"] = _utc_now_iso()
         record["verify_error"] = None
         return True
+
+    def _queue_placement_repairs(self) -> int:
+        """Re-file every entry that has no placement of its own.
+
+        An entry whose cloud row sits at another path is in AI Matrx only as
+        somebody else's file: the session's own path is recorded nowhere, so
+        the app cannot list it under this session. The repair is the ordinary
+        upload again, now DECLARING the placement, which the door answers with
+        a row of this entry's own. Idempotent: once the row comes back filed at
+        the expected path the entry is no longer ``deduplicated`` and is never
+        queued again. Bounded: after ``MAX_PLACEMENT_REPAIRS`` rounds the entry
+        stops and SAYS the door is not honouring the placement rather than
+        re-uploading forever (that is what an old server build looks like).
+        """
+        queued = 0
+        touched: set[str] = set()
+        for session in self._sessions.values():
+            for rel, record in session.files.items():
+                if queued >= UPLOADS_PER_TICK:
+                    break
+                if not record.get("deduplicated") or not record.get("file_id"):
+                    continue
+                rounds = int(record.get("placement_repairs") or 0)
+                if rounds >= MAX_PLACEMENT_REPAIRS:
+                    record["placement_error"] = (
+                        "AI Matrx filed this under "
+                        f"{record.get('cloud_file_path') or 'another path'} instead of this "
+                        "session's own path, and did not honour the placement request after "
+                        f"{rounds} attempts. The file itself is safe here and in AI Matrx."
+                    )
+                    continue
+                record.update(
+                    placement_repairs=rounds + 1,
+                    placement_error=(
+                        "This path shares another file's AI Matrx row; it is being re-filed "
+                        "under this session's own path."
+                    ),
+                    repair_attempts=int(record.get("repair_attempts") or 0) + 1,
+                    file_id=None,
+                    uploaded_at=None,
+                    verified_at=None,
+                    deduplicated=None,
+                    cloud_file_path=None,
+                    upload_attempts=0,
+                    upload_error=None,
+                )
+                queued += 1
+                touched.add(session.cli_session_id)
+        for sid in touched:
+            self._write_manifest(self._sessions[sid])
+        if queued:
+            logger.info(
+                "[coding_session_artifacts] %s artifact path(s) had no placement of their own "
+                "and are queued to be re-filed under their own session path",
+                queued,
+            )
+        return queued
 
     @staticmethod
     def _mark_missing(record: dict[str, Any], reason: str) -> None:
@@ -776,12 +894,17 @@ class CodingSessionArtifactsLane:
         return counts["confirmed"], counts["missing"]
 
     async def verify_now(self) -> dict[str, Any]:
-        """Operator-facing repair: confirm a slice now, re-upload what is gone."""
+        """Operator-facing repair: confirm a slice now, re-upload what is gone,
+        and re-file every path AI Matrx holds under somebody else's."""
         async with self._lock:
             confirmed, missing = await self._verify_backlog(recheck=True)
-        result = {"confirmed": confirmed, "missing_in_cloud": missing}
-        if missing:
-            uploaded, failed = 0, 0
+            refiling = self._queue_placement_repairs()
+        result = {
+            "confirmed": confirmed,
+            "missing_in_cloud": missing,
+            "queued_for_refiling": refiling,
+        }
+        if missing or refiling:
             async with self._lock:
                 uploaded, failed = await self._publish_pending()
             result |= {"re_uploaded": uploaded, "re_upload_failed": failed}
@@ -791,6 +914,7 @@ class CodingSessionArtifactsLane:
             "uploaded": status["uploaded"],
             "awaiting_confirmation": status["awaiting_confirmation"],
             "still_missing_in_cloud": status["missing_in_cloud"],
+            "still_unplaced": status["unplaced"],
         }
         return result
 

@@ -402,11 +402,14 @@ class TunnelManager:
         self._process_started_at = None
         self._process_executable = None
         if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
+            # A replacement can begin only after the prior child has exited
+            # (``start`` returns early while it is live).  Its reader may
+            # still be serializing the mandatory inactive cloud write; do not
+            # cancel that write and let a stale old URL outlive this generation.
             try:
                 await self._reader_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except Exception:
+                logger.warning("Previous cloudflared reader failed before replacement", exc_info=True)
         self._reader_task = None
 
         cmd = self._build_command(bin_path, port)
@@ -468,7 +471,7 @@ class TunnelManager:
                     "Could not persist cloudflared process identity",
                     exc_info=True,
                 )
-        self._reader_task = asyncio.create_task(self._read_output())
+        self._reader_task = asyncio.create_task(self._read_output(self._process))
 
         exit_task: asyncio.Task | None = None
         url_task: asyncio.Task | None = None
@@ -536,7 +539,11 @@ class TunnelManager:
             try:
                 from app.services.cloud_sync.instance_manager import get_instance_manager
 
-                return await get_instance_manager().update_tunnel_url(url, active=True)
+                # This is an advisory registration write.  A cloud outage
+                # must not recast an otherwise live tunnel as a failed start
+                # or suppress local discovery; liveness is the return value.
+                await get_instance_manager().update_tunnel_url(url, active=True)
+                return True
             except Exception:
                 logger.warning("Failed to publish active cloud tunnel registration", exc_info=True)
                 return False
@@ -646,14 +653,14 @@ class TunnelManager:
                 "--url", f"http://127.0.0.1:{port}",
             ]
 
-    async def _read_output(self) -> None:
+    async def _read_output(self, process: asyncio.subprocess.Process) -> None:
         """Read cloudflared stdout/stderr and extract the tunnel URL."""
-        if not self._process or not self._process.stdout:
+        if not process.stdout:
             return
 
         line_count = 0
         try:
-            async for raw_line in self._process.stdout:
+            async for raw_line in process.stdout:
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if not line:
                     continue
@@ -682,7 +689,6 @@ class TunnelManager:
         except Exception as exc:
             logger.error("cloudflared output reader error: %s", exc)
 
-        process = self._process
         if process is not None and process.returncode is None:
             # EOF on the combined output pipe does not prove the child exited:
             # a process can close stdout/stderr and keep servicing work for a

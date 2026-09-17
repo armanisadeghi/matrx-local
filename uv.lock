@@ -2128,7 +2128,7 @@ wheels = [
 
 [[package]]
 name = "matrx-local"
-version = "1.4.150"
+version = "1.4.151"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },

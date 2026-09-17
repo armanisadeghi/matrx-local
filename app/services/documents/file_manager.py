@@ -19,9 +19,10 @@ import os
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,41 @@ from app.config import MATRX_NOTES_DIR
 
 # Backward-compat alias
 DOCUMENTS_BASE_DIR = MATRX_NOTES_DIR
+
+
+@dataclass(frozen=True)
+class NoteRevision:
+    """The metadata needed to prove a note did not change across an await."""
+
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+
+@dataclass(frozen=True)
+class NoteReadSnapshot:
+    """A stable read, a proven absence, or a detected read-time change.
+
+    An unreadable path stays distinct from absence. Callers must never turn
+    either condition into permission to overwrite or delete user work.
+    """
+
+    state: Literal["present", "missing", "changed", "unreadable"]
+    content: str | None = None
+    content_hash: str | None = None
+    revision: NoteRevision | None = None
+
+
+def _note_revision(stat_result: os.stat_result) -> NoteRevision:
+    return NoteRevision(
+        device=stat_result.st_dev,
+        inode=stat_result.st_ino,
+        size=stat_result.st_size,
+        mtime_ns=stat_result.st_mtime_ns,
+        ctime_ns=stat_result.st_ctime_ns,
+    )
 
 
 def _notes_dir() -> Path:
@@ -309,6 +345,65 @@ class DocumentFileManager:
         if target.is_file():
             return target.read_text(encoding="utf-8")
         return None
+
+    def read_note_snapshot(self, file_path: str) -> NoteReadSnapshot:
+        """Read one note only when its revision stays stable through the read.
+
+        This synchronous primitive is run in ``offload_read_only`` by async
+        sync paths. Its revision can then be checked on the event-loop thread
+        immediately before a destructive local mutation.
+        """
+        target = self.note_path_from_file_path(file_path)
+        try:
+            before = _note_revision(target.stat())
+        except FileNotFoundError:
+            return NoteReadSnapshot("missing")
+        except OSError:
+            return NoteReadSnapshot("unreadable")
+
+        try:
+            content = target.read_text(encoding="utf-8")
+            after = _note_revision(target.stat())
+        except FileNotFoundError:
+            # The file was present for one side of the read only. Treat it as
+            # changed, never as safely absent.
+            return NoteReadSnapshot("changed")
+        except OSError:
+            return NoteReadSnapshot("unreadable")
+
+        if before != after:
+            return NoteReadSnapshot("changed")
+        return NoteReadSnapshot(
+            "present",
+            content=content,
+            content_hash=content_hash(content),
+            revision=after,
+        )
+
+    def note_snapshot_is_current(
+        self, file_path: str, snapshot: NoteReadSnapshot
+    ) -> bool:
+        """Synchronously prove a snapshot still describes ``file_path``.
+
+        ``False`` covers changed, missing, and unreadable paths so mutation
+        callers fail closed. This only stats metadata; it never reads bodies
+        on the event loop.
+        """
+        target = self.note_path_from_file_path(file_path)
+        if snapshot.state == "missing":
+            try:
+                target.stat()
+            except FileNotFoundError:
+                return True
+            except OSError:
+                return False
+            return False
+        if snapshot.state != "present" or snapshot.revision is None:
+            return False
+        try:
+            return _note_revision(target.stat()) == snapshot.revision
+        except OSError:
+            return False
 
     def read_eligible_queued_note(self, file_path: str) -> str | None:
         """Read one queued note only when ``scan_all`` would include it.

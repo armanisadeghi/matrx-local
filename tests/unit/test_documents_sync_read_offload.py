@@ -7,6 +7,7 @@ not start an engine, open a real notes directory, or configure cloud sync.
 from __future__ import annotations
 
 import asyncio
+import ast
 import inspect
 import threading
 from contextvars import ContextVar
@@ -15,7 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.documents.file_manager import DocumentFileManager
+from app.services.documents.file_manager import DocumentFileManager, content_hash
 from app.services.documents.async_io import offload_read_only
 from app.services.documents.sync_engine import SyncEngine
 
@@ -267,8 +268,306 @@ async def test_cancelled_read_only_scan_preserves_cancellation_after_worker_erro
     assert fm.finished.is_set()
 
 
+@pytest.mark.anyio
+async def test_conflict_snapshot_read_keeps_health_equivalent_work_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real conflict snapshot read must not stop unrelated loop work."""
+    notes = tmp_path / "private-notes"
+    conflict = notes / ".sync" / "conflicts" / "note-1"
+    conflict.mkdir(parents=True)
+    local_snapshot = conflict / "local.md"
+    local_snapshot.write_text("local", encoding="utf-8")
+    (conflict / "remote.md").write_text("remote", encoding="utf-8")
+    current_file = notes / "General" / "Note.md"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("current", encoding="utf-8")
+    fm = DocumentFileManager(base_dir=notes)
+    engine = SyncEngine(fm=fm)
+    engine.configure("account-a", "token-a")
+    repo = AsyncMock()
+    repo.get.return_value = {
+        "id": "note-1", "user_id": "account-a", "label": "Note",
+        "folder_name": "General", "file_path": "General/Note.md",
+    }
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    engine._push_note = AsyncMock(return_value={"_synced_to_cloud": True})
+
+    started = threading.Event()
+    release = threading.Event()
+    original_read_text = Path.read_text
+
+    def controlled_read(self: Path, *args: object, **kwargs: object) -> str:
+        if self == local_snapshot:
+            started.set()
+            release.wait()
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", controlled_read)
+    resolve = asyncio.create_task(engine.resolve_conflict("note-1", "keep_remote"))
+    await _wait_for(started)
+
+    beats = 0
+    for _ in range(8):
+        await asyncio.sleep(0)
+        beats += 1
+
+    release.set()
+    result = await resolve
+
+    assert beats == 8
+    assert result and result["content"] == "remote"
+    assert repo.set_sync_status.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_cancelled_conflict_snapshot_read_drains_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation cannot leave a conflict-body read touching user data."""
+    notes = tmp_path / "private-notes"
+    conflict = notes / ".sync" / "conflicts" / "note-1"
+    conflict.mkdir(parents=True)
+    local_snapshot = conflict / "local.md"
+    local_snapshot.write_text("local", encoding="utf-8")
+    (conflict / "remote.md").write_text("remote", encoding="utf-8")
+    engine = SyncEngine(fm=DocumentFileManager(base_dir=notes))
+
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original_read_text = Path.read_text
+
+    def controlled_read(self: Path, *args: object, **kwargs: object) -> str:
+        if self == local_snapshot:
+            started.set()
+            release.wait()
+            finished.set()
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", controlled_read)
+    resolve = asyncio.create_task(engine.resolve_conflict("note-1", "keep_remote"))
+    await _wait_for(started)
+
+    resolve.cancel()
+    await asyncio.sleep(0)
+    resolve.cancel()
+    await asyncio.sleep(0)
+    assert not resolve.done()
+    assert not finished.is_set()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await resolve
+    assert finished.is_set()
+
+
+@pytest.mark.anyio
+async def test_keep_local_defers_edit_made_after_worker_captures_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-read external edit cannot be overwritten after the await."""
+    notes = tmp_path / "private-notes"
+    conflict = notes / ".sync" / "conflicts" / "note-1"
+    conflict.mkdir(parents=True)
+    (conflict / "local.md").write_text("conflict-local", encoding="utf-8")
+    (conflict / "remote.md").write_text("conflict-remote", encoding="utf-8")
+    current_file = notes / "General" / "Note.md"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("before-edit", encoding="utf-8")
+    fm = DocumentFileManager(base_dir=notes)
+    engine = SyncEngine(fm=fm)
+    engine.configure("account-a", "token-a")
+    repo = AsyncMock()
+    repo.get.return_value = {
+        "id": "note-1", "user_id": "account-a", "label": "Note",
+        "folder_name": "General", "file_path": "General/Note.md",
+    }
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    engine._push_note = AsyncMock(return_value={"_synced_to_cloud": True})
+
+    started = threading.Event()
+    release = threading.Event()
+    original_snapshot = fm.read_note_snapshot
+
+    def controlled_snapshot(file_path: str):
+        snapshot = original_snapshot(file_path)
+        if file_path == "General/Note.md":
+            started.set()
+            release.wait()
+        return snapshot
+
+    monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
+    resolve = asyncio.create_task(engine.resolve_conflict("note-1", "keep_local"))
+    await _wait_for(started)
+    current_file.write_text("edited-while-read-pending", encoding="utf-8")
+    release.set()
+
+    result = await resolve
+
+    assert result == {"id": "note-1", "_deferred_revision": True}
+    assert current_file.read_text(encoding="utf-8") == "edited-while-read-pending"
+
+
+@pytest.mark.anyio
+async def test_pull_defers_post_capture_edit_before_remote_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote pull cannot overwrite a local edit made after its worker read."""
+    notes = tmp_path / "private-notes"
+    current_file = notes / "General" / "Note.md"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("synced-local", encoding="utf-8")
+    fm = DocumentFileManager(base_dir=notes)
+    engine = SyncEngine(fm=fm)
+    engine.configure("account-a", "token-a")
+    local_hash = content_hash("synced-local")
+    repo = AsyncMock()
+    local_row = {
+        "id": "note-1", "user_id": "account-a", "file_path": "General/Note.md",
+        "remote_content_hash": local_hash, "sync_status": "synced",
+    }
+    repo.get.return_value = local_row
+    repo.list_live_by_file_path.return_value = [local_row]
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    state = {"note_hashes": {"General/Note.md": local_hash}}
+    engine._load_sync_state = lambda: state  # type: ignore[method-assign]
+    engine._save_sync_state = lambda _state: None  # type: ignore[method-assign]
+
+    started = threading.Event()
+    release = threading.Event()
+    original_snapshot = fm.read_note_snapshot
+
+    def controlled_snapshot(file_path: str):
+        snapshot = original_snapshot(file_path)
+        if file_path == "General/Note.md":
+            started.set()
+            release.wait()
+        return snapshot
+
+    monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
+    pull = asyncio.create_task(engine._pull_note("note-1", {
+        "id": "note-1", "created_by": "account-a", "file_path": "General/Note.md",
+        "label": "Note", "folder_name": "General", "content": "remote-body",
+        "content_hash": content_hash("remote-body"),
+    }))
+    await _wait_for(started)
+    current_file.write_text("edited-after-capture", encoding="utf-8")
+    release.set()
+
+    result = await pull
+
+    assert result and result.get("_deferred_revision") is True
+    assert current_file.read_text(encoding="utf-8") == "edited-after-capture"
+    assert repo.upsert.await_count == 0
+
+
+@pytest.mark.anyio
+async def test_reroute_cleanup_preserves_post_capture_old_path_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A move may materialize its new path but never delete a changed old one."""
+    notes = tmp_path / "private-notes"
+    old_file = notes / "General" / "Old.md"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("synced-old", encoding="utf-8")
+    fm = DocumentFileManager(base_dir=notes)
+    engine = SyncEngine(fm=fm)
+    engine.configure("account-a", "token-a")
+    old_hash = content_hash("synced-old")
+    local_row = {
+        "id": "note-1", "user_id": "account-a", "file_path": "General/Old.md",
+        "remote_content_hash": old_hash, "sync_status": "synced",
+    }
+    repo = AsyncMock()
+    repo.get.return_value = local_row
+    repo.list_live_by_file_path.side_effect = lambda fp: [local_row] if fp == "General/Old.md" else []
+    engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
+    state = {"note_hashes": {"General/Old.md": old_hash}}
+    engine._load_sync_state = lambda: state  # type: ignore[method-assign]
+    engine._save_sync_state = lambda _state: None  # type: ignore[method-assign]
+
+    started = threading.Event()
+    release = threading.Event()
+    original_snapshot = fm.read_note_snapshot
+
+    def controlled_snapshot(file_path: str):
+        snapshot = original_snapshot(file_path)
+        if file_path == "General/Old.md":
+            started.set()
+            release.wait()
+        return snapshot
+
+    monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
+    pull = asyncio.create_task(engine._pull_note("note-1", {
+        "id": "note-1", "created_by": "account-a", "file_path": "General/New.md",
+        "label": "Note", "folder_name": "General", "content": "remote-body",
+        "content_hash": content_hash("remote-body"),
+    }))
+    await _wait_for(started)
+    old_file.write_text("edited-after-capture", encoding="utf-8")
+    release.set()
+
+    await pull
+
+    assert old_file.read_text(encoding="utf-8") == "edited-after-capture"
+    assert (notes / "General" / "New.md").read_text(encoding="utf-8") == "remote-body"
+    assert "General/Old.md" in state["note_hashes"]
+
+
+@pytest.mark.anyio
+async def test_prune_preserves_conflict_changed_after_worker_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pruning never clears a conflict whose snapshot changed after capture."""
+    notes = tmp_path / "private-notes"
+    conflict = notes / ".sync" / "conflicts" / "note-1"
+    conflict.mkdir(parents=True)
+    local_file = conflict / "local.md"
+    local_file.write_text("same", encoding="utf-8")
+    (conflict / "remote.md").write_text("same", encoding="utf-8")
+    fm = DocumentFileManager(base_dir=notes)
+    engine = SyncEngine(fm=fm)
+
+    started = threading.Event()
+    release = threading.Event()
+    original_snapshot = fm.read_note_snapshot
+
+    def controlled_snapshot(file_path: str):
+        snapshot = original_snapshot(file_path)
+        if file_path.endswith("/local.md"):
+            started.set()
+            release.wait()
+        return snapshot
+
+    monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
+    prune = asyncio.create_task(engine.prune_stale_conflicts())
+    await _wait_for(started)
+    local_file.write_text("changed-after-capture", encoding="utf-8")
+    release.set()
+
+    assert await prune == 0
+    assert conflict.exists()
+
+
+def test_unreadable_snapshot_is_not_treated_as_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed stat/read is a deferral signal, never a safe missing file."""
+    fm = DocumentFileManager(base_dir=tmp_path / "private-notes")
+
+    class UnreadablePath:
+        def stat(self):
+            raise PermissionError("private fixture access denied")
+
+    monkeypatch.setattr(fm, "note_path_from_file_path", lambda _path: UnreadablePath())
+
+    snapshot = fm.read_note_snapshot("General/Note.md")
+
+    assert snapshot.state == "unreadable"
+    assert fm.note_snapshot_is_current("General/Note.md", snapshot) is False
+
+
 def test_sync_engine_routes_all_repeating_note_reads_through_offload() -> None:
-    """The three scans and native watcher hash read stay outside the loop."""
+    """Every asynchronous Notes content read is owned by the offload helper."""
     push_source = inspect.getsource(SyncEngine.push_all)
     full_source = inspect.getsource(SyncEngine.full_sync)
     watcher_source = inspect.getsource(SyncEngine._watch_loop)
@@ -280,3 +579,30 @@ def test_sync_engine_routes_all_repeating_note_reads_through_offload() -> None:
     assert watcher_source.count("await offload_read_only(self.fm.scan_all)") == 1
     assert "await offload_read_only(" in watcher_source
     assert 'path.read_text(encoding="utf-8")' in watcher_source
+
+    tree = ast.parse(inspect.getsource(__import__("app.services.documents.sync_engine", fromlist=["*"])))
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"read_note", "read_note_snapshot", "note_hash", "read_text"}:
+            continue
+        owner: ast.AST | None = node
+        while owner is not None and not isinstance(owner, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            owner = parents.get(owner)
+        if not isinstance(owner, ast.AsyncFunctionDef):
+            continue
+        ancestor: ast.AST | None = node
+        while ancestor is not None:
+            if (
+                isinstance(ancestor, ast.Call)
+                and isinstance(ancestor.func, ast.Name)
+                and ancestor.func.id == "offload_read_only"
+            ):
+                break
+            ancestor = parents.get(ancestor)
+        assert ancestor is not None, f"async {owner.name} reads content without offload"

@@ -8,6 +8,9 @@ import threading
 from contextvars import ContextVar
 from pathlib import Path
 
+import pytest
+
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api import document_routes
@@ -114,3 +117,42 @@ def test_every_async_route_scan_is_offloaded_and_legacy_lookup_uses_paths() -> N
     for route_name in ("get_note", "update_note", "delete_note"):
         route_source = inspect.getsource(getattr(document_routes, route_name))
         assert "list_note_paths" in route_source
+
+
+def test_conflict_route_reads_snapshots_through_offload() -> None:
+    """Conflict bodies must not run on the request's asyncio task."""
+    source = inspect.getsource(document_routes.list_conflicts)
+    assert "def read_conflict_snapshots" in source
+    assert "local_file.read_text" in source
+    assert "remote_file.read_text" in source
+    assert "await offload_read_only(" in source
+    assert "            read_conflict_snapshots\n" in source
+
+
+def test_conflict_resolution_deferral_is_not_reported_as_success(monkeypatch) -> None:
+    class DeferredEngine:
+        async def resolve_conflict(self, *args, **kwargs):
+            return {"id": "note-1", "_deferred_revision": True}
+
+    monkeypatch.setattr(document_routes, "sync_engine", DeferredEngine())
+    monkeypatch.setattr(document_routes, "_configure_sync", lambda _request: None)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/notes/conflicts/note-1/resolve",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException, match="Conflict changed") as exc_info:
+        asyncio.run(
+            document_routes.resolve_conflict(
+                "note-1",
+                document_routes.ConflictResolveRequest(resolution="keep_remote"),
+                request,
+            )
+        )
+
+    assert exc_info.value.status_code == 409

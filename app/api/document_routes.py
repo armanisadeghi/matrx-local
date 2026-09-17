@@ -1157,7 +1157,7 @@ async def stop_watcher(request: Request) -> dict[str, str]:
 async def list_conflicts(request: Request) -> dict[str, Any]:
     # Drop residue conflicts whose two sides are byte-identical (lossless by
     # definition) before presenting anything to the user.
-    sync_engine.prune_stale_conflicts()
+    await sync_engine.prune_stale_conflicts()
     conflict_ids = file_manager.list_conflicts()
     details: list[dict[str, Any]] = []
     for note_id in conflict_ids:
@@ -1165,10 +1165,22 @@ async def list_conflicts(request: Request) -> dict[str, Any]:
         local_file = conflict_dir / "local.md"
         remote_file = conflict_dir / "remote.md"
         entry: dict[str, Any] = {"note_id": note_id}
-        if local_file.exists():
-            entry["local_content"] = local_file.read_text(encoding="utf-8")
-        if remote_file.exists():
-            entry["remote_content"] = remote_file.read_text(encoding="utf-8")
+        def read_conflict_snapshots() -> tuple[str | None, str | None]:
+            local_content = (
+                local_file.read_text(encoding="utf-8") if local_file.exists() else None
+            )
+            remote_content = (
+                remote_file.read_text(encoding="utf-8") if remote_file.exists() else None
+            )
+            return local_content, remote_content
+
+        local_content, remote_content = await offload_read_only(
+            read_conflict_snapshots
+        )
+        if local_content is not None:
+            entry["local_content"] = local_content
+        if remote_content is not None:
+            entry["remote_content"] = remote_content
         repo = _get_notes_repo()
         sqlite_note = await repo.get(note_id)
         if sqlite_note:
@@ -1188,6 +1200,13 @@ async def resolve_conflict(
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Conflict not found")
+    if result.get("_deferred_revision"):
+        raise HTTPException(
+            status_code=409,
+            detail="Conflict changed while it was being resolved; refresh and try again",
+        )
+    if result.get("_deferred_account"):
+        raise HTTPException(status_code=409, detail="Conflict ownership changed; refresh and try again")
     return {"status": "resolved", "resolution": req.resolution}
 
 

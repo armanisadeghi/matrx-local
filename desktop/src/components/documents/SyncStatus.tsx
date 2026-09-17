@@ -183,11 +183,30 @@ export function SyncStatusBar({ status, syncing, lastResult, onSync }: SyncStatu
 
       {/* Last sync result toast */}
       {lastResult && !syncing && (
-        <span className="text-emerald-500">
-          {lastResult.pushed ? `↑${lastResult.pushed}` : ""}
-          {lastResult.pulled ? ` ↓${lastResult.pulled}` : ""}
-          {lastResult.conflicts ? ` ⚠${lastResult.conflicts}` : ""}
-          {!lastResult.pushed && !lastResult.pulled && !lastResult.conflicts ? "Up to date" : ""}
+        <span
+          className={
+            lastResult.error
+              || lastResult.failed
+              || lastResult.deferred_account
+              || lastResult.deferred_revision
+              ? "text-amber-500"
+              : "text-emerald-500"
+          }
+        >
+          {lastResult.error || lastResult.failed
+            ? "Sync needs attention"
+            : lastResult.deferred_account
+              ? "Sync incomplete — account ownership changed"
+              : lastResult.deferred_revision
+                ? "Sync incomplete — local changes will retry"
+                : <>
+                    {lastResult.pushed ? `↑${lastResult.pushed}` : ""}
+                    {lastResult.pulled ? ` ↓${lastResult.pulled}` : ""}
+                    {lastResult.conflicts ? ` ⚠${lastResult.conflicts}` : ""}
+                    {!lastResult.pushed && !lastResult.pulled && !lastResult.conflicts
+                      ? "Up to date"
+                      : ""}
+                  </>}
         </span>
       )}
     </div>

@@ -25,7 +25,11 @@ from typing import Any
 import pytest
 
 try:
-    from app.services.documents.file_manager import content_hash
+    from app.services.documents.file_manager import (
+        NoteReadSnapshot,
+        NoteRevision,
+        content_hash,
+    )
     from app.services.documents.supabase_client import _normalize_note_row
     from app.services.documents.sync_engine import SyncEngine, _note_id_for_path
 except Exception as exc:  # pragma: no cover — env-dependent import guard
@@ -73,6 +77,66 @@ class FakeFileManager:
     def read_note(self, file_path: str) -> str | None:
         return self.notes.get(file_path)
 
+    def read_note_snapshot(self, file_path: str) -> NoteReadSnapshot:
+        if file_path.startswith(".sync/"):
+            target = self.base_dir / file_path
+            try:
+                before = target.stat()
+            except FileNotFoundError:
+                return NoteReadSnapshot("missing")
+            content = target.read_text(encoding="utf-8")
+            after = target.stat()
+            if (
+                before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                return NoteReadSnapshot("changed")
+            return NoteReadSnapshot(
+                "present",
+                content=content,
+                content_hash=content_hash(content),
+                revision=NoteRevision(
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ),
+            )
+        content = self.notes.get(file_path)
+        if content is None:
+            return NoteReadSnapshot("missing")
+        return NoteReadSnapshot(
+            "present",
+            content=content,
+            content_hash=content_hash(content),
+            revision=NoteRevision(0, 0, len(content), 0, 0),
+        )
+
+    def note_snapshot_is_current(
+        self, file_path: str, snapshot: NoteReadSnapshot
+    ) -> bool:
+        if file_path.startswith(".sync/"):
+            target = self.base_dir / file_path
+            try:
+                current = target.stat()
+            except OSError:
+                return snapshot.state == "missing"
+            return snapshot.revision == NoteRevision(
+                current.st_dev,
+                current.st_ino,
+                current.st_size,
+                current.st_mtime_ns,
+                current.st_ctime_ns,
+            )
+        content = self.notes.get(file_path)
+        if snapshot.state == "missing":
+            return content is None
+        return snapshot.state == "present" and snapshot.content == content
+
     def delete_note(self, file_path: str) -> bool:
         self.deleted.append(file_path)
         return self.notes.pop(file_path, None) is not None
@@ -85,6 +149,9 @@ class FakeFileManager:
         while f"{folder_name}/{label}_{n}.md" in self.notes:
             n += 1
         return f"{folder_name}/{label}_{n}.md"
+
+    def relative_path(self, absolute: Path) -> str:
+        return str(absolute.relative_to(self.base_dir))
 
     def note_hash(self, file_path: str) -> str | None:
         content = self.notes.get(file_path)
@@ -512,7 +579,7 @@ def test_prune_stale_conflicts_drops_identical_sides(engine: SyncEngine) -> None
     engine.fm.save_conflict("General/a.md", "same", "same", "conf-same")
     engine.fm.save_conflict("General/b.md", "left", "right", "conf-diff")
     engine.fm.list_conflicts = lambda: ["conf-same", "conf-diff"]  # type: ignore[method-assign]
-    pruned = engine.prune_stale_conflicts()
+    pruned = _run(engine.prune_stale_conflicts())
     assert pruned == 1
     assert engine.fm.conflicts_resolved == ["conf-same"]
 
@@ -556,6 +623,7 @@ def _seed_conflict(
     fp: str = "General/Conflicted.md",
 ) -> str:
     _configure(engine)
+    engine.fm.notes[fp] = local
     engine.fm.save_conflict(fp, local, remote, note_id)
     _run(
         engine._repo.upsert(
@@ -748,3 +816,81 @@ def test_push_conflicts_instead_of_overwriting_foreign_remote_edit(
     ]
     # note_hashes must NOT advance — nothing synced.
     assert _account_state(engine)["note_hashes"][fp] == content_hash("commonly synced")
+
+
+def test_pull_changes_defers_revision_without_advancing_checkpoint(
+    engine: SyncEngine,
+) -> None:
+    """A post-read revision change is retried; it is neither a pull nor a cursor advance."""
+    _configure(engine)
+
+    async def fake_get_notes_since(
+        user_id: str, since: str | None
+    ) -> list[dict[str, Any]]:
+        return [{"id": "n1", "updated_at": "2026-07-14T00:00:00+00:00"}]
+
+    async def deferred_pull(note_id: str) -> dict[str, Any]:
+        assert note_id == "n1"
+        return {"id": note_id, "_deferred_revision": True}
+
+    engine.sb.get_notes_since = fake_get_notes_since  # type: ignore[attr-defined]
+    engine._pull_note = deferred_pull  # type: ignore[method-assign]
+
+    result = _run(engine.pull_changes())
+
+    assert result["pulled"] == 0
+    assert result["skipped"] == 1
+    assert "last_pull_at" not in _account_state(engine)
+    assert SyncEngine._is_nonmaterialized_pull({"_deferred_revision": True})
+
+
+def test_remote_tombstone_with_already_missing_file_converges(engine: SyncEngine) -> None:
+    """A proven missing local file is a safe no-op before recording the tombstone."""
+    _configure(engine)
+    engine._repo.rows["dead"] = {
+        "id": "dead", "user_id": "user-1", "file_path": "General/gone.md",
+    }
+    remote = {
+        "id": "dead", "created_by": "user-1", "file_path": "General/gone.md",
+        "is_deleted": True,
+    }
+
+    result = _run(engine._pull_note("dead", note=remote))
+
+    assert result and result.get("_deleted") is True
+    assert "dead" in engine._repo.soft_deleted
+    assert "General/gone.md" not in engine.fm.deleted
+
+
+def test_remote_tombstone_db_failure_is_deferred_and_logged_safely(
+    engine: SyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A local-row failure cannot be reported as a completed remote deletion."""
+    _configure(engine)
+    engine._repo.rows["dead"] = {
+        "id": "dead", "user_id": "user-1", "file_path": "General/gone.md",
+    }
+
+    async def fail_soft_delete(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("private database failure detail")
+
+    engine._repo.soft_delete = fail_soft_delete  # type: ignore[method-assign]
+    result = _run(engine._pull_note("dead", note={
+        "id": "dead", "created_by": "user-1", "file_path": "General/gone.md",
+        "is_deleted": True,
+    }))
+
+    assert result == {"id": "dead", "created_by": "user-1", "file_path": "General/gone.md", "is_deleted": True, "_deferred_revision": True}
+    assert "RuntimeError" in caplog.text
+    assert "private database failure detail" not in caplog.text
+
+
+def test_keep_local_preserves_intentional_empty_current_content(engine: SyncEngine) -> None:
+    """An empty current note is content, not a request to restore the conflict copy."""
+    note_id = _seed_conflict(engine)
+    engine.fm.notes["General/Conflicted.md"] = ""
+
+    result = _run(engine.resolve_conflict(note_id, "keep_local"))
+
+    assert result and result["content"] == ""
+    assert engine.fm.notes["General/Conflicted.md"] == ""

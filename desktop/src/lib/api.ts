@@ -5165,6 +5165,10 @@ export interface SyncResult {
   unchanged?: number;
   skipped?: number;
   failed?: number;
+  /** Reads deferred after a local file changed or could not be verified. */
+  deferred_revision?: number;
+  /** Notes withheld because their durable owner differs from this account. */
+  deferred_account?: number;
   error?: string;
 }
 

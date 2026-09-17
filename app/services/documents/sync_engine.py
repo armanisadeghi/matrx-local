@@ -221,6 +221,16 @@ class SyncEngine:
         result.setdefault("note_hashes", {})
         return result
 
+    async def _read_note_snapshot(self, file_path: str) -> Any:
+        """Capture a stable Notes body/revision without blocking the loop."""
+        return await offload_read_only(
+            lambda: self.fm.read_note_snapshot(file_path)
+        )
+
+    def _snapshot_is_current(self, file_path: str, snapshot: Any) -> bool:
+        """Fail closed before a local Notes mutation after an awaited read."""
+        return self.fm.note_snapshot_is_current(file_path, snapshot)
+
     def _save_sync_state(self, account_state: dict[str, Any]) -> None:
         user_id = self._user_id
         if not user_id:
@@ -637,7 +647,9 @@ class SyncEngine:
         ]
         if len(matching) == 1:
             return {"status": "keeper", "keeper_id": matching[0]["id"], "owners": owners}
-        if len(matching) > 1 and self.fm.note_hash(file_path) == known_hash:
+        if len(matching) > 1 and (
+            await offload_read_only(lambda: self.fm.note_hash(file_path))
+        ) == known_hash:
             keeper = min(matching, key=lambda owner: owner["id"])
             return {"status": "keeper", "keeper_id": keeper["id"], "owners": owners}
         return {"status": "ambiguous", "owners": owners}
@@ -655,6 +667,7 @@ class SyncEngine:
                 "_skipped_own_push",
                 "_skipped_local_tombstone",
                 "_path_allocation_failed",
+                "_deferred_revision",
             )
         )
 
@@ -716,18 +729,39 @@ class SyncEngine:
                         note_id, fp,
                     )
                 else:
-                    try:
-                        self.fm.delete_note(fp)
-                    except Exception:
-                        logger.debug("Could not remove local file for deleted note %s", note_id)
+                    snapshot = await self._read_note_snapshot(fp)
+                    if not (
+                        snapshot.state in {"present", "missing"}
+                        and self._snapshot_is_current(fp, snapshot)
+                    ):
+                        logger.info(
+                            "Deferring local tombstone removal for %s — "
+                            "file revision changed or cannot be proven current",
+                            note_id,
+                        )
+                        return {**note, "_deferred_revision": True}
+                    if snapshot.state == "present":
+                        try:
+                            self.fm.delete_note(fp)
+                        except Exception:
+                            logger.debug(
+                                "Could not remove local file for deleted note %s",
+                                note_id,
+                            )
+                            return {**note, "_deferred_revision": True}
                     state = self._load_sync_state()
                     state.get("note_hashes", {}).pop(fp, None)
                     self._save_sync_state(state)
                     self._last_push_hashes.pop(fp, None)
             try:
                 await repo.soft_delete(note_id, user_id=actor_user_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Could not record remote tombstone locally for %s (%s); retrying",
+                    note_id,
+                    type(exc).__name__,
+                )
+                return {**note, "_deferred_revision": True}
             return {**note, "_deleted": True}
 
         # Values from other clients can be present-but-null — dict-get
@@ -736,6 +770,7 @@ class SyncEngine:
         label = note.get("label") or "Untitled"
         folder_name = note.get("folder_name") or "General"
         file_path = note.get("file_path")
+        write_snapshot: Any | None = None
 
         # Local tombstone guard: this device deleted the note; don't let a pull
         # of the (not-yet-tombstoned) remote row resurrect it unless the remote
@@ -791,7 +826,10 @@ class SyncEngine:
                 for attempt in range(1_000):
                     candidate = _contested_note_path(contested_path, note_id, attempt)
                     candidate_owners = await repo.list_live_by_file_path(candidate)
-                    candidate_content = self.fm.read_note(candidate)
+                    candidate_snapshot = await self._read_note_snapshot(candidate)
+                    if candidate_snapshot.state == "changed":
+                        continue
+                    candidate_content = candidate_snapshot.content
                     if any(owner["id"] != note_id for owner in candidate_owners):
                         continue
                     candidate_is_owned_by_note = any(
@@ -804,6 +842,7 @@ class SyncEngine:
                         # overwrite it merely to materialize a cloud sibling.
                         continue
                     file_path = candidate
+                    write_snapshot = candidate_snapshot
                     note["_reroute_from"] = contested_path
                     if candidate_is_owned_by_note:
                         # This identity was already materialized locally. Let
@@ -820,7 +859,21 @@ class SyncEngine:
                     return {**note, "_path_allocation_failed": True}
 
         if file_path and not note.get("_allocated_path"):
-            local_hash = self.fm.note_hash(file_path)
+            write_snapshot = await self._read_note_snapshot(file_path)
+            if (
+                write_snapshot.state == "missing"
+                and (
+                    local_row is None
+                    or local_row.get("file_path") != file_path
+                )
+            ):
+                # This remote identity moved to a new path. Its absence is a
+                # safe allocation only while the same absence still holds at
+                # the write boundary below.
+                note["_new_local_path"] = True
+            elif write_snapshot.state != "present":
+                return {**note, "_deferred_revision": True}
+            local_hash = write_snapshot.content_hash
             remote_hash = note.get("content_hash")
             state = self._load_sync_state()
             last_known_hash = state.get("note_hashes", {}).get(file_path)
@@ -854,7 +907,7 @@ class SyncEngine:
                     last_known_hash is not None and local_hash == last_known_hash
                 )
                 if not local_unchanged_since_sync:
-                    local_content = self.fm.read_note(file_path) or ""
+                    local_content = write_snapshot.content or ""
                     self.fm.save_conflict(file_path, local_content, content, note_id)
                     logger.warning(
                         "Sync conflict detected for %s (note %s) — local edit "
@@ -864,6 +917,23 @@ class SyncEngine:
                         "missing" if last_known_hash is None else "stale",
                     )
                     return {**note, "_conflict": True}
+
+        if write_snapshot is None:
+            assert file_path is not None
+            write_snapshot = await self._read_note_snapshot(file_path)
+        if (
+            write_snapshot.state == "changed"
+            or (
+                (note.get("_allocated_path") or note.get("_new_local_path"))
+                and write_snapshot.state != "missing"
+            )
+            or not self._snapshot_is_current(file_path, write_snapshot)
+        ):
+            logger.info(
+                "Deferring pull of %s — local file revision changed before write",
+                note_id,
+            )
+            return {**note, "_deferred_revision": True}
 
         file_path = self.fm.write_note(folder_name, label, content, file_path)
         c_hash = content_hash(content)
@@ -884,27 +954,27 @@ class SyncEngine:
             other_old_owners = [
                 owner for owner in old_path_owners if owner["id"] != note_id
             ]
-            old_content = self.fm.read_note(old_fp)
-            old_hash = content_hash(old_content) if old_content is not None else None
+            old_snapshot = await self._read_note_snapshot(old_fp)
+            old_hash = old_snapshot.content_hash
             last_synced_old_hash = state.get("note_hashes", {}).get(old_fp)
             can_remove_old_path = (
-                old_content is None
-                or (
-                    not other_old_owners
-                    and local_row is not None
-                    and not local_row.get("is_deleted")
-                    and local_row.get("file_path") == old_fp
-                    and last_synced_old_hash is not None
-                    and old_hash == last_synced_old_hash
-                )
+                old_snapshot.state == "present"
+                and not other_old_owners
+                and local_row is not None
+                and not local_row.get("is_deleted")
+                and local_row.get("file_path") == old_fp
+                and last_synced_old_hash is not None
+                and old_hash == last_synced_old_hash
+                and self._snapshot_is_current(old_fp, old_snapshot)
             )
             if can_remove_old_path:
                 try:
                     self.fm.delete_note(old_fp)
                 except Exception:
                     logger.debug("Could not remove old-path file %s after move", old_fp)
-                state.get("note_hashes", {}).pop(old_fp, None)
-                self._last_push_hashes.pop(old_fp, None)
+                else:
+                    state.get("note_hashes", {}).pop(old_fp, None)
+                    self._last_push_hashes.pop(old_fp, None)
             else:
                 logger.info(
                     "Preserving old path %s while rerouting note %s — it is "
@@ -1028,6 +1098,9 @@ class SyncEngine:
                     continue
                 if result.get("_deferred_account"):
                     stats["deferred_account"] += 1
+                    deferred = True
+                elif result.get("_deferred_revision"):
+                    stats["skipped"] += 1
                     deferred = True
                 elif result.get("_deleted"):
                     stats["deleted"] += 1
@@ -1162,12 +1235,17 @@ class SyncEngine:
                                 and full_row.get("is_deleted")
                                 and full_row.get("content_hash") == c_hash
                             ):
-                                await self._pull_note(
+                                tombstone_result = await self._pull_note(
                                     note["id"], note=full_row
                                 )
-                                stats["deleted_local"] = (
-                                    stats.get("deleted_local", 0) + 1
-                                )
+                                if tombstone_result and tombstone_result.get("_deleted"):
+                                    stats["deleted_local"] = (
+                                        stats.get("deleted_local", 0) + 1
+                                    )
+                                elif tombstone_result and tombstone_result.get(
+                                    "_deferred_revision"
+                                ):
+                                    stats["skipped"] += 1
                                 continue
 
                 try:
@@ -1253,6 +1331,7 @@ class SyncEngine:
             if not self._user_id:
                 return {"error": "Not configured"}
 
+            full_sync_deferred = False
             stats = {
                 "pushed": 0,
                 "pulled": 0,
@@ -1261,7 +1340,27 @@ class SyncEngine:
                 "skipped": 0,
                 "deleted_local": 0,
                 "deferred_account": 0,
+                "deferred_revision": 0,
+                "failed": 0,
             }
+
+            def record_deferred_revision() -> None:
+                nonlocal full_sync_deferred
+                full_sync_deferred = True
+                stats["skipped"] += 1
+                stats["deferred_revision"] += 1
+                logger.info("full_sync deferred a local Notes read; retrying later")
+
+            def record_push_result(result: dict[str, Any] | None) -> None:
+                """Account every full-sync cloud write before claiming completion."""
+                if result and result.get("_deferred_account"):
+                    stats["deferred_account"] += 1
+                elif result and result.get("_conflict"):
+                    stats["conflicts"] += 1
+                elif result and result.get("_synced_to_cloud") is True:
+                    stats["pushed"] += 1
+                else:
+                    stats["failed"] += 1
 
             skipped = self._access_skipped()
             if skipped is not None:
@@ -1312,6 +1411,8 @@ class SyncEngine:
                     or result.get("_path_allocation_failed")
                 ):
                     stats["conflicts"] += 1
+                elif result and result.get("_deferred_revision"):
+                    record_deferred_revision()
                 elif result and not self._is_nonmaterialized_pull(result):
                     stats["pulled"] += 1
 
@@ -1332,7 +1433,9 @@ class SyncEngine:
                 if keeper_id is None:
                     if len(group) == 1:
                         keeper_id = group[0]["id"]
-                    elif self.fm.read_note(fp) is None:
+                    elif (
+                        await offload_read_only(lambda: self.fm.read_note(fp))
+                    ) is None:
                         # A clean initial import has no personal bytes to
                         # protect. A stable cloud ID selects the original-path
                         # keeper before siblings are materialized.
@@ -1384,6 +1487,8 @@ class SyncEngine:
                         or result.get("_path_allocation_failed")
                     ):
                         stats["conflicts"] += 1
+                    elif result and result.get("_deferred_revision"):
+                        record_deferred_revision()
                     elif result and not self._is_nonmaterialized_pull(result):
                         stats["pulled"] += 1
                     continue
@@ -1414,6 +1519,8 @@ class SyncEngine:
                                 or result.get("_path_allocation_failed")
                             ):
                                 stats["conflicts"] += 1
+                            elif result and result.get("_deferred_revision"):
+                                record_deferred_revision()
                             elif result and not self._is_nonmaterialized_pull(result):
                                 stats["pulled"] += 1
                             continue
@@ -1427,14 +1534,18 @@ class SyncEngine:
                                 note_id, self.device_id, actor_tier="code"
                             )
                             stats["deleted_local"] += 1
-                        except Exception:
-                            logger.debug(
-                                "Could not propagate local delete for %s", note_id
+                        except Exception as exc:
+                            stats["failed"] += 1
+                            logger.warning(
+                                "Could not propagate local delete (%s); retrying",
+                                type(exc).__name__,
                             )
                         continue
                     result = await self._pull_note(remote["id"])
                     if result and result.get("_deferred_account"):
                         stats["deferred_account"] += 1
+                    elif result and result.get("_deferred_revision"):
+                        record_deferred_revision()
                     elif result and not self._is_nonmaterialized_pull(result):
                         stats["pulled"] += 1
 
@@ -1452,11 +1563,13 @@ class SyncEngine:
                     result = await self._pull_note(remote["id"])
                     if result and result.get("_deferred_account"):
                         stats["deferred_account"] += 1
+                    elif result and result.get("_deferred_revision"):
+                        record_deferred_revision()
                     elif result and not self._is_nonmaterialized_pull(result):
                         stats["pulled"] += 1
 
                 elif known_hashes.get(fp) == remote.get("content_hash"):
-                    content = self.fm.read_note(fp)
+                    content = await offload_read_only(lambda: self.fm.read_note(fp))
                     if content is not None:
                         result = await self._push_note(
                             note_id=remote["id"],
@@ -1466,17 +1579,14 @@ class SyncEngine:
                             folder_id=remote.get("folder_id"),
                             file_path=fp,
                         )
-                        if result.get("_deferred_account"):
-                            stats["deferred_account"] += 1
-                        elif result.get("_synced_to_cloud"):
-                            stats["pushed"] += 1
+                        record_push_result(result)
                 elif remote.get("last_device_id") == self.device_id:
                     # Divergence, but the cloud row was last written by THIS
                     # device — no other device has contributed since our last
                     # push, so the local file is simply newer unsynced work.
                     # Raising a conflict here made the app accuse the user of
                     # conflicting with their own saves. Push instead.
-                    content = self.fm.read_note(fp)
+                    content = await offload_read_only(lambda: self.fm.read_note(fp))
                     if content is not None:
                         result = await self._push_note(
                             note_id=remote["id"],
@@ -1486,13 +1596,12 @@ class SyncEngine:
                             folder_id=remote.get("folder_id"),
                             file_path=fp,
                         )
-                        if result.get("_deferred_account"):
-                            stats["deferred_account"] += 1
-                        elif result.get("_synced_to_cloud"):
-                            stats["pushed"] += 1
+                        record_push_result(result)
 
                 else:
-                    local_content = self.fm.read_note(fp) or ""
+                    local_content = await offload_read_only(
+                        lambda: self.fm.read_note(fp) or ""
+                    )
                     try:
                         full_note = await self.sb.get_note(remote["id"])
                         remote_content = full_note.get("content", "") if full_note else ""
@@ -1528,7 +1637,7 @@ class SyncEngine:
                         stats["deferred_account"] += 1
                         continue
 
-                    content = self.fm.read_note(fp)
+                    content = await offload_read_only(lambda: self.fm.read_note(fp))
                     if content is None:
                         continue
                     parts = Path(fp).parts
@@ -1624,8 +1733,15 @@ class SyncEngine:
                             and remote_row.get("content_hash")
                             == local["content_hash"]
                         ):
-                            await self._pull_note(push_id, note=remote_row)
-                            stats["deleted_local"] += 1
+                            tombstone_result = await self._pull_note(
+                                push_id, note=remote_row
+                            )
+                            if tombstone_result and tombstone_result.get("_deleted"):
+                                stats["deleted_local"] += 1
+                            elif tombstone_result and tombstone_result.get(
+                                "_deferred_revision"
+                            ):
+                                record_deferred_revision()
                             continue
 
                     result = await self._push_note(
@@ -1636,10 +1752,7 @@ class SyncEngine:
                         folder_id=(local_note or {}).get("folder_id"),
                         file_path=fp,
                     )
-                    if result.get("_deferred_account"):
-                        stats["deferred_account"] += 1
-                    elif result.get("_synced_to_cloud"):
-                        stats["pushed"] += 1
+                    record_push_result(result)
 
             # Remote notes WITHOUT a file_path — created by other clients (the
             # web app writes no file_path). remote_by_path walks right past
@@ -1669,6 +1782,8 @@ class SyncEngine:
                 result = await self._pull_note(note_id)
                 if result and result.get("_deferred_account"):
                     stats["deferred_account"] += 1
+                elif result and result.get("_deferred_revision"):
+                    record_deferred_revision()
                 elif result and not self._is_nonmaterialized_pull(result):
                     stats["pulled"] += 1
                     imported += 1
@@ -1701,9 +1816,19 @@ class SyncEngine:
             # this reload→save free of awaits: it must stay atomic on the
             # event loop so a concurrent reset_delete_breaker can never be
             # overwritten by a stale snapshot (see allow_cloud_delete).
-            state = self._load_sync_state()
-            state["last_full_sync"] = time.time()
-            self._save_sync_state(state)
+            if not (
+                full_sync_deferred
+                or stats["deferred_account"]
+                or stats.get("failed")
+                or stats.get("error")
+                or stats["conflicts"]
+            ):
+                state = self._load_sync_state()
+                state["last_full_sync"] = time.time()
+                self._save_sync_state(state)
+            attempt_state = self._load_sync_state()
+            attempt_state["last_full_sync_attempt"] = time.time()
+            self._save_sync_state(attempt_state)
             # Live remote corpus size — scales the mass-delete breaker budget.
             root_state = self.fm.load_sync_state()
             root_state["remote_live_count"] = len(remote_notes)
@@ -1900,9 +2025,13 @@ class SyncEngine:
         push = await self.push_all()
 
         state = self._load_sync_state()
-        last_full = state.get("last_full_sync") or 0
+        last_full_attempt = (
+            state.get("last_full_sync_attempt")
+            or state.get("last_full_sync")
+            or 0
+        )
         full: dict[str, Any] | None = None
-        if (time.time() - last_full) > self._FULL_SYNC_MAX_AGE_S:
+        if (time.time() - last_full_attempt) > self._FULL_SYNC_MAX_AGE_S:
             full = await self.full_sync()
 
         moved = (
@@ -2230,14 +2359,30 @@ class SyncEngine:
         if not conflict_dir.exists():
             return None
 
-        local_content = ""
-        remote_content = ""
         local_file = conflict_dir / "local.md"
         remote_file = conflict_dir / "remote.md"
-        if local_file.exists():
-            local_content = local_file.read_text(encoding="utf-8")
-        if remote_file.exists():
-            remote_content = remote_file.read_text(encoding="utf-8")
+        local_conflict_path = self.fm.relative_path(local_file)
+        remote_conflict_path = self.fm.relative_path(remote_file)
+        local_snapshot, remote_snapshot = await offload_read_only(
+            lambda: (
+                self.fm.read_note_snapshot(local_conflict_path),
+                self.fm.read_note_snapshot(remote_conflict_path),
+            )
+        )
+        if local_snapshot.state != "present" or remote_snapshot.state != "present":
+            return {"id": note_id, "_deferred_revision": True}
+        local_content = local_snapshot.content or ""
+        remote_content = remote_snapshot.content or ""
+
+        if resolution not in {
+            "keep_local",
+            "keep_remote",
+            "merge",
+            "append",
+            "split",
+            "exclude",
+        }:
+            return None
 
         repo = self._get_notes_repo()
         sqlite_note = await repo.get(note_id)
@@ -2248,6 +2393,20 @@ class SyncEngine:
         folder_name = (sqlite_note.get("folder_name") or "General") if sqlite_note else "General"
         folder_id = sqlite_note.get("folder_id") if sqlite_note else None
         note_path = sqlite_note.get("file_path") if sqlite_note else None
+        target_path = note_path or self.fm.unique_file_path(folder_name, label)
+        target_snapshot = await self._read_note_snapshot(target_path)
+        if (
+            (note_path is not None and target_snapshot.state != "present")
+            or (note_path is None and target_snapshot.state != "missing")
+        ):
+            return {"id": note_id, "_deferred_revision": True}
+
+        def snapshots_are_current() -> bool:
+            return (
+                self._snapshot_is_current(local_conflict_path, local_snapshot)
+                and self._snapshot_is_current(remote_conflict_path, remote_snapshot)
+                and self._snapshot_is_current(target_path, target_snapshot)
+            )
 
         result: dict[str, Any] = {"id": note_id, "resolution": resolution}
 
@@ -2255,9 +2414,14 @@ class SyncEngine:
             # Prefer the CURRENT file over the conflict-time snapshot — the
             # user may have kept editing after the conflict was filed, and
             # reverting to the snapshot would eat those keystrokes.
-            current = self.fm.read_note(note_path) if note_path else None
-            keep = current if current is not None else local_content
-            self.fm.write_note(folder_name, label, keep, note_path)
+            keep = (
+                target_snapshot.content
+                if target_snapshot.content is not None
+                else local_content
+            )
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, label, keep, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
@@ -2274,8 +2438,10 @@ class SyncEngine:
             result["content"] = keep
 
         elif resolution == "keep_remote":
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
             written_path = self.fm.write_note(
-                folder_name, label, remote_content, note_path
+                folder_name, label, remote_content, target_path
             )
             await repo.set_sync_status(
                 note_id, "synced", remote_hash=content_hash(remote_content), user_id=actor_user_id
@@ -2290,7 +2456,9 @@ class SyncEngine:
         elif resolution == "merge":
             if not merged_content:
                 return None
-            self.fm.write_note(folder_name, label, merged_content, note_path)
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, label, merged_content, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
@@ -2310,7 +2478,9 @@ class SyncEngine:
             # Combine both versions: local first, then cloud, with separator
             separator = "\n\n---\n\n*— Appended from cloud sync —*\n\n"
             combined = local_content.rstrip() + separator + remote_content.lstrip()
-            self.fm.write_note(folder_name, label, combined, note_path)
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, label, combined, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
@@ -2327,9 +2497,18 @@ class SyncEngine:
             result["content"] = combined
 
         elif resolution == "split":
-            self.fm.write_note(folder_name, label, local_content, note_path)
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, label, local_content, target_path)
             new_label = f"{label} (cloud copy)"
-            self.fm.write_note(folder_name, new_label, remote_content)
+            new_path = self.fm.unique_file_path(folder_name, new_label)
+            new_snapshot = await self._read_note_snapshot(new_path)
+            if (
+                new_snapshot.state != "missing"
+                or not self._snapshot_is_current(new_path, new_snapshot)
+            ):
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, new_label, remote_content, new_path)
             if self.is_configured and self._user_id:
                 try:
                     new_id = str(uuid.uuid4())
@@ -2346,18 +2525,25 @@ class SyncEngine:
             result["split_note_label"] = new_label
 
         elif resolution == "exclude":
-            self.fm.write_note(folder_name, label, local_content, note_path)
+            if not snapshots_are_current():
+                return {"id": note_id, "_deferred_revision": True}
+            self.fm.write_note(folder_name, label, local_content, target_path)
             await repo.set_excluded(note_id, True)
             result["content"] = local_content
 
         else:
             return None
 
+        if not (
+            self._snapshot_is_current(local_conflict_path, local_snapshot)
+            and self._snapshot_is_current(remote_conflict_path, remote_snapshot)
+        ):
+            return {"id": note_id, "_deferred_revision": True}
         self.fm.resolve_conflict(note_id)
 
         return result
 
-    def prune_stale_conflicts(self) -> int:
+    async def prune_stale_conflicts(self) -> int:
         """Drop conflicts whose local and remote snapshots are identical.
 
         A conflict with byte-identical sides carries no decision for the user —
@@ -2366,22 +2552,29 @@ class SyncEngine:
         Returns the number of conflicts pruned.
         """
         pruned = 0
-        for note_id in self.fm.list_conflicts():
-            conflict_dir = self.fm.base_dir / ".sync" / "conflicts" / note_id
-            local_file = conflict_dir / "local.md"
-            remote_file = conflict_dir / "remote.md"
-            try:
-                local_content = (
-                    local_file.read_text(encoding="utf-8") if local_file.exists() else None
-                )
-                remote_content = (
-                    remote_file.read_text(encoding="utf-8") if remote_file.exists() else None
-                )
-            except OSError:
-                continue
-            if local_content is not None and local_content == remote_content:
-                self.fm.resolve_conflict(note_id)
-                pruned += 1
+        async with self._sync_lock:
+            for note_id in self.fm.list_conflicts():
+                conflict_dir = self.fm.base_dir / ".sync" / "conflicts" / note_id
+                local_path = self.fm.relative_path(conflict_dir / "local.md")
+                remote_path = self.fm.relative_path(conflict_dir / "remote.md")
+                try:
+                    local_snapshot, remote_snapshot = await offload_read_only(
+                        lambda: (
+                            self.fm.read_note_snapshot(local_path),
+                            self.fm.read_note_snapshot(remote_path),
+                        )
+                    )
+                except OSError:
+                    continue
+                if (
+                    local_snapshot.state == "present"
+                    and remote_snapshot.state == "present"
+                    and local_snapshot.content == remote_snapshot.content
+                    and self._snapshot_is_current(local_path, local_snapshot)
+                    and self._snapshot_is_current(remote_path, remote_snapshot)
+                ):
+                    self.fm.resolve_conflict(note_id)
+                    pruned += 1
         if pruned:
             logger.info("Pruned %d stale identical-content conflicts", pruned)
         return pruned

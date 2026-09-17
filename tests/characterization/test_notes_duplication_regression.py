@@ -917,3 +917,136 @@ def test_push_all_stale_pending_with_edited_then_deleted_remote_resurrects(
     assert stats.get("deleted_local") is None
     assert stats["pushed"] == 1
     assert "Draft/stale.md" in engine.fm.notes  # local file NOT deleted
+
+
+def test_full_sync_deferred_ordinary_pull_keeps_success_timestamp(engine: SyncEngine) -> None:
+    """A safe local-read deferral is visible in existing stats and is not success."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    engine.sb.notes["ordinary"] = {
+        "id": "ordinary", "file_path": "Draft/ordinary.md", "content": "cloud",
+        "content_hash": content_hash("cloud"), "label": "ordinary", "folder_name": "Draft",
+    }
+
+    async def deferred_pull(note_id: str, note: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"id": note_id, "_deferred_revision": True}
+
+    engine._pull_note = deferred_pull  # type: ignore[method-assign]
+    stats = _run(engine.full_sync())
+    account = engine.fm.state["accounts"]["user-1"]
+
+    assert stats["skipped"] == 1
+    assert stats["deferred_revision"] == 1
+    assert account["last_full_sync"] == 101.0
+    assert account["last_full_sync_attempt"] >= 101.0
+
+
+def test_full_sync_deferred_collision_counts_each_unmaterialized_identity(
+    engine: SyncEngine,
+) -> None:
+    """Both IDs remain retryable when contested-path materialization defers."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    for note_id in ("keeper", "sibling"):
+        engine.sb.notes[note_id] = {
+            "id": note_id, "file_path": "Draft/shared.md", "content": note_id,
+            "content_hash": content_hash(note_id), "label": "shared", "folder_name": "Draft",
+        }
+
+    async def keeper_resolution(file_path: str, actor_user_id: str) -> dict[str, Any]:
+        return {"status": "keeper", "keeper_id": "keeper", "owners": []}
+
+    async def deferred_pull(note_id: str, note: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"id": note_id, "_deferred_revision": True}
+
+    engine._resolve_path_collision_owner = keeper_resolution  # type: ignore[method-assign]
+    engine._pull_note = deferred_pull  # type: ignore[method-assign]
+    stats = _run(engine.full_sync())
+    account = engine.fm.state["accounts"]["user-1"]
+
+    assert stats["skipped"] == 2
+    assert stats["deferred_revision"] == 2
+    assert stats["pulled"] == 0
+    assert account["last_full_sync"] == 101.0
+
+
+def test_full_sync_account_deferral_keeps_success_timestamp(engine: SyncEngine) -> None:
+    """A foreign durable row is incomplete work, never a completed reconciliation."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    engine.sb.notes["foreign"] = {
+        "id": "foreign", "file_path": "Draft/foreign.md", "content": "cloud",
+        "content_hash": content_hash("cloud"), "label": "foreign", "folder_name": "Draft",
+    }
+    engine._repo.rows["foreign"] = {
+        "id": "foreign", "user_id": "another-account", "file_path": "Draft/foreign.md",
+    }
+
+    stats = _run(engine.full_sync())
+    account = engine.fm.state["accounts"]["user-1"]
+
+    assert stats["deferred_account"] == 1
+    assert account["last_full_sync"] == 101.0
+    assert account["last_full_sync_attempt"] >= 101.0
+
+
+def test_full_sync_counts_production_push_transport_failure_as_failed(
+    engine: SyncEngine,
+) -> None:
+    """The production push failure result prevents a false completed-sync timestamp."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    _seed_owner(engine, "Draft/offline.md", "local", "offline")
+    engine.sb.fail_pushes = True
+
+    stats = _run(engine.full_sync())
+
+    assert stats["failed"] == 1
+    assert stats["pushed"] == 0
+    assert engine.fm.state["accounts"]["user-1"]["last_full_sync"] == 101.0
+
+
+def test_full_sync_counts_push_conflict_from_its_shared_result_accounting(
+    engine: SyncEngine,
+) -> None:
+    """A write conflict is unresolved work, not a successful full reconciliation."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    _seed_owner(engine, "Draft/conflict.md", "local", "conflict")
+    engine.sb.notes["conflict"] = {
+        "id": "conflict", "file_path": "Draft/conflict.md", "content": "remote",
+        "content_hash": content_hash("remote"), "label": "conflict", "folder_name": "Draft",
+    }
+    state = engine._load_sync_state()
+    state["note_hashes"] = {"Draft/conflict.md": content_hash("remote")}
+    engine._save_sync_state(state)
+
+    async def conflict_push(**kwargs: Any) -> dict[str, Any]:
+        return {"_synced_to_cloud": False, "_conflict": True}
+
+    engine._push_note = conflict_push  # type: ignore[method-assign]
+    stats = _run(engine.full_sync())
+
+    assert stats["conflicts"] == 1
+    assert stats["pushed"] == 0
+    assert engine.fm.state["accounts"]["user-1"]["last_full_sync"] == 101.0
+
+
+def test_full_sync_counts_remote_delete_transport_failure_as_failed(
+    engine: SyncEngine,
+) -> None:
+    """A failed cloud tombstone write cannot be reported as a completed sync."""
+    engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
+    engine._repo.rows["deleted-local"] = {
+        "id": "deleted-local", "user_id": "user-1", "file_path": "Draft/gone.md",
+        "is_deleted": True, "remote_content_hash": content_hash("remote"),
+    }
+    engine.sb.notes["deleted-local"] = {
+        "id": "deleted-local", "file_path": "Draft/gone.md", "content": "remote",
+        "content_hash": content_hash("remote"), "label": "gone", "folder_name": "Draft",
+    }
+
+    async def fail_delete(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("boundary unavailable")
+
+    engine.sb.soft_delete_note = fail_delete  # type: ignore[method-assign]
+    stats = _run(engine.full_sync())
+
+    assert stats["failed"] == 1
+    assert stats["deleted_local"] == 0
+    assert engine.fm.state["accounts"]["user-1"]["last_full_sync"] == 101.0

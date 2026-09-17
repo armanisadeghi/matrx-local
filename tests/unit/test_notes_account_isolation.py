@@ -324,3 +324,35 @@ def test_auto_sync_full_reconcile_uses_account_timestamp(tmp_path: Path, monkeyp
     monkeypatch.setattr(engine, 'full_sync', full)
     asyncio.run(engine._auto_sync_tick())
     assert full.await_count == expected_full
+
+
+def test_auto_sync_full_reconcile_uses_account_attempt_timestamp(tmp_path: Path, monkeypatch) -> None:
+    import time
+    from app.services.local_db.repositories import TokenRepo
+    from unittest.mock import AsyncMock
+
+    now = time.time()
+    fm = FakeFileManager(tmp_path)
+    fm.state = {
+        'note_hashes': {},
+        'accounts': {
+            'account-a': {
+                'note_hashes': {},
+                'last_full_sync': 0,
+                'last_full_sync_attempt': now,
+            }
+        },
+    }
+    engine = SyncEngine(fm=fm, sb=FakeSupabaseFull())
+    engine._device_id = 'isolated-test-device'
+    monkeypatch.setattr(TokenRepo, 'get', AsyncMock(return_value={'user_id': 'account-a', 'access_token': 'test-token-a'}))
+    monkeypatch.setattr(TokenRepo, 'is_expired', lambda *args: False)
+    monkeypatch.setattr(engine, 'start_watcher', AsyncMock())
+    monkeypatch.setattr(engine, 'pull_changes', AsyncMock(return_value={}))
+    monkeypatch.setattr(engine, 'push_all', AsyncMock(return_value={}))
+    full = AsyncMock(return_value={})
+    monkeypatch.setattr(engine, 'full_sync', full)
+
+    asyncio.run(engine._auto_sync_tick())
+
+    assert full.await_count == 0

@@ -107,6 +107,18 @@ bound by the same contract).
   edit and conflict (pinned: `test_pull_conflicts_when_last_known_hash_missing`).
   Resolution modes: `keep_local` / `keep_remote` / `merge` / `append` /
   `split` / `exclude`.
+- **Async content reads do not block the serving loop.** Notes body/hash and
+  conflict-snapshot reads use `offload_read_only`; cancellation drains the read
+  worker. Database operations and mutations remain on the owning loop. Before a
+  write/delete based on a background read, validate its captured file revision
+  without another await. Changed or unreadable files defer; a proven missing
+  tombstone target may converge without deleting bytes. Empty content is an edit.
+- **A partial full sync is not complete.** Failed pushes/deletes, unresolved
+  conflicts, and account/revision deferrals prevent advancing `last_full_sync`.
+  `last_full_sync_attempt` drives the existing daily reconciliation cadence;
+  ordinary incremental retries continue. The UI reports incomplete results,
+  while ordinary exclusions/skips remain normal. Conflict resolution returns
+  HTTP 409 when an intervening edit requires a fresh decision.
 - **Deletes are tombstones** on both sides (SQLite `is_deleted`, cloud
   `deleted_at`); tombstones must survive long enough to propagate.
 - **Echo suppression stays:** pulls whose content hash matches

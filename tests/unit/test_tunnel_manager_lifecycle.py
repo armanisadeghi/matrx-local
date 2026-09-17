@@ -178,3 +178,26 @@ async def test_spontaneous_exit_withdraws_cloud_tunnel_before_next_heartbeat(
     await manager._reader_task
 
     assert withdrawn == [(None, False)]
+
+
+@pytest.mark.anyio
+async def test_normal_stop_leaves_cloud_withdrawal_to_lifespan_teardown(
+    tunnel_fakes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    withdrawn: list[tuple[str | None, bool]] = []
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            withdrawn.append((url, active))
+            return True
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    manager = tunnel_manager.TunnelManager()
+
+    assert await manager.start(22140) == "https://owned.trycloudflare.com"
+    await manager.stop()
+
+    assert withdrawn == []

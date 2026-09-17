@@ -1174,6 +1174,37 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 - **Owner hint:** local_db / sync spine
 
 
+### MXL-D-092 — A metadata observation the server applied to NOTHING is recorded as delivered, so it is never retried
+
+- **Area:** coding_sessions — bridge outbox / label sync ledger
+- **Symptom:** a title/pin/archive observation whose upload the server answers
+  with `accepted=0, duplicates=0` ("this provider session is bound to nothing
+  here") is written into `claude_session_metadata_sent` exactly like an applied
+  one. `title_sync` then gates on `sent.get(provider_session_id) != digest`, so
+  that payload is never offered again for that conversation — if the session is
+  bound later, the observation is already remembered as sent and the server
+  keeps whatever it had. The local ledger says "delivered" where the server
+  recorded "applied to nothing".
+- **Evidence:** `app/services/coding_sessions/service.py:2794-2806` writes the
+  ledger row on any 2xx, in the same transaction as outbox deletion, with no
+  reference to the acknowledgement counts;
+  `app/services/coding_sessions/service.py:576-577`
+  (`_validate_upstream_acknowledgement`) deliberately RETURNS on
+  `accepted == 0 and duplicates == 0`, so the caller cannot tell that case from
+  an applied one; the send gate is `app/services/coding_sessions/title_sync.py:997`.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-09-17 — verified in code while fixing the
+  pin-never-unpins bug (the pin fix is commits on `claude_session_index.py` /
+  `claude_index_store.py`). Deliberately NOT fixed there: an unbound session has
+  no server-side pin to clear, so this is not part of that bug's causal chain,
+  and changing the delivery ledger's meaning is a separate change with its own
+  regression surface. No test asserts the counts today —
+  `tests/unit/test_claude_session_labels.py:455` asserts only that the
+  acknowledgement settles, not what the ledger records.
+- **Owner hint:** needs the acknowledgement counts returned from
+  `_validate_upstream_acknowledgement` to the ledger-write site, then a guard
+  proving an `accepted=0` settle leaves `claude_session_metadata_sent` untouched.
+
 ### MXL-D-044 — Flaky full-suite ordering: test_runner_drains_a_whole_batch_unattended
 
 - **Found:** 2026-07-13 during Wave-0 verification run

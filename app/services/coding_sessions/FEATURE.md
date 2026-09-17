@@ -658,8 +658,8 @@ the ordered publisher; neither repair silently drops an event.
   file-history snapshots, permissions, credentials, or filesystem state and always reports
   `native_restore_available=false`.
 - **Pins, categories, and archive are READ from provider truth, never inferred.** Claude Code's
-  desktop app keeps a real `isArchived` flag in its own session index (below); pins and sidebar
-  categories live in the app's localStorage and reach us through the machine's canonical sidebar
+  desktop app keeps a real `isArchived` flag in its own session index (below); the pin is that
+  record's own `isStarred` (see below) and sidebar categories reach us through the canonical sidebar
   ledger (`~/.claude/claude-code-sidebar-state.json`, maintained by the session-sync agent — see
   the pins/categories section further down). Sessions the ledger has no opinion on send nothing —
   the product never invents pin or category state. (Superseded 2026-08-21: this bullet previously
@@ -742,14 +742,32 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   with an opaque compound keyset cursor through
   `/coding-session/claude/labels/operations/{operation_id}` and proves final
   state through the operation's `/verify` endpoint.
-- **Pins + categories ride the same observation (2026-08-21).** The desktop app keeps pins and
-  custom sidebar groups in its localStorage LevelDB, which the machine's session-sync agent
-  extracts into the canonical ledger (`~/.claude/claude-code-sidebar-state.json`; see that
-  machine's `~/.claude/CLAUDE-CODE-SESSION-SYNC.md`). `claude_session_index.read_session_index`
-  joins the ledger by record filename (`CLAUDE_SIDEBAR_LEDGER` overrides the path) and the
-  payload gains `is_pinned` / `pinned_rank` / `category`; the server mirrors pinned onto
-  `chat.conversation.is_favorite` and category into the conversation's bridge metadata. A
-  session the ledger has never observed sends neither field.
+- **THE PIN IS THE APP'S OWN `isStarred`, IN THE SCOPE IT IS SIGNED INTO (2026-09-17).** The
+  desktop app records a pin as `isStarred` on its own per-session index record, and pins are per
+  `<account>/<org>` scope: this Mac carries 48 scopes whose pinned counts ranged 140–256 while the
+  app showed 218. `claude_session_index.active_index_scope` picks the live scope by the newest
+  `lastFocusedAt` (written only by the app, only in the scope in use, and NOT copied between
+  scopes by the session-sync agent), and `LivePins` turns that scope's `isStarred` into
+  `is_pinned`. **An absent pin key in a live scope is an honest `false`** — that is how the app
+  itself reports it — so an UNPIN finally reaches the server. Two cases stay UNKNOWN and send
+  nothing: no scope could be identified, and the signed-in account has no record of the
+  conversation. A scope carrying no pin opinion at all (a freshly signed-in account) is never
+  believed when it says "not pinned"; pins then fall back to the ledger.
+  - **Why it changed:** pins used to come from `pinnedOrder` in the app's localStorage LevelDB via
+    the machine's session-sync agent and the canonical ledger
+    (`~/.claude/claude-code-sidebar-state.json`, `CLAUDE_SIDEBAR_LEDGER` overrides the path).
+    `pinnedOrder` is an append-only DISPLAY-ORDER array: it keeps a reference forever after the
+    person unpins, so an unpin was unrepresentable. Measured 2026-09-17 — app 218 pinned, ledger
+    257 (73 wrong, 34 missing), `pinnedOrder` 295, server 276 and growing. The ledger still
+    supplies `pinnedRank` (a display hint), `categoryName`, title and archive state.
+  - **BOTH READERS MUST APPLY THE SAME RULE.** Production reads the persisted store
+    (`claude_index_store`), never `read_session_index`, so the rule lives once in
+    `claude_session_index.LivePins` and the store resolves the scope at refresh time into
+    `sessions.in_active_scope` / `sessions.active_is_starred`. A pin fix landed in only one reader
+    is invisible in the running app — that was the second half of this bug.
+    Guard: `tests/unit/test_claude_pin_truth.py` (store and scan asserted equal, every pin state).
+  - The payload gains `is_pinned` / `pinned_rank` / `category`; the server mirrors pinned onto
+    `platform.user_entity_state.is_favorite` and category into the conversation's bridge metadata.
 - **The server list is the allowlist for BOTH directions.** Labels of local sessions AI Matrx never
   mirrored never leave this machine, and a session AI Matrx does not own is never written to on
   disk. This is the whole privacy boundary of the feature — never widen it to "every local session".

@@ -50,6 +50,21 @@ _DEFAULT_EMBEDDING_QUOTA_ENTRIES = 10_000
 _MAX_CONCURRENT_SEARCH_BUILDS = 2
 _ENRICHMENT_CONTENTION_BACKOFF_SECONDS = 1.0
 _ENRICHMENT_UNEXPECTED_BACKOFF_SECONDS = 2.0
+_CRAWL_SQLITE_CONTENTION_BACKOFF_SECONDS = 1.0
+_CRAWL_CONTENTION_LOG_INTERVAL_SECONDS = 30.0
+
+
+def _is_sqlite_contention(error: sqlite3.OperationalError) -> bool:
+    """Only SQLite's transient writer conflicts earn crawl recovery."""
+    code = getattr(error, "sqlite_errorcode", None)
+    if code is not None:
+        return (int(code) & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    message = str(error).lower()
+    return (
+        "database is locked" in message
+        or "database is busy" in message
+        or "database table is locked" in message
+    )
 
 
 class FilesystemService:
@@ -76,6 +91,7 @@ class FilesystemService:
         self._search_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._active_enrichment_claim: tuple[str, str, float | None, int] | None = None
         self._pending_enrichment_resets: deque[tuple[str, str, float | None, int]] = deque()
+        self._crawl_contention_logged_at: dict[str, float] = {}
 
     async def start(self) -> None:
         if self._started:
@@ -778,34 +794,123 @@ class FilesystemService:
                 raise
             except OSError as exc:
                 if item is not None:
-                    retry_delay = await asyncio.to_thread(
-                        self.index.fail_directory, item[0], exc, item[4]
-                    )
-                    if retry_delay is not None:
-                        # Permission-denied subtrees are normal when indexing
-                        # an entire host volume (for example protected macOS
-                        # system directories). They remain visible in status
-                        # and retry with backoff, but are not an app warning.
-                        log = logger.info if isinstance(exc, PermissionError) else logger.warning
-                        log(
-                            "Filesystem directory unavailable; retrying in %.0fs path=%s error=%s",
-                            retry_delay,
+                    try:
+                        retry_delay = await asyncio.to_thread(
+                            self.index.fail_directory, item[0], exc, item[4]
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except sqlite3.OperationalError as bookkeeping_error:
+                        if _is_sqlite_contention(bookkeeping_error):
+                            # Do not clear or acknowledge a lease that SQLite
+                            # did not durably update. It expires and is safely
+                            # reclaimed later; the loop can still serve other
+                            # directories after a bounded pause.
+                            self._log_crawl_contention(
+                                item[0], "recording a failed directory", bookkeeping_error, exc
+                            )
+                            await asyncio.sleep(_CRAWL_SQLITE_CONTENTION_BACKOFF_SECONDS)
+                            continue
+                        logger.error(
+                            "Filesystem failed to record a directory scan failure; preserving its claim "
+                            "path=%s scan_error_type=%s bookkeeping_error_type=%s",
                             item[0],
-                            exc,
+                            type(exc).__name__,
+                            type(bookkeeping_error).__name__,
+                            exc_info=True,
+                        )
+                    except Exception as bookkeeping_error:
+                        logger.error(
+                            "Filesystem failed to record a directory scan failure; preserving its claim "
+                            "path=%s scan_error_type=%s bookkeeping_error_type=%s",
+                            item[0],
+                            type(exc).__name__,
+                            type(bookkeeping_error).__name__,
+                            exc_info=True,
                         )
                     else:
-                        logger.info(
-                            "Filesystem directory scan failed after its claim was superseded: %s",
-                            item[0],
-                        )
-                await asyncio.sleep(1.0)
-            except Exception:
+                        if retry_delay is not None:
+                            # Permission-denied subtrees are normal when indexing
+                            # an entire host volume (for example protected macOS
+                            # system directories). They remain visible in status
+                            # and retry with backoff, but are not an app warning.
+                            log = logger.info if isinstance(exc, PermissionError) else logger.warning
+                            log(
+                                "Filesystem directory unavailable; retrying in %.0fs path=%s error=%s",
+                                retry_delay,
+                                item[0],
+                                exc,
+                            )
+                        else:
+                            logger.info(
+                                "Filesystem directory scan failed after its claim was superseded: %s",
+                                item[0],
+                            )
+                await asyncio.sleep(_CRAWL_SQLITE_CONTENTION_BACKOFF_SECONDS)
+            except Exception as scan_error:
                 if item is not None:
-                    await asyncio.to_thread(
-                        self.index.release_directory, item[0], item[4]
-                    )
+                    try:
+                        await asyncio.to_thread(
+                            self.index.release_directory, item[0], item[4]
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except sqlite3.OperationalError as cleanup_error:
+                        if _is_sqlite_contention(cleanup_error):
+                            self._log_crawl_contention(
+                                item[0],
+                                "releasing a failed directory",
+                                cleanup_error,
+                                scan_error,
+                            )
+                        else:
+                            logger.error(
+                                "Filesystem failed to release a crawl claim; preserving it for lease recovery "
+                                "path=%s scan_error_type=%s cleanup_error_type=%s",
+                                item[0],
+                                type(scan_error).__name__,
+                                type(cleanup_error).__name__,
+                                exc_info=True,
+                            )
+                    except Exception as cleanup_error:
+                        logger.error(
+                            "Filesystem failed to release a crawl claim; preserving it for lease recovery "
+                            "path=%s scan_error_type=%s cleanup_error_type=%s",
+                            item[0],
+                            type(scan_error).__name__,
+                            type(cleanup_error).__name__,
+                            exc_info=True,
+                        )
                 logger.warning("Filesystem crawl iteration failed; continuing", exc_info=True)
                 await asyncio.sleep(1.0)
+
+    def _log_crawl_contention(
+        self,
+        path: str,
+        operation: str,
+        error: sqlite3.OperationalError,
+        scan_error: Exception,
+    ) -> None:
+        """Make a retained claim actionable without flooding a locked database."""
+        # There are only two bookkeeping operations. Do not retain one clock
+        # entry per path while a host-wide crawl observes millions of them.
+        key = operation
+        now = time.monotonic()
+        previous = self._crawl_contention_logged_at.get(key)
+        if (
+            previous is not None
+            and now - previous < _CRAWL_CONTENTION_LOG_INTERVAL_SECONDS
+        ):
+            return
+        self._crawl_contention_logged_at[key] = now
+        logger.warning(
+            "Filesystem crawl deferred after SQLite contention while %s; retaining claim for lease recovery "
+            "path=%s scan_error_type=%s sqlite_error_type=%s",
+            operation,
+            path,
+            type(scan_error).__name__,
+            type(error).__name__,
+        )
 
     async def _watch_loop(self) -> None:
         # Watching every mounted volume is expensive on some OSes.  Watch user

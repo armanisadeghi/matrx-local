@@ -52,8 +52,11 @@ Places, browsing, or metadata search.
 local database phase. Startup awaits the dedicated SQLite schema and root
 discovery, then reports readiness without running the full index aggregate
 census. `GET /filesystem/status` owns that census. Crawl/watch/enrichment tasks
-run in the background. Shutdown sets a cooperative thread stop event, awaits
-the crawl, cancels watchers/enrichment, and reports stopped only afterward.
+run in the background. A transient SQLite writer conflict while recording a failed
+directory retains that directory lease for expiry-based reclamation, logs a bounded
+actionable warning, and leaves the crawl alive for other roots. Shutdown sets a
+cooperative thread stop event, awaits the crawl, cancels watchers/enrichment, and
+reports stopped only afterward.
 
 Configured/user roots are watched with `watchfiles`. Low-priority volumes are
 maintained through periodic six-hour reconciliation to avoid installing an

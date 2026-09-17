@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ import pytest
 from app.services.filesystem.index import FilesystemIndex
 from app.services.filesystem.models import Place, SearchPage
 from app.services.filesystem import service as filesystem_service_module
-from app.services.filesystem.service import FilesystemService
+from app.services.filesystem.service import FilesystemService, _is_sqlite_contention
 
 
 def _scan_root(index: FilesystemIndex, root: Path) -> Path:
@@ -988,3 +989,212 @@ def test_changed_file_hides_stale_content_and_blocks_stale_embedding(tmp_path: P
     assert index.search_content("private", 10) == []
     assert index.semantic_search([1.0], "model", limit=10) == []
     assert index.next_embedding_candidate("model", 100) is None
+
+
+def test_sqlite_contention_recognizes_extended_busy_locked_codes() -> None:
+    extended_busy = sqlite3.OperationalError("unrelated detail")
+    extended_busy.sqlite_errorcode = sqlite3.SQLITE_BUSY | (2 << 8)
+    extended_locked = sqlite3.OperationalError("unrelated detail")
+    extended_locked.sqlite_errorcode = sqlite3.SQLITE_LOCKED | (1 << 8)
+    non_contention = sqlite3.OperationalError("unrelated detail")
+    non_contention.sqlite_errorcode = sqlite3.SQLITE_CONSTRAINT
+
+    assert _is_sqlite_contention(extended_busy)
+    assert _is_sqlite_contention(extended_locked)
+    assert not _is_sqlite_contention(non_contention)
+    assert _is_sqlite_contention(sqlite3.OperationalError("database table is locked"))
+
+
+def test_crawl_contention_log_is_first_visible_and_constant_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    error = sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(filesystem_service_module.time, "monotonic", lambda: 0.0)
+
+    with caplog.at_level(logging.WARNING, logger=filesystem_service_module.__name__):
+        service._log_crawl_contention(
+            "/first", "recording a failed directory", error, FileNotFoundError()
+        )
+        service._log_crawl_contention(
+            "/second", "recording a failed directory", error, FileNotFoundError()
+        )
+
+    assert len(caplog.records) == 1
+    assert "/first" in caplog.text
+    assert "scan_error_type=FileNotFoundError" in caplog.text
+    assert "sqlite_error_type=OperationalError" in caplog.text
+    assert service._crawl_contention_logged_at == {"recording a failed directory": 0.0}
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("entry_path", "scan_error_name"),
+    [("missing_directory", "FileNotFoundError"), ("unexpected_exception", "RuntimeError")],
+)
+async def test_crawl_survives_locked_failure_bookkeeping_and_indexes_other_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    entry_path: str,
+    scan_error_name: str,
+) -> None:
+    """Both leased-directory cleanup paths survive a real SQLite writer lock."""
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    vanished = tmp_path / "vanished"
+    survivor = tmp_path / "survivor"
+    vanished.mkdir()
+    survivor.mkdir()
+    (survivor / "resumes.txt").write_text("resumes after lock", encoding="utf-8")
+    service.index.sync_roots([
+        Place("vanished", "Vanished", str(vanished), "configured", 200),
+        Place("survivor", "Survivor", str(survivor), "configured", 100),
+    ])
+    service._last_reconcile = time.time()
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: {"paused": False}
+    )
+    monkeypatch.setattr(
+        filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(
+        filesystem_service_module, "_CRAWL_SQLITE_CONTENTION_BACKOFF_SECONDS", 0.01
+    )
+
+    # Keep the test fast while retaining a real separate SQLite writer lock.
+    original_connect = service.index._connect
+    def short_busy_connect() -> sqlite3.Connection:
+        connection = original_connect()
+        connection.execute("PRAGMA busy_timeout=20")
+        return connection
+    monkeypatch.setattr(service.index, "_connect", short_busy_connect)
+
+    original_pop = service.index.pop_next_directory
+    lock_held = threading.Event()
+    holder: dict[str, sqlite3.Connection] = {}
+
+    def pop_then_delete_and_lock(*, fair: bool = False):
+        claim = original_pop(fair=fair)
+        if claim is not None and claim[0] == str(vanished) and "connection" not in holder:
+            if entry_path == "missing_directory":
+                vanished.rmdir()
+            connection = sqlite3.connect(service.index.path, check_same_thread=False)
+            connection.execute("BEGIN IMMEDIATE")
+            holder["connection"] = connection
+            lock_held.set()
+        return claim
+
+    monkeypatch.setattr(service.index, "pop_next_directory", pop_then_delete_and_lock)
+    if entry_path == "unexpected_exception":
+        original_scan = service.index.index_directory
+
+        def unexpected_scan(*args: object, **kwargs: object) -> int:
+            if args and args[0] == str(vanished):
+                raise RuntimeError("controlled unexpected crawl failure")
+            return original_scan(*args, **kwargs)
+
+        monkeypatch.setattr(service.index, "index_directory", unexpected_scan)
+    crawl = asyncio.create_task(service._crawl_loop())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(lock_held.wait, 1.0), timeout=1.0)
+        await asyncio.sleep(0.08)
+        assert not crawl.done()
+        assert service.index.scan_status()["claimed"] == 1
+
+        holder["connection"].close()
+        holder.pop("connection")
+        for _ in range(100):
+            if service.index.entry_count() > 0:
+                break
+            await asyncio.sleep(0.02)
+        assert service.index.entry_count() > 0
+        assert "retaining claim for lease recovery" in caplog.text
+        assert f"scan_error_type={scan_error_name}" in caplog.text
+        assert "sqlite_error_type=OperationalError" in caplog.text
+    finally:
+        if "connection" in holder:
+            holder["connection"].close()
+        service._stop.set()
+        crawl.cancel()
+        await asyncio.gather(crawl, return_exceptions=True)
+
+
+@pytest.mark.anyio
+async def test_crawl_does_not_swallow_shutdown_cancellation_during_claim_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    root = tmp_path / "root"
+    root.mkdir()
+    service.index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    service._last_reconcile = time.time()
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: {"paused": False}
+    )
+    monkeypatch.setattr(
+        filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True
+    )
+
+    def fail_scan(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("scan failed")
+
+    def cancelled_cleanup(*_args: object, **_kwargs: object) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(service.index, "index_directory", fail_scan)
+    monkeypatch.setattr(service.index, "release_directory", cancelled_cleanup)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(service._crawl_loop(), timeout=1.0)
+
+
+@pytest.mark.anyio
+async def test_crawl_logs_original_scan_class_when_failure_bookkeeping_is_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = FilesystemService(tmp_path / "index.sqlite3")
+    service.index.initialize()
+    root = tmp_path / "vanished"
+    root.mkdir()
+    service.index.sync_roots([Place("root", "Root", str(root), "configured", 100)])
+    service._last_reconcile = time.time()
+    monkeypatch.setattr(
+        filesystem_service_module, "_indexing_settings", lambda: {"paused": False}
+    )
+    monkeypatch.setattr(
+        filesystem_service_module, "_background_capacity", lambda *_args, **_kwargs: True
+    )
+
+    original_pop = service.index.pop_next_directory
+    popped = threading.Event()
+
+    def pop_then_delete(*, fair: bool = False):
+        claim = original_pop(fair=fair)
+        if claim is not None and not popped.is_set():
+            root.rmdir()
+            popped.set()
+        return claim
+
+    def unknown_bookkeeping(*_args: object, **_kwargs: object) -> float | None:
+        error = sqlite3.OperationalError("read-only database")
+        error.sqlite_errorcode = sqlite3.SQLITE_READONLY
+        raise error
+
+    monkeypatch.setattr(service.index, "pop_next_directory", pop_then_delete)
+    monkeypatch.setattr(service.index, "fail_directory", unknown_bookkeeping)
+    crawl = asyncio.create_task(service._crawl_loop())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(popped.wait, 1.0), timeout=1.0)
+        for _ in range(50):
+            if "bookkeeping_error_type=OperationalError" in caplog.text:
+                break
+            await asyncio.sleep(0.02)
+        assert "scan_error_type=FileNotFoundError" in caplog.text
+        assert "bookkeeping_error_type=OperationalError" in caplog.text
+    finally:
+        service._stop.set()
+        crawl.cancel()
+        await asyncio.gather(crawl, return_exceptions=True)

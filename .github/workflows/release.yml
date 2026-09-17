@@ -586,7 +586,6 @@ jobs:
           prerelease: false
           # GitHub asset uploads can fail transiently after a successful signed build.
           # Retry the action's upload path before discarding a platform matrix job.
-          retryAttempts: 3
           uploadUpdaterJson: true
           retryAttempts: 5
           # Sealed: the release config adds the provider + host profile. Absent:

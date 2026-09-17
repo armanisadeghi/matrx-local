@@ -236,7 +236,17 @@ class FilesystemIndex:
                     "(SELECT MIN(rowid) FROM filesystem_entries GROUP BY path_key)"
                 )
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_filesystem_entries_path_key ON filesystem_entries(path_key)")
-            db.execute("CREATE INDEX IF NOT EXISTS idx_filesystem_entries_parent_key ON filesystem_entries(parent_key)")
+            # The recursive subtree-delete CTE reads each child's path_key from
+            # parent_key.  Keeping both keys in this index avoids a table read
+            # for every descendant while preserving the same parent lookup.
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS "
+                "idx_filesystem_entries_parent_key_path_key "
+                "ON filesystem_entries(parent_key,path_key)"
+            )
+            # The new index has parent_key as its first column, so the old
+            # single-column index is redundant and adds write work.
+            db.execute("DROP INDEX IF EXISTS idx_filesystem_entries_parent_key")
 
             content_columns = {row["name"] for row in db.execute("PRAGMA table_info(filesystem_content)")}
             if "path_key" not in content_columns:
@@ -797,12 +807,13 @@ class FilesystemIndex:
         key = _path_key(path)
         rows = db.execute(
             """WITH RECURSIVE descendants(path_key) AS (
-                 SELECT ? UNION ALL
-                 SELECT e.path_key FROM filesystem_entries e
-                 JOIN descendants d ON e.parent_key=d.path_key
-               )
-               SELECT e.path,e.path_key,e.indexed_at FROM filesystem_entries e
-               JOIN descendants d ON d.path_key=e.path_key""",
+               SELECT ? UNION
+               SELECT e.path_key FROM filesystem_entries e
+               JOIN descendants d ON e.parent_key=d.path_key
+             )
+               SELECT e.path,e.path_key,e.indexed_at FROM descendants d
+               CROSS JOIN filesystem_entries e INDEXED BY idx_filesystem_entries_path_key
+               WHERE e.path_key=d.path_key""",
             (key,),
         ).fetchall()
         if freshness_cutoff is not None and any(

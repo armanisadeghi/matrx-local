@@ -5,6 +5,7 @@ import sqlite3
 import asyncio
 import sys
 import threading
+import time
 from array import array
 from pathlib import Path
 from types import SimpleNamespace
@@ -838,6 +839,147 @@ def test_component_safe_delete_handles_wildcards_without_sibling_damage(tmp_path
     assert [entry.name for entry in index.search("keep", limit=10, offset=0)] == ["keep.txt"]
     assert index.search("keep", limit=10, offset=0, root=str(target)) == []
     assert [entry.name for entry in index.search("keep", limit=10, offset=0, root=str(sibling))] == ["keep.txt"]
+
+
+def test_subtree_delete_migrates_to_covering_child_lookup_index(tmp_path: Path) -> None:
+    """A legacy index must not force one table read per recursive child lookup."""
+    root = tmp_path / "root"
+    target = root / "target"
+    branch = target / "branch"
+    leaf = branch / "leaf.txt"
+    sibling = root / "sibling"
+    sibling_leaf = sibling / "keep.txt"
+    branch.mkdir(parents=True)
+    sibling.mkdir()
+    leaf.write_text("delete", encoding="utf-8")
+    sibling_leaf.write_text("keep", encoding="utf-8")
+
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    for path in (root, target, branch, leaf, sibling, sibling_leaf):
+        index.upsert_path(str(path), "root")
+
+    legacy_query = """WITH RECURSIVE descendants(path_key) AS (
+                 SELECT ? UNION ALL
+                 SELECT e.path_key FROM filesystem_entries e
+                 JOIN descendants d ON e.parent_key=d.path_key
+               )
+               SELECT e.path,e.path_key,e.indexed_at FROM filesystem_entries e
+               JOIN descendants d ON d.path_key=e.path_key"""
+    optimized_query = """WITH RECURSIVE descendants(path_key) AS (
+                 SELECT ? UNION ALL
+                 SELECT e.path_key FROM filesystem_entries e
+                 JOIN descendants d ON e.parent_key=d.path_key
+               )
+               SELECT e.path,e.path_key,e.indexed_at FROM descendants d
+               CROSS JOIN filesystem_entries e INDEXED BY idx_filesystem_entries_path_key
+               WHERE e.path_key=d.path_key"""
+    with index._connect() as db:
+        db.execute("DROP INDEX idx_filesystem_entries_parent_key_path_key")
+        db.execute(
+            "CREATE INDEX idx_filesystem_entries_parent_key "
+            "ON filesystem_entries(parent_key)"
+        )
+        legacy_plan = [
+            str(row[3])
+            for row in db.execute(
+                f"EXPLAIN QUERY PLAN {legacy_query}",
+                (str(target),),
+            )
+        ]
+
+    assert any(
+        "idx_filesystem_entries_parent_key" in detail
+        and "COVERING" not in detail
+        for detail in legacy_plan
+    )
+
+    # initialize() is also the migration boundary for durable existing indexes.
+    index.initialize()
+    with index._connect() as db:
+        covering_plan = [
+            str(row[3])
+            for row in db.execute(
+                f"EXPLAIN QUERY PLAN {optimized_query}",
+                (str(target),),
+            )
+        ]
+        index_names = {str(row[1]) for row in db.execute("PRAGMA index_list(filesystem_entries)")}
+
+    assert "idx_filesystem_entries_parent_key" not in index_names
+    assert any(
+        "COVERING INDEX idx_filesystem_entries_parent_key_path_key" in detail
+        for detail in covering_plan
+    )
+    assert not any(detail.startswith("SCAN e") for detail in covering_plan)
+    assert any(
+        "SEARCH e USING INDEX idx_filesystem_entries_path_key (path_key=?)" in detail
+        for detail in covering_plan
+    )
+
+    index.delete_path(str(target))
+    with index._connect() as db:
+        remaining = {
+            str(row["path"])
+            for row in db.execute("SELECT path FROM filesystem_entries")
+        }
+
+    assert str(target) not in remaining
+    assert str(branch) not in remaining
+    assert str(leaf) not in remaining
+    assert str(sibling) in remaining
+    assert str(sibling_leaf) in remaining
+
+
+def test_delete_path_terminates_for_a_self_parented_filesystem_root(tmp_path: Path) -> None:
+    """The real POSIX root has itself as parent and must be visited once."""
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    with index._connect() as db:
+        for path, parent in (("/", "/"), ("/child", "/")):
+            db.execute(
+                """INSERT INTO filesystem_entries
+                   (path,path_key,parent_path,parent_key,root_id,name,kind,size,modified_at,hidden,extension,indexed_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (path, path, parent, parent, "root", path.rsplit("/", 1)[-1], "dir", 0, 0, 0, None, 0),
+            )
+
+    started = time.monotonic()
+    index.delete_path("/")
+    assert time.monotonic() - started < 0.5
+    with index._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM filesystem_entries").fetchone()[0] == 0
+
+
+def test_delete_path_terminates_for_legacy_parent_cycle_and_keeps_other_subtrees(
+    tmp_path: Path,
+) -> None:
+    """Corrupt legacy parent links are finite graph vertices, not an infinite walk."""
+    index = FilesystemIndex(tmp_path / "index.sqlite3")
+    index.initialize()
+    target = "/cycle/a"
+    entries = (
+        (target, "/cycle/b"),
+        ("/cycle/b", target),
+        ("/cycle/a/child", target),
+        ("/outside", "/"),
+    )
+    with index._connect() as db:
+        for path, parent in entries:
+            db.execute(
+                """INSERT INTO filesystem_entries
+                   (path,path_key,parent_path,parent_key,root_id,name,kind,size,modified_at,hidden,extension,indexed_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (path, path, parent, parent, "root", path.rsplit("/", 1)[-1], "dir", 0, 0, 0, None, 0),
+            )
+
+    started = time.monotonic()
+    index.delete_path(target)
+    assert time.monotonic() - started < 0.5
+    with index._connect() as db:
+        remaining = {str(row["path"]) for row in db.execute("SELECT path FROM filesystem_entries")}
+
+    assert remaining == {"/outside"}
 
 
 @pytest.mark.parametrize("force_like_fallback", [False, True])

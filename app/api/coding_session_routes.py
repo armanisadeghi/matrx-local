@@ -69,6 +69,41 @@ async def coding_session_delivery_status() -> dict[str, object]:
     return await get_coding_session_bridge_outbox().delivery_status()
 
 
+@router.get("/usage")
+async def coding_session_usage(
+    provider: str = Query(..., description="claude_code | codex | cursor | vscode"),
+    start: str = Query(..., description="Inclusive ISO-8601 timestamp with timezone"),
+    end: str = Query(..., description="Exclusive ISO-8601 timestamp with timezone"),
+    refresh: bool = Query(False, description="Re-read the provider's local source first"),
+    tz_offset: int = Query(
+        0,
+        ge=-900,
+        le=900,
+        description="Viewer minutes ahead of UTC (JavaScript -getTimezoneOffset()); day rows use it",
+    ),
+) -> dict[str, object]:
+    """ONE usage shape for every provider (usage_report.UsageReport).
+
+    Tokens, requests, cost and limits where the provider exposes them on
+    this Mac; an explicit reason where it does not. Never a blank table.
+    """
+    from app.services.codex_usage import CollectionBusyError
+    from app.services.coding_sessions.usage_report import build_report, parse_stamp
+
+    try:
+        return await build_report(
+            provider,
+            start=parse_stamp(start, "start"),
+            end=parse_stamp(end, "end"),
+            refresh=refresh,
+            tz_offset_minutes=tz_offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except CollectionBusyError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+
+
 @router.get("/providers/readiness")
 async def coding_session_provider_readiness() -> dict[str, object]:
     """Separate product, adapter, spool, local, and cloud readiness evidence."""

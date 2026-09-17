@@ -36,6 +36,7 @@ from app.services.documents.file_manager import (
     content_hash,
     file_manager,
 )
+from app.services.documents.async_io import offload_read_only
 from app.services.documents.supabase_client import supabase_docs
 from app.services.documents.sync_engine import sync_engine
 from app.services.local_db.repositories import NotesRepo, NoteVersionsRepo
@@ -226,11 +227,11 @@ def _unique_file_path(folder_name: str, label: str) -> str:
 
 def _local_folder_tree() -> dict[str, Any]:
     folders_raw = file_manager.list_folders()
-    all_files = file_manager.scan_all()
+    note_paths = file_manager.list_note_paths()
 
     folder_counts: dict[str, int] = {}
-    for f in all_files:
-        parts = Path(f["file_path"]).parts
+    for file_path in note_paths:
+        parts = Path(file_path).parts
         folder_name = parts[0] if len(parts) > 1 else "__root__"
         folder_counts[folder_name] = folder_counts.get(folder_name, 0) + 1
 
@@ -251,7 +252,7 @@ def _local_folder_tree() -> dict[str, Any]:
 
     return {
         "folders": folders,
-        "total_notes": len(all_files),
+        "total_notes": len(note_paths),
         "unfiled_notes": folder_counts.get("__root__", 0),
     }
 
@@ -386,7 +387,7 @@ async def _sync_note_to_sqlite(
 @router.get("/tree")
 async def get_folder_tree(request: Request) -> dict[str, Any]:
     _configure_sync(request)
-    return _local_folder_tree()
+    return await offload_read_only(_local_folder_tree)
 
 
 @router.post("/folders")
@@ -396,7 +397,7 @@ async def create_folder(req: CreateFolderRequest, request: Request) -> dict[str,
 
     path = req.name
     if req.parent_id:
-        folders = file_manager.list_folders()
+        folders = await offload_read_only(file_manager.list_folders)
         for f in folders:
             fid = _folder_id_for_name(f)
             if fid == req.parent_id:
@@ -437,14 +438,14 @@ async def update_folder(
     user_id = _get_user_id_optional(request)
 
     if req.name:
-        for f in file_manager.list_folders():
+        for f in await offload_read_only(file_manager.list_folders):
             fid = _folder_id_for_name(f)
             if fid == folder_id:
                 repo = _get_notes_repo()
-                for nf in file_manager.scan_all():
-                    if Path(nf["file_path"]).parts[:1] != (f,):
+                for file_path in await offload_read_only(file_manager.list_note_paths):
+                    if Path(file_path).parts[:1] != (f,):
                         continue
-                    row = await repo.get_by_file_path(nf["file_path"])
+                    row = await repo.get_by_file_path(file_path)
                     if (
                         row is None
                         or not row.get("user_id")
@@ -490,7 +491,7 @@ async def delete_folder(folder_id: str, request: Request) -> dict[str, str]:
 
 
 async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | None) -> None:
-    for f in file_manager.list_folders():
+    for f in await offload_read_only(file_manager.list_folders):
         fid = _folder_id_for_name(f)
         if fid == folder_id:
             # Tombstone every contained note BEFORE removing the directory
@@ -501,17 +502,18 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | 
             # when connectivity returns; the per-note cloud soft-deletes below
             # cover the online case immediately.
             contained = [
-                nf for nf in file_manager.scan_all()
-                if Path(nf["file_path"]).parts[:1] == (f,)
+                file_path
+                for file_path in await offload_read_only(file_manager.list_note_paths)
+                if Path(file_path).parts[:1] == (f,)
             ]
             # Check the complete directory before touching any file, so a
             # mixed-account folder cannot be partially deleted.
             rows: dict[str, dict[str, Any] | None] = {}
-            for nf in contained:
-                row = await repo.get_by_file_path(nf["file_path"])
+            for file_path in contained:
+                row = await repo.get_by_file_path(file_path)
                 if row is None:
-                    row = await repo.get(_note_id_for_path(nf["file_path"]))
-                rows[nf["file_path"]] = row
+                    row = await repo.get(_note_id_for_path(file_path))
+                rows[file_path] = row
                 if (
                     row is None
                     or not row.get("user_id")
@@ -519,9 +521,9 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | 
                     or str(row["user_id"]) != str(user_id)
                 ):
                     raise HTTPException(status_code=404, detail="Folder not found")
-            for nf in contained:
-                row = rows[nf["file_path"]]
-                del_id = row["id"] if row else _note_id_for_path(nf["file_path"])
+            for file_path in contained:
+                row = rows[file_path]
+                del_id = row["id"] if row else _note_id_for_path(file_path)
                 # Unindexed files are local-only: do not create a cloud
                 # tombstone under the current session.
                 if row is None:
@@ -531,7 +533,7 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | 
                 except Exception:
                     logger.warning(
                         "Could not tombstone note %s during folder delete",
-                        nf["file_path"], exc_info=True,
+                        file_path, exc_info=True,
                     )
                 # Breaker-gated: a folder delete is a legitimate bulk action,
                 # but it still spends the delete budget — an agent (or bug)
@@ -552,7 +554,7 @@ async def _delete_folder_locked(folder_id: str, repo: NotesRepo, user_id: str | 
             try:
                 state = sync_engine._load_sync_state()
                 hashes = state.get("note_hashes", {})
-                removed = [nf["file_path"] for nf in contained]
+                removed = contained
                 if any(fp in hashes for fp in removed):
                     for fp in removed:
                         hashes.pop(fp, None)
@@ -574,7 +576,7 @@ async def list_notes(
 ) -> list[dict[str, Any]]:
     _configure_sync(request)
 
-    all_files = file_manager.scan_all()
+    all_files = await offload_read_only(file_manager.scan_all)
     results: list[dict[str, Any]] = []
     repo = _get_notes_repo()
 
@@ -587,7 +589,9 @@ async def list_notes(
                 continue
 
         if search:
-            file_content = file_manager.read_note(f["file_path"]) or ""
+            file_content = await offload_read_only(
+                lambda: file_manager.read_note(f["file_path"]) or ""
+            )
             label = f.get("label", "")
             if search.lower() not in file_content.lower() and search.lower() not in label.lower():
                 continue
@@ -608,7 +612,9 @@ async def list_notes(
         # otherwise fall back to the filename stem.
         label = (sqlite_note.get("label") or sqlite_note.get("title") or f["label"]) if sqlite_note else f["label"]
 
-        created_at, updated_at = _file_timestamps(f["file_path"])
+        created_at, updated_at = await offload_read_only(
+            lambda: _file_timestamps(f["file_path"])
+        )
 
         results.append({
             "id": note_id,
@@ -652,15 +658,19 @@ async def get_note(note_id: str, request: Request) -> dict[str, Any]:
     # Primary: SQLite has the canonical note_id → file_path mapping for new notes.
     sqlite_note = await repo.get(note_id)
     if sqlite_note and sqlite_note.get("file_path"):
-        record = _build_note_record(sqlite_note["file_path"])
+        record = await offload_read_only(
+            lambda: _build_note_record(sqlite_note["file_path"])
+        )
         if record:
             record["id"] = note_id  # preserve the canonical ID, not the UUID5 from the file path
             return _enrich_record_from_sqlite(record, sqlite_note)
 
     # Secondary: filesystem scan — catches legacy notes (UUID5 IDs) not yet in SQLite.
-    for f in file_manager.scan_all():
-        if _note_id_for_path(f["file_path"]) == note_id:
-            record = _build_note_record(f["file_path"])
+    for file_path in await offload_read_only(file_manager.list_note_paths):
+        if _note_id_for_path(file_path) == note_id:
+            record = await offload_read_only(
+                lambda: _build_note_record(file_path)
+            )
             if record:
                 sqlite_note2 = await repo.get(note_id)
                 if sqlite_note2:
@@ -765,16 +775,17 @@ async def update_note(
     if sqlite_note and sqlite_note.get("file_path"):
         fp = sqlite_note["file_path"]
         if file_manager.note_path_from_file_path(fp).is_file():
-            existing_record = _build_note_record(fp)
+            existing_record = await offload_read_only(lambda: _build_note_record(fp))
 
     # Slow path: walk the filesystem — only needed when SQLite doesn't have a
     # record yet (e.g. first save after engine restart or db corruption).
     if existing_record is None:
-        all_files = file_manager.scan_all()
-        for f in all_files:
-            candidate_id = _note_id_for_path(f["file_path"])
+        for file_path in await offload_read_only(file_manager.list_note_paths):
+            candidate_id = _note_id_for_path(file_path)
             if candidate_id == note_id:
-                existing_record = _build_note_record(f["file_path"])
+                existing_record = await offload_read_only(
+                    lambda: _build_note_record(file_path)
+                )
                 break
 
     if existing_record is None:
@@ -899,9 +910,9 @@ async def delete_note(note_id: str, request: Request) -> dict[str, str]:
             file_manager.delete_note(sqlite_note["file_path"])
         else:
             # Legacy fallback: scan for a UUID5-matched file.
-            for f in file_manager.scan_all():
-                if _note_id_for_path(f["file_path"]) == note_id:
-                    file_manager.delete_note(f["file_path"])
+            for file_path in await offload_read_only(file_manager.list_note_paths):
+                if _note_id_for_path(file_path) == note_id:
+                    file_manager.delete_note(file_path)
                     break
 
         if sqlite_note and owner:
@@ -1274,21 +1285,27 @@ async def delete_mapping(
 
 @router.get("/local/folders")
 async def list_local_folders() -> list[str]:
-    return file_manager.list_folders()
+    return await offload_read_only(file_manager.list_folders)
 
 
 @router.get("/local/files")
 async def scan_local_files() -> list[dict[str, str]]:
-    return file_manager.scan_all()
+    return await offload_read_only(file_manager.scan_all)
 
 
 @router.get("/local/files/{file_path:path}")
 async def read_local_file(file_path: str) -> dict[str, Any]:
-    content = file_manager.read_note(file_path)
-    if content is None:
+    def read() -> dict[str, Any] | None:
+        content = file_manager.read_note(file_path)
+        if content is None:
+            return None
+        return {
+            "file_path": file_path,
+            "content": content,
+            "content_hash": content_hash(content),
+        }
+
+    result = await offload_read_only(read)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-    return {
-        "file_path": file_path,
-        "content": content,
-        "content_hash": file_manager.note_hash(file_path),
-    }
+    return result

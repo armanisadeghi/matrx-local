@@ -1066,11 +1066,11 @@ class SyncEngine:
             user_id = self._user_id
             if not user_id:
                 return {"error": "Not configured"}
-            pending = await repo.list_pending_push(user_id)
-            local_files = await offload_read_only(self.fm.scan_all)
-            local_by_path = {f["file_path"]: f for f in local_files}
-
             stats = {"pushed": 0, "failed": 0, "skipped": 0, "conflicts": 0}
+            pending = await repo.list_pending_push(user_id)
+            if not pending:
+                return stats
+
             open_conflicts = set(self.fm.list_conflicts())
 
             # Duplicate/resurrection guard (the push_all funnel). full_sync
@@ -1084,19 +1084,18 @@ class SyncEngine:
             # snapshot once and check bytes first.
             remote_by_id: dict[str, dict] = {}
             remote_hashes: set[str] = set()
-            if pending:
-                try:
-                    for r in await self.sb.get_all_notes_with_hashes(user_id):
-                        remote_by_id[r["id"]] = r
-                        if r.get("content_hash"):
-                            remote_hashes.add(r["content_hash"])
-                except Exception:
-                    logger.warning(
-                        "push_all: could not fetch remote snapshot for the "
-                        "duplicate guard — deferring pending pushes this tick",
-                        exc_info=True,
-                    )
-                    return {**stats, "error": "network_error"}
+            try:
+                for r in await self.sb.get_all_notes_with_hashes(user_id):
+                    remote_by_id[r["id"]] = r
+                    if r.get("content_hash"):
+                        remote_hashes.add(r["content_hash"])
+            except Exception:
+                logger.warning(
+                    "push_all: could not fetch remote snapshot for the "
+                    "duplicate guard — deferring pending pushes this tick",
+                    exc_info=True,
+                )
+                return {**stats, "error": "network_error"}
 
             for note in pending:
                 if not note.get("sync_enabled", True):
@@ -1110,11 +1109,13 @@ class SyncEngine:
                     continue
 
                 fp = note.get("file_path")
-                if not fp or fp not in local_by_path:
+                if not fp:
                     stats["skipped"] += 1
                     continue
 
-                content = self.fm.read_note(fp)
+                content = await offload_read_only(
+                    lambda: self.fm.read_eligible_queued_note(fp)
+                )
                 if content is None:
                     stats["skipped"] += 1
                     continue

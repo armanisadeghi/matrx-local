@@ -100,6 +100,12 @@ class FakeFileManager:
             for fp, content in self.notes.items()
         ]
 
+    def list_note_paths(self) -> list[str]:
+        return list(self.notes)
+
+    def read_eligible_queued_note(self, file_path: str) -> str | None:
+        return self.read_note(file_path) if file_path.endswith(".md") else None
+
     # -- sync state ----------------------------------------------------------
     def load_sync_state(self) -> dict[str, Any]:
         return self.state

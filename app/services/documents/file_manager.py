@@ -310,6 +310,35 @@ class DocumentFileManager:
             return target.read_text(encoding="utf-8")
         return None
 
+    def read_eligible_queued_note(self, file_path: str) -> str | None:
+        """Read one queued note only when ``scan_all`` would include it.
+
+        Pending SQLite paths are input, not permission to traverse the
+        filesystem.  Keep the same membership as ``scan_all``: Markdown files
+        below the canonical root, outside hidden directories and without a
+        symlinked directory ancestor.  A terminal file symlink remains valid,
+        as it is for ``os.walk(..., followlinks=False)`` plus ``read_text``.
+        """
+        relative = Path(file_path)
+        if (
+            relative.is_absolute()
+            or not relative.name.endswith(".md")
+            or not relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            return None
+
+        target = self.base_dir / relative
+        parent = self.base_dir
+        for part in relative.parts[:-1]:
+            parent = parent / part
+            if part.startswith(".") or parent.is_symlink():
+                return None
+
+        if target.is_file():
+            return target.read_text(encoding="utf-8")
+        return None
+
     def delete_note(self, file_path: str) -> bool:
         target = self.note_path_from_file_path(file_path)
         if target.is_file():
@@ -388,26 +417,40 @@ class DocumentFileManager:
             )
         return results
 
-    def scan_all(self) -> list[dict[str, str]]:
-        """Scan all .md files under the documents directory."""
-        results: list[dict[str, str]] = []
+    def list_note_paths(self) -> list[str]:
+        """List the Markdown paths that ``scan_all`` would inspect.
+
+        This is deliberately metadata-only: callers that only need counts or
+        membership must not read and hash every note body.  Keep ``os.walk``'s
+        existing ordering, hidden-directory exclusion, and no-follow-directory
+        symlink behavior so it is the exact scan membership source.
+        """
+        paths: list[str] = []
         if not self.base_dir.exists():
-            return results
+            return paths
         for root, dirs, files in os.walk(self.base_dir):
             # Skip hidden directories
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             for f in sorted(files):
                 if f.endswith(".md"):
                     fp = Path(root) / f
-                    text = fp.read_text(encoding="utf-8")
-                    results.append(
-                        {
-                            "label": fp.stem,
-                            "file_path": self.relative_path(fp),
-                            "content_hash": content_hash(text),
-                            "folder": Path(root).relative_to(self.base_dir).as_posix(),
-                        }
-                    )
+                    paths.append(self.relative_path(fp))
+        return paths
+
+    def scan_all(self) -> list[dict[str, str]]:
+        """Scan all .md files under the documents directory."""
+        results: list[dict[str, str]] = []
+        for file_path in self.list_note_paths():
+            fp = self.note_path_from_file_path(file_path)
+            text = fp.read_text(encoding="utf-8")
+            results.append(
+                {
+                    "label": fp.stem,
+                    "file_path": file_path,
+                    "content_hash": content_hash(text),
+                    "folder": fp.parent.relative_to(self.base_dir).as_posix(),
+                }
+            )
         return results
 
     # ── Conflict handling ────────────────────────────────────────────────────

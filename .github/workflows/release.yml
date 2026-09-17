@@ -672,8 +672,11 @@ jobs:
             sleep "$((ATTEMPT * 10))"
           done
           EXPECTED="sha256:$(shasum -a 256 "$DMG" | awk '{print $1}')"
+          # GitHub replaces spaces in uploaded asset names with dots. Compare
+          # the digest of the actual uploaded name, not the local filename.
+          ASSET_NAME="$(basename "$DMG" | tr ' ' '.')"
           ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
-            --jq '.[] | select(.name == "'"$(basename "$DMG")"'") | .digest')"
+            --jq '.[] | select(.name == "'"$ASSET_NAME"'") | .digest')"
           [[ "$ACTUAL" == "$EXPECTED" ]] || {
             echo "Uploaded DMG checksum differs from stapled disk image" >&2
             exit 1

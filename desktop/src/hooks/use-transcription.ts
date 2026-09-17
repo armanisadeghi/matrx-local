@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useContext, useMemo } from "r
 import { isTauri } from "@/lib/sidecar";
 import { PLATFORM } from "@/lib/platformCtx";
 import { enqueueDurableClientError } from "@/lib/error-outbox";
+import { loadSettings } from "@/lib/settings";
 import { overlayWhisperCatalog } from "@/lib/transcription/catalog";
 import {
   readPluginPermissionStatus,
@@ -162,6 +163,11 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
   // Permission probe failures are a single causal condition until a successful
   // read resets the transition. Do not turn a retry button into an outbox flood.
   const microphoneProbeFailureReportedRef = useRef(false);
+  // Only the current startup effect may issue native initialization or update
+  // this context. Strict Mode cleans up and replays effects before settings
+  // resolve, so a boolean "started" flag would strand startup on the cancelled
+  // first pass.
+  const startupAutoInitGenerationRef = useRef(0);
 
   // Full transcript derived from segments
   const fullTranscript = segments
@@ -202,57 +208,52 @@ export function useTranscription(): [TranscriptionState, TranscriptionActions] {
     };
   }, []);
 
-  // Load initial setup status
-  useEffect(() => {
-    if (!isTauri()) return;
-    refreshSetupStatus();
-  }, []);
-
-  // Poll get_active_model until the Rust auto-init completes (max 30s).
-  // This bridges the gap between the config saying "setup_complete: true"
-  // and the TranscriptionManager actually being loaded into memory.
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    let cancelled = false;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 30;
-
-    const poll = async () => {
-      if (cancelled || attempts >= MAX_ATTEMPTS) return;
-      attempts++;
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const model = await invoke<string | null>("get_active_model");
-        if (model) {
-          setActiveModel(model);
-          return; // done — model is loaded
-        }
-      } catch {
-        // not ready yet — keep polling
-      }
-      setTimeout(poll, 1000);
-    };
-
-    poll();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const refreshSetupStatus = useCallback(async () => {
+  const refreshSetupStatus = useCallback(async (isCurrent: () => boolean = () => true) => {
     if (!isTauri()) return;
     try {
       const status = await tauriInvoke<VoiceSetupStatus>("get_voice_setup_status");
+      // Selection is persisted setup state, not proof that the native context
+      // exists. The active-model command is the source of truth for the UI.
+      const activeModel = await tauriInvoke<string | null>("get_active_model");
+      if (!isCurrent()) return;
       setSetupStatus(status);
-      if (status.selected_model) {
-        setActiveModel(status.selected_model);
-      }
+      setActiveModel(activeModel);
       // Keep downloaded filenames ref in sync for queue dedup
       downloadedFilenamesRef.current = new Set(status.downloaded_models ?? []);
     } catch {
       // Not critical — app may work without voice features
     }
   }, []);
+
+  // Read the webview-owned preference before asking native code to initialize.
+  // The command serializes cross-webview requests and returns the actual active
+  // model, so startup has no blind polling window.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const generation = ++startupAutoInitGenerationRef.current;
+    let cancelled = false;
+    const isCurrent = () => !cancelled && generation === startupAutoInitGenerationRef.current;
+
+    void (async () => {
+      try {
+        const settings = await loadSettings();
+        if (!isCurrent()) return;
+        const active = await tauriInvoke<string | null>("auto_init_transcription", {
+          enabled: settings.transcriptionAutoInit,
+        });
+        if (!isCurrent()) return;
+        setActiveModel(active);
+        await refreshSetupStatus(isCurrent);
+      } catch {
+        // A missing setting or non-fatal native startup error must not block
+        // manual model initialization or transcription recording.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSetupStatus]);
 
   const detectHardware = useCallback(async () => {
     setIsDetecting(true);

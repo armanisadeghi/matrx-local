@@ -17,11 +17,13 @@ const mocks = vi.hoisted(() => ({
       : "Microphone access is required for transcription. Please allow access when prompted.",
   ),
   enqueue: vi.fn(() => true),
+  loadSettings: vi.fn(async () => ({ transcriptionAutoInit: false })),
 }));
 
 vi.mock("@/lib/sidecar", () => ({ isTauri: () => true }));
 vi.mock("@/lib/platformCtx", () => ({ PLATFORM: { is_mac: true } }));
 vi.mock("@/lib/error-outbox", () => ({ enqueueDurableClientError: mocks.enqueue }));
+vi.mock("@/lib/settings", () => ({ loadSettings: mocks.loadSettings }));
 vi.mock("@/lib/transcription/catalog", () => ({ overlayWhisperCatalog: async (value: unknown) => value }));
 vi.mock("@/hooks/use-permissions", () => ({
   readPluginPermissionStatus: mocks.readMicrophone,
@@ -63,6 +65,8 @@ afterEach(async () => {
   mocks.requestMicrophone.mockReset();
   mocks.prerequisiteError.mockClear();
   mocks.enqueue.mockClear();
+  mocks.loadSettings.mockReset();
+  mocks.loadSettings.mockResolvedValue({ transcriptionAutoInit: false });
 });
 
 describe("useTranscription microphone prerequisite", () => {

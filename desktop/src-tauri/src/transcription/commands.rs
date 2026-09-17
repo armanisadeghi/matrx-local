@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
 use whisper_cpp_plus::TranscriptionParams;
@@ -16,6 +16,15 @@ use super::{
 
 // Default model used for wake word detection (fastest whisper model).
 const WAKE_WORD_DEFAULT_MODEL: &str = "ggml-tiny.en.bin";
+
+// Startup can be requested independently by more than one webview. Keep model
+// construction and replacement serialized so two requests never load the same
+// Whisper model concurrently or overwrite each other out of order.
+static TRANSCRIPTION_INIT_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn transcription_init_lock() -> &'static tokio::sync::Mutex<()> {
+    TRANSCRIPTION_INIT_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 fn receive_startup_result(
     receiver: std::sync::mpsc::Receiver<Result<(), String>>,
@@ -89,6 +98,61 @@ pub struct WhisperDownloadCancelState(pub Arc<AtomicBool>);
 
 /// Tauri-managed state for the wake-word subsystem.
 pub struct WakeWordAppState(pub Arc<WakeWordState>);
+
+#[derive(Debug, PartialEq, Eq)]
+enum AutoInitPlan {
+    Skip,
+    KeepActive(String),
+    ResetInvalidConfig,
+    Load(String),
+}
+
+fn active_model_filename(state: &TranscriptionState) -> Option<String> {
+    state.0.lock().unwrap().as_ref().map(|manager| {
+        manager
+            .model_path()
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    })
+}
+
+fn should_load_model(active_model: Option<&str>, requested_filename: &str) -> bool {
+    active_model != Some(requested_filename)
+}
+
+fn auto_init_plan(
+    enabled: bool,
+    config: &TranscriptionConfig,
+    active_model: Option<String>,
+    selected_model_is_valid: Option<bool>,
+) -> AutoInitPlan {
+    if !enabled || !config.setup_complete {
+        return AutoInitPlan::Skip;
+    }
+    if let Some(active_model) = active_model {
+        return AutoInitPlan::KeepActive(active_model);
+    }
+    let Some(filename) = config.selected_model.clone() else {
+        return AutoInitPlan::Skip;
+    };
+    if selected_model_is_valid == Some(false) {
+        return AutoInitPlan::ResetInvalidConfig;
+    }
+    AutoInitPlan::Load(filename)
+}
+
+async fn load_model_into_state(
+    state: &TranscriptionState,
+    model_path: std::path::PathBuf,
+) -> Result<(), String> {
+    let manager = tokio::task::spawn_blocking(move || TranscriptionManager::load(model_path))
+        .await
+        .map_err(|error| error.to_string())??;
+    *state.0.lock().unwrap() = Some(manager);
+    Ok(())
+}
 
 // ── Hardware Detection ─────────────────────────────────────────────────────
 
@@ -329,6 +393,7 @@ pub async fn init_transcription(
     state: State<'_, TranscriptionState>,
     filename: String,
 ) -> Result<(), String> {
+    let _init_guard = transcription_init_lock().lock().await;
     let model_path = app
         .path()
         .app_data_dir()
@@ -340,11 +405,12 @@ pub async fn init_transcription(
         return Err(format!("Model not found: {:?}", model_path));
     }
 
-    let manager = tokio::task::spawn_blocking(move || TranscriptionManager::load(model_path))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    *state.0.lock().unwrap() = Some(manager);
+    // Manual initialization may deliberately switch models. A request for the
+    // already active filename only refreshes persisted selection; it never
+    // builds a duplicate context.
+    if should_load_model(active_model_filename(&state).as_deref(), &filename) {
+        load_model_into_state(&state, model_path).await?;
+    }
 
     // Save selection to config
     let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -354,6 +420,54 @@ pub async fn init_transcription(
     config.save(&config_dir)?;
 
     Ok(())
+}
+
+/// Load the persisted model only when the webview has explicitly enabled
+/// transcription auto-initialization. The lock also protects concurrent root
+/// contexts from creating duplicate Whisper contexts during startup.
+#[tauri::command]
+pub async fn auto_init_transcription(
+    app: AppHandle,
+    state: State<'_, TranscriptionState>,
+    enabled: bool,
+) -> Result<Option<String>, String> {
+    let _init_guard = transcription_init_lock().lock().await;
+
+    // Disabled must be a true no-op: do not inspect, remove, or rewrite any
+    // model/config state. Manual initialization and recording remain available.
+    if !enabled {
+        return Ok(active_model_filename(&state));
+    }
+
+    let config_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let config = TranscriptionConfig::load(&config_dir);
+    let selected_model_is_valid = config.selected_model.as_ref().map(|filename| {
+        downloader::is_valid_model(&config_dir.join("models").join(filename))
+    });
+
+    match auto_init_plan(
+        enabled,
+        &config,
+        active_model_filename(&state),
+        selected_model_is_valid,
+    ) {
+        AutoInitPlan::Skip => Ok(None),
+        AutoInitPlan::KeepActive(filename) => Ok(Some(filename)),
+        AutoInitPlan::ResetInvalidConfig => {
+            let reset = TranscriptionConfig {
+                setup_complete: false,
+                selected_model: None,
+                ..config
+            };
+            reset.save(&config_dir)?;
+            Ok(None)
+        }
+        AutoInitPlan::Load(filename) => {
+            let model_path = config_dir.join("models").join(&filename);
+            load_model_into_state(&state, model_path).await?;
+            Ok(active_model_filename(&state))
+        }
+    }
 }
 
 /// Check if a model file exists and is valid.
@@ -370,13 +484,7 @@ pub fn check_model_exists(app: AppHandle, filename: String) -> bool {
 /// Get the currently active model filename.
 #[tauri::command]
 pub fn get_active_model(state: State<'_, TranscriptionState>) -> Option<String> {
-    state.0.lock().unwrap().as_ref().map(|m| {
-        m.model_path()
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
-    })
+    active_model_filename(&state)
 }
 
 /// List all downloaded models in the models directory.
@@ -1139,5 +1247,71 @@ mod capture_startup_tests {
             Err("Wake-word capture was stopped before startup completed. Start it again when you are ready.".into())
         );
         assert_eq!(ensure_start_still_active(true, "Audio capture"), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod auto_init_tests {
+    use super::{auto_init_plan, should_load_model, AutoInitPlan};
+    use crate::transcription::config::TranscriptionConfig;
+
+    fn configured() -> TranscriptionConfig {
+        TranscriptionConfig {
+            setup_complete: true,
+            selected_model: Some("ggml-base.en.bin".into()),
+            ..TranscriptionConfig::default()
+        }
+    }
+
+    #[test]
+    fn disabled_auto_init_is_a_noop_even_when_configured() {
+        assert_eq!(
+            auto_init_plan(false, &configured(), None, Some(true)),
+            AutoInitPlan::Skip
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_selected_model_resets_setup_state() {
+        assert_eq!(
+            auto_init_plan(true, &configured(), None, Some(false)),
+            AutoInitPlan::ResetInvalidConfig
+        );
+    }
+
+    #[test]
+    fn active_model_wins_over_stale_persisted_selection() {
+        assert_eq!(
+            auto_init_plan(
+                true,
+                &configured(),
+                Some("ggml-small.en.bin".into()),
+                Some(false),
+            ),
+            AutoInitPlan::KeepActive("ggml-small.en.bin".into())
+        );
+    }
+
+    #[test]
+    fn second_serialized_auto_request_keeps_the_model_loaded_by_the_first() {
+        assert_eq!(
+            auto_init_plan(true, &configured(), None, Some(true)),
+            AutoInitPlan::Load("ggml-base.en.bin".into())
+        );
+        assert_eq!(
+            auto_init_plan(
+                true,
+                &configured(),
+                Some("ggml-base.en.bin".into()),
+                Some(true),
+            ),
+            AutoInitPlan::KeepActive("ggml-base.en.bin".into())
+        );
+    }
+
+    #[test]
+    fn manual_init_reuses_the_same_model_and_can_explicitly_switch_models() {
+        assert!(!should_load_model(Some("ggml-base.en.bin"), "ggml-base.en.bin"));
+        assert!(should_load_model(Some("ggml-base.en.bin"), "ggml-small.en.bin"));
     }
 }

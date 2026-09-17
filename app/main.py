@@ -1985,8 +1985,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if tm.running:
                 await asyncio.wait_for(tm.stop(), timeout=7.0)
                 logger.info("[app/main.py] Tunnel stopped ✓")
-            if not await asyncio.wait_for(tm.publish_inactive_registration(), timeout=2.0):
-                logger.warning("[app/main.py] Shutdown: failed to clear tunnel URL in Supabase")
+            try:
+                if not await asyncio.wait_for(tm.publish_inactive_registration(), timeout=2.0):
+                    logger.warning("[app/main.py] Shutdown: failed to clear tunnel URL in Supabase")
+            except (asyncio.TimeoutError, Exception):
+                logger.warning("[app/main.py] Shutdown: failed to clear tunnel URL in Supabase", exc_info=True)
             # Mirror the inactive state into the runtime singleton.
             try:
                 from app.api.tunnel_state import mark_tunnel_inactive

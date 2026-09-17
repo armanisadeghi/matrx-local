@@ -326,6 +326,24 @@ describe("Refresh", () => {
     );
     expect(container.textContent).toContain("First session");
   });
+
+  it("keeps the cached list and says when one transient retry is scheduled", async () => {
+    await render("/coding-sessions");
+    mocks.getClaudeOverview.mockRejectedValue({
+      name: "ClaudeOverviewReadError",
+      kind: "timeout",
+      message: "Engine request timed out after 2 minutes: /coding-session/claude/overview",
+    });
+    await act(async () => {
+      (container.querySelector("[data-testid='coding-sessions-refresh']") as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector("[data-testid='sessions-retry-scheduled']")?.textContent).toContain(
+      "Trying this read once more shortly",
+    );
+    expect(container.textContent).toContain("First session");
+  });
 });
 
 describe("A row is a door", () => {

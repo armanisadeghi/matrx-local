@@ -50,7 +50,24 @@ export function indexState(overview: ClaudeOverview | null): IndexState {
 
 /** Milliseconds until this screen should ask again, or null when it should not. */
 export function indexPollDelayMs(overview: ClaudeOverview | null): number | null {
-  return POLL_MS[indexState(overview)];
+  const indexDelay = POLL_MS[indexState(overview)];
+  if (indexDelay !== null) return indexDelay;
+
+  // A fresh local index can still carry an unanswered cloud inventory. These
+  // are the only cloud states that earn a follow-up: terminal auth and server
+  // reasons stay visible without becoming an unbounded poll loop.
+  const cloud = overview?.cloud;
+  if (!cloud) return null;
+  if (!cloud.checked && cloud.reason === "cloud_check_in_flight") {
+    return POLL_MS.cold;
+  }
+  if (
+    cloud.refreshing ||
+    (!cloud.checked && (cloud.reason === "session_refreshing" || cloud.reason === "refreshing"))
+  ) {
+    return POLL_MS.refreshing;
+  }
+  return null;
 }
 
 /**
@@ -112,7 +129,11 @@ export type CloudPhase = "checked" | "in_flight" | "unavailable";
 export function cloudPhase(cloud: ClaudeCloudCheck | null | undefined): CloudPhase {
   if (!cloud) return "unavailable";
   if (cloud.checked) return "checked";
-  return cloud.reason === "cloud_check_in_flight" ? "in_flight" : "unavailable";
+  return cloud.reason === "cloud_check_in_flight" ||
+      cloud.reason === "session_refreshing" ||
+      cloud.reason === "refreshing"
+    ? "in_flight"
+    : "unavailable";
 }
 
 /** True while the cloud answer is merely pending — rows read "unknown" quietly. */

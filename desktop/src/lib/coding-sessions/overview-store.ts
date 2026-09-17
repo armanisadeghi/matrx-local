@@ -33,6 +33,8 @@ export interface CodingSessionsSources {
   readiness(): Promise<CodingSessionProviderReadinessStatus>;
   artifactsStatus(): Promise<CodingSessionArtifactsStatus>;
   artifactsSessions(): Promise<{ sessions: CodingSessionArtifactsSessionSummary[] }>;
+  /** Fires only after the engine's authenticated socket reconnects. */
+  onEngineConnected?(listener: () => void): () => void;
 }
 
 export interface CodingSessionsSnapshot {
@@ -48,6 +50,10 @@ export interface CodingSessionsSnapshot {
   artifacts: CodingSessionArtifactsStatus | null;
   artifactSessions: Map<string, CodingSessionArtifactsSessionSummary> | null;
   error: string | null;
+  /** A request failure eligible for the hook's one bounded recovery pass. */
+  overviewFailure: "timeout" | "network" | null;
+  /** The recovery state is explicit so a stale list never implies a live read. */
+  overviewRetry: "scheduled" | "exhausted" | null;
   artifactsError: string | null;
   artifactSessionsError: string | null;
   cacheError: string | null;
@@ -65,6 +71,16 @@ function reason(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }
 
+function overviewFailureKind(value: unknown): "timeout" | "network" | null {
+  // `ClaudeOverviewReadError` is the typed boundary in api.ts. Keep this
+  // structural at the store boundary so alternate engine clients and tests do
+  // not need to share its runtime constructor.
+  if (!value || typeof value !== "object") return null;
+  const error = value as { name?: unknown; kind?: unknown };
+  if (error.name !== "ClaudeOverviewReadError") return null;
+  return error.kind === "timeout" || error.kind === "network" ? error.kind : null;
+}
+
 export function emptySnapshot(cached: CachedOverview | null = null): CodingSessionsSnapshot {
   return {
     overview: cached?.overview ?? null,
@@ -76,6 +92,8 @@ export function emptySnapshot(cached: CachedOverview | null = null): CodingSessi
     artifacts: null,
     artifactSessions: null,
     error: null,
+    overviewFailure: null,
+    overviewRetry: null,
     artifactsError: null,
     artifactSessionsError: null,
     cacheError: null,
@@ -83,6 +101,26 @@ export function emptySnapshot(cached: CachedOverview | null = null): CodingSessi
     overviewPending: false,
     loadedFromEngine: false,
     capturedCloudFailureClass: null,
+  };
+}
+
+/** Mark the one automatic recovery attempt without replacing cached rows. */
+export function withOverviewRetry(
+  snapshot: CodingSessionsSnapshot,
+  overviewRetry: "scheduled" | "exhausted",
+): CodingSessionsSnapshot {
+  return { ...snapshot, overviewRetry };
+}
+
+/** Announce a joined refresh before waiting for another consumer's pass. */
+export function pendingCodingSessionsSnapshot(
+  snapshot: CodingSessionsSnapshot,
+): CodingSessionsSnapshot {
+  return {
+    ...snapshot,
+    refreshing: true,
+    overviewPending: true,
+    overviewRetry: null,
   };
 }
 
@@ -142,11 +180,7 @@ export async function refreshCodingSessions(
 
   // RULE 1 — announce before awaiting. Nothing below this line may be the
   // first thing a person sees change.
-  let snapshot: CodingSessionsSnapshot = {
-    ...current,
-    refreshing: true,
-    overviewPending: true,
-  };
+  let snapshot = pendingCodingSessionsSnapshot(current);
   emit(snapshot);
 
   // The slow one starts first and is awaited last: the fast facts paint while
@@ -206,11 +240,13 @@ export async function refreshCodingSessions(
     snapshot.overviewCacheTruncated = false;
     snapshot.loadedFromEngine = true;
     snapshot.error = null;
+    snapshot.overviewFailure = null;
     snapshot.cacheError = persist(overview.value, at);
   } else {
     // The rows already on screen stay, and now carry a visible reason they
     // might be stale. Emptying the list would hide what we know.
     snapshot.error = reason(overview.error);
+    snapshot.overviewFailure = overviewFailureKind(overview.error);
   }
   emit(snapshot);
   return snapshot;

@@ -891,6 +891,25 @@ export interface ClaudeOverview {
   };
 }
 
+/** A recoverable failure while reading the local coding-session index.
+ *
+ * This is deliberately limited to failures for which `request()` has no HTTP
+ * response: an endpoint timeout or a browser-level network failure. Callers
+ * must not retry an authorization, permission, schema, or server response.
+ */
+export class ClaudeOverviewReadError extends Error {
+  override readonly name = "ClaudeOverviewReadError";
+  readonly original: Error;
+
+  constructor(
+    readonly kind: "timeout" | "network",
+    cause: Error,
+  ) {
+    super(cause.message);
+    this.original = cause;
+  }
+}
+
 export interface ClaudeSessionDiagnosisEnvelope {
   receipt_id: number;
   state: "pending" | "quarantine";
@@ -3004,14 +3023,9 @@ class EngineAPI {
   /**
    * The coding-sessions screen's whole payload.
    *
-   * Engine 1.4.125 moved the Claude index read off the request path, so this
-   * answers in milliseconds — but the shared 60s ceiling was the wrong one
-   * either way: lane V-ML measured this path at 31.8s and then 59.0s against
-   * it on 2026-09-15, 1.04s from the client aborting a read that was working.
-   * A ceiling this screen cannot hit on a current engine, and that still
-   * covers an older engine's in-request scan, replaces it — and when it IS
-   * exceeded the screen says so inline (SessionsTab's read-failure banner)
-   * instead of leaving the Refresh button spinning.
+   * This has its own bounded ceiling because a hung local read must settle in
+   * the screen. Exceeding that ceiling says only that this request did not
+   * finish; it does not identify why the engine did not answer.
    */
   async getClaudeOverview(): Promise<ClaudeOverview> {
     try {
@@ -3021,13 +3035,20 @@ class EngineAPI {
         EngineAPI.CLAUDE_OVERVIEW_TIMEOUT_MS,
       );
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (message.includes("timed out")) {
-        throw new Error(
-          `${message} — the engine is still reading this Mac's sessions. ` +
-            "Update Matrx Local (engine 1.4.125 and newer answer this in milliseconds), " +
-            "then press Refresh.",
-        );
+      // `request()` creates this precise error only for its own timeout
+      // signal. Keep it typed for the screen's one bounded recovery attempt;
+      // a timeout does not prove why the engine did not answer.
+      if (
+        e instanceof Error &&
+        e.message.startsWith("Engine request timed out after")
+      ) {
+        throw new ClaudeOverviewReadError("timeout", e);
+      }
+      // Fetch reports a transport failure as TypeError. HTTP errors remain
+      // ordinary Errors so the screen never retries auth, permission, schema,
+      // or server failures blindly.
+      if (e instanceof TypeError) {
+        throw new ClaudeOverviewReadError("network", e);
       }
       throw e;
     }

@@ -323,6 +323,16 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           <div>
             <p className="font-medium">Couldn't read your conversations</p>
             <p className="mt-1 font-mono text-xs text-muted-foreground">{snapshot.error}</p>
+            {snapshot.overviewRetry === "scheduled" && (
+              <p className="mt-1 text-muted-foreground" data-testid="sessions-retry-scheduled">
+                Trying this read once more shortly.
+              </p>
+            )}
+            {snapshot.overviewRetry === "exhausted" && (
+              <p className="mt-1 text-muted-foreground" data-testid="sessions-retry-exhausted">
+                The automatic retry did not finish. You can refresh when ready.
+              </p>
+            )}
             {data && (
               <p className="mt-1 text-muted-foreground">
                 The list below is the last answer this Mac read

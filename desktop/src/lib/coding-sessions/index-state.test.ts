@@ -76,6 +76,18 @@ describe("index state", () => {
     expect(indexPollDelayMs(overview())).toBeNull();
   });
 
+  it("follows only an in-flight cloud inventory after the local index is fresh", () => {
+    const fresh = overview({ state: "fresh" });
+    fresh.cloud = cloud({ checked: false, reason: "cloud_check_in_flight", refreshing: true });
+    expect(indexPollDelayMs(fresh)).toBe(2_500);
+
+    fresh.cloud = cloud({ checked: true, reason: null, refreshing: true });
+    expect(indexPollDelayMs(fresh)).toBe(4_000);
+
+    fresh.cloud = cloud({ checked: false, reason: "no_active_user_jwt", refreshing: false });
+    expect(indexPollDelayMs(fresh)).toBeNull();
+  });
+
   it("refuses to present counts from an index that has not been read", () => {
     expect(indexCountsAreReal(overview({ state: "cold" }))).toBe(false);
     expect(indexCountsAreReal(overview({ state: "refreshing" }))).toBe(true);
@@ -118,6 +130,7 @@ describe("the cloud check", () => {
   it("separates answered, not asked yet, and could not be asked", () => {
     expect(cloudPhase(cloud({ checked: true }))).toBe("checked");
     expect(cloudPhase(cloud({ checked: false, reason: "cloud_check_in_flight" }))).toBe("in_flight");
+    expect(cloudPhase(cloud({ checked: false, reason: "refreshing" }))).toBe("in_flight");
     expect(cloudPhase(cloud({ checked: false, reason: "signed_out" }))).toBe("unavailable");
     expect(cloudPhase(undefined)).toBe("unavailable");
     expect(cloudCheckPending(cloud({ checked: false, reason: "cloud_check_in_flight" }))).toBe(true);

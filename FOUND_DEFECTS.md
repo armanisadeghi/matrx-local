@@ -828,6 +828,45 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Testing infrastructure
 
+### MXL-D-093 — `claude-sdk:` bound sessions can be pinned but can never be unpinned
+
+- **Area:** coding_sessions — pin observations vs. the bound-session id families
+- **Symptom:** the live server holds Claude Code bound sessions under TWO
+  provider_session_id shapes: a bare `cliSessionId` UUID (the desktop session
+  index, 890 rows) and a composite `claude-sdk:<account-hash>:<base64 uuid>`
+  (964 rows). Pin observations reach BOTH — 77 of the composite rows are
+  `provider_pinned=true` — but the reconciler that can now clear a pin reads
+  the desktop session index and keys by bare `cliSessionId`, so it never
+  produces an observation for a composite id. Those pins are unclearable: they
+  accumulate exactly the way the desktop ones did before MXL fix (commit
+  b36e2e799). Measured 2026-09-17 against the live DB: of the 77, **43 are for
+  conversations that are NOT pinned in Claude Code any more**, and 5
+  truly-pinned conversations are missing a pin on their composite row. The
+  same conversation is frequently bound under both shapes, so one pinned
+  conversation can be right in one row and wrong in the other.
+- **Evidence:** `chat.coding_session` on project `brsgrqvjdzwihsvnfqkf`, split by
+  family and compared against the app's own 218 pinned conversations:
+  desktop 200 pinned (163 correct / 37 to clear / 33 to add), claude-sdk 77
+  pinned (34 correct / 43 stale / 5 missing). The reconciler's candidate set is
+  the server identity list (`app/services/coding_sessions/identity_client.py`),
+  and the local lookup is `entry = index.get(native_id)` at
+  `app/services/coding_sessions/title_sync.py:764` — a composite id never
+  matches a desktop index record, so the row is recorded
+  `blocked / local_session_not_found` and nothing is sent.
+- **Status:** open
+- **Analysis stamp:** Analyzed 2026-09-17 — verified against the live DB while
+  fixing the desktop pin bug. NOT fixed there: the desktop fix is
+  scope-complete and correct, and this needs a decision about which surface
+  owns a composite binding's labels, which is a different question.
+- **Owner hint:** first establish WHICH producer writes the `claude-sdk:`
+  bindings and their pins (it is not this repo's desktop index reconciler —
+  candidates are the Agent SDK / sandbox lanes). Then either normalize the
+  composite id to its embedded `cliSessionId` so one observation serves both
+  rows, or give that producer its own reconciler with the same
+  unpin-is-observable contract. Normalizing looks right — the base64 segment
+  already decodes to the exact `cliSessionId` the desktop index uses, which is
+  how the numbers above were computed.
+
 ### MXL-D-092 — `test_managed_runtime_bundle` fails as a 30 s timeout on a busy machine, so the frozen-bundle guard is red for reasons that have nothing to do with the bundle
 - **Area:** `tests/unit/test_managed_runtime_bundle.py:131`
   (`test_collection_reaches_submodules_static_analysis_misses`),

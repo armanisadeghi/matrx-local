@@ -2072,24 +2072,65 @@ class SyncEngine:
             actor_user_id = await self._bind_watcher_principal()
             if not actor_user_id:
                 return
-            content = self.fm.read_note(file_path)
+            content = await offload_read_only(lambda: self.fm.read_note(file_path))
             if content is None:
                 return
 
             c_hash = content_hash(content)
 
-            # Resolve the existing row by PATH first — notes created through the
-            # API have uuid4 ids, so deriving a uuid5 here created a duplicate
-            # SQLite row for the same file.
+            # A path can carry stale replica rows.  Never let SQLite insertion
+            # order choose the cloud identity which receives an external edit:
+            # the collision resolver admits only a proven local keeper.
             repo = self._get_notes_repo()
-            existing = await repo.get_by_file_path(file_path)
-            if existing is None:
-                existing = await repo.get(_note_id_for_path(file_path))
-            # A watcher must not turn an arbitrary file into the account that
-            # happened to be signed in when it observed the change.
+            resolution = await self._resolve_path_collision_owner(
+                file_path, actor_user_id
+            )
+            if resolution["status"] == "none":
+                # A raw local file has no admitted Notes identity yet. It is
+                # not a collision and must not create a noisy warning.
+                return
+            if resolution["status"] != "keeper":
+                logger.warning(
+                    "Deferring external Notes edit for contested path %s (%s)",
+                    file_path,
+                    resolution["status"],
+                )
+                return
+            note_id = resolution["keeper_id"]
+            existing = await repo.get(note_id)
             if not self._is_owned_by(existing, actor_user_id):
                 return
-            note_id = existing["id"]
+
+            # Snapshot cloud rows before the local metadata write. A remote
+            # row must be the same stable identity and account; matching a
+            # path and taking the first result crosses notes on collisions.
+            all_notes: list[dict[str, Any]] | None = None
+            remote: dict[str, Any] | None = None
+            if self.is_configured and self._user_id:
+                try:
+                    all_notes = await self.sb.get_all_notes_with_hashes(self._user_id)
+                    remote = next(
+                        (note for note in all_notes if note.get("id") == note_id),
+                        None,
+                    )
+                    remote_owner = (remote or {}).get("created_by") or (
+                        remote or {}
+                    ).get("user_id")
+                    if remote is not None and remote_owner != actor_user_id:
+                        logger.warning(
+                            "Deferring external Notes edit for %s: cloud identity has another owner",
+                            file_path,
+                        )
+                        return
+                except Exception:
+                    # Local-first still records the edit for a later retry.
+                    # Do not guess a cloud identity while its snapshot fails.
+                    logger.debug(
+                        "Could not snapshot cloud notes for external change %s",
+                        file_path,
+                        exc_info=True,
+                    )
+                    all_notes = None
 
             parts = Path(file_path).parts
             folder = parts[0] if len(parts) > 1 else "General"
@@ -2111,21 +2152,17 @@ class SyncEngine:
                 "updated_at": _now(),
             })
 
-            if self.is_configured and self._user_id:
+            if self.is_configured and self._user_id and all_notes is not None:
                 try:
-                    all_notes = await self.sb.get_all_notes_with_hashes(self._user_id)
-                    matching = [n for n in all_notes if n.get("file_path") == file_path]
-
-                    if matching:
-                        note = matching[0]
-                        if note.get("content_hash") == c_hash:
+                    if remote is not None:
+                        if remote.get("content_hash") == c_hash:
                             return
                         await self._push_note(
-                            note_id=note["id"],
-                            label=note.get("label", Path(file_path).stem),
+                            note_id=note_id,
+                            label=remote.get("label", Path(file_path).stem),
                             content=content,
-                            folder_name=note.get("folder_name", "General"),
-                            folder_id=note.get("folder_id"),
+                            folder_name=remote.get("folder_name", "General"),
+                            folder_id=remote.get("folder_id"),
                             file_path=file_path,
                         )
                     else:

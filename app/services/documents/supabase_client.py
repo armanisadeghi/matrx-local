@@ -560,7 +560,7 @@ class SupabaseDocClient:
         return [_normalize_note_row(r) for r in rows]
 
     async def get_all_notes_with_hashes(self, user_id: str) -> list[dict[str, Any]]:
-        """Get id, file_path, content_hash, sync_version for all LIVE notes.
+        """Get identity, ownership, and sync fields for all LIVE notes.
 
         Deliberately excludes soft-deleted rows (``deleted_at`` non-null), so
         full_sync's remote set never resurrects deleted notes. Remote deletions
@@ -573,7 +573,7 @@ class SupabaseDocClient:
             params={
                 "created_by": f"eq.{user_id}",
                 "deleted_at": "is.null",
-                "select": "id,file_path,content_hash,sync_version,label,"
+                "select": "id,created_by,file_path,content_hash,sync_version,label,"
                 "folder_name,folder_id,updated_at,last_device_id",
             },
             schema=_WORKBENCH,

@@ -11,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
 from typing import Any, Iterator
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -19,8 +20,10 @@ import pytest
 class _TransportHandler(BaseHTTPRequestHandler):
     status = 200
     body: object = []
+    paths: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802
+        type(self).paths.append(self.path)
         encoded = json.dumps(type(self).body).encode()
         self.send_response(type(self).status)
         self.send_header("Content-Type", "application/json")
@@ -70,6 +73,7 @@ def isolated_postgrest(documents_transport: Any) -> Iterator[Any]:
         thread.join()
         _TransportHandler.status = 200
         _TransportHandler.body = []
+        _TransportHandler.paths = []
 
 
 def _client(transport: Any) -> Any:
@@ -94,6 +98,24 @@ def test_successful_empty_get_and_no_content_remain_empty(isolated_postgrest: An
     _TransportHandler.status = 200
     _TransportHandler.body = []
     assert asyncio.run(_client(isolated_postgrest)._request("GET", "notes", schema="workbench")) == []
+
+
+def test_live_snapshot_requests_and_returns_created_by_projection(
+    isolated_postgrest: Any,
+) -> None:
+    """The watcher can only check ownership if PostgREST returns it."""
+    _TransportHandler.body = [{
+        "id": "note-1", "created_by": "account-1", "file_path": "Draft/note.md",
+        "content_hash": "hash", "sync_version": 3, "label": "note",
+        "folder_name": "Draft", "folder_id": None, "updated_at": "now",
+        "last_device_id": "device",
+    }]
+
+    rows = asyncio.run(_client(isolated_postgrest).get_all_notes_with_hashes("account-1"))
+
+    requested = parse_qs(urlparse(_TransportHandler.paths[-1]).query)
+    assert "created_by" in requested["select"][0].split(",")
+    assert rows == _TransportHandler.body
 
     _TransportHandler.status = 204
     assert asyncio.run(_client(isolated_postgrest)._request("GET", "notes", schema="workbench")) == []

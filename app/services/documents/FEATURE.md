@@ -122,6 +122,9 @@ bound by the same contract).
   incoming nonkeeper receives a deterministic per-ID sibling path and only its
   cloud row is CAS-repointed. Equal content never justifies hiding, deleting,
   or merging either identity.
+  The watcher resolves that keeper before it changes SQLite or cloud state, and
+  only pushes to its same-ID, same-account cloud row; ambiguous or foreign
+  ownership remains a visible deferred state.
 - Cloud is durable truth; local is the first-access replica the user actually
   touches. Never invert that.
 - **Cloud-delete propagation is budgeted — the mass-delete circuit breaker

@@ -456,6 +456,17 @@ async def sync_coding_session_artifacts() -> dict[str, object]:
     return await get_coding_session_artifacts_lane().run_once()
 
 
+@router.post("/artifacts/verify", status_code=status.HTTP_202_ACCEPTED)
+async def verify_coding_session_artifacts() -> dict[str, object]:
+    """Read recorded artifact file ids back from AI Matrx and repair the gaps.
+
+    Confirms a bounded slice of entries the lane has not read back yet; any id
+    AI Matrx no longer serves is cleared and its durable copy re-uploaded in the
+    same call, so the counts on the screen mean what they say.
+    """
+    return await get_coding_session_artifacts_lane().verify_now()
+
+
 @router.post("/claude/capture/reconcile", status_code=status.HTTP_202_ACCEPTED)
 async def reconcile_claude_capture(
     dry_run: bool = Query(default=False),

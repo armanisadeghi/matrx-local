@@ -14,6 +14,7 @@ from app.services.coding_sessions.artifacts import (
     MANIFEST_NAME,
     CodingSessionArtifactsLane,
 )
+from app.services.file_sync.client import FileSyncHTTPError
 from app.services.local_db.database import LocalDatabase
 
 pytestmark = pytest.mark.anyio
@@ -31,8 +32,25 @@ class _Tokens:
 
 
 class _FakeFilesClient:
+    """Models the real matrx-files door as MEASURED against production on
+    2026-09-17, not as its response model advertises:
+
+    * identical bytes are aliased onto the CANONICAL row (`matrx_files/dedup.py`
+      implicit ``alias_existing``) — one row, one id, many logical paths;
+    * the response says nothing useful about that: ``is_new`` comes back null
+      and ``file_path`` merely echoes the request, so only ``GET /files/{id}``
+      reveals the row's real path;
+    * a repeated ``X-Idempotency-Key`` REPLAYS the stored response without
+      doing any work — even after the row it named went to the trash.
+    """
+
     def __init__(self) -> None:
         self.uploads: list[dict[str, Any]] = []
+        self.reads: list[str] = []
+        self.rows: dict[str, dict[str, Any]] = {}
+        self._by_content: dict[bytes, str] = {}
+        self._replay: dict[str, dict[str, Any]] = {}
+        self._next_id = 0
         self.jwt: str | None = None
 
     def set_jwt(self, token: str | None) -> None:
@@ -40,7 +58,41 @@ class _FakeFilesClient:
 
     async def upload(self, **kwargs: Any) -> dict[str, Any]:
         self.uploads.append(kwargs)
-        return {"file_id": f"file-{len(self.uploads)}", "size_bytes": len(kwargs["content"])}
+        key = kwargs.get("idempotency_key")
+        if key and key in self._replay:
+            return dict(self._replay[key])
+        content = kwargs["content"]
+        canonical = self._by_content.get(content)
+        if canonical is None:
+            self._next_id += 1
+            canonical = f"file-{self._next_id}"
+            self.rows[canonical] = {
+                "id": canonical,
+                "file_path": kwargs["file_path"],
+                "deleted_at": None,
+            }
+            self._by_content[content] = canonical
+        response = {
+            "file_id": canonical,
+            "file_path": kwargs["file_path"],  # echo, not the row's path
+            "is_new": None,
+            "size_bytes": len(content),
+        }
+        if key:
+            self._replay[key] = dict(response)
+        return response
+
+    async def get_record(self, file_id: str) -> dict[str, Any]:
+        self.reads.append(file_id)
+        row = self.rows.get(file_id)
+        if row is None:
+            raise FileSyncHTTPError("GET", f"/files/{file_id}", 404, "not found")
+        return dict(row)
+
+    def drop_row(self, file_id: str) -> None:
+        """The cloud stops serving a row the ledger still believes in."""
+        self.rows.pop(file_id, None)
+        self._by_content = {c: fid for c, fid in self._by_content.items() if fid != file_id}
 
 
 def _scratchpad(tmp_path: Path, session: str = "11111111-2222-3333-4444-555555555555") -> Path:
@@ -157,6 +209,12 @@ async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_pat
         }
         status = lane.status()
         assert status["uploaded"] == 6 and status["pending_upload"] == 0 and status["blocker"] is None
+        # 4 of the 6 paths hold identical bytes, so matrx-files aliased 3 of
+        # them onto ONE row: the screen may never call 6 paths 6 cloud files.
+        assert status["deduplicated"] == 3
+        assert status["cloud_rows"] == 3 == len(client.rows)
+        assert status["distinct_content"] == 3
+        assert status["awaiting_confirmation"] == 0 and status["missing_in_cloud"] == 0
 
         # Second tick: nothing new, nothing re-uploaded; manifest remembers file ids.
         tick = await lane.run_once()
@@ -206,5 +264,81 @@ async def test_persistent_upload_failure_is_abandoned_visibly_not_retried_foreve
         assert "connection dropped" in entry["upload_error"]
         # The durable copy is untouched by upload failure.
         assert (tmp_path / "durable" / "11111111-2222-3333-4444-555555555555" / "report.md").exists()
+    finally:
+        await db.close()
+
+
+async def test_a_returned_file_id_counts_only_once_it_reads_back(tmp_path: Path, monkeypatch) -> None:
+    """The lie this closes: the lane called a file "uploaded" on the strength of
+    the upload response alone, so a session could report 10,631 files in AI
+    Matrx while the cloud held far fewer rows."""
+    _scratchpad(tmp_path)
+
+    class _Amnesiac(_FakeFilesClient):
+        async def upload(self, **kwargs: Any) -> dict[str, Any]:
+            self.uploads.append(kwargs)
+            # Accepts the bytes, reports an id, keeps no row.
+            return {"file_id": "file-ghost", "file_path": kwargs["file_path"], "is_new": True}
+
+    client = _Amnesiac()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        status = lane.status()
+        assert status["uploaded"] == 0, "an unreadable file id is not storage"
+        assert status["missing_in_cloud"] == 2 and status["pending_upload"] == 2
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert entry["file_id"] is None and "no longer serves" in entry["verify_error"]
+        # Nothing is lost: the durable copy stands and the entry is re-queued.
+        assert (tmp_path / "durable" / "11111111-2222-3333-4444-555555555555" / "report.md").exists()
+    finally:
+        await db.close()
+
+
+async def test_verify_now_repairs_a_row_the_cloud_stopped_serving(tmp_path: Path, monkeypatch) -> None:
+    _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        entries = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]
+        lost = entries["report.md"]["file_id"]
+        assert lane.status()["uploaded"] == 2
+        client.drop_row(lost)
+
+        result = await lane.verify_now()
+
+        assert result["missing_in_cloud"] == 1 and result["re_uploaded"] == 1
+        assert result["still_missing_in_cloud"] == 0
+        status = lane.status()
+        assert status["uploaded"] == 2 and status["pending_upload"] == 0
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert entry["file_id"] != lost and entry["verified_at"] and entry["verify_error"] is None
+        assert entry["file_id"] in client.rows
+    finally:
+        await db.close()
+
+
+async def test_a_changed_file_keeps_the_version_it_superseded(tmp_path: Path, monkeypatch) -> None:
+    import os
+    import time
+
+    pad = _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        first = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"][
+            "file_id"
+        ]
+        (pad / "report.md").write_text("# report v2")
+        os.utime(pad / "report.md", (time.time() + 5, time.time() + 5))
+        await lane.run_once()
+        entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
+        assert entry["previous_file_ids"] == [first]
+        assert lane.status()["superseded_versions"] == 1
     finally:
         await db.close()

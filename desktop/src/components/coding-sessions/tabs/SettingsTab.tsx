@@ -283,10 +283,39 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
               {snapshot.artifacts.sessions === 1 ? "" : "s"} ·{" "}
               <span className="tabular-nums">{snapshot.artifacts.files.toLocaleString()}</span> file
               {snapshot.artifacts.files === 1 ? "" : "s"} · {formatFileSize(snapshot.artifacts.bytes)} ·{" "}
-              <span className="text-emerald-600 dark:text-emerald-400">
-                {snapshot.artifacts.uploaded.toLocaleString()} in AI Matrx
+              <span
+                className="text-emerald-600 dark:text-emerald-400"
+                title={`Confirmed by reading the file id back from AI Matrx. AI Matrx holds ${snapshot.artifacts.cloud_rows.toLocaleString()} file(s) for these ${snapshot.artifacts.files.toLocaleString()} captured path(s): ${snapshot.artifacts.deduplicated.toLocaleString()} path(s) are byte-identical copies that share an existing file, and ${snapshot.artifacts.superseded_versions.toLocaleString()} earlier version(s) were superseded.`}
+              >
+                {snapshot.artifacts.uploaded.toLocaleString()} confirmed in AI Matrx
               </span>{" "}
-              · <span className="tabular-nums">{snapshot.artifacts.pending_upload.toLocaleString()}</span> pending
+              ·{" "}
+              <span className="tabular-nums">
+                {snapshot.artifacts.cloud_rows.toLocaleString()} file
+                {snapshot.artifacts.cloud_rows === 1 ? "" : "s"} there
+              </span>
+              {snapshot.artifacts.deduplicated > 0 ? (
+                <>
+                  {" · "}
+                  <span className="tabular-nums">
+                    {snapshot.artifacts.deduplicated.toLocaleString()} share an identical file
+                  </span>
+                </>
+              ) : null}
+              {snapshot.artifacts.awaiting_confirmation > 0 ? (
+                <>
+                  {" · "}
+                  <span className="tabular-nums">
+                    {snapshot.artifacts.awaiting_confirmation.toLocaleString()} not read back yet
+                  </span>
+                </>
+              ) : null}
+              {" · "}
+              <span className="tabular-nums">{snapshot.artifacts.pending_upload.toLocaleString()}</span> pending
+              {" · "}
+              <span className={snapshot.artifacts.missing_in_cloud > 0 ? "text-destructive" : "tabular-nums"}>
+                {snapshot.artifacts.missing_in_cloud.toLocaleString()} missing in AI Matrx
+              </span>
               {" · "}
               <span className={snapshot.artifacts.failed_upload > 0 ? "text-destructive" : "tabular-nums"}>
                 {snapshot.artifacts.failed_upload.toLocaleString()} failed
@@ -314,7 +343,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
               {snapshot.artifacts.cloud_enabled ? "" : " · cloud publishing off"}
               {" · last tick "}
               {"at" in snapshot.artifacts.last_tick
-                ? `${formatStamp(snapshot.artifacts.last_tick.at)} · ${snapshot.artifacts.last_tick.seconds}s · captured ${snapshot.artifacts.last_tick.captured.toLocaleString()} · uploaded ${snapshot.artifacts.last_tick.uploaded.toLocaleString()} · failed ${snapshot.artifacts.last_tick.failed.toLocaleString()}`
+                ? `${formatStamp(snapshot.artifacts.last_tick.at)} · ${snapshot.artifacts.last_tick.seconds}s · captured ${snapshot.artifacts.last_tick.captured.toLocaleString()} · uploaded ${snapshot.artifacts.last_tick.uploaded.toLocaleString()} · failed ${snapshot.artifacts.last_tick.failed.toLocaleString()} · read back ${(snapshot.artifacts.last_tick.confirmed ?? 0).toLocaleString()} · missing ${(snapshot.artifacts.last_tick.missing_in_cloud ?? 0).toLocaleString()}`
                 : "never"}
               {` · scans every ${snapshot.artifacts.limits.scan_interval_seconds}s`}
             </p>

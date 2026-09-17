@@ -247,6 +247,11 @@ class TunnelManager:
         # block" cloudflared emits on failure.
         self._recent_output: deque[str] = deque(maxlen=200)
         self._last_exit_code: Optional[int] = None
+        # ``stop()`` owns the normal shutdown publication in app/main.py.
+        # Keep that distinct from a child that exits on its own so the reader
+        # can withdraw a stale quick-tunnel URL immediately without duplicating
+        # the deliberate-stop write.
+        self._stopping = False
         # Start/stop mutate one subprocess handle and one discovery identity.
         # Serialize them so concurrent API calls cannot spawn an untracked
         # second child or clear the identity for the wrong process.
@@ -522,6 +527,7 @@ class TunnelManager:
         pipe buffer would block it inside the SIGTERM window and force the
         SIGKILL path.
         """
+        self._stopping = True
         if self._process and self._process.returncode is None:
             try:
                 self._process.terminate()
@@ -562,6 +568,7 @@ class TunnelManager:
         self._process_started_at = None
         self._process_executable = None
         self._clear_local_tunnel_state()
+        self._stopping = False
         logger.info(
             "Tunnel stopped (cloudflared exit code: %s)",
             self._last_exit_code if self._last_exit_code is not None else "n/a",
@@ -642,10 +649,26 @@ class TunnelManager:
             logger.error("cloudflared output reader error: %s", exc)
 
         rc = self._process.returncode if self._process else "N/A"
-        if self._process is not None and self._process.returncode is not None:
+        if (
+            self._process is not None
+            and self._process.returncode is not None
+            and not self._stopping
+        ):
             # A spontaneous child exit has no API stop route to repair state.
-            # Clear local truth as soon as the output pipe reaches EOF.
+            # Withdraw its cloud registration as soon as the output pipe
+            # reaches EOF.  Otherwise aidream keeps treating a dead quick
+            # tunnel's now-unresolvable hostname as an online device until the
+            # next five-minute heartbeat.
             self._clear_local_tunnel_state()
+            try:
+                from app.services.cloud_sync.instance_manager import get_instance_manager
+
+                await get_instance_manager().update_tunnel_url(None, active=False)
+            except Exception:
+                logger.warning(
+                    "Failed to withdraw cloud tunnel registration after spontaneous exit",
+                    exc_info=True,
+                )
         logger.info(
             "[cloudflared] output reader finished — %d lines read, exit code: %s, url found: %s",
             line_count, rc, bool(self._url),

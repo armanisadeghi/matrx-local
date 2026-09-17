@@ -50,8 +50,11 @@ Binary resolution: bundled → preinstalled discovery
 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`).
 
 Start/stop are single-flight under one lifecycle lock. Cancellation during
-startup terminates and reaps the spawned child, and both normal stop and
-spontaneous process exit clear local discovery/runtime state immediately.
+startup terminates and reaps the spawned child. Normal stop publishes its
+inactive cloud state from the lifespan teardown; a spontaneous process exit
+withdraws that cloud registration from the output reader immediately, as well
+as clearing local discovery/runtime state. This prevents a dead quick-tunnel
+hostname from remaining selectable until the next heartbeat.
 Named-tunnel tokens are argv-only secrets and are never included in logs or
 discovery metadata.
 

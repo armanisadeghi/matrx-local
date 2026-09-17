@@ -150,3 +150,31 @@ async def test_cancelled_start_terminates_and_reaps_spawned_child(
     assert manager.process_identity is None
     assert manager.running is False
     assert updates[-1] == ("tunnel", None)
+
+
+@pytest.mark.anyio
+async def test_spontaneous_exit_withdraws_cloud_tunnel_before_next_heartbeat(
+    tunnel_fakes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawned, _updates, _set_emit_url = tunnel_fakes
+    withdrawn: list[tuple[str | None, bool]] = []
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            withdrawn.append((url, active))
+            return True
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    manager = tunnel_manager.TunnelManager()
+
+    assert await manager.start(22140) == "https://owned.trycloudflare.com"
+    spawned[0].returncode = 1
+    spawned[0].stdout.close()
+    spawned[0]._exited.set()
+    assert manager._reader_task is not None
+    await manager._reader_task
+
+    assert withdrawn == [(None, False)]

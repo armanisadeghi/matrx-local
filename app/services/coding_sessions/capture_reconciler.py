@@ -214,6 +214,86 @@ class ClaudeCaptureReconciler:
         async with self._lock:
             return await self._reconcile_once(dry_run=dry_run)
 
+    async def reconcile_session(self, session_id: str) -> dict[str, Any]:
+        """Import ONE session's transcript because a person asked for it.
+
+        The same four importer calls the sweep makes, for a single session.
+        Two deliberate differences, both because a person clicked Reconcile on
+        a conversation they were looking at:
+
+        - THE ERA RULE does not apply. That rule exists to stop an *automatic*
+          pass from uploading a history nobody asked for; its own escape hatch
+          is "choose explicitly", which is exactly what this is.
+        - The retry budget is not consulted. A person retrying by hand is new
+          information, not the twenty-sixth attempt of a loop.
+
+        The attempt is still recorded, so a failure here is visible in the same
+        ledger the sweep writes to instead of vanishing into a click.
+        """
+        async with self._lock:
+            account, local_sources = await self._importer.capture_inventory()
+            if not account.available:
+                raise CaptureReconcileBlocked(str(account.reason or "import_not_ready"))
+            account_key = account.account_key
+            if not isinstance(account_key, str):
+                raise CaptureReconcileBlocked("account_identity_unavailable")
+            source = next(
+                (item for item in local_sources if item.session_id == session_id), None
+            )
+            if source is None:
+                return {
+                    "status": "not_on_this_mac",
+                    "detail": (
+                        "This Mac has no importable transcript for that session, "
+                        "so there is nothing to deliver."
+                    ),
+                    "enqueued": 0,
+                }
+            if source.import_blocked_reason is not None:
+                return {
+                    "status": "blocked",
+                    "detail": str(source.import_blocked_reason),
+                    "enqueued": 0,
+                }
+            session_key = f"{source.project_key}:{session_id}"
+            prepared = await self._importer.capture_revisions(
+                {(session_id, source.project_key)}
+            )
+            fresh = prepared.get((session_id, source.project_key))
+            if fresh is None or fresh.source_revision is None:
+                await self._record_attempt(
+                    session_key, source.source_state, "source changed or disappeared"
+                )
+                return {
+                    "status": "source_changed",
+                    "detail": (
+                        "The transcript changed while it was being read. Try "
+                        "Reconcile again."
+                    ),
+                    "enqueued": 0,
+                }
+            request = ClaudeHistoryImportRequest(
+                provider_account_key=account_key,
+                sessions=[
+                    ClaudeHistorySelection(
+                        session_id=session_id,
+                        provider_project_key=source.project_key,
+                        source_revision=fresh.source_revision,
+                    )
+                ],
+            )
+            try:
+                result = await self._importer.import_selected(
+                    request, enqueue_origin="explicit_history"
+                )
+            except (ClaudeHistoryConflict, ValueError) as exc:
+                await self._record_attempt(
+                    session_key, fresh.source_state, str(exc)
+                )
+                return {"status": "failed", "detail": str(exc), "enqueued": 0}
+            await self._record_attempt(session_key, fresh.source_state, None)
+            return {"status": "ok", "enqueued": 1, "result": result}
+
     async def _reconcile_once(self, *, dry_run: bool = False) -> dict[str, Any]:
         """One bounded pass. Returns exactly what it saw and what it enqueued."""
         if not AUTO_BACKFILL_ENABLED:

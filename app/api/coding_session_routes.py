@@ -325,6 +325,54 @@ async def claude_session_diagnosis(session_id: str) -> dict[str, object]:
     return result
 
 
+@router.get("/claude/sessions/{session_id}/sync-truth")
+async def claude_session_sync_truth(session_id: str) -> dict[str, object]:
+    """Whether this conversation matches AI Matrx, in numbers, with a remedy.
+
+    The older `/diagnosis` answers "is there a row for this session?". That is
+    presence, not agreement, and it let a 3,526-entry transcript read as "held"
+    beside 55 delivered entries. This compares CONTENT across all four layers
+    a conversation lives in -- the transcript on disk, what was delivered, what
+    AI Matrx projected, and this Mac's own copy -- and returns one verdict in
+    plain English. A layer that cannot be read is `unknown`, never agreement.
+    """
+    from app.services.coding_sessions.sync_truth_reader import sync_truth
+
+    result = await sync_truth(session_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No Claude Code session with that id is on this Mac, and AI "
+                "Matrx could not be asked about it."
+            ),
+        )
+    return result
+
+
+@router.post("/claude/sessions/{session_id}/reconcile")
+async def claude_session_reconcile(session_id: str) -> dict[str, object]:
+    """Close the gap the sync truth just named, then re-read that truth.
+
+    Delivers entries that never arrived, asks AI Matrx to project entries it
+    received but never turned into messages, and pulls the conversation onto
+    this Mac. Entries quarantined as `provider_account_conflict` are never
+    re-sent and the answer says why. Idempotent.
+    """
+    from app.services.coding_sessions.sync_truth_reader import reconcile
+
+    result = await reconcile(session_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No Claude Code session with that id is on this Mac, and AI "
+                "Matrx could not be asked about it."
+            ),
+        )
+    return result
+
+
 @router.post("/delivery/resume")
 async def resume_coding_session_delivery() -> dict[str, object]:
     """Re-check every publisher-wide pause now and run a delivery tick if clear.

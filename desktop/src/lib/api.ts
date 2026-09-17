@@ -959,6 +959,109 @@ export class ClaudeOverviewReadError extends Error {
   }
 }
 
+/** The CLOSED verdict vocabulary of per-conversation sync truth (CS-25 §1). */
+export type SyncVerdictCode =
+  | "in_sync"
+  | "partial_by_design"
+  | "behind_local"
+  | "behind_cloud"
+  | "mirror_stale"
+  | "diverged"
+  | "quarantined"
+  | "not_in_cloud"
+  | "unknown";
+
+/**
+ * The four counts, side by side. `null` means THAT LAYER COULD NOT BE READ and
+ * must render as such — never as 0. "0 entries" is a claim, and it would be a
+ * false one.
+ */
+export interface SyncTruthCounts {
+  transcript: number | null;
+  delivered: number | null;
+  cloud_messages: number | null;
+  mirror_messages: number | null;
+}
+
+export interface ClaudeSessionSyncTruth {
+  schema_version: 1;
+  session_id: string;
+  provider: string;
+  verdict: {
+    code: SyncVerdictCode;
+    reason: string | null;
+    sentence: string;
+    remedy: string | null;
+    /** Whether the Reconcile button can actually help this state. */
+    reconcilable: boolean;
+  };
+  count_labels: [string, string, string, string];
+  counts: SyncTruthCounts;
+  transcript: {
+    checked: boolean;
+    reason: string | null;
+    on_disk: boolean;
+    entries: number | null;
+    last_entry_at: string | null;
+    last_entry_id: string | null;
+    unreadable_lines: number;
+    bytes: number;
+    modified_at: string | null;
+  };
+  delivered: {
+    checked: boolean;
+    reason: string | null;
+    accepted_entries: number | null;
+    last_receipt_at: string | null;
+    pending_entries: number;
+    quarantined_entries: number;
+    quarantine_reasons: { code: string; message: string; count: number }[];
+    publisher_blocker: unknown;
+  };
+  cloud: {
+    checked: boolean;
+    reason: string | null;
+    session_present: boolean;
+    conversation_id: string | null;
+    fidelity: string | null;
+    entries: number | null;
+    projected_entries: number | null;
+    skipped_entries: number | null;
+    pending_entries: number | null;
+    error_entries: number | null;
+    projection_errors: { code: string | null; detail: string | null; count: number }[];
+    last_entry_at: string | null;
+    last_entry_id: string | null;
+    messages: number | null;
+    last_position: number | null;
+    last_message_at: string | null;
+    /** The SERVER's own claim about its half, already placeholder-filled. */
+    cloud_verdict: string | null;
+    cloud_sentence: string | null;
+    cloud_remedy: string | null;
+  };
+  mirror: {
+    checked: boolean;
+    reason: string | null;
+    conversation_row: boolean;
+    messages: number | null;
+    last_pulled_at: string | null;
+  };
+  computed_at: string;
+}
+
+export interface ClaudeSessionReconcileReport {
+  schema_version: 1;
+  session_id: string;
+  actions: {
+    step: "deliver" | "reproject" | "pull";
+    outcome: "queued" | "done" | "nothing_to_do" | "skipped" | "refused" | "failed";
+    detail: string;
+    result?: unknown;
+  }[];
+  truth: ClaudeSessionSyncTruth;
+}
+
 export interface ClaudeSessionDiagnosisEnvelope {
   receipt_id: number;
   state: "pending" | "quarantine";
@@ -3182,6 +3285,29 @@ class EngineAPI {
   async getClaudeSessionDiagnosis(sessionId: string): Promise<ClaudeSessionDiagnosis> {
     return this.request(
       `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/diagnosis`,
+    );
+  }
+
+  /**
+   * Whether ONE conversation matches AI Matrx, in numbers, with a remedy.
+   *
+   * The sibling `getClaudeSessionDiagnosis` answers "is there a row for this
+   * session?" — presence. This compares CONTENT across all four layers a
+   * conversation lives in, which is the question a person actually has
+   * (Arman, 2026-09-17: "a chat in Claude Code that simply doesn't match what
+   * I see in AI Matrx… this thing is a dead fish").
+   */
+  async getClaudeSessionSyncTruth(sessionId: string): Promise<ClaudeSessionSyncTruth> {
+    return this.request(
+      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/sync-truth`,
+    );
+  }
+
+  /** Close the gap the sync truth named, then return the freshly re-read truth. */
+  async reconcileClaudeSession(sessionId: string): Promise<ClaudeSessionReconcileReport> {
+    return this.request(
+      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/reconcile`,
+      { method: "POST" },
     );
   }
 

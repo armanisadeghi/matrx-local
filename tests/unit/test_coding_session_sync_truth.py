@@ -721,3 +721,87 @@ def test_payload_carries_every_layer_and_the_four_counts() -> None:
     for layer in ("transcript", "delivered", "cloud", "mirror"):
         assert "checked" in payload[layer]
     assert payload["computed_at"] == "2026-09-17T22:00:00+00:00"
+
+
+# --------------------------------------------------------------------------
+# The server's own sentence, carried through. aidream leaves
+# {transcript_entries} as a literal placeholder because it cannot see the
+# transcript and refuses to invent a count; this engine can, so it fills it.
+# --------------------------------------------------------------------------
+
+
+def test_the_servers_placeholder_is_filled_with_the_real_count() -> None:
+    """Red if the engine stops substituting -- which would put a literal
+    "{transcript_entries}" in front of a person. Measured classes affected on
+    Arman's Mac: 741 + 655 + 406 of 2033 conversations."""
+    from app.services.coding_sessions.sync_truth import fill_server_sentence
+
+    served = (
+        "AI Matrx has a conversation for this session but no record of a single "
+        "delivered entry, so none of the {transcript_entries} entries in your "
+        "local transcript are in it. The 100 messages you see there came from "
+        "the run itself, not from this transcript."
+    )
+    assert fill_server_sentence(served, transcript_entries=384) == (
+        "AI Matrx has a conversation for this session but no record of a single "
+        "delivered entry, so none of the 384 entries in your local transcript "
+        "are in it. The 100 messages you see there came from the run itself, "
+        "not from this transcript."
+    )
+
+
+def test_a_sentence_with_no_placeholder_is_untouched() -> None:
+    """Red if the substitution starts mangling healthy sentences."""
+    from app.services.coding_sessions.sync_truth import fill_server_sentence
+
+    served = "This conversation is not in AI Matrx at all."
+    assert fill_server_sentence(served, transcript_entries=384) == served
+
+
+def test_an_unfillable_placeholder_drops_the_sentence_instead_of_showing_a_brace() -> None:
+    """A newer server adding a placeholder this build does not know must
+    degrade to silence, not to gibberish. Red if a curly brace can reach a
+    screen -- a broken sentence is how a screen starts lying again."""
+    from app.services.coding_sessions.sync_truth import fill_server_sentence
+
+    assert (
+        fill_server_sentence(
+            "AI Matrx received {delivered_entries} of them.", transcript_entries=384
+        )
+        is None
+    )
+
+
+def test_no_sentence_and_no_count_are_handled_without_inventing_either() -> None:
+    from app.services.coding_sessions.sync_truth import fill_server_sentence
+
+    assert fill_server_sentence(None, transcript_entries=384) is None
+    assert (
+        fill_server_sentence("Its {transcript_entries} local entries.", transcript_entries=None)
+        is None
+    )
+
+
+def test_the_payload_carries_the_servers_own_claim_beside_this_macs() -> None:
+    """The dialog shows both. Red if the server's verdict stops being carried
+    through, which is how two systems start disagreeing invisibly."""
+    facts = SyncFacts(
+        session_id="s",
+        transcript=TranscriptFacts(on_disk=True, entries=384, checked=True),
+        delivery=DeliveryFacts(checked=True, accepted_entries=384),
+        cloud=CloudFacts(
+            checked=True,
+            session_present=True,
+            conversation_id="cf1d62fc-0000-0000-0000-000000000000",
+            entries=384,
+            messages=35,
+            cloud_verdict="unknown",
+            cloud_sentence="Cannot tell from here.",
+            cloud_remedy="Ask the Mac.",
+        ),
+        mirror=MirrorFacts(checked=True, conversation_row=True, messages=35),
+    )
+    payload = as_payload(facts, decide(facts, now=NOW), now=NOW)
+    assert payload["cloud"]["cloud_verdict"] == "unknown"
+    assert payload["cloud"]["cloud_sentence"] == "Cannot tell from here."
+    assert payload["cloud"]["cloud_remedy"] == "Ask the Mac."

@@ -6,16 +6,16 @@
  * change at all. State and install live in BrowserRuntimeContext.
  */
 
-import { Chrome, Loader2 } from "lucide-react";
+import { AlertCircle, Chrome, Loader2 } from "lucide-react";
 
 import { Button, Progress } from "@ai-matrx/design-system";
 import { useOptionalBrowserRuntimeContext } from "@/contexts/BrowserRuntimeContext";
 
 export function BrowserRuntimeNotice() {
   const runtime = useOptionalBrowserRuntimeContext();
-  if (!runtime || !runtime.loaded || runtime.available) return null;
+  if (!runtime || !runtime.loaded) return null;
 
-  const { status, installing, percent, message, error, actions } = runtime;
+  const { status, installing, percent, message, error, statusFetchFailed, actions } = runtime;
   const sizeHint = status?.download_size_hint ?? "~90 MB";
   // The engine failed one pool launch and has already scheduled the retry. The
   // browser IS installed, so "isn't installed yet" would be a lie and an
@@ -26,6 +26,35 @@ export function BrowserRuntimeNotice() {
   const buildMismatch = status?.code === "browser_build_mismatch";
   const installFailed = status?.code === "browser_install_failed";
   const actionLabel = status?.action_needed?.action.label;
+
+  if (statusFetchFailed) {
+    return (
+      <div
+        className="rounded-lg border border-amber-300/70 bg-amber-50/90 p-3 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100"
+        role="alert"
+        data-testid="browser-runtime-status-unavailable"
+      >
+        <div className="flex items-start gap-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Couldn’t refresh the built-in browser status</p>
+            <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">
+              {status ? "The previous browser status may be out of date." : "Browser availability is unknown."}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => void actions.refresh(true)}
+            className="h-7 shrink-0 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (runtime.available) return null;
 
   if (starting) {
     return (

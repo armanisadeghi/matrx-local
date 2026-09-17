@@ -49,6 +49,7 @@ function makeRuntime(
       action_needed: null,
     },
     loaded: true,
+    statusFetchFailed: false,
     installing: false,
     percent: 0,
     message: null,
@@ -99,6 +100,17 @@ describe("BrowserRuntimeNotice", () => {
   it("renders nothing before the first probe answers", () => {
     runtime = makeRuntime({ loaded: false });
     expect(renderToStaticMarkup(<BrowserRuntimeNotice />)).toBe("");
+  });
+
+  it("does not present a cached ready state as current after its status fetch fails", () => {
+    runtime = makeRuntime({
+      available: true,
+      statusFetchFailed: true,
+      status: { ...makeRuntime().status!, available: true, code: "ready" },
+    });
+    const html = renderToStaticMarkup(<BrowserRuntimeNotice />);
+    expect(html).toContain("Couldn’t refresh the built-in browser status");
+    expect(html).toContain("Retry");
   });
 
   it("says the browser is starting instead of claiming it is missing", () => {

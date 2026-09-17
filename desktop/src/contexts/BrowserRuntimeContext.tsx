@@ -67,7 +67,7 @@ export function useBrowserRuntimeConnectionRefresh(connected: boolean): void {
   } = useBrowserRuntimeContext();
 
   useEffect(() => {
-    if (connected) void refresh();
+    if (connected) void refresh(true);
   }, [connected, refresh]);
 }
 

@@ -1947,6 +1947,7 @@ export function Devices({ engineStatus }: DevicesProps) {
     devicePermissions,
     devicePlatform: platform,
     deviceLastRefresh: lastRefresh,
+    devicePermissionsFetchFailed,
     refreshDevicePermissions,
   } = usePermissionsContext();
 
@@ -2121,6 +2122,19 @@ export function Devices({ engineStatus }: DevicesProps) {
             </Card>
           ) : (
             <>
+              {devicePermissionsFetchFailed && (
+                <div
+                  className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3"
+                  role="alert"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <p className="text-xs text-muted-foreground">
+                    {lastRefresh
+                      ? "Couldn’t refresh device capabilities. Showing the last checked results; use Refresh All to try again."
+                      : "Couldn’t check device capabilities. Use Refresh All to try again."}
+                  </p>
+                </div>
+              )}
               {/* Summary badges */}
               {hasRows && (
                 <div className="flex flex-wrap gap-2">

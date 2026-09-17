@@ -41,7 +41,7 @@
  *   Sequoia 30-day consent prompt) — see checker.py.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "@/lib/sidecar";
 import { PLATFORM } from "@/lib/platformCtx";
 import { engine, type PermissionInfo } from "@/lib/api";
@@ -339,15 +339,16 @@ const PROBE_CAUSAL_SIGNATURE = {
   pluginInputMonitoring: "permission-probe:plugin:input-monitoring",
   pluginScreenRecording: "permission-probe:plugin:screen-recording",
   app: "permission-probe:app",
+  deviceSnapshot: "permission-probe:device-snapshot",
 } as const;
 
 function reportPermissionProbeFailure(
   source: string,
   causalSignature: string,
   error: unknown,
-): void {
+): boolean {
   console.error(`[permissions] ${source} failed:`, error);
-  enqueueDurableClientError({
+  return enqueueDurableClientError({
     level: "error",
     source,
     message: `Permission status probe failed in ${source}.`,
@@ -480,6 +481,8 @@ export interface UsePermissionsReturn {
   devicePermissions: PermissionInfo[];
   devicePlatform: string;
   deviceLastRefresh: Date | null;
+  /** The last engine device snapshot could not be refreshed; existing rows are stale. */
+  devicePermissionsFetchFailed: boolean;
   refreshDevicePermissions: (force?: boolean) => Promise<void>;
   check: (key: PermissionKey) => Promise<PermissionStatus>;
   checkAll: () => Promise<void>;
@@ -553,6 +556,20 @@ export function usePermissions(): UsePermissionsReturn {
   const [devicePermissions, setDevicePermissions] = useState<PermissionInfo[]>([]);
   const [devicePlatform, setDevicePlatform] = useState("");
   const [deviceLastRefresh, setDeviceLastRefresh] = useState<Date | null>(null);
+  const [devicePermissionsFetchFailed, setDevicePermissionsFetchFailed] = useState(false);
+  const devicePermissionsFailureCaptured = useRef(false);
+  const devicePermissionsRequestId = useRef(0);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    // React StrictMode runs setup → cleanup → setup. Re-arm this hook for the
+    // replay and fence every request that belonged to the prior generation.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      devicePermissionsRequestId.current += 1;
+    };
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -687,19 +704,33 @@ export function usePermissions(): UsePermissionsReturn {
    */
   const refreshDevicePermissions = useCallback(
     async (force: boolean = false) => {
+      const requestId = ++devicePermissionsRequestId.current;
       try {
         const result = await engine.getDevicePermissions(force);
+        if (!mounted.current || requestId !== devicePermissionsRequestId.current) return;
         setDevicePermissions(result.permissions);
         setDevicePlatform(result.platform);
         setDeviceLastRefresh(new Date());
+        setDevicePermissionsFetchFailed(false);
+        devicePermissionsFailureCaptured.current = false;
         for (const p of result.permissions) {
           const key = p.permission as PermissionKey;
           if (!(key in PERMISSION_META)) continue;
           if (authorityFor(key) !== "engine") continue;
           updatePermission(key, engineStatus(p.status), p.user_details || p.details);
         }
-      } catch {
-        // Engine unreachable — keep the last known list.
+      } catch (error) {
+        if (!mounted.current || requestId !== devicePermissionsRequestId.current) return;
+        // Keep the last known snapshot, but make its freshness honest. Capture
+        // once per unresolved failure episode; a successful refresh re-arms it.
+        setDevicePermissionsFetchFailed(true);
+        if (!devicePermissionsFailureCaptured.current) {
+          devicePermissionsFailureCaptured.current = reportPermissionProbeFailure(
+            "permission-probe:device-snapshot",
+            PROBE_CAUSAL_SIGNATURE.deviceSnapshot,
+            error,
+          );
+        }
       }
     },
     [updatePermission],
@@ -845,6 +876,7 @@ export function usePermissions(): UsePermissionsReturn {
     devicePermissions,
     devicePlatform,
     deviceLastRefresh,
+    devicePermissionsFetchFailed,
     refreshDevicePermissions,
     check,
     checkAll,

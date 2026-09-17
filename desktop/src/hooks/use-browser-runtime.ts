@@ -22,6 +22,8 @@ export interface BrowserRuntimeState {
   status: BrowserRuntimeStatus | null;
   /** Unknown until the first probe answers — never gate UI on `false` alone. */
   loaded: boolean;
+  /** The last status request failed; `status`, if present, is stale. */
+  statusFetchFailed: boolean;
   installing: boolean;
   percent: number;
   message: string | null;
@@ -29,7 +31,8 @@ export interface BrowserRuntimeState {
 }
 
 export interface BrowserRuntimeActions {
-  refresh: () => Promise<void>;
+  /** `captureFailure` is only true after engine connection or a user retry. */
+  refresh: (captureFailure?: boolean) => Promise<void>;
   install: () => Promise<void>;
 }
 
@@ -67,6 +70,21 @@ export function captureBrowserRuntimeFailureTransition(
   return accepted ? safeCode : previous;
 }
 
+/** Capture one failed status request after connection, then re-arm on success. */
+export function captureBrowserRuntimeStatusFetchFailure(
+  previouslyCaptured: boolean,
+  capture: typeof enqueueDurableClientError = enqueueDurableClientError,
+): boolean {
+  if (previouslyCaptured) return true;
+  return capture({
+    level: "error",
+    source: "browser-runtime",
+    message: "Could not refresh the built-in browser status.",
+    requireIdentity: true,
+    causalSignature: "browser-runtime:status-fetch",
+  });
+}
+
 export function useBrowserRuntime(): UseBrowserRuntimeReturn {
   const [status, setStatus] = useState<BrowserRuntimeStatus | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -74,18 +92,36 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
   const [percent, setPercent] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [statusFetchFailed, setStatusFetchFailed] = useState(false);
   const installRunning = useRef(false);
   const priorTerminalCode = useRef<string | null>(null);
+  const statusFetchFailureCaptured = useRef(false);
+  const statusRequestId = useRef(0);
+  const mounted = useRef(true);
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    // React StrictMode runs setup → cleanup → setup. Re-arm this hook for the
+    // replay and fence every request that belonged to the prior generation.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      statusRequestId.current += 1;
+    };
+  }, []);
+
+  const refresh = useCallback(async (captureFailure = false) => {
+    const requestId = ++statusRequestId.current;
     try {
       const next = await engine.getBrowserRuntimeStatus();
+      if (!mounted.current || requestId !== statusRequestId.current) return;
       priorTerminalCode.current = captureBrowserRuntimeFailureTransition(
         priorTerminalCode.current,
         next.code,
       );
       setStatus(next);
       setLoaded(true);
+      setStatusFetchFailed(false);
+      statusFetchFailureCaptured.current = false;
       // Adopt an install started elsewhere (first-boot background download, or
       // another window) so this surface shows progress it did not start.
       if (!installRunning.current) {
@@ -96,7 +132,15 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
         }
       }
     } catch (err) {
-      // Engine not up yet is not an error worth showing; keep the last state.
+      if (!mounted.current || requestId !== statusRequestId.current) return;
+      // Mount-time probing can precede discovery. A connected retry is an
+      // incident; in both cases retain the last truthful state.
+      setStatusFetchFailed(captureFailure);
+      if (captureFailure) {
+        statusFetchFailureCaptured.current = captureBrowserRuntimeStatusFetchFailure(
+          statusFetchFailureCaptured.current,
+        );
+      }
       console.warn("[use-browser-runtime] status probe failed", err);
     }
   }, []);
@@ -126,7 +170,7 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
       installRunning.current = false;
       setInstalling(false);
       setPercent(0);
-      await refresh();
+      await refresh(true);
     }
   }, [refresh]);
 
@@ -139,7 +183,7 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
   // Narrowly gated: only while an install is actually running, with cleanup.
   useEffect(() => {
     if (!installing) return;
-    const id = setInterval(() => void refresh(), INSTALLING_POLL_MS);
+    const id = setInterval(() => void refresh(true), INSTALLING_POLL_MS);
     return () => clearInterval(id);
   }, [installing, refresh]);
 
@@ -155,6 +199,7 @@ export function useBrowserRuntime(): UseBrowserRuntimeReturn {
     percent,
     message,
     error,
+    statusFetchFailed,
     // Optimistic before the first probe answers: never disable a working
     // control because the status call has not returned yet.
     available: status ? status.available : true,

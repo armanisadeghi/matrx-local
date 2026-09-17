@@ -18,6 +18,9 @@ contract conversation, not a test edit.
 - `file_manager.py` — note files under `MATRX_NOTES_DIR` (default `~/Documents/Matrx/Notes/`), `.sync/state.json`
   checkpoint, `.sync/conflicts/<id>/{local,remote}.md`. Records access
   evidence into the canonical access-health service; holds NO access state.
+- `async_io.py` — owns read-only filesystem work moved off the engine loop.
+  Cancellation drains its worker before returning, so a watcher or sync task
+  cannot leave a read running after its owner ends.
 - `access_resources.py` — registers the documents-domain resources with the
   access-health authority: `notes-canonical` (mirrors into the `notes_sync`
   registry service) and one `notes-mapping:<folder_id>:<sha8>` per mapped

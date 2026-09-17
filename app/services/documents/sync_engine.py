@@ -42,6 +42,7 @@ from app.common.platform_ctx import PLATFORM
 
 from app.services.access_health import get_access_health
 from app.services.documents.access_resources import NOTES_RESOURCE
+from app.services.documents.async_io import offload_read_only
 from app.services.documents.file_manager import (
     DocumentFileManager,
     content_hash,
@@ -1066,7 +1067,7 @@ class SyncEngine:
             if not user_id:
                 return {"error": "Not configured"}
             pending = await repo.list_pending_push(user_id)
-            local_files = self.fm.scan_all()
+            local_files = await offload_read_only(self.fm.scan_all)
             local_by_path = {f["file_path"]: f for f in local_files}
 
             stats = {"pushed": 0, "failed": 0, "skipped": 0, "conflicts": 0}
@@ -1280,7 +1281,7 @@ class SyncEngine:
                 if n.get("content_hash"):
                     remote_by_hash.setdefault(n["content_hash"], []).append(n)
 
-            local_files = self.fm.scan_all()
+            local_files = await offload_read_only(self.fm.scan_all)
             local_by_path: dict[str, dict] = {f["file_path"]: f for f in local_files}
 
             state = self._load_sync_state()
@@ -1949,7 +1950,9 @@ class SyncEngine:
                         if path.is_file():
                             try:
                                 current_hash = content_hash(
-                                    path.read_text(encoding="utf-8")
+                                    await offload_read_only(
+                                        lambda: path.read_text(encoding="utf-8")
+                                    )
                                 )
                             except OSError:
                                 continue
@@ -1965,7 +1968,7 @@ class SyncEngine:
 
             while not self._stop_event.is_set():
                 await asyncio.sleep(5)
-                current_files = self.fm.scan_all()
+                current_files = await offload_read_only(self.fm.scan_all)
                 for f in current_files:
                     fp = f["file_path"]
                     if f["content_hash"] != known.get(fp):

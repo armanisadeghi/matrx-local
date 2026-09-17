@@ -152,6 +152,25 @@ export interface UpdateStatus {
   downloaded?: number;
 }
 
+/**
+ * The version of the app bundle **as it currently sits on disk**.
+ *
+ * Distinct from the compile-time `APP_VERSION` the renderer carries: an
+ * auto-update replaces the bundle under a running process, so this is the build
+ * that would launch next, not the one executing. `null` means genuinely
+ * unreadable (dev binary, non-macOS installer) — the UI renders that as
+ * unknown, never as "same as running". See `lib/version-facts.ts`.
+ */
+export async function getInstalledAppVersion(): Promise<string | null> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return null;
+  try {
+    return (await inv<string | null>("installed_app_version")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Check for updates via the Tauri updater plugin. */
 export async function checkForUpdates(install = false): Promise<UpdateStatus> {
   const inv = await loadTauriInvoke();

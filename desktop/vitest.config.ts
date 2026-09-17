@@ -16,6 +16,10 @@ export default defineConfig({
     // modules that read it (lib/dev-harness-custody, lib/engine-ports) load at all. `false` is
     // the shipped value, and every test that cares passes the flag explicitly instead.
     __MATRX_HARNESS_BRIDGE__: "false",
+    // The app bakes the release version in from pyproject.toml; unit tests get
+    // a fixed literal so `lib/app-version-constant` (and everything that reads
+    // the running build through it) loads without the Tauri build pipeline.
+    __APP_VERSION__: JSON.stringify("0.0.0-test"),
   },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],

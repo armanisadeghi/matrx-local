@@ -2178,12 +2178,21 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
 
                 let result = UpdateProgress {
                     status: "installed".to_string(),
-                    version: Some(version),
+                    version: Some(version.clone()),
                     body,
                     content_length: None,
                     downloaded: final_downloaded,
                 };
 
+                // The files on disk have just been swapped under us. Nothing
+                // about this process changed, so every surface that reports a
+                // version is now reporting the OLD build — announce it at the
+                // moment it becomes true, and say the remedy.
+                lifecycle_log::log(&format!(
+                    "[update] installed v{version} on disk; this process still runs v{} — \
+                     remedy: restart AI Matrx (Settings → About → Restart, or the update banner)",
+                    app.package_info().version
+                ));
                 let _ = app.emit("update-progress", result.clone());
                 Ok(result)
             } else {
@@ -2204,6 +2213,61 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
             downloaded: 0,
         }),
     }
+}
+
+/// Read the version of the app bundle **as it currently sits on disk**.
+///
+/// This is deliberately NOT `app.package_info().version`: that value is baked
+/// into the running binary at compile time, so it answers "what build am I?",
+/// never "what build would launch next?". An auto-update swaps the bundle's
+/// files underneath a running process, and until the user restarts, the two
+/// answers differ. The About panel shows both, labelled, and the difference is
+/// what drives "Update installed — restart AI Matrx to finish".
+///
+/// Fresh read on every call: the whole point is to observe a change the
+/// updater made after this process started.
+///
+/// Returns `None` when there is no bundle to read (a plain dev binary, or a
+/// platform whose installer applies the update on exit rather than in place —
+/// on those, running and installed cannot diverge while the app is up). The
+/// caller renders `None` as an honest "unknown", never as agreement.
+#[cfg(target_os = "macos")]
+fn installed_bundle_version(current_exe: &std::path::Path) -> Option<String> {
+    let macos_dir = current_exe.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name()? != "Contents" {
+        return None;
+    }
+    let info: plist::Dictionary = plist::from_file(contents_dir.join("Info.plist")).ok()?;
+    info.get("CFBundleShortVersionString")?
+        .as_string()
+        .map(str::to_string)
+}
+
+/// The build currently installed on disk, or `None` when it cannot be read.
+#[tauri::command]
+fn installed_app_version() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let exe = std::env::current_exe().ok()?;
+        installed_bundle_version(&exe)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// The build this process is actually running — the compile-time identity.
+///
+/// Paired with `installed_app_version` so the UI never has to infer one from
+/// the other.
+#[tauri::command]
+fn running_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
 }
 
 /// Return the pending OAuth deep-link URL (if one arrived before the frontend
@@ -2495,6 +2559,8 @@ pub fn run() {
             set_close_to_tray,
             get_close_to_tray,
             check_for_updates,
+            installed_app_version,
+            running_app_version,
             native_vault_provider_status,
             invalidate_native_vault_host_actor,
             reconcile_native_vault_host_actor,
@@ -3928,6 +3994,59 @@ mod relaunch_target_tests {
     }
 }
 
+
+/// An update swaps the bundle's files under a running process. The version the
+/// UI calls "installed on disk" must therefore come from the bundle itself,
+/// re-read every time — a compile-time constant can only ever repeat what is
+/// already running, which is exactly the lie this guard exists to catch.
+#[cfg(all(test, target_os = "macos"))]
+mod installed_version_tests {
+    use super::installed_bundle_version;
+
+    fn write_plist(root: &std::path::Path, version: &str) {
+        std::fs::write(
+            root.join("AI Matrx.app/Contents/Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>aimatrx-desktop</string>
+  <key>CFBundleShortVersionString</key><string>{version}</string>
+</dict></plist>
+"#
+            ),
+        )
+        .expect("fixture Info.plist");
+    }
+
+    #[test]
+    fn the_disk_version_is_re_read_after_an_update_swaps_the_bundle() {
+        let root =
+            std::env::temp_dir().join(format!("matrx-installed-version-{}", std::process::id()));
+        let macos_dir = root.join("AI Matrx.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos_dir).expect("fixture bundle");
+        let exe = macos_dir.join("aimatrx-desktop");
+
+        write_plist(&root, "1.4.145");
+        assert_eq!(
+            installed_bundle_version(&exe).as_deref(),
+            Some("1.4.145"),
+            "the bundle's own Info.plist is the authority for what is installed"
+        );
+
+        // The updater lands a new build while this process keeps running.
+        write_plist(&root, "1.4.147");
+        assert_eq!(
+            installed_bundle_version(&exe).as_deref(),
+            Some("1.4.147"),
+            "a stale read here is the 'No updates available' lie: disk moved, we did not"
+        );
+
+        // Not a bundle at all — honest None, never a guess.
+        assert_eq!(installed_bundle_version(&root.join("aimatrx-desktop")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
 
 /// Forcing-function guards for the engine supervisor (SR-02).
 ///

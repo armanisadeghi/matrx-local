@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -70,15 +71,15 @@ def isolated_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.anyio
 async def test_the_event_loop_keeps_answering_while_a_full_walk_runs(
-    tmp_path: Path, isolated_index: ClaudeIndexStore
+    tmp_path: Path, isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A /health-shaped coroutine must still be served during the whole build.
 
     The bound here is the one V-ML could not get an answer inside: 200 ms. The
-    in-engine refresh reads the tree in bounded chunks and awaits between them,
-    so a heartbeat keeps its schedule; a refresh that read the tree in one hop
-    (the shipped ``asyncio.to_thread(_session_index, root)`` fallback) parks
-    the loop for the whole read and this goes red.
+    in-engine refresh reads the tree in worker threads and awaits between
+    chunks, so a heartbeat keeps its schedule. A synchronous direct scan would
+    park the loop, which the explicit in-flight handshake below detects even
+    when a fast machine finishes the complete fixture in under 210 ms.
     """
     from app.services.coding_sessions import claude_overview
 
@@ -86,18 +87,33 @@ async def test_the_event_loop_keeps_answering_while_a_full_walk_runs(
     _write_records(root, 4000)
 
     worst = 0.0
-    beats = 0
     stop = asyncio.Event()
+    primed = asyncio.Event()
+    in_flight_progress = asyncio.Event()
+    worker_acknowledged = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_plan_refresh = claude_overview.plan_refresh
 
     async def heartbeat() -> None:
-        nonlocal worst, beats
+        nonlocal worst
+        primed.set()
         while not stop.is_set():
             asked = time.perf_counter()
             await asyncio.sleep(0.01)
             worst = max(worst, time.perf_counter() - asked - 0.01)
-            beats += 1
+            if in_flight_progress.is_set():
+                worker_acknowledged.set()
+
+    def gated_plan_refresh(*args, **kwargs):
+        """Require an event-loop heartbeat while the refresh is in flight."""
+        loop.call_soon_threadsafe(in_flight_progress.set)
+        if not worker_acknowledged.wait(timeout=0.2):
+            raise AssertionError("the event loop did not answer during the scan")
+        return original_plan_refresh(*args, **kwargs)
 
     pulse = asyncio.create_task(heartbeat())
+    await primed.wait()
+    monkeypatch.setattr(claude_overview, "plan_refresh", gated_plan_refresh)
     try:
         result = await claude_overview._refresh_in_threads(root, isolated_index)
     finally:
@@ -106,7 +122,39 @@ async def test_the_event_loop_keeps_answering_while_a_full_walk_runs(
 
     assert result["changed"] == 4000, result
     assert worst < 0.2, f"the event loop stalled for {worst:.3f}s during the walk"
-    assert beats > 20, f"the event loop stalled: only {beats} heartbeats ran"
+    assert in_flight_progress.is_set()
+    assert worker_acknowledged.is_set()
+
+
+@pytest.mark.anyio
+async def test_event_loop_handshake_rejects_a_synchronous_scan_variant() -> None:
+    """Private canary: calling a scan on the loop cannot satisfy the handshake."""
+    loop = asyncio.get_running_loop()
+    primed = asyncio.Event()
+    progress_requested = asyncio.Event()
+    worker_acknowledged = threading.Event()
+    stop = asyncio.Event()
+
+    async def heartbeat() -> None:
+        primed.set()
+        while not stop.is_set():
+            await asyncio.sleep(0.01)
+            if progress_requested.is_set():
+                worker_acknowledged.set()
+
+    def synchronous_scan_variant() -> None:
+        loop.call_soon_threadsafe(progress_requested.set)
+        if not worker_acknowledged.wait(timeout=0.2):
+            raise AssertionError("the event loop did not answer during the scan")
+
+    pulse = asyncio.create_task(heartbeat())
+    await primed.wait()
+    try:
+        with pytest.raises(AssertionError, match="did not answer"):
+            synchronous_scan_variant()
+    finally:
+        stop.set()
+        await pulse
 
 
 @pytest.mark.anyio

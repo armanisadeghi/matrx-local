@@ -385,17 +385,42 @@ async def _check_permissions() -> ComponentStatus:
 
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status() -> SetupStatus:
-    """Return comprehensive installation/setup status."""
-    gpu_available, gpu_name = _check_gpu()
+    """Return comprehensive installation/setup status without blocking requests.
+
+    Package imports and filesystem probes can take seconds when a native module
+    is first loaded.  They are read-only, so run them in worker threads.  OS
+    permission checks stay on this task because their platform probes may
+    require the process's main-thread context.
+    """
+    (
+        gpu,
+        core_packages,
+        playwright_browsers,
+        storage_directories,
+        tts,
+        cloudflared,
+        permissions,
+        transcription,
+    ) = await asyncio.gather(
+        asyncio.to_thread(_check_gpu),
+        asyncio.to_thread(_check_core_packages),
+        asyncio.to_thread(_check_playwright_browsers),
+        asyncio.to_thread(_check_storage_directories),
+        asyncio.to_thread(_check_tts),
+        asyncio.to_thread(_check_cloudflared),
+        _check_permissions(),
+        asyncio.to_thread(_check_transcription),
+    )
+    gpu_available, gpu_name = gpu
 
     components = [
-        _check_core_packages(),
-        _check_playwright_browsers(),
-        _check_storage_directories(),
-        _check_tts(),
-        _check_cloudflared(),
-        await _check_permissions(),
-        _check_transcription(),
+        core_packages,
+        playwright_browsers,
+        storage_directories,
+        tts,
+        cloudflared,
+        permissions,
+        transcription,
     ]
 
     # Only blocking components determine setup_complete

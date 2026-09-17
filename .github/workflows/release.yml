@@ -136,6 +136,11 @@ jobs:
               echo "Release ${TAG} already exists and is not a draft" >&2
               exit 1
             }
+            TAG_SHA="$(gh api "repos/${REPO}/git/ref/tags/${TAG}" --jq .object.sha)"
+            [[ "$TAG_SHA" == "$GITHUB_SHA" ]] || {
+              echo "Draft ${TAG} points to ${TAG_SHA}, but this run checks out ${GITHUB_SHA}; refusing to mix source cutoffs" >&2
+              exit 1
+            }
           else
             RELEASE_ID="$(gh api --method POST "repos/${REPO}/releases" \
               -f tag_name="$TAG" \
@@ -587,7 +592,7 @@ jobs:
           # GitHub asset uploads can fail transiently after a successful signed build.
           # Retry the action's upload path before discarding a platform matrix job.
           uploadUpdaterJson: true
-          retryAttempts: 5
+          retryAttempts: 10
           # Sealed: the release config adds the provider + host profile. Absent:
           # the host-only config REMOVES the provider mapping that
           # tauri.macos.conf.json carries for dev builds (JSON Merge Patch:

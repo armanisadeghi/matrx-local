@@ -53,4 +53,24 @@ describe("codexUsageRangeFor", () => {
     expect(container.textContent).toContain("model: gpt-5.6-terra");
     expect(container.textContent).toContain("Clear model scope");
   });
+
+  it("marks a selected scope unavailable when a responding cell has no estimate", async () => {
+    const row = { model: "gpt-5.6-terra", total_tokens: 10, response_count: 1, estimated_standard_credits: null, input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+    mocks.getCodexUsage.mockResolvedValue({ ...snapshot, models: [row], cells: [row] });
+    await act(async () => { root.render(<CodexUsagePanel />); await Promise.resolve(); });
+    const model = [...container.querySelectorAll("button")].find(button => button.textContent === "gpt-5.6-terra")!;
+    await act(async () => { model.click(); });
+    expect(container.textContent).toContain("Unavailable");
+  });
+
+  it("keeps a selected scope priced when only an activity-only cell lacks an estimate", async () => {
+    const priced = { model: "gpt-5.6-terra", total_tokens: 10, response_count: 1, estimated_standard_credits: 2, input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+    const activityOnly = { ...priced, response_count: 0, estimated_standard_credits: null };
+    mocks.getCodexUsage.mockResolvedValue({ ...snapshot, credits: { ...snapshot.credits, estimated_standard: 2 }, models: [priced], cells: [priced, activityOnly] });
+    await act(async () => { root.render(<CodexUsagePanel />); await Promise.resolve(); });
+    const model = [...container.querySelectorAll("button")].find(button => button.textContent === "gpt-5.6-terra")!;
+    await act(async () => { model.click(); });
+    const selectedScope = [...container.querySelectorAll("p")].find(paragraph => paragraph.textContent === "Selected scope")?.parentElement;
+    expect(selectedScope?.textContent).toContain("2.00");
+  });
 });

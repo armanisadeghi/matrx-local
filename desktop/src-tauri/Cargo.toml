@@ -30,6 +30,7 @@ serde_json = "1"
 reqwest.workspace = true
 rusqlite.workspace = true
 base64 = "0.22"
+semver = "1"
 
 # Transcription (whisper.cpp)
 whisper-cpp-plus = { version = "0.1", features = ["async"] }

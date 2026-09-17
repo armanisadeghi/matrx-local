@@ -19,10 +19,17 @@
 //! app can never cascade into it.
 
 use serde::Serialize;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::sync::OnceCell;
+
+const APP_PROTOCOL_VERSION: u64 = 1;
+static STARTUP_RECONCILE: OnceCell<Result<(), String>> = OnceCell::const_new();
+const PAYLOAD_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+const VERSION_CALL_TIMEOUT: Duration = Duration::from_secs(2);
+const VERIFY_REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+const RECONCILE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// The daemon band this build talks to (C7, S21): 22160–22179 live, 22260–22279 dev. The world is
 /// decided the same way the engine's is — `debug_assertions` — so a source run never touches the
@@ -99,52 +106,13 @@ fn base_url() -> Option<String> {
     Some(format!("http://127.0.0.1:{port}"))
 }
 
+#[cfg(test)]
 fn is_healthy_daemon_response(response: &[u8]) -> bool {
     const OK_FIELD: &[u8] = b"\"ok\":true";
     response.starts_with(b"HTTP/1.1 200")
         && response
             .windows(OK_FIELD.len())
             .any(|part| part == OK_FIELD)
-}
-
-/// A discovery file is only a hint.  The daemon can be killed or crash before it removes the
-/// file, and treating that stale file as proof of life leaves the app permanently unable to
-/// sign in.  Prove that the published endpoint is really our daemon with its scoped read token
-/// before skipping the first-run spawn.
-fn daemon_is_reachable() -> bool {
-    let Some(port) = discovery()
-        .and_then(|value| value.get("tcp_port")?.as_u64())
-        .and_then(|value| u16::try_from(value).ok())
-    else {
-        return false;
-    };
-    let Some((_, read_token)) = tokens() else {
-        return false;
-    };
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
-        return false;
-    };
-    if stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .is_err()
-        || stream
-            .set_write_timeout(Some(Duration::from_millis(500)))
-            .is_err()
-    {
-        return false;
-    }
-    let request = format!(
-        "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {read_token}\r\nConnection: close\r\n\r\n"
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    let mut response = Vec::with_capacity(512);
-    if stream.read_to_end(&mut response).is_err() {
-        return false;
-    }
-    is_healthy_daemon_response(&response)
 }
 
 /// The host talks to the daemon over the **loopback listener**, not the Unix socket.
@@ -167,6 +135,7 @@ async fn call(
     let port = base.rsplit(':').next().unwrap_or_default().to_string();
 
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
@@ -201,13 +170,29 @@ async fn call(
 
 /// What the webview needs to read its own session and token. Called at window setup.
 #[tauri::command]
-pub fn syncd_client_config() -> SyncdClientConfig {
+pub async fn syncd_client_config() -> Result<SyncdClientConfig, String> {
+    if let Err(error) = startup_reconcile().await {
+        crate::lifecycle_log::log(&format!(
+            "[syncd] startup reconciliation was not ready; checking current daemon state: {error}"
+        ));
+    }
+    let version = authenticated_version().await?;
+    if version.world != syncd_world()
+        || version.min_protocol_version > APP_PROTOCOL_VERSION
+        || version.protocol_version < APP_PROTOCOL_VERSION
+    {
+        return Err("AI Matrx Sync is running with an incompatible world or protocol.".to_string());
+    }
     let read_token = tokens().map(|(_control, read)| read);
-    SyncdClientConfig {
+    let config = SyncdClientConfig {
         base_url: base_url(),
         read_token,
         world: syncd_world(),
+    };
+    if config.base_url.is_none() || config.read_token.is_none() {
+        return Err("AI Matrx Sync did not become ready after startup reconciliation.".to_string());
     }
+    Ok(config)
 }
 
 /// Start a sign-in. The daemon generates the verifier and returns the URL to open.
@@ -351,24 +336,190 @@ fn daemon_binary() -> Option<PathBuf> {
     sibling.exists().then_some(sibling)
 }
 
-/// SPEC-ENGINE §1.2 step 3 — the detached first-run spawn.
-///
-/// Idempotent and silent: if a daemon is already publishing a discovery file this does nothing,
-/// and the daemon's own clobber rule refuses a second instance anyway. It is **not** an error for
-/// the binary to be absent — a build without the sidecar simply has no sync, which the Sync
-/// surface reports as `daemon_not_running` with its "Start sync" action rather than a crash.
-pub fn ensure_running() {
-    if daemon_is_reachable() {
-        return;
-    }
-    let Some(binary) = daemon_binary() else {
-        println!("[syncd] no matrx-syncd binary beside this build; sync is unavailable");
-        return;
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonVersion {
+    daemon_version: String,
+    protocol_version: u64,
+    min_protocol_version: u64,
+    world: String,
+}
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReconcileDecision {
+    StartAbsent,
+    Adopt,
+    Upgrade,
+    Refuse(&'static str),
+}
+
+fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    Some(
+        semver::Version::parse(left)
+            .ok()?
+            .cmp(&semver::Version::parse(right).ok()?),
+    )
+}
+
+fn decide_reconciliation(
+    expected_version: &str,
+    expected_world: &str,
+    observed: Option<&DaemonVersion>,
+) -> ReconcileDecision {
+    let Some(observed) = observed else {
+        return ReconcileDecision::StartAbsent;
+    };
+    if observed.world != expected_world {
+        return ReconcileDecision::Refuse("world mismatch");
+    }
+    if observed.min_protocol_version > APP_PROTOCOL_VERSION
+        || observed.protocol_version < APP_PROTOCOL_VERSION
+    {
+        return ReconcileDecision::Refuse("protocol mismatch");
+    }
+    match compare_versions(&observed.daemon_version, expected_version) {
+        Some(std::cmp::Ordering::Less) => ReconcileDecision::Upgrade,
+        Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater) => ReconcileDecision::Adopt,
+        None => ReconcileDecision::Refuse("daemon version is malformed"),
+    }
+}
+
+fn may_spawn_replacement(
+    shutdown_accepted: bool,
+    original_exited: bool,
+    discovery_removed: bool,
+) -> bool {
+    shutdown_accepted && original_exited && discovery_removed
+}
+
+#[cfg(test)]
+fn start_absent_allowed(discovery_present: bool) -> bool {
+    !discovery_present
+}
+
+fn stale_discovery_allows_recovery(discovery_present: bool, valid_pid_exited: bool) -> bool {
+    !discovery_present || valid_pid_exited
+}
+
+fn replacement_matches(expected_version: &str, world: &str, version: &DaemonVersion) -> bool {
+    version.world == world
+        && version.protocol_version >= APP_PROTOCOL_VERSION
+        && version.min_protocol_version <= APP_PROTOCOL_VERSION
+        && version.daemon_version == expected_version
+}
+
+fn version_from_value(value: serde_json::Value) -> Result<DaemonVersion, String> {
+    let number = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("/v1/version did not contain {name}"))
+    };
+    Ok(DaemonVersion {
+        daemon_version: value
+            .get("daemon_version")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "/v1/version did not contain daemon_version".to_string())?
+            .to_string(),
+        protocol_version: number("protocol_version")?,
+        min_protocol_version: number("min_protocol_version")?,
+        world: value
+            .get("world")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "/v1/version did not contain world".to_string())?
+            .to_string(),
+    })
+}
+
+async fn payload_version(binary: &Path) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut child = tokio::process::Command::new(binary)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("could not inspect bundled matrx-syncd version: {error}"))?;
+    let status = match tokio::time::timeout(PAYLOAD_VERSION_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            return Err(format!(
+                "could not inspect bundled matrx-syncd version: {error}"
+            ))
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err("bundled matrx-syncd --version timed out".to_string());
+        }
+    };
+    if !status.success() {
+        return Err("bundled matrx-syncd --version failed".to_string());
+    }
+    let mut output = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        stdout
+            .read_to_string(&mut output)
+            .await
+            .map_err(|error| format!("could not read bundled matrx-syncd version: {error}"))?;
+    }
+    output
+        .split_whitespace()
+        .nth(1)
+        .filter(|version| semver::Version::parse(version).is_ok())
+        .map(str::to_string)
+        .ok_or_else(|| "bundled matrx-syncd --version returned no usable app version".to_string())
+}
+
+async fn authenticated_version() -> Result<DaemonVersion, String> {
+    let value = tokio::time::timeout(
+        VERSION_CALL_TIMEOUT,
+        call(reqwest::Method::GET, "/v1/version", None),
+    )
+    .await
+    .map_err(|_| "authenticated /v1/version timed out".to_string())??;
+    version_from_value(value)
+}
+
+fn discovery_pid() -> Option<u32> {
+    discovery()?
+        .get("pid")?
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+}
+
+fn discovery_is_removed() -> bool {
+    matrx_home().is_some_and(|dir| !dir.join("syncd.json").exists())
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let process = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[process]), true);
+    system.process(process).is_some()
+}
+
+async fn wait_for_original_shutdown(pid: u32, budget_seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(budget_seconds + 5);
+    loop {
+        if !process_is_alive(pid) && discovery_is_removed() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(RECONCILE_POLL_INTERVAL).await;
+    }
+}
+
+/// SPEC-ENGINE §1.2 step 3 — the detached first-run spawn.
+fn spawn_daemon(binary: &Path, world: &str) -> Result<(), String> {
     let mut command = std::process::Command::new(&binary);
     command
-        .args(["--world", syncd_world()])
+        .args(["--world", world])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -399,14 +550,17 @@ pub fn ensure_running() {
     }
 
     match command.spawn() {
-        Ok(child) => println!("[syncd] started matrx-syncd (pid {})", child.id()),
+        Ok(child) => {
+            crate::lifecycle_log::log(&format!("[syncd] started matrx-syncd (pid {})", child.id()));
+            Ok(())
+        }
         Err(error) => {
             #[cfg(windows)]
             {
                 let mut retry = std::process::Command::new(&binary);
                 use std::os::windows::process::CommandExt;
                 retry
-                    .args(["--world", syncd_world()])
+                    .args(["--world", world])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -416,17 +570,164 @@ pub fn ensure_running() {
                         "[syncd] started matrx-syncd without job breakaway (pid {})",
                         child.id()
                     );
-                    return;
+                    return Ok(());
                 }
             }
-            println!("[syncd] could not start matrx-syncd: {error}");
+            Err(format!("could not start matrx-syncd: {error}"))
         }
     }
+}
+
+async fn verify_replacement(expected_version: &str, world: &str) -> bool {
+    let deadline = tokio::time::Instant::now() + VERIFY_REPLACEMENT_TIMEOUT;
+    loop {
+        if let Ok(version) = authenticated_version().await {
+            if replacement_matches(expected_version, world, &version) {
+                return true;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(RECONCILE_POLL_INTERVAL).await;
+    }
+}
+
+#[allow(async_fn_in_trait)]
+trait ReconcileOps {
+    async fn payload_version(&self, binary: &Path) -> Result<String, String>;
+    async fn version(&self) -> Result<DaemonVersion, String>;
+    fn discovery_pid(&self) -> Option<u32>;
+    fn discovery_present(&self) -> bool;
+    fn process_alive(&self, pid: u32) -> bool;
+    async fn shutdown(&self) -> Result<serde_json::Value, String>;
+    async fn wait_for_shutdown(&self, pid: u32, budget: u64) -> bool;
+    fn spawn(&self, binary: &Path, world: &str) -> Result<(), String>;
+    async fn verify(&self, expected_version: &str, world: &str) -> bool;
+}
+
+struct RuntimeOps;
+
+impl ReconcileOps for RuntimeOps {
+    async fn payload_version(&self, binary: &Path) -> Result<String, String> { payload_version(binary).await }
+    async fn version(&self) -> Result<DaemonVersion, String> { authenticated_version().await }
+    fn discovery_pid(&self) -> Option<u32> { discovery_pid() }
+    fn discovery_present(&self) -> bool { !discovery_is_removed() }
+    fn process_alive(&self, pid: u32) -> bool { process_is_alive(pid) }
+    async fn shutdown(&self) -> Result<serde_json::Value, String> {
+        call(reqwest::Method::POST, "/v1/shutdown", Some(serde_json::json!({ "reason": "upgrade" }))).await
+    }
+    async fn wait_for_shutdown(&self, pid: u32, budget: u64) -> bool { wait_for_original_shutdown(pid, budget).await }
+    fn spawn(&self, binary: &Path, world: &str) -> Result<(), String> { spawn_daemon(binary, world) }
+    async fn verify(&self, expected_version: &str, world: &str) -> bool { verify_replacement(expected_version, world).await }
+}
+
+async fn reconcile_with(ops: &impl ReconcileOps, binary: &Path, world: &str) -> Result<(), String> {
+    let expected_version = match ops.payload_version(binary).await {
+        Ok(version) => version,
+        Err(error) => {
+            return Err(format!("upgrade reconciliation unavailable: {error}"));
+        }
+    };
+    let observed = match ops.version().await {
+        Ok(version) => Some(version),
+        Err(_)
+            if stale_discovery_allows_recovery(
+                ops.discovery_present(),
+                ops.discovery_pid().is_some_and(|pid| !ops.process_alive(pid)),
+            ) =>
+        {
+            None
+        }
+        Err(error) => {
+            return Err(format!(
+                "upgrade reconciliation stopped: authenticated daemon is unreachable: {error}"
+            ));
+        }
+    };
+    match decide_reconciliation(&expected_version, &world, observed.as_ref()) {
+        ReconcileDecision::StartAbsent => {
+            ops.spawn(binary, world)?;
+            if ops.verify(&expected_version, world).await {
+                Ok(())
+            } else {
+                Err("new daemon did not become ready with the expected version".to_string())
+            }
+        }
+        ReconcileDecision::Adopt => Ok(()),
+        ReconcileDecision::Refuse(reason) => {
+            Err(format!("upgrade reconciliation stopped: {reason}"))
+        }
+        ReconcileDecision::Upgrade => {
+            let Some(original_pid) = ops.discovery_pid() else {
+                return Err(
+                    "upgrade reconciliation stopped: live daemon had no discovery pid".to_string(),
+                );
+            };
+            let shutdown = match ops.shutdown().await {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(format!("upgrade shutdown refused: {error}"));
+                }
+            };
+            let budget = shutdown.get("budget_s").and_then(serde_json::Value::as_u64);
+            if shutdown
+                .get("accepted")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+                || !matches!(budget, Some(5..=120))
+            {
+                return Err("upgrade shutdown refused an invalid acknowledgement".to_string());
+            }
+            let budget = budget.expect("validated above");
+            if !may_spawn_replacement(
+                true,
+                ops.wait_for_shutdown(original_pid, budget).await,
+                !ops.discovery_present(),
+            ) {
+                return Err(
+                    "shutdown_stalled during daemon upgrade; no replacement spawned".to_string(),
+                );
+            }
+            ops.spawn(binary, world)?;
+            if ops.verify(&expected_version, world).await {
+                Ok(())
+            } else {
+                Err("upgrade replacement did not report the expected version".to_string())
+            }
+        }
+    }
+}
+
+async fn reconcile(binary: PathBuf, world: String) -> Result<(), String> {
+    reconcile_with(&RuntimeOps, &binary, &world).await
+}
+
+async fn startup_reconcile() -> Result<(), String> {
+    STARTUP_RECONCILE
+        .get_or_init(|| async {
+            let binary = daemon_binary()
+                .ok_or_else(|| "no matrx-syncd binary beside this build".to_string())?;
+            let world = syncd_world().to_string();
+            reconcile(binary, world).await
+        })
+        .await
+        .clone()
+}
+
+/// Queue one serialized, non-blocking startup reconciliation.
+pub fn ensure_running() {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = startup_reconcile().await {
+            crate::lifecycle_log::log(&format!("[syncd] startup reconciliation failed: {error}"));
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn a_callback_url_yields_its_code_and_state() {
@@ -485,11 +786,178 @@ mod tests {
         // S17/§12: a compromised webview must not be able to sign the device out or stop the
         // daemon, and the only thing standing between it and those routes is that it never holds
         // the control token.
-        let config = syncd_client_config();
+        let config = SyncdClientConfig {
+            base_url: Some("http://127.0.0.1:22262".to_string()),
+            read_token: tokens().map(|(_control, read)| read),
+            world: "dev",
+        };
         let json = serde_json::to_string(&config).expect("serialize");
         assert!(!json.contains("control"));
         if let (Some((control, _read)), true) = (tokens(), config.read_token.is_some()) {
             assert!(!json.contains(&control));
         }
+    }
+
+    fn daemon(version: &str) -> DaemonVersion {
+        DaemonVersion {
+            daemon_version: version.to_string(),
+            protocol_version: APP_PROTOCOL_VERSION,
+            min_protocol_version: APP_PROTOCOL_VERSION,
+            world: "dev".to_string(),
+        }
+    }
+
+    struct FakeOps {
+        version: Result<DaemonVersion, String>,
+        discovery_present: Cell<bool>,
+        pid: Option<u32>,
+        alive: Cell<bool>,
+        shutdown: Result<serde_json::Value, String>,
+        stopped: bool,
+        verified: bool,
+        shutdown_calls: Cell<u8>,
+        spawn_calls: Cell<u8>,
+    }
+
+    impl FakeOps {
+        fn ready(version: Result<DaemonVersion, String>) -> Self {
+            Self {
+                version,
+                discovery_present: Cell::new(true),
+                pid: Some(42),
+                alive: Cell::new(true),
+                shutdown: Ok(serde_json::json!({ "accepted": true, "budget_s": 5 })),
+                stopped: true,
+                verified: true,
+                shutdown_calls: Cell::new(0),
+                spawn_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl ReconcileOps for FakeOps {
+        async fn payload_version(&self, _: &Path) -> Result<String, String> { Ok("1.4.141".to_string()) }
+        async fn version(&self) -> Result<DaemonVersion, String> { self.version.clone() }
+        fn discovery_pid(&self) -> Option<u32> { self.pid }
+        fn discovery_present(&self) -> bool { self.discovery_present.get() }
+        fn process_alive(&self, _: u32) -> bool { self.alive.get() }
+        async fn shutdown(&self) -> Result<serde_json::Value, String> {
+            self.shutdown_calls.set(self.shutdown_calls.get() + 1);
+            self.shutdown.clone()
+        }
+        async fn wait_for_shutdown(&self, _: u32, _: u64) -> bool {
+            if self.stopped {
+                self.discovery_present.set(false);
+            }
+            self.stopped
+        }
+        fn spawn(&self, _: &Path, _: &str) -> Result<(), String> {
+            self.spawn_calls.set(self.spawn_calls.get() + 1);
+            Ok(())
+        }
+        async fn verify(&self, _: &str, _: &str) -> bool { self.verified }
+    }
+
+    #[tokio::test]
+    async fn reconcile_orchestrates_only_confirmed_replacements() {
+        let stale = FakeOps::ready(Ok(daemon("0.1.0")));
+        assert!(reconcile_with(&stale, Path::new("payload"), "dev").await.is_ok());
+        assert_eq!(stale.shutdown_calls.get(), 1);
+        assert_eq!(stale.spawn_calls.get(), 1);
+
+        let mut refused = FakeOps::ready(Ok(daemon("0.1.0")));
+        refused.shutdown = Ok(serde_json::json!({ "accepted": false, "budget_s": 5 }));
+        assert!(reconcile_with(&refused, Path::new("payload"), "dev").await.is_err());
+        assert_eq!(refused.spawn_calls.get(), 0);
+
+        let mut stalled = FakeOps::ready(Ok(daemon("0.1.0")));
+        stalled.stopped = false;
+        assert!(reconcile_with(&stalled, Path::new("payload"), "dev").await.is_err());
+        assert_eq!(stalled.spawn_calls.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn reconcile_refuses_live_unreachable_and_adopts_equal_or_newer() {
+        let unreachable = FakeOps::ready(Err("http failed".to_string()));
+        assert!(reconcile_with(&unreachable, Path::new("payload"), "dev").await.is_err());
+        assert_eq!(unreachable.spawn_calls.get(), 0);
+
+        for version in ["1.4.141", "1.5.0", "1.5.0-beta.2"] {
+            let adopted = FakeOps::ready(Ok(daemon(version)));
+            assert!(reconcile_with(&adopted, Path::new("payload"), "dev").await.is_ok());
+            assert_eq!(adopted.shutdown_calls.get(), 0);
+            assert_eq!(adopted.spawn_calls.get(), 0);
+        }
+        assert_eq!(
+            compare_versions("1.4.141-beta.2", "1.4.141-beta.10"),
+            Some(std::cmp::Ordering::Less)
+        );
+
+        let stale_dead = FakeOps::ready(Err("http failed".to_string()));
+        stale_dead.alive.set(false);
+        assert!(reconcile_with(&stale_dead, Path::new("payload"), "dev").await.is_ok());
+        assert_eq!(stale_dead.spawn_calls.get(), 1);
+
+        let mut verify_failure = FakeOps::ready(Ok(daemon("0.1.0")));
+        verify_failure.verified = false;
+        assert!(reconcile_with(&verify_failure, Path::new("payload"), "dev").await.is_err());
+    }
+
+    #[test]
+    fn stale_legacy_daemon_requires_an_upgrade() {
+        assert_eq!(
+            decide_reconciliation("1.4.141", "dev", Some(&daemon("0.1.0"))),
+            ReconcileDecision::Upgrade
+        );
+    }
+
+    #[test]
+    fn equal_or_newer_compatible_daemon_is_adopted_without_downgrade() {
+        assert_eq!(
+            decide_reconciliation("1.4.141", "dev", Some(&daemon("1.4.141"))),
+            ReconcileDecision::Adopt
+        );
+        assert_eq!(
+            decide_reconciliation("1.4.141", "dev", Some(&daemon("1.5.0"))),
+            ReconcileDecision::Adopt
+        );
+    }
+
+    #[test]
+    fn world_or_protocol_mismatch_never_requests_a_replacement() {
+        let mut wrong_world = daemon("0.1.0");
+        wrong_world.world = "live".to_string();
+        assert_eq!(
+            decide_reconciliation("1.4.141", "dev", Some(&wrong_world)),
+            ReconcileDecision::Refuse("world mismatch")
+        );
+        let mut wrong_protocol = daemon("0.1.0");
+        wrong_protocol.protocol_version = 0;
+        assert_eq!(
+            decide_reconciliation("1.4.141", "dev", Some(&wrong_protocol)),
+            ReconcileDecision::Refuse("protocol mismatch")
+        );
+    }
+
+    #[test]
+    fn no_shutdown_failure_or_premature_unreachable_state_can_spawn_a_replacement() {
+        assert!(!may_spawn_replacement(false, true, true));
+        assert!(!may_spawn_replacement(true, false, true));
+        assert!(!may_spawn_replacement(true, true, false));
+        assert!(may_spawn_replacement(true, true, true));
+    }
+
+    #[test]
+    fn unreachable_daemon_with_discovery_is_not_treated_as_absent() {
+        assert!(!start_absent_allowed(true));
+        assert!(start_absent_allowed(false));
+        assert!(stale_discovery_allows_recovery(true, true));
+        assert!(!stale_discovery_allows_recovery(true, false));
+    }
+
+    #[test]
+    fn replacement_requires_expected_version_world_and_protocol() {
+        assert!(replacement_matches("1.4.141", "dev", &daemon("1.4.141")));
+        assert!(!replacement_matches("1.4.141", "dev", &daemon("1.4.142")));
     }
 }

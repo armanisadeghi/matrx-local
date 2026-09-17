@@ -124,9 +124,18 @@ function loadConfig(): Promise<ClientConfig> {
   // agent could verify. `devHarnessCustodyConfig` is the dev-server-only fallback that restores
   // it. It is behind `import.meta.env.DEV`, so it is dead code in every shipped bundle, and it
   // receives only the same read token the packaged webview holds.
-  configPromise ??= invoke<ClientConfig>("syncd_client_config").catch(() =>
-    devHarnessCustodyConfig(),
-  );
+  configPromise ??= invoke<ClientConfig>("syncd_client_config")
+    .then((config) => {
+      if (config.base_url && config.read_token) return config;
+      configPromise = null;
+      throw new Error("AI Matrx Sync is not ready yet.");
+    })
+    .catch(async (error) => {
+      configPromise = null;
+      const fallback = await devHarnessCustodyConfig();
+      if (fallback.base_url && fallback.read_token) return fallback;
+      throw error;
+    });
   return configPromise;
 }
 
@@ -136,7 +145,12 @@ export function resetCustodianConfig(): void {
 }
 
 async function request(path: string, signal?: AbortSignal): Promise<Response | null> {
-  const config = await loadConfig();
+  let config: ClientConfig;
+  try {
+    config = await loadConfig();
+  } catch {
+    return null;
+  }
   if (!config.base_url || !config.read_token) return null;
   try {
     return await fetch(`${config.base_url}${path}`, {

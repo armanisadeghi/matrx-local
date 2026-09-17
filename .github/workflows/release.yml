@@ -626,6 +626,59 @@ jobs:
             exit 1
           fi
 
+      # Tauri notarizes and staples the app, but the separately signed DMG does
+      # not inherit that ticket. Gatekeeper checks the downloaded disk image
+      # before a user can open the app inside it. Notarize that exact container,
+      # staple it, then replace the draft asset before rename/publish proceeds.
+      - name: Notarize and verify macOS disk image
+        if: matrix.platform == 'macos-15'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            TRIPLE="aarch64-apple-darwin"
+          else
+            TRIPLE="x86_64-apple-darwin"
+          fi
+          DMG_DIR="desktop/src-tauri/target/$TRIPLE/release/bundle/dmg"
+          DMG="$(find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -type f -print -quit)"
+          [[ -n "$DMG" ]] || { echo "No .dmg found in $DMG_DIR" >&2; exit 1; }
+          NOTARY_RESULT="$(xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --output-format json)"
+          jq -e '.status == "Accepted"' <<< "$NOTARY_RESULT" >/dev/null || {
+            echo "Apple did not accept the DMG for notarization" >&2
+            exit 1
+          }
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl -a -vv -t open --context context:primary-signature "$DMG"
+
+          TAG="v$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          for ATTEMPT in 1 2 3; do
+            if gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$DMG"; then
+              break
+            fi
+            if [[ "$ATTEMPT" -eq 3 ]]; then
+              echo "Could not upload stapled DMG after three attempts" >&2
+              exit 1
+            fi
+            sleep "$((ATTEMPT * 10))"
+          done
+          EXPECTED="sha256:$(shasum -a 256 "$DMG" | awk '{print $1}')"
+          ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+            --jq '.[] | select(.name == "'"$(basename "$DMG")"'") | .digest')"
+          [[ "$ACTUAL" == "$EXPECTED" ]] || {
+            echo "Uploaded DMG checksum differs from stapled disk image" >&2
+            exit 1
+          }
+
   # ── Rename assets to human-friendly names ──────────────────────────────────
   rename-assets:
     needs: [verify, release]

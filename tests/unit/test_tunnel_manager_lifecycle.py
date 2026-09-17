@@ -263,3 +263,48 @@ async def test_late_active_publication_cannot_restore_exited_child(monkeypatch: 
 
     assert await manager.publish_active_registration(url) is False
     assert published == [(None, False)]
+
+
+@pytest.mark.anyio
+async def test_replacement_waits_for_old_generation_withdrawal(tunnel_fakes, monkeypatch: pytest.MonkeyPatch) -> None:
+    spawned, _updates, _set_emit_url = tunnel_fakes
+    writes: list[tuple[str | None, bool]] = []
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            writes.append((url, active))
+            return True
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    manager = tunnel_manager.TunnelManager()
+    assert await manager.start(22140) == "https://owned.trycloudflare.com"
+
+    spawned[0].returncode = 1
+    spawned[0].stdout.close()
+    spawned[0]._exited.set()
+
+    assert await asyncio.wait_for(manager.start(22140), timeout=1.0) == "https://owned.trycloudflare.com"
+    assert writes == [(None, False)]
+    await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_live_tunnel_survives_best_effort_active_patch_failure(tunnel_fakes, monkeypatch: pytest.MonkeyPatch) -> None:
+    _spawned, _updates, _set_emit_url = tunnel_fakes
+
+    class _InstanceManager:
+        async def update_tunnel_url(self, url: str | None, active: bool) -> bool:
+            return False
+
+    from app.services.cloud_sync import instance_manager
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: _InstanceManager())
+    manager = tunnel_manager.TunnelManager()
+    url = await manager.start(22140)
+
+    assert url == "https://owned.trycloudflare.com"
+    assert manager.running is True
+    assert await manager.publish_active_registration(url) is True
+    await manager.stop()

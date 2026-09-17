@@ -51,9 +51,12 @@ Binary resolution: bundled → preinstalled discovery
 
 Start/stop are single-flight under one lifecycle lock. Cancellation during
 startup terminates and reaps the spawned child. Cloud registration writes are
-serialized by `TunnelManager`: callers publish an active URL only while its
-child is still live, and a spontaneous exit waits for the actual child exit
-after output EOF before withdrawing the registration. Normal shutdown also
+serialized by `TunnelManager`: each output reader retains its own child
+generation, and replacement starts wait for that generation's inactive write
+before spawning again. Callers publish an active URL only while its child is
+still live; a cloud PATCH failure remains best-effort and never marks that
+live child failed. A spontaneous exit waits for the actual child exit after
+output EOF before withdrawing the registration. Normal shutdown also
 withdraws even when the child already died. This prevents a dead quick-tunnel
 hostname from remaining selectable until the next heartbeat.
 Named-tunnel tokens are argv-only secrets and are never included in logs or

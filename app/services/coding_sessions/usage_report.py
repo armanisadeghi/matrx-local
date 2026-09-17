@@ -204,7 +204,10 @@ def _fold(
             row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_creation_tokens
         )
         row.cost = cost if priced else None
-        rows.append(row)
+        # A group with nothing measured (Codex's model-less activity rows,
+        # an empty hour) is noise in a usage grid, not a zero worth a line.
+        if row.total_tokens or row.requests or any(row.extra.values()):
+            rows.append(row)
     return sorted(rows, key=lambda item: (-item.total_tokens, item.key))
 
 

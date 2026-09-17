@@ -311,6 +311,8 @@ def test_codex_and_claude_reports_are_one_shape(tmp_path: Path) -> None:
         assert sum(day["requests"] for day in payload["by_day"]) == row["requests"]
         assert sum(model["requests"] for model in payload["by_model"]) == row["requests"]
         assert sum(session["requests"] for session in payload["by_session"]) == row["requests"]
+    # A Codex activity-only row (model "unknown", no tokens, no responses) is not a grid line.
+    assert all(row["total_tokens"] or row["requests"] for row in codex["by_model"])
     # Codex: the cached 60 of 100 input tokens are cache reads, never double-counted.
     terra = next(row for row in codex["by_model"] if row["model"] == "gpt-5.6-terra")
     assert (terra["input_tokens"], terra["cache_read_tokens"], terra["output_tokens"]) == (40, 60, 7)

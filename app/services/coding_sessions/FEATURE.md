@@ -402,10 +402,27 @@ held 1,671 of those conversations:
   Codex or Cursor transcripts the chips grow with no UI edit.
 - **ONE feature, three tabs (2026-09-14).** Arman: *"coding sessions is one feature
   and everything needs to live inside of it."* `Sessions` (the list + provider chips),
-  `Usage` (the former standalone `/codex-usage` page as a panel; a provider with no
-  local usage ledger says so in words), `Settings & diagnostics` (readiness, bridge
+  `Usage` (ONE grid for every provider — see the next bullet), `Settings & diagnostics` (readiness, bridge
   queue, publisher ticks, artifacts lane, accounts, agent runtime). The tab is in the
   URL (`/coding-sessions?tab=…`) and `/codex-usage` redirects to the usage tab.
+- **Usage: one shape, one grid, provider as a facet (2026-09-17, CS-24).** Arman:
+  *"usage for every provider, in that tab, provider as a facet — same shapes, same
+  table, not four different screens."* `GET /coding-session/usage?provider=&start=&end=
+  &refresh=&tz_offset=` returns `usage_report.UsageReport` for every provider: totals,
+  by day / model / session / project rows (input, cache read, cache write, output,
+  total, requests, cost), `metrics` (what the provider measures at all), `cost`
+  (unit + reason), `limits` (plan + windows), `source` (complete / pending / notes).
+  Sources: **Claude Code** — per-turn `message.usage` from its own transcripts, read by
+  the persisted index in the same pass that stats them (`claude_usage.py`, one count
+  per message id + requestId because a streamed reply is written once per block,
+  byte cursor per transcript, `DEFAULT_USAGE_BYTE_BUDGET` per refresh, pending count
+  in meta), limits from Claude Code's own `.claude.json` utilization cache, list
+  prices from the local `ai_models` catalog (an unpriced model makes the total cost
+  unavailable, never smaller). **Codex** — the existing collector + allowance,
+  re-keyed. **Cursor** — daily suggested/accepted lines and plan tier from
+  `state.vscdb`; tokens are on cursor.com and the report says so. **VS Code** —
+  nothing local; the report says exactly that. The tab (`tabs/UsageTab.tsx`) renders
+  nothing provider-specific; the retired `/codex-usage` panel is gone.
 - **Refresh announces itself and never blanks the list (2026-09-14).** Arman: *"The
   refresh button, when you click it, does nothing. It just stares at you."* The
   overview read is slow by nature (36s cold, ~4.3s warm on this Mac), so the rules

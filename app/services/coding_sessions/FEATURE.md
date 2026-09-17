@@ -766,6 +766,24 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
     `sessions.in_active_scope` / `sessions.active_is_starred`. A pin fix landed in only one reader
     is invisible in the running app — that was the second half of this bug.
     Guard: `tests/unit/test_claude_pin_truth.py` (store and scan asserted equal, every pin state).
+  - **AND SO MUST THE MACHINE'S SIDEBAR LEDGER.** The ledger is written every pass by the launchd
+    session-sync agent, and everything downstream of it (rank, category, title, archive state, and
+    the pre-`isStarred` engines still installed on the machine) believes what it says. Its
+    extractor is canonically `scripts/claude_code_pins_extract.py` in THIS repo, installed as
+    `~/.claude/claude-code-pins-extract.py`; it applies the same rule as `LivePins`, publishes a
+    per-conversation verdict (`pin_states`), keeps `pinnedOrder` for `pinnedRank` only, and OMITS
+    its pin keys when the pin is unknown so the agent leaves every ledger pin untouched. Fixed
+    2026-09-17: the ledger read 257 pinned against the app's 218 (73 wrong, 34 missing) and the
+    dry-run `--diff` now gates any change on zero differences from the app's own `isStarred`.
+    Agreement guard: `tests/unit/test_claude_pins_extractor.py`.
+  - **A COMPOSITE BINDING'S PIN IS REACHABLE.** Bindings exist under two `provider_session_id`
+    shapes — the bare `cliSessionId` and the native import's
+    `claude-sdk:<project digest>:<b64 cliSessionId>` — and `title_sync.raw_session_id` decodes the
+    composite's last segment back to the exact `cliSessionId` the index is keyed by, so ONE local
+    pin verdict serves both rows. Census 2026-09-17 against the live DB: 913 of 964 composite and
+    878 of 895 bare identities resolve locally; the rest have no record in the signed-in account
+    and stay UNKNOWN (nothing sent). Guard:
+    `tests/unit/test_claude_session_labels.py::test_unpin_reaches_a_claude_sdk_composite_binding`.
   - The payload gains `is_pinned` / `pinned_rank` / `category`; the server mirrors pinned onto
     `platform.user_entity_state.is_favorite` and category into the conversation's bridge metadata.
 - **The server list is the allowlist for BOTH directions.** Labels of local sessions AI Matrx never

@@ -853,19 +853,41 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
   `app/services/coding_sessions/title_sync.py:764` — a composite id never
   matches a desktop index record, so the row is recorded
   `blocked / local_session_not_found` and nothing is sent.
-- **Status:** open
-- **Analysis stamp:** Analyzed 2026-09-17 — verified against the live DB while
-  fixing the desktop pin bug. NOT fixed there: the desktop fix is
-  scope-complete and correct, and this needs a decision about which surface
-  owns a composite binding's labels, which is a different question.
-- **Owner hint:** first establish WHICH producer writes the `claude-sdk:`
-  bindings and their pins (it is not this repo's desktop index reconciler —
-  candidates are the Agent SDK / sandbox lanes). Then either normalize the
-  composite id to its embedded `cliSessionId` so one observation serves both
-  rows, or give that producer its own reconciler with the same
-  unpin-is-observable contract. Normalizing looks right — the base64 segment
-  already decodes to the exact `cliSessionId` the desktop index uses, which is
-  how the numbers above were computed.
+- **CORRECTION, 2026-09-17 (CS-29, measured):** the stated root cause is WRONG.
+  `title_sync.raw_session_id` has decoded the composite's base64 segment back to
+  the `cliSessionId` since commit 31efecc45, and `index.get(native_id)` DOES
+  match: a full census of all 1,859 bound identities against the real
+  session-index tree resolves 913 of 964 composite rows (and 878 of 895 bare
+  rows); the 51 + 17 that do not resolve have no record in the signed-in account
+  at all and correctly stay UNKNOWN. Nothing was blocked for being composite.
+  The 43 stale composite pins had the SAME single cause as the desktop ones: the
+  reconciler took `is_pinned` from the machine's sidebar ledger, and the ledger
+  said pinned. The ledger's extractor still derived pins from the append-only
+  `pinnedOrder`, so it claimed 257 pinned against the app's 218 — and the
+  installed engine (1.4.151, pre-`isStarred`) reads exactly that.
+- **Status:** FIXED 2026-09-17 by repairing the ledger's extractor
+  (`scripts/claude_code_pins_extract.py`, installed at
+  `~/.claude/claude-code-pins-extract.py`, plus the per-conversation-verdict
+  merge in `~/.claude/sync-claude-code-sessions.py`). Zero-diff dry run against
+  the app's own `isStarred`, then the live ledger went 257 -> 218 pinned with
+  only `isPinned` (107 flips: 34 pin, 73 unpin) and `pinnedRank` (73) changed.
+  The local verdict for the 43 is now `is_pinned=false`, and one verdict serves
+  both id shapes, so they clear on the reconciler's next pass.
+- **Guard (red then green):**
+  `tests/unit/test_claude_session_labels.py::test_unpin_reaches_a_claude_sdk_composite_binding`
+  — a composite identity for an unpinned conversation must queue
+  `is_pinned: false` addressed to the composite id. Fails when the decode in
+  `raw_session_id` is disabled; the resolution had no coverage before, which is
+  how it came to be believed missing. Plus
+  `tests/unit/test_claude_pins_extractor.py`, which fails if the ledger
+  extractor and `LivePins` disagree on one conversation.
+- **Analysis stamp:** Analyzed + fixed 2026-09-17 — census run against the live
+  DB (`chat.coding_session` joined to `platform.user_entity_state`) and the real
+  75,666-record index.
+- **Note:** this entry shares its id with an unrelated `MXL-D-093` above
+  (`docs/official/lifecycle-ownership.md`'s stale `assign_engine_port`); the
+  collision is left as found — renumbering someone else's open entry would break
+  the references already pointing at it.
 
 ### MXL-D-092 — `test_managed_runtime_bundle` fails as a 30 s timeout on a busy machine, so the frozen-bundle guard is red for reasons that have nothing to do with the bundle
 - **Area:** `tests/unit/test_managed_runtime_bundle.py:131`

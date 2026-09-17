@@ -590,3 +590,85 @@ async def test_import_carries_the_claude_index_title(env) -> None:
     assert result["unchanged"] == 0
     assert result["queued"] == 0
     assert result["already_queued"] == 1
+
+
+@pytest.mark.anyio
+async def test_unpin_reaches_a_claude_sdk_composite_binding(env) -> None:
+    """A composite binding's stale pin must be clearable — MXL-D-093.
+
+    The live server holds Claude Code bindings under two ``provider_session_id``
+    shapes: the bare ``cliSessionId`` the event mirror writes, and the
+    ``claude-sdk:<project digest>:<b64 cliSessionId>`` composite a native import
+    writes. Measured 2026-09-17 against the live DB, 43 of the 76 pinned
+    composite rows were for conversations Arman had already unpinned in Claude
+    Code, and 6 truly-pinned ones carried no pin.
+
+    The resolution that makes those reconcilable is ``raw_session_id`` decoding
+    the composite's last segment back to the exact ``cliSessionId`` the desktop
+    index is keyed by. NOTHING covered it, so the reconciler was believed unable
+    to match a composite at all. This is that cover: a composite identity whose
+    conversation the app has UNPINNED must queue an observation carrying
+    ``is_pinned: false`` — addressed to the composite id, because that is the
+    row the server has to clear.
+    """
+    db, outbox, tmp_path = env
+    root = tmp_path / "claude-code-sessions"
+    unpinned = str(uuid4())
+    still_pinned = str(uuid4())
+    # One signed-in scope, the app's own pin field on each record.
+    _write_index_record(
+        root,
+        cli_session_id=unpinned,
+        title="Stale composite pin",
+        lastActivityAt=20,
+        lastFocusedAt=1789684595177,
+        isStarred=False,
+    )
+    _write_index_record(
+        root,
+        cli_session_id=still_pinned,
+        title="Genuinely pinned",
+        lastActivityAt=21,
+        lastFocusedAt=1789684595100,
+        isStarred=True,
+    )
+    project_key = "claude-local:matrx-local"
+    composites = {
+        session: _bridge_provider_session_id(project_key, session)
+        for session in (unpinned, still_pinned)
+    }
+    for session, composite in composites.items():
+        # The decode is the whole resolution: it must be exact, not approximate.
+        assert raw_session_id(composite) == session
+        assert composite.startswith("claude-sdk:")
+
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(
+            [
+                {"provider_session_id": composite,
+                 "provider_project_key": project_key}
+                for composite in composites.values()
+            ]
+        ),
+        index_reader=lambda: read_session_index(
+            root, ledger_path=tmp_path / "no-ledger.json"
+        ),
+    )
+    result = await reconciler.sync()
+    assert result["matched"] == 2, result
+    assert result["unmatched"] == 0, result
+    assert result["queued"] == 2, result
+
+    rows = await db.fetchall(
+        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+    )
+    queued = {}
+    for row in rows:
+        envelope = BridgeRequest.model_validate_json(row["envelope_json"])
+        assert envelope.hook_event is not None
+        queued[envelope.provider_session_id] = envelope.hook_event.payload
+    assert set(queued) == set(composites.values())
+    assert queued[composites[unpinned]]["is_pinned"] is False
+    assert queued[composites[still_pinned]]["is_pinned"] is True

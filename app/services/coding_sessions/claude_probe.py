@@ -306,7 +306,7 @@ def _desktop_oauth_identity(
         else None
     )
     raw_org = account.get("organizationUuid")
-    org_id = raw_org if isinstance(raw_org, str) and raw_org else None
+    org_id = raw_org.strip() if isinstance(raw_org, str) and raw_org.strip() else None
     if email is None and org_id is None:
         return None
     return email, org_id
@@ -450,7 +450,9 @@ async def read_account_snapshot(
         if isinstance(email_value, str) and email_value.strip()
         else None
     )
-    normalized_org_id = org_id if isinstance(org_id, str) and org_id else None
+    normalized_org_id = (
+        org_id.strip() if isinstance(org_id, str) and org_id.strip() else None
+    )
     if normalized_org_id is None and email is None:
         return AccountSnapshot(
             False,

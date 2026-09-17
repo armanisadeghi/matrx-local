@@ -25,6 +25,24 @@ def _write_cli(path: Path, body: str) -> Path:
     return path
 
 
+class _CompletedProcess:
+    def __init__(self, stdout: bytes, *, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self._stdout = stdout
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._stdout, b""
+
+
+def _completed_process_factory(*outputs: bytes):
+    remaining = iter(outputs)
+
+    async def factory(*_args: Any, **_kwargs: Any) -> _CompletedProcess:
+        return _CompletedProcess(next(remaining))
+
+    return factory
+
+
 def test_packaged_gui_path_finds_official_native_launcher(tmp_path: Path) -> None:
     launcher = _write_cli(tmp_path / ".local" / "bin" / "claude", "exit 0\n")
 
@@ -187,6 +205,80 @@ async def test_signed_out_status_falls_back_to_desktop_oauth_record(
     )
     assert snapshot.account_label == "user@example.com"
     assert snapshot.diagnostic is not None and "desktop OAuth" in snapshot.diagnostic
+
+
+async def test_cli_account_snapshot_trims_org_and_email_without_rotating_v2_key(
+    tmp_path: Path,
+) -> None:
+    """CLI formatting must match the hook's trimmed OAuth-record inputs."""
+    canonical_key = "3f4585247ba86157b1c99d62f332746019cb37f8c50c70addaef1ae192130910"
+    plain_auth = json.dumps(
+        {
+            "loggedIn": True,
+            "apiProvider": "firstParty",
+            "authMethod": "claude.ai",
+            "orgId": "org-1234",
+            "email": "user@example.com",
+        }
+    ).encode()
+    padded_auth = json.dumps(
+        {
+            "loggedIn": True,
+            "apiProvider": "firstParty",
+            "authMethod": "claude.ai",
+            "orgId": "  org-1234  ",
+            "email": " User@Example.com ",
+        }
+    ).encode()
+    launcher = tmp_path / "fake-claude"
+    plain = await read_account_snapshot(
+        executable=launcher,
+        process_factory=_completed_process_factory(plain_auth, b"2.1.228"),
+    )
+    padded = await read_account_snapshot(
+        executable=launcher,
+        process_factory=_completed_process_factory(padded_auth, b"2.1.228"),
+    )
+
+    assert plain.account_key == canonical_key
+    assert padded.account_key == canonical_key
+    assert padded.account_label == "user@example.com"
+
+
+async def test_oauth_fallback_trims_org_and_rejects_whitespace_only_org(
+    tmp_path: Path,
+) -> None:
+    signed_out = b'{"loggedIn": false}'
+    record = tmp_path / "claude.json"
+    record.write_text(
+        json.dumps(
+            {
+                "oauthAccount": {
+                    "emailAddress": " User@Example.com ",
+                    "organizationUuid": "  org-1234  ",
+                }
+            }
+        )
+    )
+    snapshot = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(signed_out),
+    )
+    assert (
+        snapshot.account_key
+        == "3f4585247ba86157b1c99d62f332746019cb37f8c50c70addaef1ae192130910"
+    )
+    assert snapshot.account_label == "user@example.com"
+
+    record.write_text(json.dumps({"oauthAccount": {"organizationUuid": "   "}}))
+    unavailable = await read_account_snapshot(
+        executable=tmp_path / "fake-claude",
+        oauth_record_path=record,
+        process_factory=_completed_process_factory(signed_out),
+    )
+    assert unavailable.available is False
+    assert unavailable.reason == "claude_not_signed_in"
 
 
 async def test_invalid_auth_command_is_execution_failure(tmp_path: Path) -> None:

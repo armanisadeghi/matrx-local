@@ -218,15 +218,34 @@ def _estimate(row: dict[str, Any]) -> dict[str, Any]:
 
 def _aggregate(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:
     grouped: dict[tuple[Any, ...], collections.Counter[str]] = collections.defaultdict(_metrics)
+    estimates: dict[tuple[Any, ...], float] = collections.defaultdict(float)
+    fully_priced: dict[tuple[Any, ...], bool] = collections.defaultdict(lambda: True)
     for row in rows:
+        group_key = tuple(row[key] for key in keys)
         for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count"): grouped[tuple(row[key] for key in keys)][key] += int(row.get(key, 0))
-    return sorted([_estimate(dict(zip(keys, key)) | {"model": (dict(zip(keys, key)).get("model", "mixed"))} | _plain(value)) for key, value in grouped.items()], key=lambda row: row["total_tokens"], reverse=True)
+        if row.get("credit_rate_known") is True:
+            estimates[group_key] += float(row["estimated_standard_credits"])
+        else:
+            fully_priced[group_key] = False
+    output = []
+    for key, value in grouped.items():
+        dimensions = dict(zip(keys, key))
+        output.append(
+            dimensions
+            | {"model": dimensions.get("model", "mixed")}
+            | _plain(value)
+            | {
+                "estimated_standard_credits": estimates[key] if fully_priced[key] else None,
+                "credit_rate_known": fully_priced[key],
+            }
+        )
+    return sorted(output, key=lambda row: row["total_tokens"], reverse=True)
 
 
 def snapshot(scan: UsageScan) -> dict[str, Any]:
     rows = []
     for (tid, model, effort), values in scan.cells.items():
-        item = {"conversation_id": tid, "conversation_title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "root_id": scan.root(tid), "project": scan.threads.get(tid, {}).get("project", "unknown"), "model": model, "effort": effort, **_plain(values)}; rows.append(item)
+        item = _estimate({"conversation_id": tid, "conversation_title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "root_id": scan.root(tid), "project": scan.threads.get(tid, {}).get("project", "unknown"), "model": model, "effort": effort, **_plain(values)}); rows.append(item)
     for tid in {row["conversation_id"] for row in rows}:
         group = [row for row in rows if row["conversation_id"] == tid]; activity = next((row for row in group if row["model"] == "unknown" and any(row[key] for key in ACTIVITY_FIELDS)), None)
         if activity is not None and tid in scan.targets:
@@ -234,7 +253,7 @@ def snapshot(scan: UsageScan) -> dict[str, Any]:
             # the explicit unknown row instead of assigning them to the largest
             # token model in the same conversation.
             activity["peer_targets"] = [{"conversation_id": target, "title": scan.threads[target]["title"], "invocations": count} for target, count in scan.targets[tid].most_common() if target in scan.threads]
-    bins = [{"start": when.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(values)} for (when, tid, model, effort), values in sorted(scan.bins.items())]
+    bins = [_estimate({"start": when.isoformat(), "conversation_id": tid, "model": model, "effort": effort, **_plain(values)}) for (when, tid, model, effort), values in sorted(scan.bins.items())]
     tasks = [{"id": tid, "title": scan.threads.get(tid, {}).get("title", f"Conversation {tid[:8]}"), "project": scan.threads.get(tid, {}).get("project", "unknown"), "root_id": scan.root(tid), "is_worker": tid != scan.root(tid), **{key: sum(row[key] for row in rows if row["conversation_id"] == tid) for key in ACTIVITY_FIELDS}} for tid in sorted({row["conversation_id"] for row in rows})]
     total = _plain(collections.Counter({key: sum(int(row.get(key, 0)) for row in rows) for key in (*FIELDS, *ACTIVITY_FIELDS, "response_count")})); models, model_effort, projects = _aggregate(rows, ("model",)), _aggregate(rows, ("model", "effort")), _aggregate(rows, ("project",)); estimate = sum(float(row["estimated_standard_credits"] or 0) for row in models)
     exhausted = scan.scan_exhausted; complete = scan.index_available and exhausted and not (scan.missing or scan.skipped or scan.read_errors or scan.truncated)

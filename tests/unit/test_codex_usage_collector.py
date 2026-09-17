@@ -84,3 +84,34 @@ def test_collaboration_transport_requires_exact_structured_namespace_and_name():
     assert not collector._is_collaboration_send_message({}, "send_message")
     assert not collector._is_collaboration_send_message({"namespace": "tools"}, "send_message")
     assert not collector._is_collaboration_send_message({"namespace": "collaboration"}, "send_message_to_thread")
+
+
+def test_snapshot_estimates_cells_bins_and_mixed_projects_without_fabricating_unknowns():
+    """The 77-response local window must keep estimates on every scoped row."""
+    start = dt.datetime(2026, 9, 14, 13, 31, tzinfo=UTC)
+    scan = collector.UsageScan(start, start + dt.timedelta(minutes=10), dt.datetime.now(UTC), {
+        "sol": {"title": "AI Dream Releases", "project": "priced"},
+        "terra": {"title": "Release worker", "project": "priced"},
+        "unknown": {"title": "Unknown model", "project": "unknown-rate"},
+    }, {"terra": "sol"}, [])
+    scan.cells[("sol", "gpt-5.6-sol", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=77)
+    scan.cells[("terra", "gpt-5.6-terra", "low")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=1)
+    scan.cells[("unknown", "future-model", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=1)
+    scan.bins[(start, "sol", "gpt-5.6-sol", "medium")].update(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, response_count=77)
+
+    result = collector.snapshot(scan)
+    by_model = {row["model"]: row for row in result["cells"]}
+    assert by_model["gpt-5.6-sol"]["estimated_standard_credits"] == 600
+    assert by_model["gpt-5.6-sol"]["credit_rate_known"] is True
+    assert result["bins"][0]["estimated_standard_credits"] == 600
+    assert result["conversations"][0]["estimated_standard_credits"] == 600
+    assert result["workers"][0]["estimated_standard_credits"] == 350
+    priced_project = next(row for row in result["projects"] if row["project"] == "priced")
+    assert priced_project["estimated_standard_credits"] == 950
+    assert priced_project["credit_rate_known"] is True
+    unknown = by_model["future-model"]
+    assert unknown["estimated_standard_credits"] is None
+    assert unknown["credit_rate_known"] is False
+    unknown_project = next(row for row in result["projects"] if row["project"] == "unknown-rate")
+    assert unknown_project["estimated_standard_credits"] is None
+    assert unknown_project["credit_rate_known"] is False

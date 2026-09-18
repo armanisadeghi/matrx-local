@@ -10,6 +10,21 @@ file a Codex session wrote is its ``apply_patch`` tool call inside the rollout
 at ``~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl``, whose body carries
 real ``*** Add File:`` / ``*** Update File:`` / ``*** Delete File:`` headers.
 
+**THE SECOND SOURCE, AND THE ONE THAT ACTUALLY WORKS NOW.** The rollout is a
+record Codex keeps for itself, and it stopped naming files: 0 of the 4,492
+rollouts from August 2026 onward contain a single ``apply_patch`` (lane CS-31).
+The fact is not in the file, so it is collected where it still exists — at hook
+time. The AI Matrx Codex plugin records, per turn, which files under the
+session's own working directory were created or modified while the turn ran,
+and writes a DECLARATION into its own durable plugin data directory. This
+module reads those declarations from
+``$CODEX_HOME/plugins/data/*/coding-session-bridge/writes/*.writes.json`` and
+merges them into the same ``DiscoveredSession`` the rollout produces, so the
+artifacts lane, the durable folder, the upload door, the repository rule and
+the screen are all one path for both sources. A declaration is plain JSON
+written atomically by a hook that needs no engine to be running, which is why
+a stopped or absent Matrx Local can never lose a write record.
+
 **THE LIMIT, SAID OUT LOUD.** Modern Codex writes mostly through shell
 commands, and a shell call records no file list — only the command. Measured
 across every rollout in Arman's ``~/.codex`` on 2026-09-17: 5,041 rollouts,
@@ -37,7 +52,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +190,138 @@ def _patch_body(payload: dict[str, Any]) -> str:
             if nested:
                 return nested
     return ""
+
+
+# ---------------------------------------------------------------------------
+# The plugin's hook-time declarations.
+# ---------------------------------------------------------------------------
+
+#: Where the AI Matrx Codex plugin keeps its per-session write declarations.
+#: The ``*`` is the installed plugin id (``matrx-codex-plugin-ai-matrx`` today),
+#: globbed so a differently-named install is still read rather than silently
+#: producing an empty artifacts panel.
+PLUGIN_DECLARATION_GLOB = "plugins/data/*/coding-session-bridge/writes/*.writes.json"
+PLUGIN_DECLARATION_SCHEMA = 1
+#: A declaration is small (one record per path, capped at 1,000 paths by the
+#: plugin), but the number of them grows with sessions, so the read is bounded
+#: the same way the rollout scan is — newest first, and what the bound left
+#: out is reported rather than hidden.
+DEFAULT_MAX_DECLARATIONS = 500
+_MAX_DECLARATION_BYTES = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class CodexPluginDeclaration:
+    """One Codex session's hook-time write record, as the plugin wrote it."""
+
+    path: Path
+    session_id: str
+    cwd: Path
+    updated_at: str | None
+    written: tuple[Path, ...] = ()
+    outside_cwd: tuple[Path, ...] = ()
+    refused: dict[str, int] = field(default_factory=dict)
+    turns_scanned: int = 0
+    turns_stopped_by_a_bound: int = 0
+
+    @property
+    def project_slug(self) -> str:
+        return str(self.cwd).replace(os.sep, "-").replace("/", "-") or "-"
+
+
+def read_plugin_declaration(path: Path) -> CodexPluginDeclaration | None:
+    """Read one declaration file. ``None`` when it cannot be trusted.
+
+    A declaration is data written by another process, so every field is
+    checked: an unknown ``schema_version`` is REFUSED rather than guessed at,
+    because a future plugin could mean something different by the same key and
+    a wrong guess here uploads the wrong files.
+    """
+    try:
+        if path.stat().st_size > _MAX_DECLARATION_BYTES:
+            logger.info("[codex_writes] declaration too large, ignored: %s", path)
+            return None
+        record = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        logger.info("[codex_writes] could not read declaration %s: %s", path, exc)
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("schema_version") != PLUGIN_DECLARATION_SCHEMA:
+        logger.info(
+            "[codex_writes] declaration %s has schema_version %r, not %r — ignored",
+            path,
+            record.get("schema_version"),
+            PLUGIN_DECLARATION_SCHEMA,
+        )
+        return None
+    if record.get("provider") != PROVIDER:
+        return None
+    session_id = record.get("session_id")
+    cwd = record.get("cwd")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    root = Path(cwd)
+    files = record.get("files")
+    inside: list[Path] = []
+    outside: list[Path] = []
+    if isinstance(files, dict):
+        for key, entry in files.items():
+            raw = entry.get("path") if isinstance(entry, dict) else None
+            candidate = Path(raw if isinstance(raw, str) and raw else key)
+            if not candidate.is_absolute():
+                continue
+            # The same boundary the rollout source applies: a path outside the
+            # session's own project folder is not a session artifact.
+            if candidate == root or root in candidate.parents:
+                inside.append(candidate)
+            else:
+                outside.append(candidate)
+    refused_raw = record.get("refused")
+    refused = {
+        str(key): int(value)
+        for key, value in (refused_raw or {}).items()
+        if isinstance(refused_raw, dict)
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    }
+    scan = record.get("scan") if isinstance(record.get("scan"), dict) else {}
+    updated_at = record.get("updated_at")
+    return CodexPluginDeclaration(
+        path=path,
+        session_id=session_id,
+        cwd=root,
+        updated_at=updated_at if isinstance(updated_at, str) else None,
+        written=tuple(dict.fromkeys(inside)),
+        outside_cwd=tuple(dict.fromkeys(outside)),
+        refused=refused,
+        turns_scanned=int(scan.get("turns_scanned") or 0),
+        turns_stopped_by_a_bound=int(scan.get("turns_stopped_by_a_bound") or 0),
+    )
+
+
+def plugin_declaration_files(
+    home: Path | None = None, *, max_declarations: int | None = DEFAULT_MAX_DECLARATIONS
+) -> tuple[list[Path], int]:
+    """Declaration files newest first, plus how many exist in total."""
+    root = home or codex_home()
+    try:
+        candidates = list(root.glob(PLUGIN_DECLARATION_GLOB))
+    except OSError:
+        return [], 0
+    dated: list[tuple[float, Path]] = []
+    for path in candidates:
+        try:
+            dated.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    ordered = [path for _, path in dated]
+    if max_declarations is None:
+        return ordered, len(ordered)
+    return ordered[:max_declarations], len(ordered)
 
 
 @dataclass(frozen=True)
@@ -318,19 +465,37 @@ class CodexRolloutSessionSource:
         *,
         max_age_days: float | None = DEFAULT_MAX_AGE_DAYS,
         max_rollouts: int | None = DEFAULT_MAX_ROLLOUTS,
+        max_declarations: int | None = DEFAULT_MAX_DECLARATIONS,
     ) -> None:
         self._home = home
         self._max_age_days = max_age_days
         self._max_rollouts = max_rollouts
+        self._max_declarations = max_declarations
         self._cache: dict[str, _Cached] = {}
         self._last_scan: dict[str, int] = {}
+        self._last_refusals: dict[str, int] = {}
 
     @property
     def home(self) -> Path:
         return self._home or codex_home()
 
     def locations(self) -> list[str]:
-        return [str(codex_sessions_root(self._home))]
+        return [
+            str(codex_sessions_root(self._home)),
+            str((self._home or codex_home()) / PLUGIN_DECLARATION_GLOB),
+        ]
+
+    def declarations(self) -> tuple[list[CodexPluginDeclaration], int]:
+        """Every hook-time declaration this pass will read, newest first."""
+        paths, available = plugin_declaration_files(
+            self._home, max_declarations=self._max_declarations
+        )
+        read = [
+            declaration
+            for declaration in (read_plugin_declaration(path) for path in paths)
+            if declaration is not None
+        ]
+        return read, available
 
     def rollouts(self) -> list[Path]:
         return rollout_files(
@@ -386,48 +551,183 @@ class CodexRolloutSessionSource:
                 f"{without} Codex session(s) recorded no file writes at all, so they have "
                 "no artifacts to show even though they may have written files."
             )
+        messages.extend(self._declaration_gaps())
+        return messages
+
+    def _declaration_gaps(self) -> list[str]:
+        """What the hook-time source did, or why it has nothing to say.
+
+        The silence case is the one that matters. Before hook-time capture
+        existed, a Codex session with real deliverables showed an empty
+        artifacts panel and the only explanation on offer was about
+        ``apply_patch`` — true, and useless to the person looking at it. An
+        absent plugin is a DIFFERENT fact from a plugin that ran and found
+        nothing, and the screen says which.
+        """
+        messages: list[str] = []
+        scan = self._last_scan
+        read = int(scan.get("declarations_read") or 0)
+        if not read:
+            messages.append(
+                "No Codex session on this Mac has a hook-time write record yet. Codex itself "
+                "only names a file it changed through apply_patch, which current Codex versions "
+                "do not use, so artifacts are captured by the AI Matrx plugin for Codex as each "
+                "turn finishes. Install or update that plugin and run one Codex turn, and the "
+                "files that turn writes will appear here."
+            )
+            return messages
+        paths = int(scan.get("declaration_paths") or 0)
+        only = int(scan.get("sessions_only_in_declarations") or 0)
+        detail = (
+            f"{read} Codex session(s) have a hook-time write record naming {paths} file(s)"
+        )
+        if only:
+            detail += f", {only} of which Codex's own rollouts no longer cover"
+        messages.append(detail + ".")
+        clipped = int(scan.get("declarations_outside_scan_window") or 0)
+        if clipped:
+            messages.append(
+                f"{clipped} older Codex write record(s) were not read this pass (the scan reads "
+                f"the newest {self._max_declarations}), so artifacts older than that are not "
+                "listed yet."
+            )
+        refused_repo = sum(
+            int(self._last_refusals.get(key) or 0)
+            for key in ("repository_files_refused", "repository_subtrees_refused", "repository_roots_refused")
+        )
+        if refused_repo:
+            messages.append(
+                f"{refused_repo} path(s) or folder(s) these turns wrote are inside a git "
+                "checkout and are deliberately not captured: AI Matrx never copies source code "
+                "out of a repository working copy, for any coding agent."
+            )
+        excluded = int(self._last_refusals.get("excluded_subtrees") or 0)
+        if excluded:
+            messages.append(
+                f"{excluded} build, cache or dependency folder(s) were skipped while looking for "
+                "these files (node_modules, .venv, target and the like are never deliverables)."
+            )
+        over_size = int(self._last_refusals.get("files_over_size_cap") or 0)
+        if over_size:
+            messages.append(
+                f"{over_size} file(s) a turn wrote are larger than the 25 MB artifact limit and "
+                "were not captured."
+            )
         return messages
 
     def discover(self) -> Iterator[DiscoveredSession]:
+        # TWO SOURCES, ONE SESSION. The rollout knows a session's identity and
+        # its `apply_patch` paths; the plugin's hook-time declaration knows what
+        # the turn actually wrote (which, since August 2026, is the only source
+        # that knows anything). A session seen by both is yielded ONCE with the
+        # union of their paths, so the artifacts lane keeps one durable folder
+        # and one manifest per session instead of two competing views.
+        declarations, declarations_available = self.declarations()
+        by_session: dict[str, CodexPluginDeclaration] = {}
+        for declaration in declarations:
+            existing = by_session.get(declaration.session_id)
+            # Same session declared twice (two plugin installs): keep the
+            # freshest, never a silent half-merge.
+            if existing is None or (declaration.updated_at or "") >= (existing.updated_at or ""):
+                by_session[declaration.session_id] = declaration
+        refusals: dict[str, int] = {}
+        for declaration in by_session.values():
+            for key, value in declaration.refused.items():
+                refusals[key] = refusals.get(key, 0) + value
+
         # The scan is BOUNDED (5,041 rollouts on this Mac, each read in full),
         # so how many rollouts the bound left out is itself a gap the screen
         # must be able to say — a quietly clipped scan looks exactly like a
         # user with no Codex artifacts.
         available = len(rollout_files(self._home, max_age_days=None, max_rollouts=None))
         seen = with_writes = without = 0
+        declared_paths = 0
+        sessions_from_declarations = 0
+        merged: set[str] = set()
         for rollout in self.rollouts():
             seen += 1
             writes = self.read(rollout)
             if writes is None:
                 continue
-            if not writes.written:
+            declaration = by_session.get(writes.session_id)
+            files = writes.written
+            if declaration is not None:
+                merged.add(writes.session_id)
+                declared_paths += len(declaration.written)
+                files = tuple(dict.fromkeys(files + declaration.written))
+            if not files:
                 without += 1
                 continue
             with_writes += 1
+            notes = writes.notes()
+            if declaration is not None:
+                notes.update(_declaration_notes(declaration))
             yield DiscoveredSession(
                 provider=self.provider,
                 project_slug=writes.project_slug,
                 cli_session_id=writes.session_id,
                 root=writes.cwd,
-                files=writes.written,
-                notes=writes.notes(),
+                files=files,
+                notes=notes,
             )
+
+        # A declaration whose rollout fell outside the scan window (or was
+        # archived, or never existed) is still a real session with real
+        # artifacts. It carries its own identity and cwd, so it needs no
+        # rollout to be listed.
+        for session_id, declaration in by_session.items():
+            if session_id in merged or not declaration.written:
+                continue
+            sessions_from_declarations += 1
+            declared_paths += len(declaration.written)
+            yield DiscoveredSession(
+                provider=self.provider,
+                project_slug=declaration.project_slug,
+                cli_session_id=session_id,
+                root=declaration.cwd,
+                files=declaration.written,
+                notes=_declaration_notes(declaration),
+            )
+
+        self._last_refusals = refusals
         self._last_scan = {
             "rollouts_available": available,
             "rollouts_scanned": seen,
             "rollouts_with_structured_writes": with_writes,
             "rollouts_without_structured_writes": without,
             "rollouts_outside_scan_window": max(available - seen, 0),
+            "declarations_available": declarations_available,
+            "declarations_read": len(by_session),
+            "declarations_outside_scan_window": max(declarations_available - len(declarations), 0),
+            "declaration_paths": declared_paths,
+            "sessions_only_in_declarations": sessions_from_declarations,
         }
+
+
+def _declaration_notes(declaration: CodexPluginDeclaration) -> dict[str, Any]:
+    return {
+        "hook_declaration": str(declaration.path),
+        "hook_declared_writes": len(declaration.written),
+        "hook_declared_paths_outside_cwd": len(declaration.outside_cwd),
+        "hook_turns_scanned": declaration.turns_scanned,
+        "hook_turns_stopped_by_a_bound": declaration.turns_stopped_by_a_bound,
+        "hook_declaration_updated_at": declaration.updated_at,
+    }
 
 
 __all__ = [
     "CODEX_HOME_ENV",
     "DEFAULT_MAX_AGE_DAYS",
+    "DEFAULT_MAX_DECLARATIONS",
     "DEFAULT_MAX_ROLLOUTS",
+    "PLUGIN_DECLARATION_GLOB",
+    "PLUGIN_DECLARATION_SCHEMA",
     "PROVIDER",
+    "CodexPluginDeclaration",
     "CodexRolloutSessionSource",
     "CodexSessionWrites",
+    "plugin_declaration_files",
+    "read_plugin_declaration",
     "codex_home",
     "codex_sessions_root",
     "parse_apply_patch",

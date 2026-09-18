@@ -254,7 +254,15 @@ async def test_codex_lane_captures_and_publishes_the_file_the_rollout_names(
         )
         status = lane.status()
         assert status["provider"] == "codex" and status["uploaded"] == 1
-        assert status["roots"] == [str(home / "sessions")]
+        # BOTH Codex sources are named on the screen (lane CS-34): the rollouts
+        # Codex writes for itself, and the plugin's hook-time write records —
+        # which, since Codex stopped emitting apply_patch, are the only source
+        # that names a modern session's files at all. A source the screen does
+        # not name cannot be diagnosed when it is the one that is empty.
+        assert status["roots"] == [
+            str(home / "sessions"),
+            str(home / "plugins/data/*/coding-session-bridge/writes/*.writes.json"),
+        ]
 
         # Second tick: nothing new, nothing re-uploaded.
         assert (await lane.run_once())["uploaded"] == 0 and len(client.uploads) == 1

@@ -53,11 +53,13 @@ one pass.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
 import stat
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -88,7 +90,6 @@ ORG_SIGNAL_PREFIX = "dxt:allowlistLastUpdated:"
 # id format, and this module must not reject a future one. What it must reject
 # is a separator or a ``..`` that would walk out of the index tree.
 _SAFE_SEGMENT_RE = re.compile(r"\A[A-Za-z0-9._-]{1,128}\Z")
-_ISO_STAMP_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T[\d:.]{8,15}Z\Z")
 
 
 def _safe_account(value: object) -> str | None:
@@ -98,6 +99,36 @@ def _safe_account(value: object) -> str | None:
     if not _SAFE_SEGMENT_RE.match(candidate) or candidate in {".", ".."}:
         return None
     return candidate
+
+
+def parse_stated_stamp(value: object) -> dt.datetime | None:
+    """One of the app's ``dxt:allowlistLastUpdated`` stamps as an INSTANT.
+
+    These were compared as strings until 2026-09-18, which is wrong in the one
+    place it matters: ``"…08.500Z"`` sorts BELOW ``"…08Z"``, so an org updated
+    half a second later lost to its sibling. All eight stamps on the machine
+    this was measured on happened to carry fractional seconds, so the bug was
+    dormant rather than active — and dormant is not fixed.
+
+    A value that is not a stamp returns ``None`` and is then treated exactly
+    like a stamp the app never wrote: ignored, never a crash, never a winner.
+    Concluding anything from an unparseable stamp would be a guess, and a
+    guess here publishes another organisation's sidebar.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text[-1] in {"Z", "z"}:
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -244,9 +275,11 @@ def record_focused_at(record: dict) -> int:
 def stated_org_stamps(app_support: Path | None = None) -> dict[str, str]:
     """Organisation -> the app's own last-updated stamp for it, if stated.
 
-    The values are ISO-8601 UTC strings the app writes itself, so they are
-    comparable as strings; anything that is not one is ignored rather than
-    guessed at.
+    The values are ISO-8601 UTC strings the app writes itself. What counts as
+    one is decided by :func:`parse_stated_stamp` — the SAME function that
+    later orders them — so this reader cannot accept a stamp the decision
+    would then silently drop, nor drop one the decision could have used.
+    Anything unparseable is ignored rather than guessed at.
     """
     base = app_support or default_app_support_dir()
     path = base / ORG_SIGNAL_FILE
@@ -264,8 +297,8 @@ def stated_org_stamps(app_support: Path | None = None) -> dict[str, str]:
         if not isinstance(key, str) or not key.startswith(ORG_SIGNAL_PREFIX):
             continue
         org = _safe_account(key[len(ORG_SIGNAL_PREFIX) :])
-        if org and isinstance(value, str) and _ISO_STAMP_RE.match(value.strip()):
-            stamps[org] = value.strip()
+        if org and parse_stated_stamp(value) is not None:
+            stamps[org] = str(value).strip()
     return stamps
 
 
@@ -299,6 +332,57 @@ def _newest_focus_in(org_dir: Path) -> int:
         if value > newest:
             newest = value
     return newest
+
+
+def account_org_dirs(account_dir: Path) -> tuple[str, ...]:
+    """Every organisation folder under one account, sorted.
+
+    THE answer to which organisations EXIST for an account, and the ONLY
+    place either reader may get it. Existence is a directory listing and
+    nothing else — never "the orgs I happen to hold a stamp for".
+    """
+    try:
+        names = sorted(os.listdir(account_dir))
+    except OSError:
+        return ()
+    return tuple(name for name in names if (account_dir / name).is_dir())
+
+
+def org_focus_for(
+    account_dir: Path,
+    stamps: Mapping[str, int] | None = None,
+) -> dict[str, int]:
+    """``{organisation: newest lastFocusedAt}`` for ONE account's orgs.
+
+    The org SET is :func:`account_org_dirs` — the same listing for both
+    readers of the rule — and only the VALUES differ in how they are
+    gathered: ``stamps=None`` walks each org's records (the extractor, which
+    has no index), and a caller that already stores every record's focus
+    stamp passes them in (the engine's SQLite index, which must not re-walk
+    79,000 files to answer this).
+
+    This function exists because the two readers DID disagree (CS-33/R2,
+    2026-09-18): the extractor enumerated org directories while the engine
+    enumerated records ``WHERE lastrecord_focused_at > 0``, so an org the app
+    NAMES whose records carry no focus stamp was invisible to the engine —
+    and :func:`decide_scope` only honours a statement about an org it can
+    see, so the engine silently fell back to focus ranking and published a
+    different sidebar from the ledger on the same machine. An org with no
+    stamp is now an org with stamp 0 in BOTH readers: a missing stamp cannot
+    hide an organisation, and a stamp naming a folder that is not there
+    cannot invent one.
+    """
+    orgs = account_org_dirs(account_dir)
+    if stamps is None:
+        return {org: _newest_focus_in(account_dir / org) for org in orgs}
+    focus: dict[str, int] = {}
+    for org in orgs:
+        try:
+            value = int(stamps.get(org) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        focus[org] = value if value > 0 else 0
+    return focus
 
 
 def decide_scope(
@@ -343,23 +427,35 @@ def decide_scope(
             ),
         )
 
-    stated = {
-        org: stamp
-        for org, stamp in (org_stated or {}).items()
-        if org in org_focus
-    }
+    # ``org_focus`` is the org set from :func:`account_org_dirs` in BOTH
+    # readers, so "an org it can see" no longer depends on which reader is
+    # asking. The stamps are ordered as INSTANTS, never as strings: ".500Z"
+    # sorts below "Z", and an unparseable stamp is dropped here exactly as it
+    # is in :func:`stated_org_stamps` — ignored, never a winner.
+    stated: dict[str, tuple[dt.datetime, str]] = {}
+    for org, stamp in (org_stated or {}).items():
+        if org not in org_focus:
+            continue
+        parsed = parse_stated_stamp(stamp)
+        if parsed is None:
+            continue
+        stated[org] = (parsed, str(stamp).strip())
     if stated:
-        best = max(stated.values())
-        winners = sorted(org for org, stamp in stated.items() if stamp == best)
+        best = max(instant for instant, _text in stated.values())
+        winners = sorted(
+            org for org, (instant, _text) in stated.items() if instant == best
+        )
         if len(winners) == 1:
-            return resolved(winners[0], f"is the one the app last updated ({best})")
+            shown = stated[winners[0]][1]
+            return resolved(winners[0], f"is the one the app last updated ({shown})")
+        shown = "; ".join(f"{org} at {stated[org][1]}" for org in winners)
         return ScopeResolution(
             account=account,
             signals=signals,
             reason=(
                 f"the app states it is signed into {account} but names "
                 f"{len(winners)} of its organisations as last updated at the "
-                f"same moment ({best}), so the organisation — and therefore "
+                f"same moment ({shown}), so the organisation — and therefore "
                 "the pin — is UNKNOWN"
             ),
         )
@@ -432,15 +528,7 @@ def resolve_active_scope(
                 "has no session-index folder yet, so the pin is UNKNOWN"
             ),
         )
-    org_focus: dict[str, int] = {}
-    try:
-        candidates = sorted(os.listdir(account_dir))
-    except OSError:
-        candidates = []
-    for name in candidates:
-        org_dir = account_dir / name
-        if org_dir.is_dir():
-            org_focus[name] = _newest_focus_in(org_dir)
+    org_focus = org_focus_for(account_dir)
     return decide_scope(
         account,
         signals,

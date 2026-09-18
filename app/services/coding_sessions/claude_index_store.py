@@ -58,6 +58,8 @@ from app.services.coding_sessions.claude_session_index import (
 from app.services.coding_sessions.claude_scope import (
     app_support_for,
     decide_scope,
+    default_sessions_root,
+    org_focus_for,
     signed_in_account,
     stated_org_stamps,
 )
@@ -530,23 +532,35 @@ class ClaudeIndexStore:
             # :mod:`app.services.coding_sessions.claude_scope`; this path only
             # supplies the per-organisation stamps it already stores, so it
             # never re-walks the tree to answer the question.
-            app_support = app_support_for(sessions_root) if sessions_root else None
+            # WHICH organisations exist is NOT this reader's question to
+            # answer: it comes from ``claude_scope.account_org_dirs`` through
+            # ``org_focus_for``, the same listing the extractor uses. This
+            # path used to build the set from ``WHERE lastrecord_focused_at >
+            # 0``, so an org the app NAMES whose records carry no focus stamp
+            # was invisible here, ``decide_scope`` ignored the app's statement
+            # about it, and the engine fell back to focus ranking while the
+            # extractor honoured the statement — one machine, two sidebars
+            # (CS-33/R2, 2026-09-18). All this reader supplies now is the
+            # per-org stamp it already stores, so it still never re-walks the
+            # tree to answer the question.
+            root = sessions_root or default_sessions_root()
+            app_support = app_support_for(root)
             account, signals, account_reason = signed_in_account(app_support)
             org_focus: dict[str, int] = {}
             account_dir: Path | None = None
             if account is not None:
+                account_dir = root / account
+                stamps: dict[str, int] = {}
                 for row in connection.execute(
                     "SELECT path, lastrecord_focused_at AS focus FROM records "
-                    "WHERE account = ? AND lastrecord_focused_at > 0 "
-                    "AND unreadable = 0",
+                    "WHERE account = ? AND unreadable = 0",
                     (account,),
                 ):
-                    org_dir = Path(str(row["path"])).parent
-                    if account_dir is None:
-                        account_dir = org_dir.parent
+                    org_name = Path(str(row["path"])).parent.name
                     focus = int(row["focus"] or 0)
-                    if focus > org_focus.get(org_dir.name, 0):
-                        org_focus[org_dir.name] = focus
+                    if focus > stamps.get(org_name, 0):
+                        stamps[org_name] = focus
+                org_focus = org_focus_for(account_dir, stamps)
             resolution = decide_scope(
                 account,
                 signals,

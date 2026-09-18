@@ -1,20 +1,38 @@
 """Coding-session artifacts — keep what a session BUILT, not just what it said.
 
+Coding sessions are ONE feature, so this lane is not Claude-Code-only: a
+lane is built PER PROVIDER (``provider="claude_code"``, ``provider="codex"``,
+…) and every provider differs in exactly one place — how its sessions and
+their files are DISCOVERED. That difference is an
+:class:`ArtifactSessionSource`; everything after discovery (exclusions, size
+and count caps, the durable copy, the manifest, the upload, the read-back
+confirmation and the placement repair) is this one shared machinery.
+
 Claude Code writes a session's deliverables into a per-session scratchpad
-under ``/tmp/claude-<uid>/<project-slug>/<session-id>/scratchpad/…``. The
-bridge mirrors the conversation to AI Matrx but never those files, so
-switching Claude accounts hid them, AI Matrx showed conversations without
-the things they produced, and macOS eventually purges /tmp. Measured
-2026-09-12: 723 scratchpads, 11 GB, most of it venvs/clones/node_modules
-next to the handful of real deliverables.
+under ``/tmp/claude-<uid>/<project-slug>/<session-id>/scratchpad/…``
+(:class:`ScratchpadSessionSource`). The bridge mirrors the conversation to
+AI Matrx but never those files, so switching Claude accounts hid them, AI
+Matrx showed conversations without the things they produced, and macOS
+eventually purges /tmp. Measured 2026-09-12: 723 scratchpads, 11 GB, most of
+it venvs/clones/node_modules next to the handful of real deliverables.
+
+Codex has no scratchpad at all: its structured record of what a session
+wrote is the ``apply_patch`` calls in its rollout file, so its source hands
+this lane an explicit file list instead of a directory to walk
+(:mod:`app.services.coding_sessions.codex_writes`). That record is
+INCOMPLETE by construction — a Codex session that writes through shell
+commands records no file list — so every source also reports the gap it
+knows about (``source_notes``), and the lane carries those numbers into
+``status()`` and each session summary. A gap that is counted and named is
+honest; a gap that is silent is a defect (law 4).
 
 This lane, every cycle:
 
-1. scans every scratchpad it can see (all projects, all sessions — a
-   session hidden by an account switch is still on disk);
+1. asks its source for every session it can see (all projects, all sessions
+   — a session hidden by an account switch is still on disk);
 2. copies every DELIVERABLE file (see ``_is_excluded_dir`` / size cap) into
    the durable per-session folder ``<app data>/coding-sessions/artifacts/
-   claude_code/<session-id>/<relative path>`` — outside /tmp, readable by
+   <provider>/<session-id>/<relative path>`` — outside /tmp, readable by
    any session on this Mac, revealed from the Coding Sessions screen;
 3. publishes each new or changed file to AI Matrx through the same
    matrx-files upload the screenshot publisher uses, tagged with the
@@ -59,10 +77,11 @@ import json
 import mimetypes
 import os
 import shutil
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from app.common.system_logger import get_logger
 from app.services.aidream.organization import OrganizationNotResolvedError
@@ -77,7 +96,7 @@ from app.services.session_freshness import (
 
 logger = get_logger()
 
-PROVIDER = "claude_code"
+DEFAULT_PROVIDER = "claude_code"
 MANIFEST_NAME = ".matrx-artifacts.json"
 SCAN_INTERVAL_SECONDS = 120.0
 MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -158,6 +177,22 @@ def default_scratchpad_roots() -> list[Path]:
     return roots
 
 
+def _inside_repository(candidate: Path, root: Path) -> bool:
+    """Is this file inside a git checkout or worktree at or under ``root``?
+
+    Walks from the file's own folder up to (and including) ``root``. A
+    ``.git`` entry anywhere on that path means the file belongs to a
+    repository working copy, which is never a session deliverable.
+    """
+    folder = candidate.parent
+    while True:
+        if (folder / ".git").exists():
+            return True
+        if folder == root or root not in folder.parents:
+            return False
+        folder = folder.parent
+
+
 def _is_excluded_dir(path: Path) -> bool:
     if path.name in _EXCLUDED_DIR_NAMES:
         return True
@@ -167,16 +202,101 @@ def _is_excluded_dir(path: Path) -> bool:
     return (path / ".git").exists() or (path / MANIFEST_NAME).exists()
 
 
+@dataclass(frozen=True)
+class DiscoveredSession:
+    """One provider session this lane should capture, as its source sees it.
+
+    ``root`` is what relative paths are computed against, so the durable
+    layout is the same shape for every provider. ``files`` is the honest
+    difference between providers: ``None`` means "walk ``root``" (Claude
+    Code's scratchpad), while an explicit tuple means "these exact files"
+    (Codex, whose writes are named by its rollout, not by a directory).
+    ``notes`` carries what the source knows it CANNOT see — numbers and a
+    sentence, never a silent gap.
+    """
+
+    provider: str
+    project_slug: str
+    cli_session_id: str
+    root: Path
+    files: tuple[Path, ...] | None = None
+    notes: dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class ArtifactSessionSource(Protocol):
+    """How ONE provider's sessions and their written files are discovered.
+
+    The whole per-provider difference lives here. Implementations do no
+    copying, no uploading and no manifest work: they answer "which sessions
+    exist, and which files did each one write".
+    """
+
+    provider: str
+
+    def locations(self) -> list[str]:
+        """Where this source looks — shown verbatim on the status screen."""
+
+    def discover(self) -> Iterable[DiscoveredSession]:
+        """Every session this source can see right now."""
+
+
+class ScratchpadSessionSource:
+    """Claude Code: ``<root>/<project-slug>/<session-id>/scratchpad`` trees."""
+
+    provider = DEFAULT_PROVIDER
+
+    def __init__(self, roots: list[Path] | None = None) -> None:
+        self._roots_override = roots
+
+    @property
+    def roots(self) -> list[Path]:
+        return self._roots_override if self._roots_override is not None else default_scratchpad_roots()
+
+    def locations(self) -> list[str]:
+        return [str(root) for root in self.roots]
+
+    def discover(self) -> Iterator[DiscoveredSession]:
+        for root in self.roots:
+            try:
+                projects = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink()]
+            except OSError:
+                continue
+            for project in projects:
+                try:
+                    sessions = [s for s in project.iterdir() if s.is_dir() and not s.is_symlink()]
+                except OSError:
+                    continue
+                for session_dir in sessions:
+                    scratchpad = session_dir / "scratchpad"
+                    if not scratchpad.is_dir():
+                        continue
+                    yield DiscoveredSession(
+                        provider=self.provider,
+                        project_slug=project.name,
+                        cli_session_id=session_dir.name,
+                        root=scratchpad,
+                    )
+
+
 @dataclass
 class SessionArtifacts:
     provider: str
     cli_session_id: str
     project_slug: str
-    scratchpad: Path
+    source_root: Path
     durable_dir: Path
     files: dict[str, dict[str, Any]] = field(default_factory=dict)
     skipped_over_size: int = 0
     skipped_over_count: int = 0
+    # What the source could not read: files it was told about that are no
+    # longer on disk, plus whatever gap the source itself reports.
+    missing_source_files: list[str] = field(default_factory=list)
+    # Files the source named that belong to a repository working copy. The
+    # repository rule excludes them for every provider, and the count is the
+    # honest reason a session with real writes can still capture nothing.
+    skipped_repository_files: int = 0
+    source_notes: dict[str, Any] = field(default_factory=dict)
 
     @property
     def uploaded_count(self) -> int:
@@ -254,8 +374,14 @@ class SessionArtifacts:
             "provider": self.provider,
             "cli_session_id": self.cli_session_id,
             "project_slug": self.project_slug,
-            "scratchpad": str(self.scratchpad),
+            "source_root": str(self.source_root),
+            # Kept for the screens that already read this key; for Claude Code
+            # it is the scratchpad, for every other provider the source root.
+            "scratchpad": str(self.source_root),
             "durable_dir": str(self.durable_dir),
+            "missing_source_files": len(self.missing_source_files),
+            "skipped_repository_files": self.skipped_repository_files,
+            "source_notes": dict(self.source_notes),
             "files": len(self.files),
             "bytes": sum(int(f.get("size") or 0) for f in self.files.values()),
             "uploaded": self.uploaded_count,
@@ -282,13 +408,24 @@ class CodingSessionArtifactsLane:
         self,
         *,
         db: LocalDatabase | None = None,
+        provider: str = DEFAULT_PROVIDER,
+        source: ArtifactSessionSource | None = None,
         roots: list[Path] | None = None,
         durable_root: Path | None = None,
         files_client: MatrxFilesClient | None = None,
         cloud_enabled: bool = True,
     ) -> None:
         self._db = db or get_db()
-        self._roots_override = roots
+        if source is None:
+            source = build_artifact_session_source(provider, roots=roots)
+        elif roots is not None:
+            raise ValueError("pass either a source or roots, never both")
+        if source.provider != provider:
+            raise ValueError(
+                f"source provider {source.provider!r} does not match lane provider {provider!r}"
+            )
+        self.provider = provider
+        self._source = source
         self._durable_root_override = durable_root
         self._client = files_client or MatrxFilesClient()
         self._cloud_enabled = cloud_enabled
@@ -309,13 +446,18 @@ class CodingSessionArtifactsLane:
 
     # ── configuration ────────────────────────────────────────────────
     @property
-    def roots(self) -> list[Path]:
-        return self._roots_override if self._roots_override is not None else default_scratchpad_roots()
+    def source(self) -> ArtifactSessionSource:
+        return self._source
+
+    @property
+    def roots(self) -> list[str]:
+        """Where this lane's source looks, as the status screen shows it."""
+        return self._source.locations()
 
     @property
     def durable_root(self) -> Path:
         root = self._durable_root_override or (
-            safe_dir("data") / "coding-sessions" / "artifacts" / PROVIDER
+            safe_dir("data") / "coding-sessions" / "artifacts" / self.provider
         )
         root.mkdir(parents=True, exist_ok=True)
         return root
@@ -329,7 +471,9 @@ class CodingSessionArtifactsLane:
         if self.active:
             return
         self._stopping = False
-        self._task = asyncio.create_task(self._loop(), name="coding-session-artifacts")
+        self._task = asyncio.create_task(
+            self._loop(), name=f"coding-session-artifacts:{self.provider}"
+        )
 
     async def stop_background(self) -> None:
         self._stopping = True
@@ -353,7 +497,9 @@ class CodingSessionArtifactsLane:
                 raise
             except Exception as exc:  # noqa: BLE001 — the loop must survive
                 self._last_error = {"code": type(exc).__name__, "message": str(exc)[:500]}
-                logger.warning("[coding_session_artifacts] tick failed", exc_info=True)
+                logger.warning(
+                    "[coding_session_artifacts] %s tick failed", self.provider, exc_info=True
+                )
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=SCAN_INTERVAL_SECONDS)
@@ -365,9 +511,14 @@ class CodingSessionArtifactsLane:
         sessions = list(self._sessions.values())
         return {
             "active": self.active,
-            "roots": [str(r) for r in self.roots],
+            "provider": self.provider,
+            "roots": list(self.roots),
             "durable_root": str(self.durable_root),
             "sessions": len(sessions),
+            # What this provider's record does NOT contain. Kept per lane so a
+            # screen can say the number out loud instead of implying the list
+            # of captured files is everything the session wrote.
+            "source_gaps": self._source_gaps(sessions),
             "files": sum(len(s.files) for s in sessions),
             "bytes": sum(int(f.get("size") or 0) for s in sessions for f in s.files.values()),
             "uploaded": sum(s.uploaded_count for s in sessions),
@@ -423,6 +574,42 @@ class CodingSessionArtifactsLane:
             },
         }
 
+    def _source_gaps(self, sessions: list[SessionArtifacts]) -> dict[str, Any]:
+        """Everything this lane knows it could NOT capture, with a sentence.
+
+        Numbers come from the sources (``DiscoveredSession.notes``) plus the
+        files a source named that are no longer on disk. The wording of a
+        provider-specific gap belongs to that provider's source; the generic
+        "the file is gone" sentence belongs here.
+        """
+        totals: dict[str, int] = {}
+        for session in sessions:
+            for key, value in session.source_notes.items():
+                if isinstance(value, bool) or not isinstance(value, int):
+                    continue
+                totals[key] = totals.get(key, 0) + value
+        missing = sum(len(session.missing_source_files) for session in sessions)
+        totals["missing_source_files"] = missing
+        repository = sum(session.skipped_repository_files for session in sessions)
+        totals["skipped_repository_files"] = repository
+        messages: list[str] = []
+        describe = getattr(self._source, "describe_gaps", None)
+        if callable(describe):
+            messages.extend(describe(totals))
+        if missing:
+            messages.append(
+                f"{missing} file(s) this session wrote are no longer on disk, so they "
+                "could not be captured. Their names are kept on each session."
+            )
+        if repository:
+            messages.append(
+                f"{repository} file(s) this session wrote are part of a repository "
+                "working copy, so they are not captured. Artifacts are a session's "
+                "own deliverables; AI Matrx never copies your source code out of a "
+                "checkout, for any coding agent."
+            )
+        return {"counts": totals, "messages": messages}
+
     def session_summaries(self) -> list[dict[str, Any]]:
         return sorted(
             (s.summary() for s in self._sessions.values()),
@@ -464,113 +651,153 @@ class CodingSessionArtifactsLane:
     # ── capture (thread) ─────────────────────────────────────────────
     def _capture_all(self) -> int:
         captured = 0
-        for root in self.roots:
-            try:
-                projects = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink()]
-            except OSError:
-                continue
-            for project in projects:
-                try:
-                    sessions = [
-                        s for s in project.iterdir() if s.is_dir() and not s.is_symlink()
-                    ]
-                except OSError:
-                    continue
-                for session_dir in sessions:
-                    scratchpad = session_dir / "scratchpad"
-                    if not scratchpad.is_dir():
-                        continue
-                    captured += self._capture_session(project.name, session_dir.name, scratchpad)
+        for discovered in self._source.discover():
+            captured += self._capture_session(discovered)
         return captured
 
-    def _session(self, project_slug: str, cli_session_id: str, scratchpad: Path) -> SessionArtifacts:
-        session = self._sessions.get(cli_session_id)
+    def _session(self, discovered: DiscoveredSession) -> SessionArtifacts:
+        session = self._sessions.get(discovered.cli_session_id)
         if session is None:
-            durable_dir = self.durable_root / cli_session_id
+            durable_dir = self.durable_root / discovered.cli_session_id
             session = SessionArtifacts(
-                provider=PROVIDER,
-                cli_session_id=cli_session_id,
-                project_slug=project_slug,
-                scratchpad=scratchpad,
+                provider=self.provider,
+                cli_session_id=discovered.cli_session_id,
+                project_slug=discovered.project_slug,
+                source_root=discovered.root,
                 durable_dir=durable_dir,
                 files=self._read_manifest(durable_dir),
             )
-            self._sessions[cli_session_id] = session
+            self._sessions[discovered.cli_session_id] = session
+        session.source_notes = dict(discovered.notes)
         return session
 
-    def _capture_session(self, project_slug: str, cli_session_id: str, scratchpad: Path) -> int:
-        session = self._session(project_slug, cli_session_id, scratchpad)
-        session.skipped_over_size = 0
-        session.skipped_over_count = 0
-        captured = 0
-        seen = 0
-        changed = False
-        for dirpath, dirnames, filenames in os.walk(scratchpad):
+    def _walk_candidates(self, root: Path) -> Iterator[Path]:
+        """Every file under ``root`` that could be a deliverable."""
+        for dirpath, dirnames, filenames in os.walk(root):
             current = Path(dirpath)
             dirnames[:] = [
                 d for d in dirnames
                 if not (current / d).is_symlink() and not _is_excluded_dir(current / d)
             ]
             for name in filenames:
-                if name in _EXCLUDED_FILE_NAMES or Path(name).suffix in _EXCLUDED_SUFFIXES:
+                yield current / name
+
+    def _listed_candidates(
+        self, session: SessionArtifacts, root: Path, files: tuple[Path, ...]
+    ) -> Iterator[Path]:
+        """The exact files a source named. One that is gone is COUNTED, never
+        dropped quietly: a session whose writes were later deleted or moved is
+        a real state the screen must be able to say out loud."""
+        session.missing_source_files = []
+        session.skipped_repository_files = 0
+        for candidate in files:
+            try:
+                rel_parts = candidate.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part in _EXCLUDED_DIR_NAMES for part in rel_parts[:-1]):
+                continue
+            if any(
+                (root / Path(*rel_parts[: index + 1]) / MANIFEST_NAME).exists()
+                for index in range(len(rel_parts) - 1)
+            ):
+                continue
+            # THE REPOSITORY RULE HOLDS FOR EVERY PROVIDER (ruled 2026-09-18,
+            # lane CS-31). A working copy of a repository is never a session
+            # deliverable, and this lane copies what it captures into a durable
+            # folder and uploads it to AI Matrx. Claude Code's walk has always
+            # excluded anything inside a checkout (``_is_excluded_dir``); an
+            # explicit file list must not be a second door into the same
+            # upload with the rule switched off, or "capture Codex the same
+            # way" would quietly mean "start uploading the user's source code".
+            #
+            # The consequence is measured and deliberate, not a surprise: the
+            # only file writes Codex records structurally are ``apply_patch``
+            # paths, and those are almost all repository source, so this rule
+            # excludes nearly every Codex write there is. That is reported as a
+            # count and a sentence (``describe_gaps``) rather than resolved by
+            # dropping the rule.
+            if _inside_repository(candidate, root):
+                session.skipped_repository_files += 1
+                continue
+            if not candidate.is_file():
+                session.missing_source_files.append(candidate.relative_to(root).as_posix())
+                continue
+            yield candidate
+
+    def _capture_session(self, discovered: DiscoveredSession) -> int:
+        session = self._session(discovered)
+        root = discovered.root
+        session.skipped_over_size = 0
+        session.skipped_over_count = 0
+        captured = 0
+        seen = 0
+        changed = False
+        candidates = (
+            self._walk_candidates(root)
+            if discovered.files is None
+            else self._listed_candidates(session, root, discovered.files)
+        )
+        for source in candidates:
+            name = source.name
+            if name in _EXCLUDED_FILE_NAMES or Path(name).suffix in _EXCLUDED_SUFFIXES:
+                continue
+            if source.is_symlink():
+                continue
+            try:
+                stat = source.stat()
+            except OSError:
+                continue
+            if stat.st_size > MAX_FILE_BYTES:
+                session.skipped_over_size += 1
+                continue
+            seen += 1
+            if seen > MAX_FILES_PER_SESSION:
+                session.skipped_over_count += 1
+                continue
+            rel = source.relative_to(root).as_posix()
+            record = session.files.get(rel)
+            mtime = int(stat.st_mtime)
+            if record and record.get("size") == stat.st_size and record.get("mtime") == mtime:
+                continue
+            try:
+                digest = _sha256(source)
+                if record and record.get("sha256") == digest:
+                    record["size"], record["mtime"] = stat.st_size, mtime
+                    changed = True
                     continue
-                source = current / name
-                if source.is_symlink():
-                    continue
-                try:
-                    stat = source.stat()
-                except OSError:
-                    continue
-                if stat.st_size > MAX_FILE_BYTES:
-                    session.skipped_over_size += 1
-                    continue
-                seen += 1
-                if seen > MAX_FILES_PER_SESSION:
-                    session.skipped_over_count += 1
-                    continue
-                rel = source.relative_to(scratchpad).as_posix()
-                record = session.files.get(rel)
-                mtime = int(stat.st_mtime)
-                if record and record.get("size") == stat.st_size and record.get("mtime") == mtime:
-                    continue
-                try:
-                    digest = _sha256(source)
-                    if record and record.get("sha256") == digest:
-                        record["size"], record["mtime"] = stat.st_size, mtime
-                        changed = True
-                        continue
-                    target = session.durable_dir / rel
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, target)
-                except OSError as exc:
-                    logger.info("[coding_session_artifacts] could not capture %s: %s", source, exc)
-                    continue
-                # New content at a path the cloud already holds: keep the id of
-                # the row it superseded so the ledger can say how many versions
-                # of this session's work AI Matrx carries.
-                previous = list((record or {}).get("previous_file_ids") or [])
-                if record and record.get("file_id"):
-                    previous.append(str(record["file_id"]))
-                session.files[rel] = {
-                    "size": stat.st_size,
-                    "mtime": mtime,
-                    "sha256": digest,
-                    "captured_at": _utc_now_iso(),
-                    "file_id": None,
-                    "uploaded_at": None,
-                    "upload_error": None,
-                    "upload_attempts": 0,
-                    "previous_file_ids": previous,
-                    "repair_attempts": int((record or {}).get("repair_attempts") or 0),
-                    "deduplicated": None,
-                    "cloud_file_path": None,
-                    "verified_at": None,
-                    "verify_error": None,
-                    "placement_repairs": int((record or {}).get("placement_repairs") or 0),
-                    "placement_error": None,
-                }
-                captured += 1
-                changed = True
+                target = session.durable_dir / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            except OSError as exc:
+                logger.info("[coding_session_artifacts] could not capture %s: %s", source, exc)
+                continue
+            # New content at a path the cloud already holds: keep the id of
+            # the row it superseded so the ledger can say how many versions
+            # of this session's work AI Matrx carries.
+            previous = list((record or {}).get("previous_file_ids") or [])
+            if record and record.get("file_id"):
+                previous.append(str(record["file_id"]))
+            session.files[rel] = {
+                "size": stat.st_size,
+                "mtime": mtime,
+                "sha256": digest,
+                "captured_at": _utc_now_iso(),
+                "file_id": None,
+                "uploaded_at": None,
+                "upload_error": None,
+                "upload_attempts": 0,
+                "previous_file_ids": previous,
+                "repair_attempts": int((record or {}).get("repair_attempts") or 0),
+                "deduplicated": None,
+                "cloud_file_path": None,
+                "verified_at": None,
+                "verify_error": None,
+                "placement_repairs": int((record or {}).get("placement_repairs") or 0),
+                "placement_error": None,
+            }
+            captured += 1
+            changed = True
         if changed:
             self._write_manifest(session)
         return captured
@@ -937,7 +1164,8 @@ class CodingSessionArtifactsLane:
             "provider": session.provider,
             "cli_session_id": session.cli_session_id,
             "project_slug": session.project_slug,
-            "scratchpad": str(session.scratchpad),
+            "source_root": str(session.source_root),
+            "scratchpad": str(session.source_root),
             "written_at": _utc_now_iso(),
             "files": session.files,
         }
@@ -959,21 +1187,76 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-_lane: CodingSessionArtifactsLane | None = None
+def build_artifact_session_source(
+    provider: str, *, roots: list[Path] | None = None
+) -> ArtifactSessionSource:
+    """The source for one provider. The ONE place a provider is wired in."""
+    if provider == DEFAULT_PROVIDER:
+        return ScratchpadSessionSource(roots=roots)
+    if roots is not None:
+        raise ValueError(f"roots= only applies to {DEFAULT_PROVIDER}, not {provider!r}")
+    if provider == "codex":
+        from app.services.coding_sessions.codex_writes import CodexRolloutSessionSource
+
+        return CodexRolloutSessionSource()
+    raise ValueError(f"no artifact source for provider {provider!r}")
 
 
-def get_coding_session_artifacts_lane() -> CodingSessionArtifactsLane:
-    global _lane
-    if _lane is None:
+# Every provider whose sessions this lane captures. Coding sessions are ONE
+# feature: a provider added here is captured, published, confirmed and
+# repaired by exactly the same machinery, with its own durable root.
+ARTIFACT_PROVIDERS: tuple[str, ...] = (DEFAULT_PROVIDER, "codex")
+
+_lanes: dict[str, CodingSessionArtifactsLane] = {}
+
+
+def get_coding_session_artifacts_lane(
+    provider: str = DEFAULT_PROVIDER,
+) -> CodingSessionArtifactsLane:
+    """The one lane for a provider (default: Claude Code), created on first use."""
+    lane = _lanes.get(provider)
+    if lane is None:
+        if provider not in ARTIFACT_PROVIDERS:
+            raise ValueError(
+                f"unknown coding-session artifact provider {provider!r}; "
+                f"known: {', '.join(ARTIFACT_PROVIDERS)}"
+            )
         from app.config import CLOUD_PARTICIPATION_ENABLED
 
-        _lane = CodingSessionArtifactsLane(cloud_enabled=CLOUD_PARTICIPATION_ENABLED)
-    return _lane
+        lane = CodingSessionArtifactsLane(
+            provider=provider, cloud_enabled=CLOUD_PARTICIPATION_ENABLED
+        )
+        _lanes[provider] = lane
+    return lane
+
+
+def coding_session_artifact_lanes() -> list[CodingSessionArtifactsLane]:
+    """Every configured lane — one per provider. Start/stop/status cover all."""
+    return [get_coding_session_artifacts_lane(provider) for provider in ARTIFACT_PROVIDERS]
+
+
+async def start_coding_session_artifact_lanes() -> None:
+    for lane in coding_session_artifact_lanes():
+        await lane.start_background()
+
+
+async def stop_coding_session_artifact_lanes() -> None:
+    for lane in coding_session_artifact_lanes():
+        await lane.stop_background()
 
 
 __all__ = [
+    "ARTIFACT_PROVIDERS",
+    "DEFAULT_PROVIDER",
+    "ArtifactSessionSource",
     "CodingSessionArtifactsLane",
+    "DiscoveredSession",
+    "ScratchpadSessionSource",
     "SessionArtifacts",
+    "build_artifact_session_source",
+    "coding_session_artifact_lanes",
     "default_scratchpad_roots",
     "get_coding_session_artifacts_lane",
+    "start_coding_session_artifact_lanes",
+    "stop_coding_session_artifact_lanes",
 ]

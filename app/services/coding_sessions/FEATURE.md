@@ -320,10 +320,77 @@ Actions are guided instructions. Claude and Codex can point to their supported
 host setup/test/trust flows; unpublished Cursor and VS Code artifacts are never
 silently installed from local source checkouts.
 
-## The Coding Sessions screen — judged against the CLOUD, every number a door
+## The Coding Sessions screen — ONE feature, four providers
 
-`GET /coding-session/claude/overview` (`claude_overview.py`) feeds the desktop's
-Coding Sessions page. Ruled by Arman 2026-09-08 after the screen said
+Arman, 2026-09-17: *"coding sessions is one feature"*. A Codex, Cursor or VS Code
+session is a coding session exactly like a Claude Code one, so there is ONE list,
+ONE row shape and ONE state judgement for all four. Before that day the screen
+listed Claude Code only while AI Matrx already held **2,814 Codex, 4 Cursor and 2
+VS Code** sessions that no local screen would ever show.
+
+`GET /coding-session/overview` (`overview.py`) feeds the desktop's Coding Sessions
+page. `GET /coding-session/claude/overview` is kept as an **alias returning the
+identical payload** — an older desktop on the old path gains the other providers
+rather than silently seeing a shorter list than the engine has. `payload.schema_version`
+is 3; every row carries `provider`, and `payload.providers[]` carries each provider's
+own index state, cloud freshness, counts and honesty note.
+
+- **One adapter per provider, behind one interface** (`session_providers.py`:
+  `SessionSummary`, `ProviderListing`, `SessionProvider`). An adapter answers only
+  "what sessions are on this Mac"; it never asks the server anything and never judges
+  cloud state. Four providers, one judgement — an adapter that judged for itself would
+  be four chances to disagree about the same fact.
+  - `claude_provider.py` — Claude Code, over the existing per-account sidebar index.
+  - `codex_provider.py` + `codex_session_index.py` — Codex's own rollout JSONLs,
+    `$CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`. **5,041 files and 30.33 GB
+    on this Mac (2026-09-17)**, so one rollout costs two bounded reads and no parse of
+    the middle: the first 64 KB for `session_meta` (session id, cwd, start) and the
+    last 256 KB for the newest entry — whose `ordinal` + 1 IS the exact entry count.
+    Titles come from Codex's own `session_index.jsonl` (`thread_name`), never guessed
+    from a prompt when a person has named the thread.
+  - `editor_providers.py` — Cursor and VS Code, and the two are opposite answers.
+    **Cursor is listable in 0.397 s**: `state.vscdb` table `composerHeaders` (id,
+    workspaceId, createdAt, `recency`, isArchived, isSubagent, and
+    `value.workspaceIdentifier.uri.fsPath` for the folder) left-joined to Cursor's own
+    `conversation-search.db` for titles. Last activity is **`recency`, not
+    `lastUpdatedAt`** — the latter is NULL in 1,726 of 4,570 rows. Reading the
+    `composerData:` blobs instead measured **3 m 36 s** against a 27 GB file, so
+    Cursor's message count and size are reported ABSENT, by name, not guessed.
+    **VS Code keeps no AI Matrx record on a Mac at all** — no extension, no spool, and
+    a delivered outbox row is deleted by design — so its adapter lists nothing,
+    `lists_locally` is false, and the overview fills the tab from the SERVER's
+    inventory with `on_disk: false`. Every editor database is opened **read-only by
+    URI** (`file:...?mode=ro`); Arman's editor state is his.
+- **An absent concept is `None`, never a false.** Codex, Cursor and VS Code have no
+  pins, so `pinned`/`pinned_rank` are null rather than a `false` that reads as "not
+  pinned"; `bytes` is null for a Cursor chat because it is rows in a shared database,
+  never a `0` that reads as "empty"; `in_claude_sidebar` is null for every provider
+  without a sidebar, so the "CLI only" badge cannot render for them.
+- **Every provider says what it cannot show.** `providers[].note` is one sentence a
+  person can act on, and it is mandatory for a provider that lists nothing: a chip with
+  0 rows and no reason is a bug, with its reason it is a state (law 4).
+- **One provider's failure never empties the screen.** A throwing adapter produces its
+  own block with the error and its note; the other three still list.
+- **The aggregate is the WEAKEST fact.** Top-level `cloud.checked` is true only when
+  every provider was checked, and its `detail` names the ones that were not — a partial
+  inventory is not a smaller truth, it is unsafe input. Top-level `index.state` is
+  `cold` if ANY provider is cold, which is what keeps the existing cold-index polling
+  working the moment a second provider joins.
+- **Continue is per provider** (`continuation.py`): `claude --resume <id>`,
+  `codex resume <id>`, and for Cursor/VS Code `command: null` with the honest sentence
+  that no command reopens one chat — never a fabricated command and never a dead
+  control. Cursor's separate `cursor-agent --resume` addresses a different store (4
+  chats) than the 4,735 IDE chats listed here, so it is not offered.
+- **Diagnosis is per provider**: `GET /coding-session/sessions/{provider}/{session_id}/diagnosis`
+  (`/coding-session/claude/sessions/{id}/diagnosis` stays as the Claude alias). Claude
+  Code's is the deepest because it is the only provider with a sidebar ledger, a label
+  writer and an import reconciler to account for.
+- Guards: `tests/unit/test_provider_session_index.py`, on REAL redacted Codex rollouts
+  (`tests/fixtures/codex/`, rebuilt by the committed `make_fixtures.py`).
+
+### The Claude Code half of it
+
+`claude_overview.py` keeps everything true only of Claude Code. Ruled by Arman 2026-09-08 after the screen said
 **Synced 0 · Not synced 1,836 · Uploading 116,803 · Failed 195** while AI Matrx
 held 1,671 of those conversations:
 
@@ -1023,6 +1090,46 @@ as `cancelled`, outbox drained to zero with validated receipts.
   declaration, so two identical local files at different paths leave the second path
   recorded nowhere while the index calls it synced (feedback
   `75e2ae34-5ec6-45fb-ad1b-e909c86eb3f8`).
+
+### ONE artifacts lane per provider, and THE REPOSITORY RULE (2026-09-18)
+
+`get_coding_session_artifacts_lane(provider)` returns one lane per provider, each with its
+own durable root (`data/coding-sessions/artifacts/<provider>`) and its own cloud path
+(`coding-sessions/<provider>/<session id>/<relative path>`); Claude Code's existing folder
+does not move. The lifespan starts and stops every lane
+(`start/stop_coding_session_artifact_lanes`), and each artifacts endpoint takes an optional
+`?provider=` — omitted means every lane, with the Claude Code numbers still at the top
+level for screens written before there was more than one.
+
+What differs per provider is only WHERE "what this session wrote" comes from, behind one
+`ArtifactSessionSource`: Claude Code's per-session scratchpad tree (walk a directory), and
+Codex's `apply_patch` records (an explicit file list). The capture, size/count limits,
+exclusions, manifest, upload, read-back and placement repair are the SAME code for both.
+
+🚨 **THE REPOSITORY RULE HOLDS FOR EVERY PROVIDER.** A working copy of a repository is
+never a session deliverable. Claude Code's walk has always refused anything inside a git
+checkout (`_is_excluded_dir`), and an explicit file list is NOT a second door into the
+same upload with that rule switched off — this lane copies what it captures into a durable
+folder and publishes it to AI Matrx, so dropping the rule for a listed provider would
+quietly mean "start uploading the user's source code". `_inside_repository()` applies it to
+listed candidates too; the count is `skipped_repository_files` and the sentence says AI
+Matrx never copies source code out of a checkout, for any coding agent. Guard:
+`tests/unit/test_codex_artifact_source.py::test_a_write_inside_a_repository_checkout_is_never_captured`
+(proven red-then-green).
+
+**What this means for Codex today, measured on this Mac 2026-09-17/18 — and it is a real
+limitation, not a gap in the code.** Codex names a file it changed only via `apply_patch`.
+Of 5,041 rollouts, **144 contain any `apply_patch` at all** (2,776 calls → 326 Add + 4,317
+Update + 56 Delete headers; 4,120 paths inside the session cwd, 523 outside), against
+**523,106 shell/exec calls whose writes Codex does not record**. All 144 are May–July 2026:
+**0 of the 4,492 rollouts from August 2026 onward contain a single `apply_patch`** — current
+Codex writes only through `exec`. And the paths the older ones do name are almost entirely
+repository source, which the repository rule excludes. So the Codex artifacts lane captures
+essentially nothing on this Mac, and says so in numbers and a sentence
+(`status()["source_gaps"]`) rather than showing an empty panel: N tool calls whose writes
+Codex does not record, N files no longer on disk, N files inside a repository working copy.
+Closing this needs Codex to record its writes (or the AI Matrx Codex plugin to record them
+at hook time) — not a change here.
 
 - 2026-09-17 — **Artifact counts are cloud-confirmed, and "uploaded" no longer means
   "the response had an id".** Measured that day: the engine reported 31,164 files ALL

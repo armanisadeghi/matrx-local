@@ -171,7 +171,7 @@ async def test_a_slow_server_never_delays_the_screen(
     release = asyncio.Event()
     calls = 0
 
-    async def _slow_fetch():
+    async def _slow_fetch(provider="claude_code"):
         nonlocal calls
         calls += 1
         started.set()
@@ -240,7 +240,7 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
 
     refreshes = 0
 
-    async def _fetch():
+    async def _fetch(provider="claude_code"):
         nonlocal refreshes
         refreshes += 1
         return {}, dict(old_meta)
@@ -272,7 +272,7 @@ async def test_failed_cold_inventory_is_terminal_not_in_flight(
 
     private_error = "jwt-and-personal-data-must-not-escape"
 
-    async def _failed_fetch():
+    async def _failed_fetch(provider="claude_code"):
         raise RuntimeError(private_error)
 
     logged: list[tuple[object, ...]] = []
@@ -325,7 +325,7 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
     )
     monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
 
-    async def _failed_fetch():
+    async def _failed_fetch(provider="claude_code"):
         raise OSError("transport unavailable")
 
     monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _failed_fetch)
@@ -348,7 +348,7 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
         == "unknown"
     )
 
-    async def _successful_fetch():
+    async def _successful_fetch(provider="claude_code"):
         fresh_rows = {"new-session": {"provider_session_id": "new-session"}}
         fresh_meta = {
             "checked": True,
@@ -375,7 +375,7 @@ async def test_inventory_refresh_cancellation_propagates(
     """Cancellation is control flow, not a terminal cloud failure."""
     from app.services.coding_sessions import claude_overview, cloud_state
 
-    async def _cancelled_fetch():
+    async def _cancelled_fetch(provider="claude_code"):
         raise asyncio.CancelledError
 
     monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
@@ -400,7 +400,7 @@ async def test_expected_inventory_block_is_not_reclassified_as_refresh_failure(
         "checked_at": "2026-09-16T00:00:00+00:00",
     }
 
-    async def _known_block():
+    async def _known_block(provider="claude_code"):
         cloud_state._CLOUD_CACHE["claude_code"] = (time.monotonic(), {}, blocked_meta)
         return {}, blocked_meta
 

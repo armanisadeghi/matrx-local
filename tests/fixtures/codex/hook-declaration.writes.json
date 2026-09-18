@@ -1,0 +1,32 @@
+{
+  "cwd": "/Users/fixture/code/demo-repo",
+  "files": {
+    "/Users/fixture/code/demo-repo/notes/release-notes.md": {
+      "change": "created",
+      "first_seen_at": "2026-09-18T08:34:10Z",
+      "last_seen_at": "2026-09-18T08:34:10Z",
+      "mtime_ns": 1789720450325964456,
+      "path": "/Users/fixture/code/demo-repo/notes/release-notes.md",
+      "root": "/Users/fixture/code/demo-repo",
+      "size": 44,
+      "turns": [
+        "019f94a6-dd83-71f0-aee4-445600000001"
+      ]
+    }
+  },
+  "provider": "codex",
+  "recorded_by": "matrx-codex-plugin",
+  "refused": {
+    "repository_subtrees_refused": 1
+  },
+  "scan": {
+    "entries_visited_last_turn": 1,
+    "root": "/Users/fixture/code/demo-repo",
+    "stopped_by_last_turn": null,
+    "turns_scanned": 1,
+    "turns_stopped_by_a_bound": 0
+  },
+  "schema_version": 1,
+  "session_id": "019f94a6-dd83-71f0-aee4-4456aff06c27",
+  "updated_at": "2026-09-18T08:34:10Z"
+}

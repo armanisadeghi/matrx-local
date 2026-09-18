@@ -929,3 +929,89 @@ async def test_a_truncated_list_says_it_is_truncated(
     whole = await overview_module.overview(limit=50)
     assert whole["totals"]["list_truncated"] is False
     assert whole["totals"]["listed"] == whole["totals"]["conversations"] == 5
+
+
+# ── the cloud cache is keyed by the provider it was asked about ──────────────
+
+
+@pytest.mark.anyio
+async def test_a_background_inventory_refresh_caches_under_its_own_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider must travel all the way into the fetch AND the cache.
+
+    Found live on a signed-in engine 2026-09-18: the background refresh called
+    the fetch with no provider, so every answer was cached under `claude_code`
+    and Codex, Cursor and VS Code reported "the cloud check is in flight" for
+    ever — a state that never resolves. Codex had 163 bound sessions at the
+    time and the screen never said so.
+
+    This asserts the two halves separately, because passing the provider to the
+    fetch and writing it to the right cache slot are two chances to lose it.
+    """
+    from app.services.coding_sessions import cloud_state
+
+    asked: list[str] = []
+
+    async def _fetch(provider: str = "claude_code"):
+        asked.append(provider)
+        meta = {
+            "checked": True,
+            "reason": None,
+            "detail": None,
+            "sessions": 7,
+            "checked_at": "2026-09-18T00:00:00+00:00",
+        }
+        cloud_state._CLOUD_CACHE[provider] = (0.0, {f"{provider}-1": {}}, meta)
+        return {f"{provider}-1": {}}, meta
+
+    monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _fetch)
+
+    await cloud_state._refresh_cloud_inventory("codex")
+
+    assert asked == ["codex"], "the fetch was not told which provider to ask about"
+    assert "codex" in cloud_state._CLOUD_CACHE
+    assert "claude_code" not in cloud_state._CLOUD_CACHE, (
+        "a Codex refresh wrote its answer into Claude Code's cache slot"
+    )
+    rows, meta = cloud_state._CLOUD_CACHE["codex"][1:]
+    assert rows == {"codex-1": {}}
+    assert meta["checked"] is True
+
+    # And the cached answer is what the next reader gets — never a permanent
+    # "in flight".
+    rows, meta = await cloud_state.cloud_inventory("codex")
+    assert meta["checked"] is True
+    assert meta["reason"] is None
+    assert rows == {"codex-1": {}}
+
+
+def test_a_fail_closed_inventory_verdict_is_explained_in_words() -> None:
+    """A CODE IS NOT A SENTENCE.
+
+    Seen on the real screen 2026-09-18: the banner read "AI Matrx could not be
+    asked which conversations it holds — identity_list_incomplete (providers
+    not checked: cursor, vscode)". The identity client is right to fail closed
+    on a snapshot the server cannot prove complete, but the person was handed
+    the raw verdict. Every reason this module can produce must arrive as a
+    sentence that says what it means and what clears it.
+    """
+    from app.services.coding_sessions.cloud_state import _explain_inventory_block
+
+    for reason in (
+        "identity_list_incomplete",
+        "identity_list_malformed",
+        "identity_list_completeness_unavailable",
+        "identity_list_duplicate",
+    ):
+        explained = _explain_inventory_block(reason)
+        assert explained != reason, f"{reason} reached the screen as a bare code"
+        assert "Unknown" in explained, "it must say what the rows will read instead"
+        assert explained.rstrip().endswith((".", ".)")), "it must be a sentence"
+        # The code is still available for an engineer, in parentheses.
+        assert reason in explained
+
+    # A reason this module has never seen still must not be silently swallowed.
+    assert _explain_inventory_block("aidream_unreachable").startswith("AI Matrx")

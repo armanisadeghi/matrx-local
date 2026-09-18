@@ -14,6 +14,7 @@
  */
 
 import type {
+  ClaudeLabelSyncStatus,
   CodingSessionsOverview,
   CodingSessionArtifactsSessionSummary,
   CodingSessionArtifactsStatus,
@@ -33,6 +34,13 @@ export interface CodingSessionsSources {
   readiness(): Promise<CodingSessionProviderReadinessStatus>;
   artifactsStatus(): Promise<CodingSessionArtifactsStatus>;
   artifactsSessions(): Promise<{ sessions: CodingSessionArtifactsSessionSummary[] }>;
+  /**
+   * The Claude label/pin sync status, which carries the pin divergence the
+   * Sessions tab states out loud. Optional so an alternate engine client (and
+   * the existing store tests) need not supply it; when it is absent the screen
+   * says nothing about pins rather than inventing a zero.
+   */
+  labelStatus?(): Promise<ClaudeLabelSyncStatus>;
   /** Fires only after the engine's authenticated socket reconnects. */
   onEngineConnected?(listener: () => void): () => void;
 }
@@ -48,6 +56,8 @@ export interface CodingSessionsSnapshot {
   bridge: CodingSessionBridgeStatus | null;
   readiness: CodingSessionProviderReadinessStatus | null;
   artifacts: CodingSessionArtifactsStatus | null;
+  /** Claude's label/pin sync status, including the pin divergence. */
+  labelStatus: ClaudeLabelSyncStatus | null;
   artifactSessions: Map<string, CodingSessionArtifactsSessionSummary> | null;
   error: string | null;
   /** A request failure eligible for the hook's one bounded recovery pass. */
@@ -56,6 +66,8 @@ export interface CodingSessionsSnapshot {
   overviewRetry: "scheduled" | "exhausted" | null;
   artifactsError: string | null;
   artifactSessionsError: string | null;
+  /** Why the pin comparison could not be read, so the row says that instead. */
+  labelStatusError: string | null;
   cacheError: string | null;
   /** Anything in flight. The Refresh button spins on this. */
   refreshing: boolean;
@@ -91,11 +103,13 @@ export function emptySnapshot(cached: CachedOverview | null = null): CodingSessi
     readiness: null,
     artifacts: null,
     artifactSessions: null,
+    labelStatus: null,
     error: null,
     overviewFailure: null,
     overviewRetry: null,
     artifactsError: null,
     artifactSessionsError: null,
+    labelStatusError: null,
     cacheError: null,
     refreshing: false,
     overviewPending: false,
@@ -187,11 +201,12 @@ export async function refreshCodingSessions(
   // the disk index walk is still running.
   const overviewPromise = (async () => sources.overview())();
 
-  const [status, ready, artifactStatus, artifactList] = await Promise.allSettled([
+  const [status, ready, artifactStatus, artifactList, labels] = await Promise.allSettled([
     sources.bridgeStatus(),
     sources.readiness(),
     sources.artifactsStatus(),
     sources.artifactsSessions(),
+    sources.labelStatus ? sources.labelStatus() : Promise.resolve(null),
   ]);
 
   snapshot = { ...snapshot };
@@ -210,6 +225,14 @@ export async function refreshCodingSessions(
     snapshot.artifactSessionsError = null;
   } else {
     snapshot.artifactSessionsError = reason(artifactList.reason);
+  }
+  if (labels.status === "fulfilled") {
+    // A missing source leaves the previous answer alone rather than blanking
+    // a fact that was true a moment ago.
+    if (labels.value !== null) snapshot.labelStatus = labels.value;
+    snapshot.labelStatusError = null;
+  } else {
+    snapshot.labelStatusError = reason(labels.reason);
   }
   emit(snapshot);
 

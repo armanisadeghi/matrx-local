@@ -35,6 +35,7 @@ import {
   SessionArtifactsDialog,
 } from "@/components/coding-sessions/SessionArtifactsDialog";
 import { ContinueSessionDialog } from "@/components/coding-sessions/ContinueSessionDialog";
+import { PinDivergenceRow } from "@/components/coding-sessions/PinDivergenceRow";
 import {
   SESSION_STATE_HINT,
   SESSION_STATE_LABEL,
@@ -569,6 +570,21 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
             />
           )}
         </div>
+      )}
+
+      {/* THE PIN LINE. The "Pinned in the coding agent" card above counts this
+          Mac's pins; on 2026-09-18 AI Matrx held 58 favourites this Mac did
+          not pin and 116 pins it did not hold, and no screen said so. One row,
+          with the reason instead of numbers when nothing has been measured. */}
+      {snapshot.labelStatusError ? (
+        <p
+          className="text-xs text-amber-600 dark:text-amber-400"
+          data-testid="pin-divergence-unreadable"
+        >
+          Pins: this Mac could not read its pin comparison — {snapshot.labelStatusError}
+        </p>
+      ) : (
+        <PinDivergenceRow divergence={snapshot.labelStatus?.pin_divergence} />
       )}
 
       {/* The provider facet. Every chip is the engine's own answer. */}

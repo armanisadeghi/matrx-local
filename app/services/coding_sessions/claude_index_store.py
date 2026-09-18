@@ -326,6 +326,50 @@ class ClaudeIndexStore:
             return {}
         return {str(row["key"]): str(row["value"]) for row in rows}
 
+    def index_facts(self) -> dict[str, Any]:
+        """Counts and the resolved pin scope, WITHOUT materialising the index.
+
+        The status endpoint the Sessions screen polls needs four counts, the
+        scope and its reason — not 1,960 conversation entries and every
+        transcript stamp. Loading the whole snapshot to answer that cost a
+        measured 173-1,552 ms on the first call against this Mac's 79,206-file
+        index (a zero-authorship verifier's three cold trials); the numbers all
+        live in ``meta`` plus one ``count(*)``, which is a few milliseconds.
+
+        Empty dict when the index has never been built — the caller must not
+        read that as zeros it measured.
+        """
+        if not self.path.exists():
+            return {}
+        try:
+            with self.connect() as connection:
+                meta = self._meta(connection)
+                row = connection.execute(
+                    "SELECT count(*) AS n FROM sessions"
+                ).fetchone()
+        except sqlite3.DatabaseError:
+            return {}
+        records = int(row["n"]) if row is not None else 0
+        totals: dict[str, int] = {
+            "files": int(meta["files"]) if meta.get("files", "").isdigit() else 0,
+            "records": records,
+            "unreadable": (
+                int(meta["unreadable"]) if meta.get("unreadable", "").isdigit() else 0
+            ),
+        }
+        if meta.get("truncated") == "1":
+            totals["truncated"] = 1
+        return {
+            "totals": totals,
+            "active_scope": meta.get("active_scope") or None,
+            "active_scope_reason": meta.get("active_scope_reason") or None,
+            "updated_at": meta.get("updated_at"),
+            "revision": (
+                int(meta["revision"]) if meta.get("revision", "").isdigit() else 0
+            ),
+            "complete": meta.get("complete") == "1",
+        }
+
     def revision(self) -> int:
         """The completed-refresh counter. One tiny query; safe to call often."""
         if not self.path.exists():

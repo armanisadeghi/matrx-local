@@ -29,6 +29,7 @@ from app.services.coding_sessions.service import (
 from app.services.coding_sessions.title_sync import (
     ClaudeSessionMetadataReconciler,
     ClaudeTitleSyncBlocked,
+    _cloud_detail_values,
     blocked_sentence,
     cloud_disagrees,
     payload_digest,
@@ -756,9 +757,9 @@ async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> N
 
     # What AI Matrx is holding for each: the two divergences and one agreement.
     cloud = {
-        pinned_here_not_there: {"claude_is_pinned": False},
-        favourite_there_not_here: {"claude_is_pinned": True},
-        agreeing: {"claude_is_pinned": True},
+        pinned_here_not_there: {"ai_matrx_is_favorite": False},
+        favourite_there_not_here: {"ai_matrx_is_favorite": True},
+        agreeing: {"ai_matrx_is_favorite": True},
     }
     sessions = [
         {
@@ -795,6 +796,7 @@ async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> N
     assert result["pins"] == {
         "local": 2,
         "ai_matrx": 2,
+        "ai_matrx_known": 3,
         "to_pin": 1,
         "to_unpin": 1,
         "to_reconcile": 2,
@@ -916,13 +918,13 @@ async def test_the_status_line_states_the_pin_divergence_and_the_last_pass(
                     "provider_session_id": pinned_here,
                     "provider_project_key": "claude-local:matrx-local",
                     "claude_title": entries[pinned_here].title,
-                    "claude_is_pinned": False,
+                    "ai_matrx_is_favorite": False,
                 },
                 {
                     "provider_session_id": favourite_there,
                     "provider_project_key": "claude-local:matrx-local",
                     "claude_title": entries[favourite_there].title,
-                    "claude_is_pinned": True,
+                    "ai_matrx_is_favorite": True,
                 },
             ]
         ),
@@ -1088,11 +1090,258 @@ async def test_status_reports_writability_with_its_age_never_a_stale_false(
     await db.execute(
         """INSERT INTO coding_session_metadata_sync_operations (
                operation_id, mode, status, started_at, completed_at,
-               compared_sessions, index_writable
+               compared_sessions, index_writable, index_writable_probed
            ) VALUES ('op-w', 'apply', 'completed', '2026-09-18T15:00:00Z',
-                     '2026-09-18T15:00:00Z', 3, 1)"""
+                     '2026-09-18T15:00:00Z', 3, 1, 1)"""
     )
     await db.commit()
     measured = await reconciler.status()
     assert measured["index_writable"] is True
     assert measured["index_writable_measured_at"] == "2026-09-18T15:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18, V-CS-33: the comparison was against the bridge's own ECHO
+#
+# A zero-authorship verifier refuted the claim that this pass compares Claude's
+# star against what AI Matrx holds. It compared `is_pinned` against
+# `claude_is_pinned`, which aidream fills from `metadata["provider_pinned"]` —
+# the value THIS MAC last reported. Comparing a value to its own echo can only
+# report agreement. Live proof: binding `claude-sdk:31cc02c5…` carried
+# `provider_pinned = true` while the owner's real
+# `platform.user_entity_state.is_favorite` was `false`, a pass running the new
+# code touched that row at 00:04:20, and the divergence was still open.
+#
+# The pin now compares against `ai_matrx_is_favorite` — the real favourite.
+# These guards hold it there.
+# ---------------------------------------------------------------------------
+
+
+def test_the_pin_compares_against_the_favourite_not_the_provider_echo() -> None:
+    """The mapping itself is the defect, so the mapping is asserted."""
+    from app.services.coding_sessions.title_sync import (
+        PROVIDER_PIN_ECHO_KEY,
+        _CLOUD_DETAIL_KEYS,
+    )
+
+    assert _CLOUD_DETAIL_KEYS["is_pinned"] == "ai_matrx_is_favorite"
+    assert PROVIDER_PIN_ECHO_KEY == "claude_is_pinned"
+    assert "claude_is_pinned" not in _CLOUD_DETAIL_KEYS.values(), (
+        "the pin is being compared against the provider's own echo again"
+    )
+
+
+@pytest.mark.anyio
+async def test_the_echo_alone_can_never_produce_a_divergence(env: Any) -> None:
+    """THE LIVE ROW, as a fixture: echo says pinned, real favourite is false.
+
+    A server that sends only the echo (an older aidream) must leave the pin
+    UNKNOWN — not agreeing, and not disagreeing either. Before this fix the
+    engine read the echo, saw its own `true` reflected back at it, and stayed
+    silent while the favourite was `false`.
+    """
+    db, outbox, tmp_path = env
+    session = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    _write_index_record(
+        root,
+        cli_session_id=session,
+        title="Pinned here, echo agrees, favourite does not",
+        lastActivityAt=60,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+    local = entries[session].metadata_payload()
+
+    # Echo only — exactly what the server sent before the fix.
+    echo_only = {"claude_is_pinned": True}
+    assert cloud_disagrees(local, _cloud_detail_values(echo_only)) == [], (
+        "the echo must not be read as AI Matrx's opinion at all"
+    )
+
+    # The same row with the REAL favourite present: a disagreement, at last.
+    truthful = {"claude_is_pinned": True, "ai_matrx_is_favorite": False}
+    assert cloud_disagrees(local, _cloud_detail_values(truthful)) == ["is_pinned"]
+
+
+@pytest.mark.anyio
+async def test_the_live_refuted_row_now_produces_an_unpin_free_pin(env: Any) -> None:
+    """One pass must now SEND the pin for the row that sat open all day.
+
+    Shape taken from the live binding: pinned in Claude, echo already `true`
+    (so the old local-digest gate had nothing to say either), real favourite
+    `false`. Both gates were silent; one of them must not be.
+    """
+    db, outbox, tmp_path = env
+    session = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    _write_index_record(
+        root,
+        cli_session_id=session,
+        title="The live row",
+        lastActivityAt=61,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+    composite = _bridge_provider_session_id("claude-local:matrx-local", session)
+    # Already acknowledged locally — the echo matched, so nothing "changed".
+    await db.execute(
+        """INSERT INTO claude_session_metadata_sent
+               (provider_session_id, payload_sha256, updated_at)
+           VALUES (?, ?, datetime('now'))""",
+        (composite, payload_digest(entries[session].metadata_payload())),
+    )
+    await db.commit()
+
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(
+            [
+                {
+                    "provider_session_id": composite,
+                    "provider_project_key": "claude-local:matrx-local",
+                    "claude_title": entries[session].title,
+                    "claude_is_pinned": True,  # the echo
+                    "ai_matrx_is_favorite": False,  # the truth
+                }
+            ]
+        ),
+        index_reader=index_reader,
+    )
+    result = await reconciler.sync()
+    assert result["ai_matrx_out_of_step"] == 1, result
+    assert result["pins"] == {
+        "local": 1,
+        "ai_matrx": 0,
+        "ai_matrx_known": 1,
+        "to_pin": 1,
+        "to_unpin": 0,
+        "to_reconcile": 1,
+    }, result["pins"]
+    rows = await db.fetchall(
+        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+    )
+    assert len(rows) == 1, "the row that sat open all day was not sent"
+    envelope = BridgeRequest.model_validate_json(rows[0]["envelope_json"])
+    assert envelope.hook_event is not None
+    assert envelope.hook_event.payload["is_pinned"] is True
+
+
+@pytest.mark.anyio
+async def test_a_blocked_pass_never_reports_the_records_as_unwritable(
+    env: Any,
+) -> None:
+    """Defect C: the same lie, in the field beside the one I fixed.
+
+    The probe runs only AFTER the identity inventory is in hand, so a pass
+    blocked on `no_active_user_jwt` never measures it — yet it journalled
+    `index_writable = 0` and status reported `false`. The verifier's engine did
+    exactly that while all 198 record files it probed by hand were writable.
+    """
+    db, outbox, tmp_path = env
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient([]),
+        index_reader=lambda: ({}, {"files": 0, "records": 0, "unreadable": 0}),
+    )
+    await db.execute(
+        """INSERT INTO coding_session_metadata_sync_operations (
+               operation_id, mode, status, started_at, completed_at,
+               compared_sessions, index_writable, index_writable_probed,
+               error_message
+           ) VALUES ('op-blocked-w', 'apply', 'failed', '2026-09-18T16:00:00Z',
+                     '2026-09-18T16:00:00Z', 0, 0, 0, 'no_active_user_jwt')"""
+    )
+    await db.commit()
+    status = await reconciler.status()
+    assert status["index_writable"] is None, (
+        "a probe that never ran was reported as a verdict"
+    )
+    assert status["index_writable_measured_at"] is None
+    assert "not a verdict" in status["index_writable_reason"]
+
+
+@pytest.mark.anyio
+async def test_a_blocked_pass_journals_that_it_never_probed(env: Any) -> None:
+    """At the source, not only at the reader: no probe = probed flag 0."""
+    db, outbox, tmp_path = env
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(AIDreamOfflineError("down")),
+        index_reader=lambda: ({}, {"files": 0, "records": 0, "unreadable": 0}),
+    )
+    with pytest.raises(ClaudeTitleSyncBlocked):
+        await reconciler.sync()
+    row = await db.fetchone(
+        """SELECT index_writable, index_writable_probed, status
+             FROM coding_session_metadata_sync_operations
+         ORDER BY started_at DESC LIMIT 1"""
+    )
+    assert int(row["index_writable_probed"]) == 0, (
+        "a pass that never probed claimed it had"
+    )
+    status = await reconciler.status()
+    assert status["index_writable"] is None
+
+
+@pytest.mark.anyio
+async def test_a_server_that_never_reports_favourites_is_unknown_not_zero(
+    env: Any,
+) -> None:
+    """Silence from the server must not render as "0 in AI Matrx, they agree".
+
+    Pointing the comparison at the real favourite introduced this risk: an
+    older aidream omits `ai_matrx_is_favorite` entirely, and a naive count of
+    favourites over rows that carry none is 0 — which on the Sessions row reads
+    as a measured agreement. It is silence.
+    """
+    db, outbox, tmp_path = env
+    session = str(uuid4())
+    root = tmp_path / "claude-code-sessions"
+    _write_index_record(
+        root,
+        cli_session_id=session,
+        title="Pinned here, server silent",
+        lastActivityAt=70,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(
+            [
+                {
+                    "provider_session_id": session,
+                    "provider_project_key": "claude-local:matrx-local",
+                    "claude_title": entries[session].title,
+                    "claude_is_pinned": True,  # echo only — an older server
+                }
+            ]
+        ),
+        index_reader=index_reader,
+    )
+    result = await reconciler.sync()
+    assert result["pins"]["ai_matrx"] is None, result["pins"]
+    assert result["pins"]["ai_matrx_known"] == 0
+    assert result["ai_matrx_out_of_step"] == 0
+
+    divergence = await reconciler.pin_divergence()
+    assert divergence["checked"] is False, divergence
+    assert divergence["ai_matrx"] is None and divergence["to_reconcile"] is None
+    assert "did not report whether" in divergence["reason"]

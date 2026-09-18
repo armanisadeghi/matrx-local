@@ -205,6 +205,15 @@ def _reset_index_state_for_tests(store: ClaudeIndexStore | None = None) -> None:
     _LAST_REFRESH_ERROR = None
 
 
+async def index_facts() -> dict[str, Any]:
+    """Counts + the resolved pin scope, without materialising the index.
+
+    For pollable status surfaces. See
+    :meth:`ClaudeIndexStore.index_facts` for why it exists.
+    """
+    return await asyncio.to_thread(index_store().index_facts)
+
+
 async def index_snapshot(*, record_paths: bool = False) -> IndexSnapshot:
     """The persisted index, loaded from SQLite. No filesystem walk, ever.
 

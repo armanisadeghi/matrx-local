@@ -75,7 +75,7 @@ from app.services.coding_sessions.claude_session_index import (
     ClaudeSessionIndexEntry,
 )
 from app.services.coding_sessions.claude_overview import (
-    index_snapshot,
+    index_facts,
     read_session_index_async,
 )
 from app.services.coding_sessions.models import BridgeRequest
@@ -244,16 +244,42 @@ _DETAIL_FIELDS = (
     "pinned_rank",
     "category",
 )
+# WHICH SERVER FIELD IS THE TRUTH FOR EACH LOCAL FIELD.
+#
+# Most of the identity row's `claude_*` fields are the server's ECHO of what
+# this Mac last reported — useful for "what did we last say?", useless for
+# "what does AI Matrx hold?". Comparing a local value against its own echo can
+# only ever report agreement, which is how the pin convergence shipped looking
+# right and doing nothing: a zero-authorship verifier found binding
+# `claude-sdk:31cc02c5…` with `provider_pinned = true` (the echo) while the
+# owner's real favourite was `false`, and the pass saw agreement and said
+# nothing.
+#
+# So the pin compares against `ai_matrx_is_favorite` — the real
+# `platform.user_entity_state.is_favorite`, the same row every star clicked in
+# AI Matrx reads and writes. The field is additive on the identity list (its
+# schema_version is deliberately unchanged, because this client fails CLOSED
+# on a version it does not know), so an older server simply omits it and the
+# pin reads as UNKNOWN rather than as agreement.
 _CLOUD_DETAIL_KEYS = {
     "title": "claude_title",
     "project_name": "claude_project_name",
     "git_branch": "claude_git_branch",
     "worktree_name": "claude_worktree_name",
     "is_archived": "claude_is_archived",
-    "is_pinned": "claude_is_pinned",
+    "is_pinned": "ai_matrx_is_favorite",
+    # STILL ECHOES, and therefore still unable to heal a server-side
+    # difference. `pinned_rank` has no other truth — the order is the
+    # provider's alone. `category` does: it is applied to the conversation's
+    # own metadata under `coding_session_bridge.category`, and until the
+    # identity row carries THAT, a category changed in AI Matrx will not be
+    # corrected. Documented here rather than left to be rediscovered.
     "pinned_rank": "claude_pinned_rank",
     "category": "claude_category",
 }
+#: The provider's own last-reported pin, kept for "what did we last say?" and
+#: for the screen — never for deciding whether AI Matrx is out of step.
+PROVIDER_PIN_ECHO_KEY = "claude_is_pinned"
 
 
 def _session_ref(provider_session_id: str) -> str:
@@ -684,7 +710,7 @@ class ClaudeSessionMetadataReconciler:
         verified_sessions: int,
         failed_sessions: int,
         index_totals: dict[str, int],
-        index_writable: bool,
+        index_writable: bool | None,
         error_message: str | None = None,
     ) -> None:
         async with write_gate():
@@ -695,7 +721,8 @@ class ClaudeSessionMetadataReconciler:
                        enqueued_sessions=?, acknowledged_sessions=?,
                        verified_sessions=?, failed_sessions=?, index_files=?,
                        index_records=?, index_unreadable=?, index_truncated=?,
-                       index_writable=?, error_message=?
+                       index_writable=?, index_writable_probed=?,
+                       error_message=?
                    WHERE operation_id=?""",
                 (
                     status,
@@ -711,7 +738,12 @@ class ClaudeSessionMetadataReconciler:
                     int(index_totals.get("records", 0)),
                     int(index_totals.get("unreadable", 0)),
                     int(_index_truncated(index_totals)),
-                    int(index_writable),
+                    # None = the probe never ran (a pass blocked before it
+                    # could). The column is NOT NULL, so the value is 0 AND
+                    # ``index_writable_probed`` is 0, which is how a reader
+                    # tells "not measured" from "measured false".
+                    int(bool(index_writable)),
+                    int(index_writable is not None),
                     error_message,
                     operation_id,
                 ),
@@ -809,13 +841,22 @@ class ClaudeSessionMetadataReconciler:
         identities: list[dict[str, Any]] = []
         index: dict[str, ClaudeSessionIndexEntry] = {}
         index_totals = {"files": 0, "records": 0, "unreadable": 0}
-        index_writable = False
+        # NOT False. The probe runs only after the identity inventory is in
+        # hand, so a pass blocked before that point has not measured anything
+        # — and journalling False made the status endpoint report Claude's
+        # records as unwritable while all 198 sampled files were writable.
+        index_writable: bool | None = None
         matched = no_labels = unchanged = queued = already_queued = 0
         # The pin divergence, counted over the WHOLE ledger this pass walked —
         # not only the sessions whose labels changed recently. These are what
         # the Sessions screen says out loud, so the divergence can never again
         # sit at 116/58 unseen for three days.
         pins_local = pins_cloud = pins_to_add = pins_to_remove = 0
+        # How many identities AI Matrx actually stated a favourite for. An
+        # older server does not send the field at all, and then a count of 0
+        # favourites is not a measurement — it is silence, and it must not
+        # render as "0 in AI Matrx · they agree".
+        pins_cloud_known = 0
         out_of_step = 0
         out_of_step_fields: dict[str, int] = {}
         unreadable_identity = failed = acknowledged = 0
@@ -909,8 +950,10 @@ class ClaudeSessionMetadataReconciler:
                         )
                 if local_values.get("is_pinned") is True:
                     pins_local += 1
-                if cloud_values.get("is_pinned") is True:
-                    pins_cloud += 1
+                if "is_pinned" in cloud_values:
+                    pins_cloud_known += 1
+                    if cloud_values.get("is_pinned") is True:
+                        pins_cloud += 1
                 if (
                     "is_pinned" in local_values
                     and "is_pinned" in cloud_values
@@ -1220,7 +1263,8 @@ class ClaudeSessionMetadataReconciler:
             "ai_matrx_out_of_step_fields": out_of_step_fields,
             "pins": {
                 "local": pins_local,
-                "ai_matrx": pins_cloud,
+                "ai_matrx": pins_cloud if pins_cloud_known else None,
+                "ai_matrx_known": pins_cloud_known,
                 "to_pin": pins_to_add,
                 "to_unpin": pins_to_remove,
                 "to_reconcile": pins_to_add + pins_to_remove,
@@ -1725,6 +1769,10 @@ class ClaudeSessionMetadataReconciler:
             (str(row["operation_id"]),),
         )
         local_pins = cloud_pins = to_pin = to_unpin = 0
+        # Identities AI Matrx actually stated a favourite for. Zero means the
+        # server never said — an older aidream omits the field — and silence
+        # must not render as "0 in AI Matrx, they agree".
+        cloud_known = 0
         for item in rows:
             try:
                 local = json.loads(str(item["local_values_json"]))
@@ -1735,8 +1783,10 @@ class ClaudeSessionMetadataReconciler:
                 continue
             if local.get("is_pinned") is True:
                 local_pins += 1
-            if cloud.get("is_pinned") is True:
-                cloud_pins += 1
+            if "is_pinned" in cloud:
+                cloud_known += 1
+                if cloud.get("is_pinned") is True:
+                    cloud_pins += 1
             if (
                 "is_pinned" in local
                 and "is_pinned" in cloud
@@ -1746,6 +1796,26 @@ class ClaudeSessionMetadataReconciler:
                     to_pin += 1
                 else:
                     to_unpin += 1
+        if not cloud_known and rows:
+            return {
+                "checked": False,
+                "reason": (
+                    "AI Matrx did not report whether these conversations are "
+                    "favourites, so the difference between this Mac's pins "
+                    "and AI Matrx's is not known — this Mac's AI Matrx server "
+                    "may predate the change that reports it"
+                ),
+                "local": None,
+                "ai_matrx": None,
+                "to_pin": None,
+                "to_unpin": None,
+                "to_reconcile": None,
+                "last_pass_at": None,
+                "last_pass_status": None,
+                "last_attempt_at": row["completed_at"],
+                "last_attempt_status": row["status"],
+                "sessions_walked": len(rows),
+            }
         return {
             "checked": True,
             "reason": None,
@@ -1784,8 +1854,15 @@ class ClaudeSessionMetadataReconciler:
         ``warm_index_cache`` at engine start — never by a poll.
         """
         await self._recover_interrupted_operations()
-        snapshot = await index_snapshot()
-        index_totals = snapshot.totals
+        # Counts and the scope only — never the 1,960 materialised entries and
+        # every transcript stamp, which is what made the FIRST call after a
+        # process start take a measured 173-1,552 ms on a 79,206-file index.
+        facts = await index_facts()
+        index_totals = facts.get("totals") or {
+            "files": 0,
+            "records": 0,
+            "unreadable": 0,
+        }
         # The writability of Claude's own records is a capability probe that
         # opens every one of 79,206 files, so it is not re-run per poll: the
         # sync pass already measures it in full and journals it, and this
@@ -1794,7 +1871,7 @@ class ClaudeSessionMetadataReconciler:
         writable_row = await self._db.fetchone(
             """SELECT index_writable, started_at
                  FROM coding_session_metadata_sync_operations
-                WHERE completed_at IS NOT NULL
+                WHERE completed_at IS NOT NULL AND index_writable_probed = 1
              ORDER BY completed_at DESC LIMIT 1"""
         )
         index_writable = (
@@ -1829,6 +1906,16 @@ class ClaudeSessionMetadataReconciler:
             "auto_sync_interval_seconds": auto_label_sync_interval_seconds(),
             "index_writable": index_writable,
             "index_writable_measured_at": index_writable_measured_at,
+            "index_writable_reason": (
+                None
+                if index_writable is not None
+                else (
+                    "no reconcile pass has probed Claude Code's records for "
+                    "writability yet — a pass blocked before it could (for "
+                    "example when this Mac is not signed in to AI Matrx) does "
+                    "not measure it, and an unmeasured probe is not a verdict"
+                )
+            ),
             "pushed_sessions": int(pushed["n"]) if pushed else 0,
             "index_available": index_totals["files"] > 0,
             "index_files": index_totals["files"],
@@ -1845,8 +1932,8 @@ class ClaudeSessionMetadataReconciler:
             "pin_divergence": await self.pin_divergence(),
             # Which account+org the pins were read from, and why. Absent scope
             # = the pins are UNKNOWN and every ledger pin stands.
-            "pin_scope": snapshot.active_scope,
-            "pin_scope_reason": snapshot.active_scope_reason,
+            "pin_scope": facts.get("active_scope"),
+            "pin_scope_reason": facts.get("active_scope_reason"),
             "push_intents_by_state": {
                 str(item["status"]): int(item["count"]) for item in intents
             },

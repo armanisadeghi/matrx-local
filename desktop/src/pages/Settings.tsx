@@ -3615,7 +3615,7 @@ export function Settings({
                     </p>
                   </div>
                   <a
-                    href="https://aimatrx.com/settings?tab=devices"
+                    href="https://aimatrx.com/user-settings/files/devices"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1 text-sm text-primary hover:underline"

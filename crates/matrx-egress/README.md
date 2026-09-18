@@ -229,7 +229,7 @@ Each of these is a decision, not an oversight.
    has not been told, with the remedy. **The gateway owner needs to decide** whether to accept a
    device token on its own row.
 4. **The tray's web links.** Both menu items open the computers list,
-   `<web>/settings?tab=devices` (the removal item adds `&computer=<device_id>` so the page can
+   `<web>/user-settings/files/devices` (the removal item adds `?computer=<device_id>` so the page can
    bring that computer into view; Remove lives on that list and names its consequence first).
    Settled by the owner 2026-09-18; the base is the `--web` flag and both paths live in one
    place (`supervisor::WebUrls`).

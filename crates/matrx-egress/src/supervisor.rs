@@ -97,7 +97,7 @@ impl Terminal {
 }
 
 /// The pages the tray opens. The list of computers is Settings → Devices & Sync at
-/// `/settings?tab=devices` (contract § The web app); removal is the Remove control on that
+/// `/user-settings/files/devices` (contract § The web app); removal is the Remove control on that
 /// list, which names its consequence before acting. The base is a flag and both paths live in
 /// ONE place — a frontend that moves the list is a one-line change here, not a hunt.
 #[derive(Debug, Clone)]
@@ -117,14 +117,14 @@ impl Default for WebUrls {
 impl WebUrls {
     /// Where the person manages the computers on their account.
     pub fn computers(&self) -> String {
-        format!("{}/settings?tab=devices", self.base.trim_end_matches('/'))
+        format!("{}/user-settings/files/devices", self.base.trim_end_matches('/'))
     }
 
     /// Where the person confirms removing this one: the same list, whose Remove control asks
     /// first. `device_id` rides along so the page can bring that computer into view.
     pub fn confirm_removal(&self, device_id: &str) -> String {
         format!(
-            "{}/settings?tab=devices&computer={device_id}",
+            "{}/user-settings/files/devices?computer={device_id}",
             self.base.trim_end_matches('/')
         )
     }
@@ -466,17 +466,17 @@ mod tests {
     #[test]
     fn the_tray_opens_the_pages_the_contract_names() {
         let web = WebUrls::default();
-        assert_eq!(web.computers(), "https://aimatrx.com/settings?tab=devices");
+        assert_eq!(web.computers(), "https://aimatrx.com/user-settings/files/devices");
         assert_eq!(
             web.confirm_removal("d-1"),
-            "https://aimatrx.com/settings?tab=devices&computer=d-1"
+            "https://aimatrx.com/user-settings/files/devices?computer=d-1"
         );
         let local = WebUrls {
             base: "http://matrx.localhost:3001/".into(),
         };
         assert_eq!(
             local.computers(),
-            "http://matrx.localhost:3001/settings?tab=devices"
+            "http://matrx.localhost:3001/user-settings/files/devices"
         );
     }
 

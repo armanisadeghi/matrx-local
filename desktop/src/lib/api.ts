@@ -781,9 +781,9 @@ export interface CodingSessionDeliveryEnvelopePage {
  *   queued       not on the server yet; its events wait in the local queue
  *   failed       a delivery was refused and is preserved here — needs a decision
  *   not_in_cloud nothing on the server, nothing queued: never mirrored/imported
- *   unknown      the server could not be asked (see ClaudeOverview.cloud)
+ *   unknown      the server could not be asked (see CodingSessionsOverview.cloud)
  */
-export type ClaudeSessionState =
+export type CodingSessionState =
   | "in_cloud"
   | "changed"
   | "queued"
@@ -791,29 +791,67 @@ export type ClaudeSessionState =
   | "not_in_cloud"
   | "unknown";
 
-export interface ClaudeConversation {
+/**
+ * How ONE session is reopened, in the engine's own words
+ * (`app/services/coding_sessions/continuation.py`).
+ *
+ * `command` is null exactly when the provider has no command that reopens one
+ * chat — Cursor and VS Code keep their chats in the editor's own workspace
+ * state. `note` is always a real sentence, so "no native resume" reads as a
+ * fact with a reason rather than as a missing control, and a client never
+ * invents a command the provider does not have.
+ */
+export interface SessionContinuation {
+  command: string | null;
+  note: string;
+  native_resume: boolean;
+}
+
+export interface CodingSessionRow {
   session_id: string;
-  /** Which coding agent this row came from. Optional: engines before 1.4.112 omit it. */
+  /**
+   * Which coding agent wrote this session. Always present from schema 3;
+   * optional because engines before 1.4.112 omit it and the alias path still
+   * answers from them.
+   */
   provider?: CodingSessionProvider;
   /**
-   * How to continue this session locally — the engine's own command and the
-   * caveat that binds it (`app/services/coding_sessions/continuation.py`).
-   * Optional: engines before 1.4.112 omit it.
+   * How to continue this session locally. Optional only for engines before
+   * 1.4.112; from schema 3 the engine always answers, including "you cannot".
    */
-  continuation?: { command: string; note: string } | null;
+  continuation?: SessionContinuation | null;
   title: string;
   title_source: string | null;
   project: string | null;
   last_activity_at: number;
-  bytes: number;
+  /**
+   * `null` = THE PROVIDER HAS NO SIZE for this session (a Cursor chat is rows
+   * in a shared database, not a file). Never rendered as "0 B".
+   */
+  bytes: number | null;
+  /** false = AI Matrx holds this session and this Mac keeps no local copy. */
   on_disk: boolean;
-  state: ClaudeSessionState;
-  pinned: boolean;
+  state: CodingSessionState;
+  /**
+   * `null` = THE PROVIDER HAS NO PIN CONCEPT (Codex, Cursor, VS Code), which
+   * is not the same fact as "not pinned". A null pin renders as nothing.
+   */
+  pinned: boolean | null;
   pinned_rank: number | null;
   category: string | null;
   archived: boolean;
-  /** false = the transcript exists on disk but Claude's sidebar never indexed it (CLI-only). */
-  in_claude_sidebar: boolean;
+  /**
+   * false = the transcript exists on disk but Claude's sidebar never indexed
+   * it (CLI-only). `null` for every non-Claude provider: a provider with no
+   * sidebar cannot be "missing from" one, so the badge must not render.
+   */
+  in_claude_sidebar: boolean | null;
+  /**
+   * Provider-specific display facts (Codex: entries/cwd/originator…, Cursor:
+   * entries/workspace_id…). Every key is optional and of unknown type; never
+   * assume one exists.
+   */
+  facts?: Record<string, unknown>;
   cloud: {
     conversation_id: string | null;
     fidelity: string | null;
@@ -846,7 +884,7 @@ export interface ClaudeAccount {
   active: boolean;
 }
 
-export interface ClaudeCloudCheck {
+export interface CodingSessionCloudCheck {
   /** False when AI Matrx could not be asked; `reason`/`detail` say why. */
   checked: boolean;
   /**
@@ -877,12 +915,16 @@ export interface ClaudeCloudCheck {
  *   refreshing  the rows are real, a re-read is running behind this answer
  *   fresh       the rows are everything on this Mac
  */
-export interface ClaudeIndexReport {
+export interface CodingSessionIndexReport {
   state: "fresh" | "refreshing" | "cold";
   refreshing: boolean;
   /** Index record files read into the store so far — the cold-start counter. */
   files_read: number;
-  conversations: number;
+  /**
+   * Sessions behind this index. Present on the screen-wide aggregate; a single
+   * provider's block reports its own count in `totals.sessions` instead.
+   */
+  conversations?: number;
   updated_at: string | null;
   /** Records the last refresh actually re-read; null when it never ran here. */
   changed_files: number | null;
@@ -894,8 +936,31 @@ export interface ClaudeIndexReport {
   error: string | null;
 }
 
-export interface ClaudeOverview {
-  schema_version: 2;
+/**
+ * ONE provider's half of the screen: how current its index is, how current the
+ * server answer about it is, its own counts, and THE ONE SENTENCE saying what
+ * it cannot show. A provider with no rows and no reason would read as a bug;
+ * with its reason it is a state (law 4).
+ */
+export interface CodingSessionProviderBlock {
+  provider: CodingSessionProvider;
+  index: CodingSessionIndexReport;
+  cloud: CodingSessionCloudCheck;
+  /** Per-provider counts: its own totals plus the six session states. */
+  totals: Record<string, number | null | unknown>;
+  /** What this provider cannot show. Null only when nothing is missing. */
+  note: string | null;
+  /** False = this provider has no pins at all; the control is ABSENT, not dead. */
+  supports_pins: boolean;
+  /** False = no command or runtime reopens one of its chats. */
+  supports_resume: boolean;
+  /** False = this Mac keeps no local record; the rows came from AI Matrx. */
+  lists_locally: boolean;
+  continuation: SessionContinuation;
+}
+
+export interface CodingSessionsOverview {
+  schema_version: 3;
   account_id: string | null;
   /**
    * The providers this payload actually LISTS sessions for. The screen reads
@@ -904,17 +969,29 @@ export interface ClaudeOverview {
    * 1.4.112 omit it.
    */
   listed_providers?: CodingSessionProvider[];
+  /**
+   * One block per listed provider, in screen order. Optional: an engine before
+   * schema 3 lists Claude Code alone and reports no blocks, and the screen
+   * must still render (it then has no per-provider note to show).
+   */
+  providers?: CodingSessionProviderBlock[];
   accounts: ClaudeAccount[];
-  cloud: ClaudeCloudCheck;
+  /**
+   * The AGGREGATE cloud answer: `checked` is true only when EVERY provider was
+   * checked, and `detail` names the providers that were not. A partial
+   * inventory is not a smaller truth.
+   */
+  cloud: CodingSessionCloudCheck;
   /** Optional for engines before delivery-ledger availability was explicit. */
   delivery_ledger?: ClaudeDeliveryLedger;
   /**
-   * The index behind `conversations`. Optional: engines before 1.4.125 read the
-   * whole tree inside the request and had no state to report, so an absent
-   * block means "this engine only ever answers with a complete list".
+   * The AGGREGATE index behind `conversations` — the least finished of them
+   * all, so `state` is "cold" if ANY provider is cold and the existing
+   * cold-index polling keeps working. Optional: engines before 1.4.125 read
+   * the whole tree inside the request and had no state to report.
    */
-  index?: ClaudeIndexReport;
-  conversations: ClaudeConversation[];
+  index?: CodingSessionIndexReport;
+  conversations: CodingSessionRow[];
   totals: {
     conversations: number;
     pinned: number;
@@ -946,8 +1023,8 @@ export interface ClaudeOverview {
  * response: an endpoint timeout or a browser-level network failure. Callers
  * must not retry an authorization, permission, schema, or server response.
  */
-export class ClaudeOverviewReadError extends Error {
-  override readonly name = "ClaudeOverviewReadError";
+export class CodingSessionsOverviewReadError extends Error {
+  override readonly name = "CodingSessionsOverviewReadError";
   readonly original: Error;
 
   constructor(
@@ -1081,7 +1158,7 @@ export interface ClaudeSessionDiagnosisEnvelope {
 export interface ClaudeSessionDiagnosis {
   schema_version: 1;
   session_id: string;
-  state: ClaudeSessionState;
+  state: CodingSessionState;
   verdict: { summary: string; remedy: string | null };
   index: {
     /** false = no Claude sidebar record; the transcript alone is the evidence. */
@@ -1102,7 +1179,7 @@ export interface ClaudeSessionDiagnosis {
     accounts: string[];
   };
   transcript: { on_disk: boolean; bytes: number; modified_at: string | null };
-  cloud: ClaudeCloudCheck & {
+  cloud: CodingSessionCloudCheck & {
     binding: {
       provider_session_id: string;
       conversation_id: string | null;
@@ -1137,6 +1214,73 @@ export interface ClaudeSessionDiagnosis {
   } | null;
   /** Absent on engines before label availability was explicit. */
   labels_ledger?: ClaudeDiagnosticFactsLedger;
+}
+
+/**
+ * A NON-CLAUDE session's diagnosis — the same question, the facts that exist.
+ *
+ * Claude Code is the only provider with a sidebar ledger, a label writer and
+ * an import reconciler, so its payload (`ClaudeSessionDiagnosis`) is deeper.
+ * Every other provider is diagnosed from its adapter's row, the server's
+ * binding, the same envelopes and the same verdict — and the dialog says
+ * plainly which sections this provider has none of rather than showing an
+ * empty box (`app/services/coding_sessions/overview.py::session_diagnosis`).
+ */
+export interface CodingSessionProviderDiagnosis {
+  schema_version: number;
+  provider: CodingSessionProvider;
+  session_id: string;
+  state: CodingSessionState;
+  verdict: { summary: string; remedy: string | null };
+  continuation: SessionContinuation;
+  /** Null when this Mac holds no local record of the session at all. */
+  local: {
+    title: string;
+    title_source: string | null;
+    project: string | null;
+    last_activity_at: number;
+    /** Null where the provider has no size for a session. Never 0. */
+    bytes: number | null;
+    on_disk: boolean;
+    archived: boolean;
+    facts: Record<string, unknown>;
+  } | null;
+  /** The provider's own sentence about what it cannot show here. */
+  local_note: string | null;
+  cloud: {
+    meta: CodingSessionCloudCheck;
+    binding: {
+      provider_session_id: string;
+      conversation_id: string | null;
+      fidelity: string | null;
+      last_seen_at: string | null;
+      conversation_title: string | null;
+      title_source: string | null;
+    } | null;
+  };
+  delivery: {
+    meta: ClaudeDeliveryLedger;
+    /** Null when this Mac could not read the envelope ledger. */
+    envelopes: ClaudeSessionDiagnosisEnvelope[] | null;
+    queue: { pending: number; quarantined: number } | null;
+    publisher_blocker: CodingSessionBridgeStatus["publisher"]["blocker"];
+  };
+  capture: {
+    meta: ClaudeDiagnosticFactsLedger;
+    attempts: ClaudeSessionDiagnosis["capture"];
+  };
+}
+
+/** Whichever shape the provider-aware diagnosis route returned. */
+export type CodingSessionDiagnosis =
+  | ClaudeSessionDiagnosis
+  | CodingSessionProviderDiagnosis;
+
+/** True for the deeper Claude Code payload: only it carries a sidebar record. */
+export function isClaudeSessionDiagnosis(
+  data: CodingSessionDiagnosis,
+): data is ClaudeSessionDiagnosis {
+  return "index" in data;
 }
 
 export interface ClaudeSyncResult {
@@ -3255,9 +3399,9 @@ class EngineAPI {
    * the screen. Exceeding that ceiling says only that this request did not
    * finish; it does not identify why the engine did not answer.
    */
-  async getClaudeOverview(): Promise<ClaudeOverview> {
+  async getCodingSessionsOverview(): Promise<CodingSessionsOverview> {
     try {
-      return await this.request<ClaudeOverview>(
+      return await this.request<CodingSessionsOverview>(
         "/coding-session/claude/overview",
         undefined,
         EngineAPI.CLAUDE_OVERVIEW_TIMEOUT_MS,
@@ -3270,28 +3414,41 @@ class EngineAPI {
         e instanceof Error &&
         e.message.startsWith("Engine request timed out after")
       ) {
-        throw new ClaudeOverviewReadError("timeout", e);
+        throw new CodingSessionsOverviewReadError("timeout", e);
       }
       // Fetch reports a transport failure as TypeError. HTTP errors remain
       // ordinary Errors so the screen never retries auth, permission, schema,
       // or server failures blindly.
       if (e instanceof TypeError) {
-        throw new ClaudeOverviewReadError("network", e);
+        throw new CodingSessionsOverviewReadError("network", e);
       }
       throw e;
     }
   }
 
-  async getClaudeSessionDiagnosis(sessionId: string): Promise<ClaudeSessionDiagnosis> {
+  /**
+   * ONE session's full diagnosis, from the provider that wrote it.
+   *
+   * The provider-neutral route; `/coding-session/claude/sessions/{id}/diagnosis`
+   * is its Claude alias and returns the identical payload, so there is no
+   * Claude-only client path left to send a Codex or Cursor row down. The
+   * answer is `ClaudeSessionDiagnosis` for Claude Code and the leaner
+   * `CodingSessionProviderDiagnosis` for every other provider — discriminate
+   * with `isClaudeSessionDiagnosis`, never by the provider string.
+   */
+  async getCodingSessionDiagnosis(
+    provider: CodingSessionProvider,
+    sessionId: string,
+  ): Promise<CodingSessionDiagnosis> {
     return this.request(
-      `/coding-session/claude/sessions/${encodeURIComponent(sessionId)}/diagnosis`,
+      `/coding-session/sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/diagnosis`,
     );
   }
 
   /**
    * Whether ONE conversation matches AI Matrx, in numbers, with a remedy.
    *
-   * The sibling `getClaudeSessionDiagnosis` answers "is there a row for this
+   * The sibling `getCodingSessionDiagnosis` answers "is there a row for this
    * session?" — presence. This compares CONTENT across all four layers a
    * conversation lives in, which is the question a person actually has
    * (Arman, 2026-09-17: "a chat in Claude Code that simply doesn't match what
@@ -3565,7 +3722,7 @@ class EngineAPI {
   private static readonly DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
   /**
-   * The coding-sessions overview's own ceiling. See `getClaudeOverview()`: the
+   * The coding-sessions overview's own ceiling. See `getCodingSessionsOverview()`: the
    * current engine answers in milliseconds, an engine older than the index
    * store scans the tree inside the request (59s measured), and 60s cut that
    * read off a second before it landed. Sane, not absent: past this the screen

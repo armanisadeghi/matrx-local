@@ -41,7 +41,7 @@ import {
   SESSION_STATE_TONE,
 } from "@/components/coding-sessions/SessionDiagnosisDialog";
 import { Stat, formatStamp, formatWhen } from "@/components/coding-sessions/shared";
-import type { ClaudeConversation, ClaudeSessionState, CodingSessionProvider } from "@/lib/api";
+import type { CodingSessionRow, CodingSessionState, CodingSessionProvider } from "@/lib/api";
 import { getWebAppOrigin } from "@/lib/app-config";
 import {
   cloudAgeLabel,
@@ -51,7 +51,13 @@ import {
 } from "@/lib/coding-sessions/index-state";
 import {
   filterRowsByProvider,
+  noSizeSentence,
+  providerBlock,
   providerChips,
+  providerLabel,
+  providerNote,
+  rowProvider,
+  rowSupportsPins,
   unlistedProviderNote,
 } from "@/lib/coding-sessions/providers";
 import {
@@ -64,7 +70,7 @@ import { openExternal } from "@/lib/open-external";
 import { formatFileSize } from "@ai-matrx/kit/format";
 
 /** The status cards, in the order a person reads them: good → needs a look. */
-const STATE_CARDS: ClaudeSessionState[] = [
+const STATE_CARDS: CodingSessionState[] = [
   "in_cloud",
   "changed",
   "queued",
@@ -72,7 +78,7 @@ const STATE_CARDS: ClaudeSessionState[] = [
   "not_in_cloud",
 ];
 
-type ListFilter = ClaudeSessionState | "pinned" | "all";
+type ListFilter = CodingSessionState | "pinned" | "all";
 
 const INITIAL_TABLE_QUERY: MatrxDataTableQueryState = {
   page: 1,
@@ -85,7 +91,7 @@ const INITIAL_TABLE_QUERY: MatrxDataTableQueryState = {
 
 export interface SessionsTabProps {
   snapshot: CodingSessionsSnapshot;
-  onOpenDiagnosis: (sessionId: string) => void;
+  onOpenDiagnosis: (sessionId: string, provider: CodingSessionProvider) => void;
 }
 
 /** A row action that reports its own failure instead of swallowing it. */
@@ -143,10 +149,13 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
   const [artifactsDialogId, setArtifactsDialogId] = useState<string | null>(null);
   // The row whose native continue is open. A real continue needs a prompt and
   // shows live status, so it is a dialog, not a one-click copy (lane XT-04).
-  const [continueRow, setContinueRow] = useState<ClaudeConversation | null>(null);
-  const [blocked, setBlocked] = useState<{ title: string; reason: string; sessionId: string } | null>(
-    null,
-  );
+  const [continueRow, setContinueRow] = useState<CodingSessionRow | null>(null);
+  const [blocked, setBlocked] = useState<{
+    title: string;
+    reason: string;
+    sessionId: string;
+    provider: CodingSessionProvider;
+  } | null>(null);
 
   const data = snapshot.overview;
   const cloud = data?.cloud;
@@ -163,6 +172,17 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
   );
   const activeChip = provider ? chips.find((chip) => chip.provider === provider) ?? null : null;
 
+  // What the OPEN Continue dialog is allowed to offer, from the engine's own
+  // block for that row's provider plus the server's own binding for the row.
+  const continueProvider = continueRow ? rowProvider(continueRow, data) : null;
+  const continueBlock = continueProvider ? providerBlock(data, continueProvider) : null;
+  const continueTarget = continueRow ? resolveSessionConversation(continueRow) : null;
+  const openContinueConversation = async () => {
+    if (continueTarget?.kind !== "conversation") return;
+    const origin = await getWebAppOrigin();
+    await openExternal(conversationWebUrl(origin, continueTarget.conversationId));
+  };
+
   const conversations = useMemo(() => {
     const rows = filterRowsByProvider(data?.conversations ?? [], data, provider);
     return rows.filter((row) => {
@@ -177,38 +197,65 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
    * While the check is merely in flight the row says "Checking…" quietly —
    * the next read replaces it with the real answer.
    */
-  const quietUnknown = (row: ClaudeConversation) => cloudPending && row.state === "unknown";
+  const quietUnknown = (row: CodingSessionRow) => cloudPending && row.state === "unknown";
 
   const toggleFilter = (next: ListFilter) =>
     setFilter((current) => (current === next ? "all" : next));
 
-  const openRow = (row: ClaudeConversation) => {
+  const openRow = (row: CodingSessionRow) => {
     const target = resolveSessionConversation(row);
     if (target.kind === "conversation") {
       setBlocked(null);
       navigate(conversationChatHref(target.conversationId));
       return;
     }
-    setBlocked({ title: row.title, reason: target.reason, sessionId: row.session_id });
+    setBlocked({
+      title: row.title,
+      reason: target.reason,
+      sessionId: row.session_id,
+      provider: rowProvider(row, data) ?? "claude_code",
+    });
   };
 
-  const columns: MatrxColumnDef<ClaudeConversation>[] = [
-    {
-      id: "pinned",
-      header: <Pin className="mx-auto h-3.5 w-3.5" />,
-      label: "Pinned",
-      sortable: true,
-      filter: false,
-      width: 48,
-      sortValue: (row) => row.pinned,
-      cell: (row) =>
-        row.pinned ? (
-          <Pin
-            className="mx-auto h-3.5 w-3.5 text-amber-500"
-            aria-label="Pinned in the coding agent"
-          />
-        ) : null,
-    },
+  // A provider with no pin concept gets NO pin column — not an empty one.
+  // `pinned: null` is "this provider has no pins", which is not "not pinned",
+  // so the control is absent rather than dead (law 4).
+  const pinnedColumnVisible = provider
+    ? (activeChip?.supportsPins ?? false)
+    : chips.some((chip) => chip.listed && chip.supportsPins);
+  // The tool that wrote the row is only worth a column once more than one
+  // tool is listed; with one provider it would repeat the same word per row.
+  const providerColumnVisible = chips.filter((chip) => chip.listed).length > 1;
+
+  const columns: MatrxColumnDef<CodingSessionRow>[] = [
+    ...(pinnedColumnVisible
+      ? [
+          {
+            id: "pinned",
+            header: (
+              <span data-testid="pinned-column-header">
+                <Pin className="mx-auto h-3.5 w-3.5" />
+              </span>
+            ),
+            label: "Pinned",
+            sortable: true,
+            filter: false,
+            width: 48,
+            sortValue: (row: CodingSessionRow) => row.pinned,
+            cell: (row: CodingSessionRow) =>
+              rowSupportsPins(row, data) ? (
+                <span className="block text-center" data-testid={`row-pin-${row.session_id}`}>
+                  {row.pinned ? (
+                    <Pin
+                      className="mx-auto h-3.5 w-3.5 text-amber-500"
+                      aria-label="Pinned in the coding agent"
+                    />
+                  ) : null}
+                </span>
+              ) : null,
+          } satisfies MatrxColumnDef<CodingSessionRow>,
+        ]
+      : []),
     {
       id: "conversation",
       header: "Conversation",
@@ -219,7 +266,19 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
       cell: (row) => (
         <div className="max-w-md truncate">
           {row.title}
-          {!row.in_claude_sidebar && (
+          {/* AI Matrx holds it and this Mac keeps no local copy — a fact, not
+              a failure, and the row still opens the conversation. */}
+          {row.on_disk === false && (
+            <span
+              className="ml-2 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+              title="AI Matrx holds this session; this Mac has no local copy of it."
+            >
+              In AI Matrx only
+            </span>
+          )}
+          {/* `null` = this provider has no sidebar at all, so it cannot be
+              "missing from" one: the badge is for Claude Code rows only. */}
+          {row.in_claude_sidebar === false && (
             <span
               className="ml-2 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground"
               title="On this Mac, but the agent's sidebar never listed it (started from the CLI). It syncs like any other."
@@ -233,6 +292,27 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         </div>
       ),
     },
+    ...(providerColumnVisible
+      ? [
+          {
+            id: "provider",
+            header: "App",
+            sortable: true,
+            filter: false,
+            width: 112,
+            sortValue: (row: CodingSessionRow) =>
+              providerLabel(rowProvider(row, data) ?? "claude_code"),
+            cell: (row: CodingSessionRow) => (
+              <span
+                className="whitespace-nowrap text-muted-foreground"
+                data-testid={`row-provider-${row.session_id}`}
+              >
+                {providerLabel(rowProvider(row, data) ?? "claude_code")}
+              </span>
+            ),
+          } satisfies MatrxColumnDef<CodingSessionRow>,
+        ]
+      : []),
     {
       id: "project",
       header: "Project",
@@ -263,11 +343,26 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
       filter: false,
       width: 88,
       sortValue: (row) => row.bytes,
-      cell: (row) => (
-        <span className="whitespace-nowrap tabular-nums text-muted-foreground">
-          {formatFileSize(row.bytes)}
-        </span>
-      ),
+      // `bytes: null` = THE PROVIDER HAS NO SIZE for a session. A zero is a
+      // claim, so this says nothing and names the reason to a screen reader.
+      cell: (row) =>
+        row.bytes === null ? (
+          <span
+            className="whitespace-nowrap text-muted-foreground"
+            data-testid={`row-size-${row.session_id}`}
+            aria-label={noSizeSentence(providerLabel(rowProvider(row, data) ?? "claude_code"))}
+            title={noSizeSentence(providerLabel(rowProvider(row, data) ?? "claude_code"))}
+          >
+            —
+          </span>
+        ) : (
+          <span
+            className="whitespace-nowrap tabular-nums text-muted-foreground"
+            data-testid={`row-size-${row.session_id}`}
+          >
+            {formatFileSize(row.bytes)}
+          </span>
+        ),
     },
     {
       id: "artifacts",
@@ -427,7 +522,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
             <p className="font-medium">“{blocked.title}” is not in AI Matrx yet</p>
             <p className="mt-1">{blocked.reason}</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => onOpenDiagnosis(blocked.sessionId)}>
+              <Button size="sm" variant="outline" onClick={() => onOpenDiagnosis(blocked.sessionId, blocked.provider)}>
                 <Stethoscope className="mr-2 h-4 w-4" />
                 See every delivery fact
               </Button>
@@ -509,6 +604,28 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           ))}
         </div>
       )}
+
+      {/* THE ONE SENTENCE per provider saying what it cannot show, from the
+          engine's own block. A provider with rows missing a fact and no reason
+          would read as a bug; with its reason it is a state (law 4). Never
+          behind a disclosure — Arman, 2026-09-17. */}
+      {provider === null
+        ? chips.length > 0 && (
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground" data-testid="provider-notes">
+              {chips.map((chip) => (
+                <p key={chip.provider} data-testid={`provider-note-${chip.provider}`}>
+                  <span className="font-medium text-foreground">{chip.label}</span>{" "}
+                  {providerNote(chip)}
+                </p>
+              ))}
+            </div>
+          )
+        : activeChip && (
+            <p className="text-xs text-muted-foreground" data-testid="provider-note-selected">
+              <span className="font-medium text-foreground">{activeChip.label}</span>{" "}
+              {providerNote(activeChip)}
+            </p>
+          )}
 
       <div className="min-w-0" data-testid="sessions-table">
         <MatrxDataTable
@@ -607,7 +724,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
                   size="sm"
                   variant="ghost"
                   title="Every delivery fact behind this row's status: the server's binding, the transcript on disk, each envelope and its error."
-                  onClick={() => onOpenDiagnosis(row.session_id)}
+                  onClick={() => onOpenDiagnosis(row.session_id, rowProvider(row, data) ?? "claude_code")}
                 >
                   <Stethoscope className="h-3.5 w-3.5" />
                   <span className="ml-1.5 hidden text-xs xl:inline">Delivery</span>
@@ -673,7 +790,17 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         onClose={() => setArtifactsDialogId(null)}
       />
 
-      <ContinueSessionDialog row={continueRow} onClose={() => setContinueRow(null)} />
+      {/* Resume capability is the engine's per-provider answer, never this
+          screen's guess: `supports_resume` false means this Mac has no way to
+          reopen one of that provider's chats, and the dialog says so. */}
+      <ContinueSessionDialog
+        row={continueRow}
+        supportsResume={continueBlock?.supports_resume ?? false}
+        {...(continueTarget?.kind === "conversation"
+          ? { onOpenConversation: () => void openContinueConversation() }
+          : {})}
+        onClose={() => setContinueRow(null)}
+      />
     </div>
   );
 }

@@ -15,10 +15,10 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClaudeOverview } from "@/lib/api";
+import type { CodingSessionProvider, CodingSessionsOverview } from "@/lib/api";
 
 const mocks = vi.hoisted(() => ({
-  getClaudeOverview: vi.fn(),
+  getCodingSessionsOverview: vi.fn(),
   getCodingSessionStatus: vi.fn(),
   getCodingSessionProviderReadiness: vi.fn(),
   getCodingSessionArtifactsStatus: vi.fn(),
@@ -101,17 +101,60 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { CodingSessions } from "./CodingSessions";
 
-function overviewPayload(titles: string[], conversationId: string | null = "conv-1"): ClaudeOverview {
+const CLAUDE_NOTE =
+  "Claude Code lists every transcript on this Mac; nothing is hidden from this list.";
+const CODEX_NOTE =
+  "Codex records no message count for an older rollout, so those rows show their entries as unknown.";
+const CURSOR_NOTE =
+  "Cursor does not expose a size or a message count for a chat: its chats are rows in a shared database.";
+const VSCODE_NOTE =
+  "VS Code is on this Mac but the AI Matrx extension is not installed in it, so this Mac keeps no local record of its chats.";
+
+function providerBlock(
+  provider: CodingSessionProvider,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
-    schema_version: 2,
+    provider,
+    index: {
+      state: "fresh",
+      refreshing: false,
+      files_read: 1,
+      updated_at: null,
+      changed_files: null,
+      duration_seconds: null,
+      limit_reached: false,
+      unreadable: 0,
+      error: null,
+    },
+    cloud: { checked: true, reason: null, detail: null, sessions: 1, checked_at: null },
+    totals: { sessions: 1 },
+    note: null,
+    supports_pins: provider === "claude_code",
+    supports_resume: provider === "claude_code" || provider === "codex",
+    lists_locally: provider !== "vscode",
+    continuation: { command: null, note: "", native_resume: false },
+    ...overrides,
+  };
+}
+
+function overviewPayload(titles: string[], conversationId: string | null = "conv-1"): CodingSessionsOverview {
+  return {
+    schema_version: 3,
     account_id: "acct",
     accounts: [],
     listed_providers: ["claude_code"],
+    providers: [providerBlock("claude_code", { note: CLAUDE_NOTE })],
     cloud: { checked: true, sessions: titles.length, checked_at: null, reason: null, detail: null },
     conversations: titles.map((title, index) => ({
       session_id: `session-${index}`,
       provider: "claude_code",
-      continuation: { command: `claude --resume session-${index}`, note: "only while local" },
+        continuation: {
+        command: `claude --resume session-${index}`,
+        note: "only while local",
+        native_resume: true,
+      },
+      facts: {},
       title,
       title_source: null,
       project: "matrx-local",
@@ -146,7 +189,7 @@ function overviewPayload(titles: string[], conversationId: string | null = "conv
       waiting: 0,
       quarantined: 0,
     },
-  } as unknown as ClaudeOverview;
+  } as unknown as CodingSessionsOverview;
 }
 
 const bridge = {
@@ -212,7 +255,7 @@ beforeEach(() => {
   } catch {
     /* no storage here; the cache reports that itself */
   }
-  mocks.getClaudeOverview.mockReset().mockResolvedValue(overviewPayload(["First session"]));
+  mocks.getCodingSessionsOverview.mockReset().mockResolvedValue(overviewPayload(["First session"]));
   mocks.getCodingSessionStatus.mockReset().mockResolvedValue(bridge);
   mocks.getCodingSessionProviderReadiness.mockReset().mockResolvedValue(readiness);
   mocks.getCodingSessionArtifactsStatus.mockReset().mockResolvedValue(null);
@@ -278,8 +321,8 @@ describe("Coding Sessions tabs", () => {
 describe("Refresh", () => {
   it("announces the work the moment it is clicked", async () => {
     await render("/coding-sessions");
-    const slow = deferred<ClaudeOverview>();
-    mocks.getClaudeOverview.mockReturnValue(slow.promise);
+    const slow = deferred<CodingSessionsOverview>();
+    mocks.getCodingSessionsOverview.mockReturnValue(slow.promise);
     const refresh = container.querySelector(
       "[data-testid='coding-sessions-refresh']",
     ) as HTMLButtonElement;
@@ -305,7 +348,7 @@ describe("Refresh", () => {
 
   it("keeps the list and shows the reason when the read fails", async () => {
     await render("/coding-sessions");
-    mocks.getClaudeOverview.mockRejectedValue(new Error("index unreadable"));
+    mocks.getCodingSessionsOverview.mockRejectedValue(new Error("index unreadable"));
     await act(async () => {
       (container.querySelector("[data-testid='coding-sessions-refresh']") as HTMLButtonElement).click();
       await Promise.resolve();
@@ -318,8 +361,8 @@ describe("Refresh", () => {
 
   it("keeps the cached list and says when one transient retry is scheduled", async () => {
     await render("/coding-sessions");
-    mocks.getClaudeOverview.mockRejectedValue({
-      name: "ClaudeOverviewReadError",
+    mocks.getCodingSessionsOverview.mockRejectedValue({
+      name: "CodingSessionsOverviewReadError",
       kind: "timeout",
       message: "Engine request timed out after 2 minutes: /coding-session/claude/overview",
     });
@@ -347,7 +390,7 @@ describe("A row is a door", () => {
   });
 
   it("says why there is nothing to open, and keeps delivery one click away", async () => {
-    mocks.getClaudeOverview.mockResolvedValue(overviewPayload(["Queued session"], null));
+    mocks.getCodingSessionsOverview.mockResolvedValue(overviewPayload(["Queued session"], null));
     await render("/coding-sessions");
     await act(async () => {
       (container.querySelector("[data-row-id='session-0']") as HTMLElement).click();
@@ -394,7 +437,7 @@ describe("A row is a door", () => {
  * as one that could not happen at all.
  */
 describe("A cold index is never an empty Mac", () => {
-  function coldPayload(filesRead: number): ClaudeOverview {
+  function coldPayload(filesRead: number): CodingSessionsOverview {
     const base = overviewPayload([]);
     return {
       ...base,
@@ -410,11 +453,11 @@ describe("A cold index is never an empty Mac", () => {
         unreadable: 0,
         error: null,
       },
-    } as unknown as ClaudeOverview;
+    } as unknown as CodingSessionsOverview;
   }
 
   it("shows the first read with its counter instead of '0 conversations'", async () => {
-    mocks.getClaudeOverview.mockResolvedValue(coldPayload(4_096));
+    mocks.getCodingSessionsOverview.mockResolvedValue(coldPayload(4_096));
     await render("/coding-sessions");
     const subtitle = container.querySelector("[data-testid='coding-sessions-subtitle']");
     expect(subtitle?.textContent).toContain("Reading your conversations for the first time…");
@@ -428,23 +471,23 @@ describe("A cold index is never an empty Mac", () => {
   it("asks again a few seconds later, until the index is fresh", async () => {
     vi.useFakeTimers();
     try {
-      mocks.getClaudeOverview.mockResolvedValue(coldPayload(10));
+      mocks.getCodingSessionsOverview.mockResolvedValue(coldPayload(10));
       await render("/coding-sessions");
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(1);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(1);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_000);
       });
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(2);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(2);
       // A fresh answer ends the polling.
-      mocks.getClaudeOverview.mockResolvedValue(overviewPayload(["First session"]));
+      mocks.getCodingSessionsOverview.mockResolvedValue(overviewPayload(["First session"]));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_000);
       });
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(3);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(3);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
       });
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(3);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
@@ -452,7 +495,7 @@ describe("A cold index is never an empty Mac", () => {
 });
 
 describe("A refresh running behind the answer", () => {
-  function refreshingPayload(): ClaudeOverview {
+  function refreshingPayload(): CodingSessionsOverview {
     const base = overviewPayload(["First session"]);
     return {
       ...base,
@@ -468,11 +511,11 @@ describe("A refresh running behind the answer", () => {
         unreadable: 0,
         error: null,
       },
-    } as unknown as ClaudeOverview;
+    } as unknown as CodingSessionsOverview;
   }
 
   it("wears the announced-refresh state and says what the engine is re-reading", async () => {
-    mocks.getClaudeOverview.mockResolvedValue(refreshingPayload());
+    mocks.getCodingSessionsOverview.mockResolvedValue(refreshingPayload());
     await render("/coding-sessions");
     const refresh = container.querySelector(
       "[data-testid='coding-sessions-refresh']",
@@ -490,13 +533,13 @@ describe("A refresh running behind the answer", () => {
   it("re-fetches once a few seconds later", async () => {
     vi.useFakeTimers();
     try {
-      mocks.getClaudeOverview.mockResolvedValue(refreshingPayload());
+      mocks.getCodingSessionsOverview.mockResolvedValue(refreshingPayload());
       await render("/coding-sessions");
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(1);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(1);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(4_500);
       });
-      expect(mocks.getClaudeOverview).toHaveBeenCalledTimes(2);
+      expect(mocks.getCodingSessionsOverview).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -504,7 +547,7 @@ describe("A refresh running behind the answer", () => {
 });
 
 describe("The cloud check that has not happened yet", () => {
-  function inFlightPayload(): ClaudeOverview {
+  function inFlightPayload(): CodingSessionsOverview {
     const base = overviewPayload(["First session"]);
     return {
       ...base,
@@ -518,11 +561,11 @@ describe("The cloud check that has not happened yet", () => {
         age_seconds: null,
       },
       conversations: base.conversations.map((row) => ({ ...row, state: "unknown", cloud: null })),
-    } as unknown as ClaudeOverview;
+    } as unknown as CodingSessionsOverview;
   }
 
   it("says 'not asked yet' quietly instead of 'could not be asked'", async () => {
-    mocks.getClaudeOverview.mockResolvedValue(inFlightPayload());
+    mocks.getCodingSessionsOverview.mockResolvedValue(inFlightPayload());
     await render("/coding-sessions");
     const quiet = container.querySelector("[data-testid='cloud-in-flight']");
     expect(quiet?.textContent).toContain("has not been asked yet");
@@ -534,7 +577,7 @@ describe("The cloud check that has not happened yet", () => {
   });
 
   it("lets the rows read unknown quietly during that window", async () => {
-    mocks.getClaudeOverview.mockResolvedValue(inFlightPayload());
+    mocks.getCodingSessionsOverview.mockResolvedValue(inFlightPayload());
     await render("/coding-sessions");
     const cell = container.querySelector("[data-testid='state-checking']");
     expect(cell?.textContent).toContain("Checking…");
@@ -543,10 +586,10 @@ describe("The cloud check that has not happened yet", () => {
 
   it("shows how old a real answer is", async () => {
     const base = overviewPayload(["First session"]);
-    mocks.getClaudeOverview.mockResolvedValue({
+    mocks.getCodingSessionsOverview.mockResolvedValue({
       ...base,
       cloud: { ...base.cloud, sessions: 1_671, age_seconds: 240, refreshing: false },
-    } as unknown as ClaudeOverview);
+    } as unknown as CodingSessionsOverview);
     await render("/coding-sessions");
     expect(container.querySelector("[data-testid='cloud-checked-note']")?.textContent).toContain(
       "checked 4m ago",
@@ -554,5 +597,204 @@ describe("The cloud check that has not happened yet", () => {
     expect(container.querySelector("[data-testid='coding-sessions-subtitle']")?.textContent).toContain(
       "AI Matrx holds 1,671 of them (checked 4m ago)",
     );
+  });
+});
+
+/**
+ * ONE FEATURE, FOUR PROVIDERS (Arman, 2026-09-17: "coding sessions is one
+ * feature"). Every case below fails against the screen as it shipped in
+ * 1.4.155: it read one provider's payload, printed "0 B" for a Cursor chat
+ * that has no size, showed an empty pin column for providers with no pins,
+ * badged every non-Claude row "CLI only", and left a provider with no rows and
+ * no reason on screen.
+ */
+describe("A mixed four-provider list", () => {
+  function mixedPayload(): CodingSessionsOverview {
+    const base = overviewPayload(["Claude session"]);
+    return {
+      ...base,
+      listed_providers: ["claude_code", "codex", "cursor", "vscode"],
+      providers: [
+        providerBlock("claude_code", { note: CLAUDE_NOTE }),
+        providerBlock("codex", { note: CODEX_NOTE }),
+        providerBlock("cursor", { note: CURSOR_NOTE }),
+        providerBlock("vscode", { note: VSCODE_NOTE, lists_locally: false }),
+      ],
+      conversations: [
+        {
+          ...base.conversations[0],
+          session_id: "claude-1",
+          provider: "claude_code",
+          title: "Claude session",
+          in_claude_sidebar: false,
+          pinned: false,
+          bytes: 10,
+        },
+        {
+          ...base.conversations[0],
+          session_id: "codex-1",
+          provider: "codex",
+          title: "Codex thread",
+          bytes: 2_048,
+          pinned: null,
+          pinned_rank: null,
+          in_claude_sidebar: null,
+          continuation: {
+            command: "codex resume codex-1",
+            note: CODEX_NOTE,
+            native_resume: true,
+          },
+          facts: { entries: 42, cwd: "/Users/someone/code" },
+          cloud: { conversation_id: "conv-codex", fidelity: null, last_seen_at: null },
+        },
+        {
+          ...base.conversations[0],
+          session_id: "cursor-1",
+          provider: "cursor",
+          title: "Cursor chat",
+          bytes: null,
+          pinned: null,
+          pinned_rank: null,
+          in_claude_sidebar: null,
+          continuation: { command: null, note: CURSOR_NOTE, native_resume: false },
+          facts: { entries: null, workspace_id: "ws-1" },
+          cloud: { conversation_id: "conv-cursor", fidelity: null, last_seen_at: null },
+        },
+        {
+          ...base.conversations[0],
+          session_id: "vscode-1",
+          provider: "vscode",
+          title: "VS Code chat",
+          bytes: null,
+          on_disk: false,
+          pinned: null,
+          pinned_rank: null,
+          in_claude_sidebar: null,
+          continuation: { command: null, note: VSCODE_NOTE, native_resume: false },
+          facts: {},
+          cloud: { conversation_id: "conv-vscode", fidelity: null, last_seen_at: null },
+        },
+      ],
+    } as unknown as CodingSessionsOverview;
+  }
+
+  beforeEach(() => {
+    mocks.getCodingSessionsOverview.mockResolvedValue(mixedPayload());
+  });
+
+  it("lists every provider's sessions, and says which tool wrote each row", async () => {
+    await render("/coding-sessions");
+    for (const title of ["Claude session", "Codex thread", "Cursor chat", "VS Code chat"]) {
+      expect(container.textContent).toContain(title);
+    }
+    expect(container.querySelector("[data-testid='row-provider-claude-1']")?.textContent).toBe(
+      "Claude Code",
+    );
+    expect(container.querySelector("[data-testid='row-provider-codex-1']")?.textContent).toBe(
+      "Codex",
+    );
+    expect(container.querySelector("[data-testid='row-provider-cursor-1']")?.textContent).toBe(
+      "Cursor",
+    );
+    expect(container.querySelector("[data-testid='row-provider-vscode-1']")?.textContent).toBe(
+      "VS Code",
+    );
+  });
+
+  it("shows four chips with real counts and isolates each one when picked", async () => {
+    await render("/coding-sessions");
+    const chips = container.querySelector("[data-testid='provider-chips']")?.textContent ?? "";
+    for (const label of ["Claude Code", "Codex", "Cursor", "VS Code"]) {
+      expect(chips).toContain(label);
+    }
+    await act(async () => {
+      findButton("Codex").click();
+    });
+    expect(container.querySelector("[data-testid='sessions-table']")?.textContent).toContain(
+      "Codex thread",
+    );
+    expect(container.querySelector("[data-testid='sessions-table']")?.textContent).not.toContain(
+      "Cursor chat",
+    );
+    await act(async () => {
+      findButton("Cursor").click();
+    });
+    expect(container.querySelector("[data-testid='sessions-table']")?.textContent).toContain(
+      "Cursor chat",
+    );
+    expect(container.querySelector("[data-testid='sessions-table']")?.textContent).not.toContain(
+      "Codex thread",
+    );
+  });
+
+  it("never renders a size a provider does not have as '0 B'", async () => {
+    await render("/coding-sessions");
+    const cell = container.querySelector("[data-testid='row-size-cursor-1']");
+    expect(cell?.textContent).toBe("—");
+    expect(cell?.getAttribute("aria-label")).toContain("Cursor");
+    expect(container.querySelector("[data-testid='row-size-codex-1']")?.textContent).toBe("2048 B");
+  });
+
+  it("renders no pin control for a provider that has no pins, and no dead one either", async () => {
+    await render("/coding-sessions");
+    expect(container.querySelector("[data-testid='row-pin-claude-1']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='row-pin-cursor-1']")).toBeNull();
+    await act(async () => {
+      findButton("Cursor").click();
+    });
+    expect(container.querySelector("[data-testid='pinned-column-header']")).toBeNull();
+  });
+
+  it("badges 'CLI only' only for a Claude Code row that Claude's sidebar never listed", async () => {
+    await render("/coding-sessions");
+    const claudeRow = container.querySelector("[data-row-id='claude-1']");
+    const cursorRow = container.querySelector("[data-row-id='cursor-1']");
+    expect(claudeRow?.textContent).toContain("CLI only");
+    expect(cursorRow?.textContent).not.toContain("CLI only");
+    expect(container.querySelector("[data-row-id='vscode-1']")?.textContent).not.toContain(
+      "CLI only",
+    );
+  });
+
+  it("says plainly when AI Matrx holds a session this Mac has no copy of", async () => {
+    await render("/coding-sessions");
+    const row = container.querySelector("[data-row-id='vscode-1']");
+    expect(row?.textContent).toContain("In AI Matrx only");
+  });
+
+  it("still opens the conversation of a session this Mac does not hold", async () => {
+    await render("/coding-sessions");
+    await act(async () => {
+      (container.querySelector("[data-row-id='vscode-1']") as HTMLElement).click();
+    });
+    expect(container.querySelector("[data-testid='location']")?.textContent).toBe(
+      "/cloud-chat?conversation=conv-vscode&from=coding-sessions",
+    );
+  });
+
+  it("puts every provider's one sentence about what it cannot show on screen", async () => {
+    await render("/coding-sessions");
+    const notes = container.querySelector("[data-testid='provider-notes']");
+    expect(notes).not.toBeNull();
+    for (const [provider, note] of [
+      ["claude_code", CLAUDE_NOTE],
+      ["codex", CODEX_NOTE],
+      ["cursor", CURSOR_NOTE],
+      ["vscode", VSCODE_NOTE],
+    ] as const) {
+      expect(
+        container.querySelector(`[data-testid='provider-note-${provider}']`)?.textContent,
+      ).toContain(note);
+    }
+  });
+
+  it("shows the picked provider's sentence without making anyone open a disclosure", async () => {
+    await render("/coding-sessions");
+    await act(async () => {
+      findButton("Cursor").click();
+    });
+    expect(
+      container.querySelector("[data-testid='provider-note-selected']")?.textContent,
+    ).toContain(CURSOR_NOTE);
   });
 });

@@ -21,7 +21,7 @@
  * Every function here is pure so the three states are tested without a DOM.
  */
 
-import type { ClaudeCloudCheck, ClaudeIndexReport, ClaudeOverview } from "@/lib/api";
+import type { CodingSessionCloudCheck, CodingSessionIndexReport, CodingSessionsOverview } from "@/lib/api";
 import { formatRelativeTime } from "@ai-matrx/kit/format";
 
 export type IndexState = "cold" | "refreshing" | "fresh" | "unreported";
@@ -38,18 +38,18 @@ const POLL_MS: Record<IndexState, number | null> = {
   unreported: null,
 };
 
-export function indexReport(overview: ClaudeOverview | null): ClaudeIndexReport | null {
+export function indexReport(overview: CodingSessionsOverview | null): CodingSessionIndexReport | null {
   return overview?.index ?? null;
 }
 
-export function indexState(overview: ClaudeOverview | null): IndexState {
+export function indexState(overview: CodingSessionsOverview | null): IndexState {
   const state = overview?.index?.state;
   if (state === "cold" || state === "refreshing" || state === "fresh") return state;
   return "unreported";
 }
 
 /** Milliseconds until this screen should ask again, or null when it should not. */
-export function indexPollDelayMs(overview: ClaudeOverview | null): number | null {
+export function indexPollDelayMs(overview: CodingSessionsOverview | null): number | null {
   const indexDelay = POLL_MS[indexState(overview)];
   if (indexDelay !== null) return indexDelay;
 
@@ -75,7 +75,7 @@ export function indexPollDelayMs(overview: ClaudeOverview | null): number | null
  * has not been read yet, so nothing on screen may present them as facts about
  * this Mac.
  */
-export function indexCountsAreReal(overview: ClaudeOverview | null): boolean {
+export function indexCountsAreReal(overview: CodingSessionsOverview | null): boolean {
   return overview !== null && indexState(overview) !== "cold";
 }
 
@@ -90,7 +90,7 @@ function seconds(value: number): string {
 }
 
 /** The plain sentence for a cold or refreshing index, or null when there is none. */
-export function indexNotice(overview: ClaudeOverview | null): IndexNotice | null {
+export function indexNotice(overview: CodingSessionsOverview | null): IndexNotice | null {
   const report = indexReport(overview);
   const state = indexState(overview);
   if (report === null || (state !== "cold" && state !== "refreshing")) return null;
@@ -126,7 +126,7 @@ export type CloudPhase = "checked" | "in_flight" | "unavailable";
  * Three different things, never conflated: answered, not asked YET, and could
  * not be asked at all.
  */
-export function cloudPhase(cloud: ClaudeCloudCheck | null | undefined): CloudPhase {
+export function cloudPhase(cloud: CodingSessionCloudCheck | null | undefined): CloudPhase {
   if (!cloud) return "unavailable";
   if (cloud.checked) return "checked";
   return cloud.reason === "cloud_check_in_flight" ||
@@ -137,12 +137,12 @@ export function cloudPhase(cloud: ClaudeCloudCheck | null | undefined): CloudPha
 }
 
 /** True while the cloud answer is merely pending — rows read "unknown" quietly. */
-export function cloudCheckPending(cloud: ClaudeCloudCheck | null | undefined): boolean {
+export function cloudCheckPending(cloud: CodingSessionCloudCheck | null | undefined): boolean {
   return cloudPhase(cloud) === "in_flight";
 }
 
 /** "checked 3 min ago" from `cloud.age_seconds`, or null when it is absent. */
-export function cloudAgeLabel(cloud: ClaudeCloudCheck | null | undefined): string | null {
+export function cloudAgeLabel(cloud: CodingSessionCloudCheck | null | undefined): string | null {
   const age = cloud?.age_seconds;
   if (age === null || age === undefined || !Number.isFinite(age)) return null;
   const now = Date.now();
@@ -151,7 +151,7 @@ export function cloudAgeLabel(cloud: ClaudeCloudCheck | null | undefined): strin
 
 /** The header's cloud clause, in the voice the phase earns. */
 export function cloudHeaderText(
-  cloud: ClaudeCloudCheck | null | undefined,
+  cloud: CodingSessionCloudCheck | null | undefined,
   stampFallback: (value: string | null | undefined) => string,
 ): string {
   switch (cloudPhase(cloud)) {

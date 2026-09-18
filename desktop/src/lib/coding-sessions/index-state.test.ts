@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { ClaudeCloudCheck, ClaudeIndexReport, ClaudeOverview } from "@/lib/api";
+import type { CodingSessionCloudCheck, CodingSessionIndexReport, CodingSessionsOverview } from "@/lib/api";
 import {
   cloudAgeLabel,
   cloudCheckPending,
@@ -23,7 +23,7 @@ import {
   indexState,
 } from "@/lib/coding-sessions/index-state";
 
-function overview(index?: Partial<ClaudeIndexReport>): ClaudeOverview {
+function overview(index?: Partial<CodingSessionIndexReport>): CodingSessionsOverview {
   return {
     schema_version: 2,
     conversations: [],
@@ -42,13 +42,13 @@ function overview(index?: Partial<ClaudeIndexReport>): ClaudeOverview {
             unreadable: 0,
             error: null,
             ...index,
-          } satisfies ClaudeIndexReport,
+          } satisfies CodingSessionIndexReport,
         }
       : {}),
-  } as unknown as ClaudeOverview;
+  } as unknown as CodingSessionsOverview;
 }
 
-function cloud(partial: Partial<ClaudeCloudCheck>): ClaudeCloudCheck {
+function cloud(partial: Partial<CodingSessionCloudCheck>): CodingSessionCloudCheck {
   return {
     checked: true,
     reason: null,

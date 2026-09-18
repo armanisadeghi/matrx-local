@@ -6,14 +6,14 @@
  * previous answer, always labelled with its age — never presented as current.
  */
 
-import type { ClaudeOverview } from "@/lib/api";
+import type { CodingSessionsOverview } from "@/lib/api";
 
 const KEY = "matrx.coding-sessions.overview.v1";
 /** Rows kept in the cache. The header says so when the real list is longer. */
 export const CACHED_ROW_LIMIT = 1000;
 
 export interface CachedOverview {
-  overview: ClaudeOverview;
+  overview: CodingSessionsOverview;
   at: number;
   /** True when the cache holds fewer rows than the overview it came from. */
   truncated: boolean;
@@ -61,7 +61,7 @@ export function readCachedOverview(store: Store | null = defaultStore()): Cached
  * is off rather than silently losing it.
  */
 export function writeCachedOverview(
-  overview: ClaudeOverview,
+  overview: CodingSessionsOverview,
   at: number,
   store: Store | null = defaultStore(),
 ): string | null {

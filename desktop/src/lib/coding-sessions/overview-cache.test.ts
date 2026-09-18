@@ -5,7 +5,7 @@ import {
   readCachedOverview,
   writeCachedOverview,
 } from "@/lib/coding-sessions/overview-cache";
-import type { ClaudeOverview } from "@/lib/api";
+import type { CodingSessionsOverview } from "@/lib/api";
 
 function memoryStore(failOnWrite = false) {
   const values = new Map<string, string>();
@@ -20,13 +20,13 @@ function memoryStore(failOnWrite = false) {
   };
 }
 
-function overview(count: number): ClaudeOverview {
+function overview(count: number): CodingSessionsOverview {
   return {
     schema_version: 2,
     conversations: Array.from({ length: count }, (_, index) => ({
       session_id: `s${index}`,
     })),
-  } as unknown as ClaudeOverview;
+  } as unknown as CodingSessionsOverview;
 }
 
 describe("overview cache", () => {

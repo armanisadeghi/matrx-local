@@ -10,10 +10,18 @@
  *
  * Whatever the verdicts say, the resume command is still here to copy: a
  * refusal hands over the fallback instead of being a dead end.
+ *
+ * FOUR PROVIDERS, ONE CONTROL. The three verdicts are Claude Code's runtime
+ * door and only a Claude Code row enters it (`continuationRoute`): this Mac
+ * runs no Codex or Cursor turns. A Codex row gets the engine's own command to
+ * copy and none of the Claude reads are made; a Cursor or VS Code row gets the
+ * engine's sentence saying no command reopens one chat, plus the mirrored
+ * conversation in AI Matrx when there is one. No provider ever sees a
+ * `claude --resume` this app invented for it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Copy, Loader2, Play, Square } from "lucide-react";
+import { AlertTriangle, Copy, ExternalLink, Loader2, Play, Square } from "lucide-react";
 
 import { Button } from "@ai-matrx/design-system";
 import {
@@ -24,7 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { engine } from "@/lib/api";
-import type { ClaudeConversation, LocalRuntimeCapabilities, LocalRuntimeRun } from "@/lib/api";
+import type { CodingSessionRow, LocalRuntimeCapabilities, LocalRuntimeRun } from "@/lib/api";
 import { fetchBridgeCapabilities, type BridgeCapabilityReport } from "@/lib/aidream-client";
 import { getAuthedSession } from "@/lib/custodian";
 import {
@@ -32,10 +40,12 @@ import {
   requireActiveOrganizationId,
 } from "@/lib/org/active-org";
 import {
+  continuationRoute,
   continueDoorView,
   runStatusSentence,
   type SessionResumeVerdict,
 } from "@/lib/coding-sessions/continue-door";
+import { providerLabel } from "@/lib/coding-sessions/providers";
 
 const POLL_MS = 1500;
 
@@ -48,9 +58,15 @@ function errorMessage(cause: unknown): string {
 
 export function ContinueSessionDialog({
   row,
+  supportsResume,
+  onOpenConversation,
   onClose,
 }: {
-  row: ClaudeConversation | null;
+  row: CodingSessionRow | null;
+  /** The provider block's own `supports_resume`, never inferred from the row. */
+  supportsResume: boolean;
+  /** Opens the mirrored conversation; absent when this surface cannot. */
+  onOpenConversation?: () => void;
   onClose: () => void;
 }) {
   const [platform, setPlatform] = useState<{
@@ -75,12 +91,25 @@ export function ContinueSessionDialog({
 
   const sessionId = row?.session_id ?? null;
   const provider = row?.provider ?? "claude_code";
-  const copyCommand = row?.continuation?.command ?? `claude --resume ${sessionId ?? ""}`;
+  const label = providerLabel(provider);
+  const route = continuationRoute({
+    provider,
+    label,
+    continuation: row?.continuation ?? null,
+    supportsResume,
+    hasMirroredConversation:
+      Boolean(row?.cloud?.conversation_id) && onOpenConversation !== undefined,
+  });
+  const native = route.kind === "native_runtime";
+  const copyCommand = route.copyCommand ?? "";
 
   // Every read is re-run per opened row, and each one reports its own failure
   // rather than collapsing into a single "unavailable".
   useEffect(() => {
-    if (!sessionId) return;
+    // Only Claude Code's runtime door asks these three, and two of them are
+    // Claude-Code-only engine routes: asking them for a Cursor row would
+    // report a Claude answer about a chat Claude never wrote.
+    if (!sessionId || !native) return;
     let cancelled = false;
     setPlatform({ report: null, error: null });
     setMachine({ capabilities: null, error: null });
@@ -130,9 +159,9 @@ export function ContinueSessionDialog({
     return () => {
       cancelled = true;
     };
-  }, [provider, sessionId]);
+  }, [native, provider, sessionId]);
 
-  const door = continueDoorView({ copyCommand, platform, machine, session });
+  const door = continueDoorView({ copyCommand, label, platform, machine, session });
   const active = run !== null && (run.status === "starting" || run.status === "running");
 
   // The `status` rpc, finally wired: the run's live state, polled only while
@@ -213,7 +242,13 @@ export function ContinueSessionDialog({
         </DialogHeader>
 
         <div className="space-y-3 text-sm">
-          {door.status === "checking" && (
+          {!native && (
+            <p className="text-muted-foreground" data-testid="continuation-route-sentence">
+              {route.sentence}
+            </p>
+          )}
+
+          {native && door.status === "checking" && (
             <p
               className="flex items-center gap-2 text-muted-foreground"
               data-testid="continue-door-checking"
@@ -223,7 +258,7 @@ export function ContinueSessionDialog({
             </p>
           )}
 
-          {door.reasons.map((reason) => (
+          {native && door.reasons.map((reason) => (
             <p
               key={reason}
               className={
@@ -240,7 +275,7 @@ export function ContinueSessionDialog({
             </p>
           ))}
 
-          {door.canStart && run === null && (
+          {native && door.canStart && run === null && (
             <div className="space-y-2">
               <label className="block text-xs font-medium text-muted-foreground" htmlFor="continue-prompt">
                 What should it do next?
@@ -277,7 +312,7 @@ export function ContinueSessionDialog({
           )}
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            {door.canStart && run === null && (
+            {native && door.canStart && run === null && (
               <Button type="button" size="sm" disabled={starting || prompt.trim().length === 0} onClick={() => void start()}>
                 {starting ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -303,12 +338,27 @@ export function ContinueSessionDialog({
                 Cancel this run
               </Button>
             )}
-            <Button type="button" size="sm" variant="outline" onClick={copy}>
-              <Copy className="mr-1.5 h-3.5 w-3.5" />
-              {copied ? "Copied" : "Copy the resume command"}
-            </Button>
+            {route.copyCommand !== null && (
+              <Button type="button" size="sm" variant="outline" onClick={copy}>
+                <Copy className="mr-1.5 h-3.5 w-3.5" />
+                {copied ? "Copied" : `Copy the ${label} resume command`}
+              </Button>
+            )}
+            {route.offerMirrored && onOpenConversation !== undefined && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onOpenConversation()}
+              >
+                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                Open the conversation in AI Matrx
+              </Button>
+            )}
           </div>
-          <p className="font-mono text-[11px] text-muted-foreground">{copyCommand}</p>
+          {route.copyCommand !== null && (
+            <p className="font-mono text-[11px] text-muted-foreground">{route.copyCommand}</p>
+          )}
         </div>
       </DialogContent>
     </Dialog>

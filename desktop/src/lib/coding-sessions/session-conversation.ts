@@ -13,14 +13,14 @@
  * be the conversation.
  */
 
-import type { ClaudeConversation, ClaudeSessionState } from "@/lib/api";
+import type { CodingSessionRow, CodingSessionState } from "@/lib/api";
 
 export type SessionOpenTarget =
   | { kind: "conversation"; conversationId: string }
   | { kind: "unavailable"; reason: string };
 
 /** Why a session has no conversation to open yet, in that state's own words. */
-const NO_CONVERSATION_REASON: Record<ClaudeSessionState, string> = {
+const NO_CONVERSATION_REASON: Record<CodingSessionState, string> = {
   in_cloud:
     "AI Matrx holds this session but did not return a conversation for it, so there is nothing to open yet.",
   changed:
@@ -35,7 +35,7 @@ const NO_CONVERSATION_REASON: Record<ClaudeSessionState, string> = {
     "AI Matrx could not be asked, so this Mac cannot say whether a conversation exists for it.",
 };
 
-export function resolveSessionConversation(row: ClaudeConversation): SessionOpenTarget {
+export function resolveSessionConversation(row: CodingSessionRow): SessionOpenTarget {
   const conversationId = row.cloud?.conversation_id ?? null;
   if (conversationId) return { kind: "conversation", conversationId };
   return { kind: "unavailable", reason: NO_CONVERSATION_REASON[row.state] };

@@ -22,7 +22,7 @@ import {
 } from "@/lib/coding-sessions/overview-store";
 
 const engineSources: CodingSessionsSources = {
-  overview: () => engine.getClaudeOverview(),
+  overview: () => engine.getCodingSessionsOverview(),
   bridgeStatus: () => engine.getCodingSessionStatus(),
   readiness: () => engine.getCodingSessionProviderReadiness(),
   artifactsStatus: () => engine.getCodingSessionArtifactsStatus(),

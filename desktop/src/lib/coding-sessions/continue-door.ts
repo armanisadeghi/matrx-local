@@ -22,7 +22,11 @@
  */
 
 import type { BridgeCapabilityReport } from "@/lib/aidream-client";
-import type { LocalRuntimeCapabilities } from "@/lib/api";
+import type {
+  CodingSessionProvider,
+  LocalRuntimeCapabilities,
+  SessionContinuation,
+} from "@/lib/api";
 
 export interface SessionResumeVerdict {
   resumable: boolean;
@@ -35,6 +39,13 @@ export interface SessionResumeVerdict {
 export interface ContinueDoorInput {
   /** The copyable command for this session — the fallback, always present. */
   copyCommand: string;
+  /**
+   * The provider whose runtime is being asked about, in a person's words.
+   * Defaults to Claude Code because this door is Claude Code's runtime; a
+   * refusal must name the runtime it actually asked rather than calling every
+   * provider's runtime Claude's.
+   */
+  label?: string;
   platform: { report: BridgeCapabilityReport | null; error: string | null };
   machine: { capabilities: LocalRuntimeCapabilities | null; error: string | null };
   session: { verdict: SessionResumeVerdict | null; error: string | null };
@@ -77,6 +88,7 @@ function resumeVerdict(report: BridgeCapabilityReport) {
 }
 
 export function continueDoorView(input: ContinueDoorInput): ContinueDoorView {
+  const label = input.label ?? "Claude Code";
   const refused = (reasons: string[]): ContinueDoorView => ({
     status: "refused",
     reasons,
@@ -95,7 +107,7 @@ export function continueDoorView(input: ContinueDoorInput): ContinueDoorView {
   }
   if (input.machine.error) {
     return refused([
-      `This Mac's engine could not be asked about its Claude Code runtime: ${input.machine.error}`,
+      `This Mac's engine could not be asked about its ${label} runtime: ${input.machine.error}`,
     ]);
   }
   if (input.session.error) {
@@ -137,12 +149,12 @@ export function continueDoorView(input: ContinueDoorInput): ContinueDoorView {
     // Claude login, no AI Matrx sign-in — each is separately fixable.
     const reasons = machine.reasons.length > 0
       ? machine.reasons
-      : ["This Mac's Claude Code runtime is unavailable and reported no reason."];
+      : [`This Mac's ${label} runtime is unavailable and reported no reason.`];
     return refused(reasons);
   }
   if (!machine.capabilities.resume_native) {
     return refused([
-      "This Mac's Claude Code runtime does not offer native resume, so a resumed turn cannot be started here.",
+      `This Mac's ${label} runtime does not offer native resume, so a resumed turn cannot be started here.`,
     ]);
   }
   if (!verdict.resumable) {
@@ -200,4 +212,76 @@ export function runStatusSentence(run: {
     default:
       return `Runtime reported an unrecognised status (${run.status}).`;
   }
+}
+
+/**
+ * WHICH DOOR a row has at all — asked before any of the three verdicts above.
+ *
+ * "Coding sessions is one feature" (Arman, 2026-09-17), but the three verdicts
+ * are Claude Code's own runtime door and nothing else may enter it: this Mac
+ * runs Claude Code turns and no others. Codex has a command and no runtime
+ * here; Cursor and VS Code have neither, because no command reopens one of
+ * their chats. The engine already answers all of this per row
+ * (`SessionContinuation`), so this function routes on the engine's answer and
+ * never on a guess — and a route with no command hands over the mirrored
+ * conversation instead of a control that looks like it would work.
+ */
+export type ContinuationRouteKind =
+  /** This Mac can run the turn: ask the three verdicts. */
+  | "native_runtime"
+  /** A command reopens it elsewhere; copy it, and nothing is asked of this Mac. */
+  | "command_only"
+  /** No command exists anywhere — the provider's own sentence says why. */
+  | "no_local_reopen"
+  /** The engine reported no continuation at all: say so, never guess one. */
+  | "unreported";
+
+export interface ContinuationRoute {
+  kind: ContinuationRouteKind;
+  /** Null whenever there is no command — never a fabricated one. */
+  copyCommand: string | null;
+  /** The engine's own sentence, or the honest one when it did not answer. */
+  sentence: string;
+  /** True only when AI Matrx actually holds a mirrored conversation to open. */
+  offerMirrored: boolean;
+}
+
+export function continuationRoute(input: {
+  provider: CodingSessionProvider;
+  label: string;
+  continuation: SessionContinuation | null;
+  /** The provider block's own `supports_resume`, never inferred from the row. */
+  supportsResume: boolean;
+  hasMirroredConversation: boolean;
+}): ContinuationRoute {
+  const { continuation, label } = input;
+  if (continuation === null) {
+    return {
+      kind: "unreported",
+      copyCommand: null,
+      sentence:
+        `This Mac's engine did not say how a ${label} session is reopened, so this ` +
+        `app will not guess a command for it.`,
+      offerMirrored: input.hasMirroredConversation,
+    };
+  }
+  const command = continuation.command;
+  if (command === null) {
+    return {
+      kind: "no_local_reopen",
+      copyCommand: null,
+      sentence: continuation.note,
+      offerMirrored: input.hasMirroredConversation,
+    };
+  }
+  // Claude Code alone has a runtime on this Mac, and only when the engine's own
+  // block says this provider can be resumed at all.
+  const native =
+    input.provider === "claude_code" && input.supportsResume && continuation.native_resume;
+  return {
+    kind: native ? "native_runtime" : "command_only",
+    copyCommand: command,
+    sentence: continuation.note,
+    offerMirrored: input.hasMirroredConversation,
+  };
 }

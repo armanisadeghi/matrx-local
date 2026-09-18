@@ -14,7 +14,7 @@
  */
 
 import type {
-  ClaudeOverview,
+  CodingSessionsOverview,
   CodingSessionArtifactsSessionSummary,
   CodingSessionArtifactsStatus,
   CodingSessionBridgeStatus,
@@ -28,7 +28,7 @@ import {
 import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 export interface CodingSessionsSources {
-  overview(): Promise<ClaudeOverview>;
+  overview(): Promise<CodingSessionsOverview>;
   bridgeStatus(): Promise<CodingSessionBridgeStatus>;
   readiness(): Promise<CodingSessionProviderReadinessStatus>;
   artifactsStatus(): Promise<CodingSessionArtifactsStatus>;
@@ -38,7 +38,7 @@ export interface CodingSessionsSources {
 }
 
 export interface CodingSessionsSnapshot {
-  overview: ClaudeOverview | null;
+  overview: CodingSessionsOverview | null;
   /** When the rows on screen were read, so their age is never implied. */
   overviewAt: number | null;
   /** True while the rows on screen are the previous answer from this Mac. */
@@ -72,12 +72,12 @@ function reason(value: unknown): string {
 }
 
 function overviewFailureKind(value: unknown): "timeout" | "network" | null {
-  // `ClaudeOverviewReadError` is the typed boundary in api.ts. Keep this
+  // `CodingSessionsOverviewReadError` is the typed boundary in api.ts. Keep this
   // structural at the store boundary so alternate engine clients and tests do
   // not need to share its runtime constructor.
   if (!value || typeof value !== "object") return null;
   const error = value as { name?: unknown; kind?: unknown };
-  if (error.name !== "ClaudeOverviewReadError") return null;
+  if (error.name !== "CodingSessionsOverviewReadError") return null;
   return error.kind === "timeout" || error.kind === "network" ? error.kind : null;
 }
 
@@ -130,7 +130,7 @@ export function initialSnapshot(): CodingSessionsSnapshot {
 
 export interface RefreshOptions {
   now?: () => number;
-  persist?: (overview: ClaudeOverview, at: number) => string | null;
+  persist?: (overview: CodingSessionsOverview, at: number) => string | null;
   capture?: typeof enqueueDurableClientError;
 }
 
@@ -138,7 +138,7 @@ export interface RefreshOptions {
  * organization selection, and an in-flight first read are ordinary readiness
  * states; they must stay visible without becoming telemetry errors. */
 export function cloudInventoryFailureClass(
-  cloud: ClaudeOverview["cloud"] | null | undefined,
+  cloud: CodingSessionsOverview["cloud"] | null | undefined,
 ): string | null {
   if (!cloud || cloud.checked) return null;
   const reason = cloud.reason ?? "";

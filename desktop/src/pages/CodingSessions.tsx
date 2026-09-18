@@ -27,7 +27,7 @@ import { UsageTab } from "@/components/coding-sessions/tabs/UsageTab";
 import { formatStamp, formatWhen } from "@/components/coding-sessions/shared";
 import { Button } from "@ai-matrx/design-system";
 import { useCodingSessions } from "@/hooks/use-coding-sessions";
-import { engine, type ClaudeSyncResult } from "@/lib/api";
+import { engine, type ClaudeSyncResult, type CodingSessionProvider } from "@/lib/api";
 import {
   CODING_SESSIONS_TABS,
   CODING_SESSIONS_TAB_LABEL,
@@ -51,7 +51,12 @@ export function CodingSessions() {
   const [result, setResult] = useState<ClaudeSyncResult | null>(null);
   const [resuming, setResuming] = useState(false);
   const [evidence, setEvidence] = useState<DeliveryEvidenceFilter | null>(null);
-  const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
+  // The diagnosis dialog is opened WITH the row's provider: the diagnosis
+  // route is provider-aware, and sending a Cursor chat down the Claude alias
+  // is how Claude's prose got written over another provider's facts.
+  const [diagnosis, setDiagnosis] = useState<
+    { sessionId: string; provider: CodingSessionProvider } | null
+  >(null);
 
   const selectTab = useCallback(
     (next: CodingSessionsTab) => {
@@ -262,7 +267,10 @@ export function CodingSessions() {
           )}
 
           {tab === "sessions" && (
-            <SessionsTab snapshot={snapshot} onOpenDiagnosis={setDiagnosisId} />
+            <SessionsTab
+              snapshot={snapshot}
+              onOpenDiagnosis={(sessionId, provider) => setDiagnosis({ sessionId, provider })}
+            />
           )}
           {tab === "usage" && <UsageTab snapshot={snapshot} />}
           {tab === "settings" && (
@@ -277,8 +285,9 @@ export function CodingSessions() {
         onChanged={refresh}
       />
       <SessionDiagnosisDialog
-        sessionId={diagnosisId}
-        onClose={() => setDiagnosisId(null)}
+        sessionId={diagnosis?.sessionId ?? null}
+        provider={diagnosis?.provider ?? "claude_code"}
+        onClose={() => setDiagnosis(null)}
         onChanged={refresh}
       />
     </div>

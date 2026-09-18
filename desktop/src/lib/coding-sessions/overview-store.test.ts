@@ -14,9 +14,9 @@ import {
   type CodingSessionsSnapshot,
   type CodingSessionsSources,
 } from "@/lib/coding-sessions/overview-store";
-import type { ClaudeOverview } from "@/lib/api";
+import type { CodingSessionsOverview } from "@/lib/api";
 
-function overview(count: number, title = "Row"): ClaudeOverview {
+function overview(count: number, title = "Row"): CodingSessionsOverview {
   return {
     schema_version: 2,
     account_id: "acct",
@@ -56,7 +56,7 @@ function overview(count: number, title = "Row"): ClaudeOverview {
       waiting: 0,
       quarantined: 0,
     },
-  } as unknown as ClaudeOverview;
+  } as unknown as CodingSessionsOverview;
 }
 
 function deferred<T>() {
@@ -85,7 +85,7 @@ const noPersist = { persist: () => null };
 describe("refreshCodingSessions", () => {
   it("announces the refresh before it awaits anything", () => {
     const seen: CodingSessionsSnapshot[] = [];
-    const slow = deferred<ClaudeOverview>();
+    const slow = deferred<CodingSessionsOverview>();
     void refreshCodingSessions(
       sources({ overview: () => slow.promise }),
       emptySnapshot(),
@@ -100,7 +100,7 @@ describe("refreshCodingSessions", () => {
   });
 
   it("keeps the rows already on screen while the slow list is re-read", async () => {
-    const slow = deferred<ClaudeOverview>();
+    const slow = deferred<CodingSessionsOverview>();
     const current: CodingSessionsSnapshot = {
       ...emptySnapshot(),
       overview: overview(3, "Old"),

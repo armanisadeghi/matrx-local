@@ -5,10 +5,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ClaudeOverviewReadError,
-  type ClaudeCloudCheck,
-  type ClaudeIndexReport,
-  type ClaudeOverview,
+  CodingSessionsOverviewReadError,
+  type CodingSessionCloudCheck,
+  type CodingSessionIndexReport,
+  type CodingSessionsOverview,
 } from "@/lib/api";
 import type { CodingSessionsSources } from "@/lib/coding-sessions/overview-store";
 import { useCodingSessions } from "./use-coding-sessions";
@@ -18,10 +18,10 @@ import { useCodingSessions } from "./use-coding-sessions";
 function overview(
   title = "Current",
   options: {
-    indexState?: ClaudeIndexReport["state"];
-    cloud?: Partial<ClaudeCloudCheck>;
+    indexState?: CodingSessionIndexReport["state"];
+    cloud?: Partial<CodingSessionCloudCheck>;
   } = {},
-): ClaudeOverview {
+): CodingSessionsOverview {
   return {
     schema_version: 2,
     account_id: "account",
@@ -56,7 +56,7 @@ function overview(
       in_cloud: 1, changed: 0, queued: 0, failed: 0, not_in_cloud: 0,
       unknown: 0, waiting: 0, quarantined: 0,
     },
-  } as unknown as ClaudeOverview;
+  } as unknown as CodingSessionsOverview;
 }
 
 function deferred<T>() {
@@ -66,7 +66,7 @@ function deferred<T>() {
 }
 
 function sources(
-  getOverview: () => Promise<ClaudeOverview>,
+  getOverview: () => Promise<CodingSessionsOverview>,
   onConnected?: (listener: () => void) => () => void,
 ): CodingSessionsSources {
   return {
@@ -124,7 +124,7 @@ afterEach(async () => {
 
 describe("useCodingSessions transient overview recovery", () => {
   it("coalesces a blocked overview through Strict Mode and concurrent consumers", async () => {
-    const slow = deferred<ClaudeOverview>();
+    const slow = deferred<CodingSessionsOverview>();
     const getOverview = vi.fn(() => slow.promise);
     const value = sources(getOverview);
 
@@ -138,7 +138,7 @@ describe("useCodingSessions transient overview recovery", () => {
 
   it("keeps cached rows, retries one transient timeout, then clears the failure", async () => {
     const getOverview = vi.fn()
-      .mockRejectedValueOnce(new ClaudeOverviewReadError("timeout", new Error("timed out")))
+      .mockRejectedValueOnce(new CodingSessionsOverviewReadError("timeout", new Error("timed out")))
       .mockResolvedValueOnce(overview("Recovered"));
     await mount(sources(getOverview));
     await settle();
@@ -155,7 +155,7 @@ describe("useCodingSessions transient overview recovery", () => {
   });
 
   it("leaves an honest exhausted state and lets manual refresh earn one new retry", async () => {
-    const timeout = () => new ClaudeOverviewReadError("timeout", new Error("timed out"));
+    const timeout = () => new CodingSessionsOverviewReadError("timeout", new Error("timed out"));
     const getOverview = vi.fn()
       .mockRejectedValueOnce(timeout())
       .mockRejectedValueOnce(timeout())
@@ -179,7 +179,7 @@ describe("useCodingSessions transient overview recovery", () => {
 
   it("cancels a scheduled retry on unmount", async () => {
     const getOverview = vi.fn(() => Promise.reject(
-      new ClaudeOverviewReadError("network", new TypeError("network down")),
+      new CodingSessionsOverviewReadError("network", new TypeError("network down")),
     ));
     await mount(sources(getOverview));
     await settle();
@@ -207,7 +207,7 @@ describe("useCodingSessions transient overview recovery", () => {
     ["cold", 2_500],
     ["refreshing", 4_000],
   ] as const)("does not let a cached %s index bypass the one transient-retry budget", async (indexState, indexDelay) => {
-    const timeout = () => new ClaudeOverviewReadError("timeout", new Error("timed out"));
+    const timeout = () => new CodingSessionsOverviewReadError("timeout", new Error("timed out"));
     const getOverview = vi.fn()
       .mockResolvedValueOnce(overview("Cached index", { indexState }))
       .mockRejectedValueOnce(timeout())
@@ -272,7 +272,7 @@ describe("useCodingSessions transient overview recovery", () => {
   });
 
   it("resets the exhausted budget and reads immediately when the engine reconnects", async () => {
-    const timeout = () => new ClaudeOverviewReadError("timeout", new Error("timed out"));
+    const timeout = () => new CodingSessionsOverviewReadError("timeout", new Error("timed out"));
     const getOverview = vi.fn()
       .mockRejectedValueOnce(timeout())
       .mockRejectedValueOnce(timeout())

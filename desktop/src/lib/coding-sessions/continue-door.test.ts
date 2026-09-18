@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { BridgeCapabilityReport } from "@/lib/aidream-client";
 import type { LocalRuntimeCapabilities } from "@/lib/api";
 import {
+  continuationRoute,
   continueDoorView,
   runStatusSentence,
   type ContinueDoorInput,
@@ -190,5 +191,130 @@ describe("a running continue always has a sentence, never a bare spinner", () =>
     expect(runStatusSentence({ status: "quantum", turns_completed: 0, error: null })).toContain(
       "unrecognised status (quantum)",
     );
+  });
+});
+
+/**
+ * FOUR PROVIDERS, ONE CONTROL (Arman, 2026-09-17: "coding sessions is one
+ * feature"). The three verdicts above are Claude Code's own runtime door and
+ * nothing else may enter it: Codex has a command and no local runtime here,
+ * Cursor and VS Code have neither. Every case below fails against the screen
+ * as it shipped in 1.4.155, which sent every provider's row through the
+ * Claude-only reads and wrote Claude's prose over the answer.
+ */
+describe("the route a row actually has to be reopened", () => {
+  const codexContinuation = {
+    command: "codex resume 0199a1d0-0000-7000-8000-000000000002",
+    note:
+      "Open the original local Codex thread with codex resume <session-id> only while that local rollout file, workspace, and login remain available.",
+    native_resume: true,
+  };
+  const cursorContinuation = {
+    command: null,
+    note:
+      "Cursor has no command or link that reopens one chat: open the workspace in Cursor and pick the chat from its own history. The mirrored conversation in AI Matrx is the copy you can open from here.",
+    native_resume: false,
+  };
+
+  it("sends a Claude Code row to this Mac's runtime door", () => {
+    const route = continuationRoute({
+      provider: "claude_code",
+      label: "Claude Code",
+      continuation: { command: COMMAND, note: "only while local", native_resume: true },
+      supportsResume: true,
+      hasMirroredConversation: true,
+    });
+    expect(route.kind).toBe("native_runtime");
+    expect(route.copyCommand).toBe(COMMAND);
+  });
+
+  it("gives Codex its own command from the engine, never a Claude one", () => {
+    const route = continuationRoute({
+      provider: "codex",
+      label: "Codex",
+      continuation: codexContinuation,
+      supportsResume: true,
+      hasMirroredConversation: false,
+    });
+    expect(route.kind).toBe("command_only");
+    expect(route.copyCommand).toBe("codex resume 0199a1d0-0000-7000-8000-000000000002");
+    expect(route.sentence).toBe(codexContinuation.note);
+    expect(route.sentence).not.toContain("Claude");
+  });
+
+  it("offers Cursor no command at all, and the mirrored conversation instead", () => {
+    const route = continuationRoute({
+      provider: "cursor",
+      label: "Cursor",
+      continuation: cursorContinuation,
+      supportsResume: false,
+      hasMirroredConversation: true,
+    });
+    expect(route.kind).toBe("no_local_reopen");
+    expect(route.copyCommand).toBeNull();
+    expect(route.sentence).toBe(cursorContinuation.note);
+    expect(route.offerMirrored).toBe(true);
+  });
+
+  it("does not offer a mirrored conversation that does not exist", () => {
+    const route = continuationRoute({
+      provider: "vscode",
+      label: "VS Code",
+      continuation: { ...cursorContinuation, note: "VS Code has no command or link that reopens one chat." },
+      supportsResume: false,
+      hasMirroredConversation: false,
+    });
+    expect(route.offerMirrored).toBe(false);
+    expect(route.sentence).toContain("VS Code");
+  });
+
+  it("never enters the Claude runtime door for a provider the engine says cannot resume", () => {
+    const route = continuationRoute({
+      provider: "codex",
+      label: "Codex",
+      continuation: codexContinuation,
+      supportsResume: false,
+      hasMirroredConversation: false,
+    });
+    expect(route.kind).not.toBe("native_runtime");
+  });
+
+  it("says the engine did not answer rather than guessing a command", () => {
+    const route = continuationRoute({
+      provider: "cursor",
+      label: "Cursor",
+      continuation: null,
+      supportsResume: false,
+      hasMirroredConversation: false,
+    });
+    expect(route.kind).toBe("unreported");
+    expect(route.copyCommand).toBeNull();
+    expect(route.sentence).toContain("Cursor");
+  });
+});
+
+describe("the runtime door's own prose names the provider it asked about", () => {
+  it("does not call a non-Claude runtime Claude's", () => {
+    const view = continueDoorView(
+      input({
+        label: "Codex",
+        machine: {
+          capabilities: machine({
+            capabilities: {
+              start: true,
+              send: true,
+              cancel: true,
+              resume_native: false,
+              fork_native: false,
+              stream: true,
+            },
+          }),
+          error: null,
+        },
+      }),
+    );
+    expect(view.status).toBe("refused");
+    expect(view.reasons[0]).toContain("Codex");
+    expect(view.reasons[0]).not.toContain("Claude Code runtime");
   });
 });

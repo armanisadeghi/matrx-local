@@ -5,12 +5,12 @@ import {
   conversationWebUrl,
   resolveSessionConversation,
 } from "@/lib/coding-sessions/session-conversation";
-import type { ClaudeConversation, ClaudeSessionState } from "@/lib/api";
+import type { CodingSessionRow, CodingSessionState } from "@/lib/api";
 
 function row(
-  state: ClaudeSessionState,
+  state: CodingSessionState,
   conversationId: string | null,
-): ClaudeConversation {
+): CodingSessionRow {
   return {
     session_id: "abc",
     title: "A session",
@@ -29,7 +29,7 @@ function row(
       ? { conversation_id: conversationId, fidelity: null, last_seen_at: null }
       : null,
     delivery: { pending: 0, quarantined: 0 },
-  } as unknown as ClaudeConversation;
+  } as unknown as CodingSessionRow;
 }
 
 describe("resolveSessionConversation", () => {
@@ -48,7 +48,7 @@ describe("resolveSessionConversation", () => {
   });
 
   it("never returns a click with nothing to say", () => {
-    const states: ClaudeSessionState[] = [
+    const states: CodingSessionState[] = [
       "in_cloud",
       "changed",
       "queued",

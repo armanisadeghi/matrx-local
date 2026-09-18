@@ -14,7 +14,7 @@ Two programs decide whether a Claude Code conversation is pinned:
 Measured 2026-09-18 on Arman's Mac: the sidebar draws pins from ONE list per
 account — IndexedDB ``keyval-store`` / ``keyval`` /
 ``store:pin-state:dframe-starred-code`` (``fixtures/claude_starred_pin_state.json``
-carries the value shape verbatim, including the empty-then-full write the app
+carries the value shape verbatim, including the partial-then-full write the app
 makes on every account switch). ``isStarred`` on the index records is NOT the
 pin: 206 unarchived records carried it while the sidebar showed ~48 and the
 list held 56 (``local_d5542855…`` "Prompt" and ``local_08264bc8…``

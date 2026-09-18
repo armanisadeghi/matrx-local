@@ -131,7 +131,14 @@ def test_incremental_tail_reads_equal_one_whole_read(tmp_path: Path) -> None:
     assert first.cursor.offset == len(b"".join(lines[:cut])), "the half-written line must wait"
     growing.write_bytes(b"".join(lines))
     stat = growing.stat()
-    second = read_usage_increment(growing, first.cursor, size=stat.st_size, mtime_ns=stat.st_mtime_ns, byte_budget=1 << 30)
+    second = read_usage_increment(
+        growing,
+        first.cursor,
+        size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
+        byte_budget=1 << 30,
+        seen_keys=first.new_keys,  # what the store persisted for this session
+    )
     assert second.cursor.offset == stat.st_size
     combined = _totals_of(first.cells)
     combined.update(_totals_of(second.cells))
@@ -140,16 +147,127 @@ def test_incremental_tail_reads_equal_one_whole_read(tmp_path: Path) -> None:
         assert combined[name] == expected[name], name
 
 
+def _repeat_keys(path: Path) -> set[str]:
+    """Every (message id, request id) a transcript carries."""
+    keys: set[str] = set()
+    for raw in path.read_text().splitlines():
+        record = json.loads(raw)
+        if record.get("type") != "assistant":
+            continue
+        keys.add(f"{record['message'].get('id')}|{record.get('requestId')}")
+    return keys
+
+
+def _repeats_beyond(path: Path, *, window: int = 64) -> list[int]:
+    """Repeats of one message with more than ``window`` other messages between.
+
+    Claude Code re-writes an earlier assistant message much later in a long
+    session (measured 2026-09-18 on the real 52.6 MB transcript 97ce06fb…:
+    205 messages whose repeat has more than 64 other messages in between). A
+    dedupe that remembers only the last N messages counts every one of those
+    a second time, so a fixture without such a pair proves nothing.
+    """
+    keys: list[str] = []
+    for raw in path.read_text().splitlines():
+        record = json.loads(raw)
+        if record.get("type") != "assistant":
+            continue
+        message = record["message"]
+        usage = message.get("usage")
+        model = message.get("model")
+        if not isinstance(usage, dict) or not model or model == "<synthetic>":
+            continue
+        keys.append(f"{message.get('id')}|{record.get('requestId')}")
+    distinct_by_line: list[int] = []
+    first_seen: dict[str, int] = {}
+    places: dict[str, list[int]] = {}
+    for index, key in enumerate(keys):
+        first_seen.setdefault(key, len(first_seen))
+        distinct_by_line.append(len(first_seen))
+        places.setdefault(key, []).append(index)
+    return [
+        distinct_by_line[later] - distinct_by_line[earlier]
+        for spots in places.values()
+        for earlier, later in zip(spots, spots[1:])
+        if distinct_by_line[later] - distinct_by_line[earlier] > window
+    ]
+
+
+def test_a_message_repeated_far_later_is_still_counted_once() -> None:
+    """Break this catches: bounding the dedupe by a count of recent keys.
+
+    Until 2026-09-18 the reader remembered only the last 64 keys, so the
+    repeats Claude writes hundreds of lines later were counted twice — on the
+    real 52.6 MB transcript that inflated requests by 208 and cache reads by
+    105 million tokens.
+    """
+    source = FIXTURES / "97ce06fb-fe43-496b-8c0d-08baed25bfa7.jsonl"
+    assert _repeats_beyond(source), (
+        "fixture has no repeat with more than 64 other messages in between; it proves nothing"
+    )
+    expected, lines, _models, _days = expected_usage(source)
+    assert lines > expected["requests"]
+    stat = source.stat()
+    increment = read_usage_increment(
+        source, None, size=stat.st_size, mtime_ns=stat.st_mtime_ns, byte_budget=1 << 30
+    )
+    got = _totals_of(increment.cells)
+    assert got["requests"] == expected["requests"]
+    for name in USAGE_FIELDS:
+        assert got[name] == expected[name], name
+
+
+def test_dedupe_survives_a_resume_between_the_two_occurrences(tmp_path: Path) -> None:
+    """The same, split across refreshes: the persisted key set must carry it."""
+    source = FIXTURES / "97ce06fb-fe43-496b-8c0d-08baed25bfa7.jsonl"
+    expected, _lines, _models, _days = expected_usage(source)
+    lines = source.read_bytes().splitlines(keepends=True)
+    assistant_at = [index for index, raw in enumerate(lines) if b'"type":"assistant"' in raw]
+    # Cut well past the first occurrence and well before the repeat, so the
+    # first read ends more than 64 assistant lines before the duplicate.
+    cut = assistant_at[len(assistant_at) // 2] + 1
+    growing = tmp_path / source.name
+    growing.write_bytes(b"".join(lines[:cut]))
+    stat = growing.stat()
+    first = read_usage_increment(
+        growing, None, size=stat.st_size, mtime_ns=stat.st_mtime_ns, byte_budget=1 << 30
+    )
+    growing.write_bytes(b"".join(lines))
+    stat = growing.stat()
+    second = read_usage_increment(
+        growing,
+        first.cursor,
+        size=stat.st_size,
+        mtime_ns=stat.st_mtime_ns,
+        byte_budget=1 << 30,
+        seen_keys=first.new_keys,  # what the store persisted for this session
+    )
+    combined = _totals_of(first.cells)
+    combined.update(_totals_of(second.cells))
+    assert combined["requests"] == expected["requests"]
+    for name in USAGE_FIELDS:
+        assert combined[name] == expected[name], name
+
+
 def test_a_rewritten_transcript_restarts_from_zero(tmp_path: Path) -> None:
+    """A shorter file replaces the session's usage, so its keys start over."""
     source = min(FIXTURES.glob("*.jsonl"), key=lambda p: p.stat().st_size)
     shrunk = tmp_path / source.name
     shrunk.write_bytes(source.read_bytes()[: source.stat().st_size // 2].rsplit(b"\n", 1)[0] + b"\n")
     stat = shrunk.stat()
-    previous = UsageCursor(offset=source.stat().st_size, size=source.stat().st_size, mtime_ns=1, recent_keys=["x|y"])
-    increment = read_usage_increment(shrunk, previous, size=stat.st_size, mtime_ns=stat.st_mtime_ns, byte_budget=1 << 30)
+    expected, _lines, _models, _days = expected_usage(shrunk)
+    previous = UsageCursor(offset=source.stat().st_size, size=source.stat().st_size, mtime_ns=1)
+    # Every key of the old read is offered back: a restart must ignore them,
+    # or the replaced rows would come back empty.
+    stale = {key for key in _repeat_keys(shrunk)} | {"x|y"}
+    increment = read_usage_increment(
+        shrunk, previous, size=stat.st_size, mtime_ns=stat.st_mtime_ns, byte_budget=1 << 30, seen_keys=stale
+    )
     assert increment.restarted
     assert increment.cursor.offset == stat.st_size
-    assert "x|y" not in increment.cursor.recent_keys
+    assert _totals_of(increment.cells)["requests"] == expected["requests"]
+    assert len(increment.new_keys) == expected["requests"]
+    assert "x|y" not in increment.new_keys
 
 
 # ── the store and the refresh: no second walk, bounded, resumable ───────────
@@ -160,7 +278,7 @@ def test_refresh_transcripts_lands_usage_in_the_same_pass(tmp_path: Path) -> Non
     store = ClaudeIndexStore(tmp_path / "index.sqlite3")
     result = refresh_transcripts_sync(store, sidebar_ids=set(), root=root)
     assert result["usage"]["pending_sessions"] == 0
-    assert result["usage"]["sessions_read"] == 3
+    assert result["usage"]["sessions_read"] == len(list(FIXTURES.glob("*.jsonl")))
     rows = store.usage_rows("0000-00-00T00", "9999-12-31T23")
     by_session: Counter[str] = Counter()
     for row in rows:

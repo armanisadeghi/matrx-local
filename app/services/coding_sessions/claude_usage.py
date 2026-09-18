@@ -7,12 +7,20 @@ this Mac spent — no account API, no guesswork.
 
 Two facts about those files decide the shape of this module:
 
-* **One message is written many times.** A streamed reply lands as one line
-  per content block, all carrying the same ``message.id``/``requestId`` and
-  the same usage (measured 2026-09-17: 4,698 assistant lines for 1,700
-  distinct messages, one message repeated 14 times). Counting lines would
-  overstate usage several-fold, so a turn is identified by that pair and
-  counted once.
+* **One message is written many times, and not only in one run.** A streamed
+  reply lands as one line per content block, all carrying the same
+  ``message.id``/``requestId`` and the same usage (measured 2026-09-17: 4,698
+  assistant lines for 1,700 distinct messages, one message repeated 14
+  times). Claude ALSO re-writes an earlier block of assistant lines much
+  later in a long session: in the real 52.6 MB transcript 97ce06fb… 205
+  messages reappear with more than 64 other messages in between (measured
+  2026-09-18, lane CS-33). So the repeats are NOT contiguous, and a dedupe
+  that remembers only the last N messages counts those a second time — it
+  inflated that one session by 208 requests and 105 million cache-read
+  tokens. A turn is identified by that pair and counted once per SESSION:
+  the reader is handed every key the session has already contributed and
+  reports back the keys this read added, which the store persists beside the
+  session's usage rows.
 * **The files only grow.** A transcript is append-only while the session is
   open, so this reader keeps a byte offset per transcript and reads only the
   tail that appeared since the last refresh. The full 10 GB tree is read once,
@@ -30,14 +38,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-
-# How many (message id, request id) keys to remember per transcript so a
-# message whose duplicate lines straddle two refreshes is still counted once.
-# Duplicates of one message are contiguous; 64 is generous.
-RECENT_KEYS = 64
 
 # The stamp a cursor carries while its transcript is only partly read.
 PENDING_STAMP = -1
@@ -60,12 +63,17 @@ _ASSISTANT_TAG = b'"type":"assistant"'
 
 @dataclass
 class UsageCursor:
-    """Where the reader stopped in one transcript, persisted between refreshes."""
+    """Where the reader stopped in one transcript, persisted between refreshes.
+
+    Position only: the keys already counted for the session are held beside
+    its usage rows (``transcript_usage_key``) and handed to
+    :func:`read_usage_increment` as ``seen_keys``, so one refresh never holds
+    more than the session it is reading.
+    """
 
     offset: int = 0
     size: int = 0
     mtime_ns: int = 0
-    recent_keys: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -75,8 +83,13 @@ class UsageIncrement:
     # (hour bucket ISO, model) -> counters incl. "requests"
     cells: dict[tuple[str, str], Counter[str]]
     cursor: UsageCursor
+    # The (message id, request id) keys this read counted for the first time,
+    # in the order they appeared. The caller persists them with the session so
+    # the next refresh — and a repeat written thousands of lines later — still
+    # counts the message once.
+    new_keys: list[str]
     # True when the file shrank or was rewritten and the session's stored
-    # usage must be replaced by this increment rather than added to.
+    # usage AND keys must be replaced by this increment rather than added to.
     restarted: bool
     bytes_read: int
     # True when the byte budget stopped this read before the file's end.
@@ -145,6 +158,7 @@ def read_usage_increment(
     size: int,
     mtime_ns: int,
     byte_budget: int,
+    seen_keys: Iterable[str] | None = None,
 ) -> UsageIncrement:
     """Read the bytes of ``path`` that appeared since ``cursor``.
 
@@ -153,12 +167,16 @@ def read_usage_increment(
     (Claude mid-write) is left for the next refresh. ``byte_budget`` bounds
     this read; when it stops the file short, ``truncated`` is True and the
     cursor points at the last complete line consumed.
+
+    ``seen_keys`` is every key this session has already been counted for —
+    the whole session, never a tail of it. A rewritten (shorter) file starts
+    over and ignores them, because its stored usage is replaced too.
     """
     previous = cursor or UsageCursor()
     restarted = previous.offset > size
     start = 0 if restarted else previous.offset
-    recent: list[str] = [] if restarted else list(previous.recent_keys)
-    seen = set(recent)
+    seen: set[str] = set() if (restarted or seen_keys is None) else set(seen_keys)
+    added: list[str] = []
     cells: dict[tuple[str, str], Counter[str]] = {}
     consumed = start
     truncated = False
@@ -184,9 +202,7 @@ def read_usage_increment(
             if key in seen:
                 continue
             seen.add(key)
-            recent.append(key)
-            if len(recent) > RECENT_KEYS:
-                seen.discard(recent.pop(0))
+            added.append(key)
             cell = cells.setdefault((bucket, model), Counter())
             cell["requests"] += 1
             for name in USAGE_FIELDS:
@@ -198,11 +214,11 @@ def read_usage_increment(
         offset=consumed,
         size=PENDING_STAMP if truncated else size,
         mtime_ns=PENDING_STAMP if truncated else mtime_ns,
-        recent_keys=recent,
     )
     return UsageIncrement(
         cells=cells,
         cursor=next_cursor,
+        new_keys=added,
         restarted=restarted,
         bytes_read=consumed - start,
         truncated=truncated,
@@ -219,7 +235,6 @@ def merge_cells(
 __all__ = [
     "MAX_LINE_BYTES",
     "PENDING_STAMP",
-    "RECENT_KEYS",
     "USAGE_FIELDS",
     "UsageCursor",
     "UsageIncrement",

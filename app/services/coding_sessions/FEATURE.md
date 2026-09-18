@@ -490,6 +490,17 @@ held 1,671 of those conversations:
   `state.vscdb`; tokens are on cursor.com and the report says so. **VS Code** —
   nothing local; the report says exactly that. The tab (`tabs/UsageTab.tsx`) renders
   nothing provider-specific; the retired `/codex-usage` panel is gone.
+- **The usage dedupe is bounded by the SESSION, never by a window (2026-09-18, CS-33).**
+  Claude Code does not write a message's duplicate lines contiguously: it re-writes an
+  earlier block of assistant lines much later in a long session (205 messages with more
+  than 64 others in between, in one real 52.6 MB transcript). The reader used to
+  remember only the last 64 keys, which counted every one of those twice and inflated
+  that session by 208 requests and 105,245,130 cache-read tokens — always upward, and
+  only on long transcripts, so short ones looked right. Every key a session has been
+  counted for now lives in `transcript_usage_key` and is handed to
+  `read_usage_increment(seen_keys=…)`; only the session being read is ever loaded (worst
+  case on this Mac: 1,914 keys), a rewritten transcript drops its keys with its rows,
+  and there is no N to exceed.
 - **Refresh announces itself and never blanks the list (2026-09-14).** Arman: *"The
   refresh button, when you click it, does nothing. It just stares at you."* The
   overview read is slow by nature (36s cold, ~4.3s warm on this Mac), so the rules

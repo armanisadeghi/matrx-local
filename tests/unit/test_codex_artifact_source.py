@@ -474,3 +474,33 @@ async def test_a_write_inside_a_repository_checkout_is_never_captured(
         assert "never copies your source code out of a checkout" in messages
     finally:
         await db.close()
+
+
+def test_an_unknown_provider_is_refused_by_name_not_by_a_bare_404() -> None:
+    """The artifacts endpoints take ?provider=, so a typo must explain itself.
+
+    Law 4: a 404 that says nothing is a dead end. The refusal names the
+    providers that DO have an artifacts lane, so the caller can fix it without
+    reading the source.
+    """
+    from fastapi import HTTPException
+
+    from app.api.coding_session_routes import _artifact_lane
+    from app.services.coding_sessions.artifacts import ARTIFACT_PROVIDERS
+
+    # Every provider with a lane resolves to that lane, not to the default one.
+    for provider in ARTIFACT_PROVIDERS:
+        assert _artifact_lane(provider).provider == provider
+
+    # Cursor and VS Code have no artifacts source, and neither does a typo.
+    for unknown in ("cursor", "vscode", "claude-code", ""):
+        try:
+            _artifact_lane(unknown)
+        except HTTPException as exc:
+            assert exc.status_code == 404
+            detail = str(exc.detail)
+            assert f"'{unknown}'" in detail
+            for known in ARTIFACT_PROVIDERS:
+                assert known in detail, "the refusal must name the lanes there are"
+        else:  # pragma: no cover — the assertion below is the failure
+            raise AssertionError(f"{unknown!r} was accepted as an artifacts provider")

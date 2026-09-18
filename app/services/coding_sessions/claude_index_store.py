@@ -55,6 +55,7 @@ from app.services.coding_sessions.claude_session_index import (
     record_is_starred,
 )
 from app.services.coding_sessions.claude_scope import (
+    app_support_for,
     decide_scope,
     signed_in_account,
     stated_org_stamps,
@@ -454,7 +455,9 @@ class ClaudeIndexStore:
             active_scope_reason=meta.get("active_scope_reason") or None,
         )
 
-    def rebuild_sessions(self) -> dict[str, Any]:
+    def rebuild_sessions(
+        self, *, sessions_root: Path | None = None
+    ) -> dict[str, Any]:
         """Materialize the winner per conversation, plus the counts in meta.
 
         The freshest record wins, and the tie-break on the record file's own
@@ -505,7 +508,8 @@ class ClaudeIndexStore:
             # :mod:`app.services.coding_sessions.claude_scope`; this path only
             # supplies the per-organisation stamps it already stores, so it
             # never re-walks the tree to answer the question.
-            account, signals, account_reason = signed_in_account()
+            app_support = app_support_for(sessions_root) if sessions_root else None
+            account, signals, account_reason = signed_in_account(app_support)
             org_focus: dict[str, int] = {}
             account_dir: Path | None = None
             if account is not None:
@@ -526,7 +530,7 @@ class ClaudeIndexStore:
                 signals,
                 account_reason,
                 org_focus,
-                org_stated=stated_org_stamps(),
+                org_stated=stated_org_stamps(app_support),
                 account_dir=account_dir,
             )
             active_scope = str(resolution.scope) if resolution.scope else None
@@ -1101,6 +1105,7 @@ def refresh_store_sync(
     removed = store.prune(alive)
     return finalize_refresh(
         store,
+        sessions_root=root,
         changed=len(changed),
         removed=removed,
         truncated=truncated,
@@ -1111,6 +1116,7 @@ def refresh_store_sync(
 def finalize_refresh(
     store: ClaudeIndexStore,
     *,
+    sessions_root: Path | None = None,
     changed: int,
     removed: int,
     truncated: bool,
@@ -1122,7 +1128,7 @@ def finalize_refresh(
     engine can never serve a snapshot whose winners were computed differently
     from the ones the helper would have written.
     """
-    counts = store.rebuild_sessions()
+    counts = store.rebuild_sessions(sessions_root=sessions_root)
     store.write_meta(
         {
             "updated_at": _now_iso(),

@@ -123,9 +123,27 @@ export function UsageTab({ snapshot }: UsageTabProps) {
 
   const load = useCallback(
     (refresh: boolean) => {
-      const range = usageRangeFor(preset, start, end, new Date());
+      const requestGeneration = ++generation.current;
+      let range: { start: string; end: string };
+      try {
+        range = usageRangeFor(preset, start, end, new Date());
+        if (
+          Number.isNaN(new Date(range.start).getTime()) ||
+          Number.isNaN(new Date(range.end).getTime()) ||
+          new Date(range.start) >= new Date(range.end)
+        ) {
+          throw new RangeError("invalid usage range");
+        }
+      } catch {
+        // An invalid selection supersedes both an in-flight answer and an
+        // intermediate queued range, but does not cancel bounded local work.
+        queuedRequest.current = null;
+        setError("Choose a valid date range with an end date after its start date.");
+        setLoading(activeRequest.current);
+        return;
+      }
       const request: UsageRequest = {
-        generation: ++generation.current,
+        generation: requestGeneration,
         provider,
         ...range,
         refresh,

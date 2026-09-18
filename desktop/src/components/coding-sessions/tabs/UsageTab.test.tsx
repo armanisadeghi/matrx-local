@@ -331,6 +331,12 @@ describe("UsageTab", () => {
     });
     await act(async () => {
       const [, endDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
+      setInputValue(endDate!, "");
+    });
+    expect(container.querySelector("[data-testid='usage-error']")?.textContent).toContain("Choose a valid date range");
+    expect(mocks.getCodingSessionUsage).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      const [, endDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
       setInputValue(endDate!, "2026-09-14");
     });
     await act(async () => {
@@ -353,6 +359,34 @@ describe("UsageTab", () => {
     });
     expect(container.querySelector("[data-testid='usage-error']")).toBeNull();
     expect(container.querySelector("[data-testid='usage-totals']")?.textContent).toContain("90");
+  });
+
+  it("does not send a reversed custom range while an obsolete read is active", async () => {
+    let resolveActive: (value: UsageReport) => void = () => {};
+    mocks.getCodingSessionUsage.mockReturnValueOnce(
+      new Promise<UsageReport>((resolve) => {
+        resolveActive = resolve;
+      }),
+    );
+    await render();
+    await act(async () => {
+      findButton("Custom").click();
+    });
+    await act(async () => {
+      const [, endDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
+      setInputValue(endDate!, "2026-09-12");
+    });
+    await act(async () => {
+      const [startDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
+      setInputValue(startDate!, "2026-09-14");
+    });
+    expect(container.querySelector("[data-testid='usage-error']")?.textContent).toContain("Choose a valid date range");
+    expect(mocks.getCodingSessionUsage).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveActive(claude);
+      await Promise.resolve();
+    });
+    expect(mocks.getCodingSessionUsage).toHaveBeenCalledTimes(1);
   });
 
   it("shows the loading state before the first answer", async () => {

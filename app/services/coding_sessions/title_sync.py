@@ -74,7 +74,10 @@ from app.services.coding_sessions.claude_session_index import (
     MAX_INDEX_FILES,
     ClaudeSessionIndexEntry,
 )
-from app.services.coding_sessions.claude_overview import read_session_index_async
+from app.services.coding_sessions.claude_overview import (
+    index_snapshot,
+    read_session_index_async,
+)
 from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
@@ -306,6 +309,49 @@ def _field_comparisons(
         }
         for field in _DETAIL_FIELDS
     ]
+
+
+#: A blocked pass is journalled with status ``failed`` and the blocked reason
+#: in ``error_message``. These are the sentences a person can act on; an
+#: unrecognised reason is shown as itself rather than swallowed.
+_BLOCKED_SENTENCES: dict[str, str] = {
+    "no_active_user_jwt": (
+        "this Mac is not signed in to AI Matrx, so the last check could not "
+        "ask what AI Matrx holds"
+    ),
+    "aidream_unreachable": "AI Matrx could not be reached on the last check",
+    "aidream_server_unconfigured": (
+        "this Mac has no AI Matrx server configured, so the last check could "
+        "not run"
+    ),
+    "claude_index_incomplete": (
+        "Claude Code's own session index could not be read completely, so the "
+        "last check stopped rather than act on a partial picture"
+    ),
+    "identity_list_completeness_unavailable": (
+        "AI Matrx could not confirm it had listed every conversation, so the "
+        "last check stopped rather than act on a partial list"
+    ),
+    "identity_list_malformed": (
+        "AI Matrx's list of conversations could not be read on the last check"
+    ),
+    "identity_list_provider_mismatch": (
+        "AI Matrx answered about the wrong coding tool on the last check"
+    ),
+}
+
+
+def blocked_sentence(reason: object) -> str:
+    """One English sentence for why a pass could not compare anything."""
+    if not isinstance(reason, str) or not reason.strip():
+        return "the last check did not finish, and it recorded no reason"
+    key = reason.strip()
+    known = _BLOCKED_SENTENCES.get(key)
+    if known:
+        return known
+    if key.startswith("aidream_error:"):
+        return f"AI Matrx returned an error on the last check ({key[14:]})"
+    return f"the last check did not finish ({key})"
 
 
 def cloud_disagrees(local: dict[str, Any], cloud: dict[str, Any]) -> list[str]:
@@ -1617,20 +1663,53 @@ class ClaudeSessionMetadataReconciler:
         ``checked`` is false when no pass has completed, and then the counts
         are None rather than 0 — an unread divergence is not a converged one.
         """
+        # Only a pass that actually COMPARED something may be believed. This
+        # used to key on ``completed_at IS NOT NULL`` alone, and on a fresh
+        # engine home the last apply pass is blocked before it compares
+        # anything — measured 2026-09-18 on a temp-home engine: blocked
+        # ``no_active_user_jwt``, journalled status ``failed`` with
+        # ``compared_sessions`` 0 — so this returned ``checked: true`` with
+        # every count 0 and the screen said the pins AGREE. That converged
+        # zero is exactly the lie this payload exists to prevent.
         row = await self._db.fetchone(
             """SELECT operation_id, completed_at, status
                  FROM coding_session_metadata_sync_operations
                 WHERE completed_at IS NOT NULL AND mode = 'apply'
+                  AND status IN ('completed', 'partial')
+                  AND compared_sessions > 0
              ORDER BY completed_at DESC LIMIT 1"""
         )
         if row is None:
-            return {
-                "checked": False,
-                "reason": (
+            # Nothing trustworthy. Say WHY, from the last attempt if there was
+            # one, so the screen carries a remedy instead of a shrug.
+            attempt = await self._db.fetchone(
+                """SELECT status, error_message, compared_sessions, completed_at
+                     FROM coding_session_metadata_sync_operations
+                    WHERE completed_at IS NOT NULL AND mode = 'apply'
+                 ORDER BY completed_at DESC LIMIT 1"""
+            )
+            if attempt is None:
+                why = (
                     "no reconcile pass has finished on this Mac yet, so the "
                     "difference between this Mac's pins and AI Matrx's is "
                     "not known"
-                ),
+                )
+            elif not int(attempt["compared_sessions"] or 0):
+                # The blocked sentence already explains that no comparison
+                # happened, so it stands alone — a second clause saying the
+                # same thing is noise on a one-row status line.
+                why = blocked_sentence(attempt["error_message"])
+            else:
+                why = (
+                    "the last reconcile pass compared no conversations, so "
+                    "the difference between this Mac's pins and AI Matrx's "
+                    "is not known"
+                )
+            return {
+                "checked": False,
+                "reason": why,
+                "last_attempt_at": attempt["completed_at"] if attempt else None,
+                "last_attempt_status": attempt["status"] if attempt else None,
                 "local": None,
                 "ai_matrx": None,
                 "to_pin": None,
@@ -1677,13 +1756,53 @@ class ClaudeSessionMetadataReconciler:
             "to_reconcile": to_pin + to_unpin,
             "last_pass_at": row["completed_at"],
             "last_pass_status": row["status"],
-            "compared_sessions": len(rows),
+            "last_attempt_at": row["completed_at"],
+            "last_attempt_status": row["status"],
+            # Rows the pass WALKED, which is every identity it was given —
+            # deliberately not called ``compared_sessions``, because the
+            # operation row already uses that word for the ones it MATCHED
+            # (measured on a real pass: 17 walked, 9 matched, and both
+            # numbers were right under one name).
+            "sessions_walked": len(rows),
         }
 
     async def status(self) -> dict[str, Any]:
+        """Everything the Sessions screen needs, from persisted state only.
+
+        STATUS IS A READ. It used to call :meth:`_read_index`, which REFRESHES
+        the whole index before reading it, and then probed every record path
+        for writability. Measured on this Mac's 79,206 record files
+        (2026-09-18): the refresh alone is 69.5 s cold and 7.8 s warm, and the
+        writability probe another 7.2 s — so the endpoint took 15 s warm and
+        ~77 s cold, past the desktop client's 60 s timeout. The new "Pins: …"
+        row therefore showed its honest "could not read" variant instead of
+        numbers nearly every time, which is a screen telling the truth about a
+        fact it should never have had to wait for.
+
+        The same persisted snapshot the overview endpoint reads answers in
+        **0.2 s**. Refreshing is owned by the background pass and by
+        ``warm_index_cache`` at engine start — never by a poll.
+        """
         await self._recover_interrupted_operations()
-        index, index_totals = await self._read_index()
-        index_writable = await asyncio.to_thread(_record_paths_writable, index)
+        snapshot = await index_snapshot()
+        index_totals = snapshot.totals
+        # The writability of Claude's own records is a capability probe that
+        # opens every one of 79,206 files, so it is not re-run per poll: the
+        # sync pass already measures it in full and journals it, and this
+        # reports that measurement with its age. None = never measured, which
+        # is not the same as "not writable" and must not render as one.
+        writable_row = await self._db.fetchone(
+            """SELECT index_writable, started_at
+                 FROM coding_session_metadata_sync_operations
+                WHERE completed_at IS NOT NULL
+             ORDER BY completed_at DESC LIMIT 1"""
+        )
+        index_writable = (
+            bool(writable_row["index_writable"]) if writable_row is not None else None
+        )
+        index_writable_measured_at = (
+            writable_row["started_at"] if writable_row is not None else None
+        )
         sync = await self._sync_meta.get_last_sync("claude_session_metadata")
         row = await self._db.fetchone(
             "SELECT count(*) AS n FROM claude_session_metadata_sent"
@@ -1709,6 +1828,7 @@ class ClaudeSessionMetadataReconciler:
             "auto_sync_running": self.active,
             "auto_sync_interval_seconds": auto_label_sync_interval_seconds(),
             "index_writable": index_writable,
+            "index_writable_measured_at": index_writable_measured_at,
             "pushed_sessions": int(pushed["n"]) if pushed else 0,
             "index_available": index_totals["files"] > 0,
             "index_files": index_totals["files"],
@@ -1723,6 +1843,10 @@ class ClaudeSessionMetadataReconciler:
             # pins this Mac holds, how many AI Matrx holds, how many one pass
             # would still have to move, and when the last pass finished.
             "pin_divergence": await self.pin_divergence(),
+            # Which account+org the pins were read from, and why. Absent scope
+            # = the pins are UNKNOWN and every ledger pin stands.
+            "pin_scope": snapshot.active_scope,
+            "pin_scope_reason": snapshot.active_scope_reason,
             "push_intents_by_state": {
                 str(item["status"]): int(item["count"]) for item in intents
             },

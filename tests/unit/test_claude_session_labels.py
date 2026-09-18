@@ -29,6 +29,7 @@ from app.services.coding_sessions.service import (
 from app.services.coding_sessions.title_sync import (
     ClaudeSessionMetadataReconciler,
     ClaudeTitleSyncBlocked,
+    blocked_sentence,
     cloud_disagrees,
     payload_digest,
     raw_session_id,
@@ -942,5 +943,156 @@ async def test_the_status_line_states_the_pin_divergence_and_the_last_pass(
     assert after["to_pin"] == 1
     assert after["to_unpin"] == 1
     assert after["to_reconcile"] == 2
-    assert after["compared_sessions"] == 2
+    assert after["sessions_walked"] == 2
     assert after["last_pass_at"], "the screen must be able to say when"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18 (CS-33, second pass): the row that reported a lie, and the
+# endpoint that was too slow to report anything
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_blocked_pass_is_not_a_converged_zero(env: Any) -> None:
+    """THE BUG, measured on a temp-home engine on 2026-09-18.
+
+    A fresh engine home is not signed in, so the apply pass is blocked with
+    ``no_active_user_jwt`` BEFORE it compares anything, and that is journalled
+    as status ``failed`` with ``compared_sessions`` 0. ``pin_divergence`` keyed
+    only on ``completed_at IS NOT NULL``, so it answered:
+
+        {"checked": true, "local": 0, "ai_matrx": 0, "to_reconcile": 0}
+
+    and the Sessions row said the pins AGREE when nothing had ever been
+    compared. A pass that compared nothing is not evidence of anything.
+    """
+    db, outbox, tmp_path = env
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient([]),
+        index_reader=lambda: ({}, {"files": 0, "records": 0, "unreadable": 0}),
+    )
+    await db.execute(
+        """INSERT INTO coding_session_metadata_sync_operations (
+               operation_id, mode, status, started_at, completed_at,
+               compared_sessions, error_message
+           ) VALUES ('op-blocked', 'apply', 'failed', '2026-09-18T15:06:00Z',
+                     '2026-09-18T15:06:00Z', 0, 'no_active_user_jwt')"""
+    )
+    await db.commit()
+
+    divergence = await reconciler.pin_divergence()
+    assert divergence["checked"] is False, divergence
+    assert divergence["to_reconcile"] is None
+    assert divergence["local"] is None and divergence["ai_matrx"] is None
+    # ...and it says WHY, in words a person can act on.
+    assert divergence["reason"] == (
+        "this Mac is not signed in to AI Matrx, so the last check could not "
+        "ask what AI Matrx holds"
+    )
+    assert divergence["last_attempt_status"] == "failed"
+    assert divergence["last_attempt_at"] == "2026-09-18T15:06:00Z"
+
+
+@pytest.mark.anyio
+async def test_a_completed_pass_that_compared_nothing_is_also_not_believed(
+    env: Any,
+) -> None:
+    """Zero compared sessions is never a divergence of zero, however it ended."""
+    db, outbox, tmp_path = env
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient([]),
+        index_reader=lambda: ({}, {"files": 0, "records": 0, "unreadable": 0}),
+    )
+    await db.execute(
+        """INSERT INTO coding_session_metadata_sync_operations (
+               operation_id, mode, status, started_at, completed_at,
+               compared_sessions
+           ) VALUES ('op-empty', 'apply', 'completed', '2026-09-18T15:00:00Z',
+                     '2026-09-18T15:00:00Z', 0)"""
+    )
+    await db.commit()
+    divergence = await reconciler.pin_divergence()
+    assert divergence["checked"] is False, divergence
+    assert divergence["to_reconcile"] is None
+
+
+@pytest.mark.anyio
+async def test_every_blocked_reason_reaches_the_screen_in_english(env: Any) -> None:
+    """No blocked reason may arrive as a bare machine token or an empty shrug."""
+    for reason, fragment in (
+        ("no_active_user_jwt", "not signed in to AI Matrx"),
+        ("aidream_unreachable", "could not be reached"),
+        ("aidream_server_unconfigured", "no AI Matrx server configured"),
+        ("claude_index_incomplete", "could not be read completely"),
+        ("identity_list_completeness_unavailable", "every conversation"),
+        ("aidream_error:503 upstream", "503 upstream"),
+    ):
+        assert fragment in blocked_sentence(reason), reason
+    # An unknown reason is SHOWN, never swallowed.
+    assert "something_new" in blocked_sentence("something_new")
+    assert "recorded no reason" in blocked_sentence(None)
+
+
+@pytest.mark.anyio
+async def test_status_never_refreshes_the_index(env: Any, monkeypatch: Any) -> None:
+    """``status`` is a READ — the endpoint the Sessions screen polls.
+
+    It used to call the reconciler's index reader, which refreshes the whole
+    index first. Measured on this Mac's 79,206 record files (2026-09-18): 69.5 s
+    cold and 7.8 s warm for the refresh, plus 7.2 s to probe every record path
+    for writability — ~15 s warm and ~77 s cold, past the desktop client's 60 s
+    timeout, so the pins row showed its "could not read" variant instead of
+    numbers. The persisted snapshot answers the same question in 0.2 s.
+    """
+    db, outbox, tmp_path = env
+    calls: list[str] = []
+
+    def _reader() -> Any:
+        calls.append("index_reader")
+        return {}, {"files": 0, "records": 0, "unreadable": 0}
+
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db, outbox=outbox, client=_FakeClient([]), index_reader=_reader
+    )
+    import app.services.coding_sessions.title_sync as title_sync
+
+    def _no_probe(_entries: Any) -> bool:
+        raise AssertionError("status probed every record path for writability")
+
+    monkeypatch.setattr(title_sync, "_record_paths_writable", _no_probe)
+    await reconciler.status()
+    assert calls == [], "status refreshed the index instead of reading it"
+
+
+@pytest.mark.anyio
+async def test_status_reports_writability_with_its_age_never_a_stale_false(
+    env: Any,
+) -> None:
+    """Never measured is None, not False — a probe nobody ran is not a verdict."""
+    db, outbox, tmp_path = env
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient([]),
+        index_reader=lambda: ({}, {"files": 0, "records": 0, "unreadable": 0}),
+    )
+    fresh = await reconciler.status()
+    assert fresh["index_writable"] is None
+    assert fresh["index_writable_measured_at"] is None
+
+    await db.execute(
+        """INSERT INTO coding_session_metadata_sync_operations (
+               operation_id, mode, status, started_at, completed_at,
+               compared_sessions, index_writable
+           ) VALUES ('op-w', 'apply', 'completed', '2026-09-18T15:00:00Z',
+                     '2026-09-18T15:00:00Z', 3, 1)"""
+    )
+    await db.commit()
+    measured = await reconciler.status()
+    assert measured["index_writable"] is True
+    assert measured["index_writable_measured_at"] == "2026-09-18T15:00:00Z"

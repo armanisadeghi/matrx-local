@@ -78,11 +78,17 @@ ACCOUNT_SIGNAL_FILES: tuple[tuple[str, str], ...] = (
     ("cowork-enabled-cli-ops.json", "ownerAccountId"),
 )
 
+#: The app writes one of these per organisation it has loaded, in the same
+#: config file, and the newest names the organisation in use.
+ORG_SIGNAL_FILE = "config.json"
+ORG_SIGNAL_PREFIX = "dxt:allowlistLastUpdated:"
+
 # The account id becomes ONE path segment under the session-index root, so it
 # is validated as a safe segment rather than as a UUID: the app owns its own
 # id format, and this module must not reject a future one. What it must reject
 # is a separator or a ``..`` that would walk out of the index tree.
 _SAFE_SEGMENT_RE = re.compile(r"\A[A-Za-z0-9._-]{1,128}\Z")
+_ISO_STAMP_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T[\d:.]{8,15}Z\Z")
 
 
 def _safe_account(value: object) -> str | None:
@@ -235,6 +241,34 @@ def record_focused_at(record: dict) -> int:
     return value if isinstance(value, int) and value > 0 else 0
 
 
+def stated_org_stamps(app_support: Path | None = None) -> dict[str, str]:
+    """Organisation -> the app's own last-updated stamp for it, if stated.
+
+    The values are ISO-8601 UTC strings the app writes itself, so they are
+    comparable as strings; anything that is not one is ignored rather than
+    guessed at.
+    """
+    base = app_support or default_app_support_dir()
+    path = base / ORG_SIGNAL_FILE
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SIGNAL_FILE_BYTES:
+            return {}
+        document = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    stamps: dict[str, str] = {}
+    for key, value in document.items():
+        if not isinstance(key, str) or not key.startswith(ORG_SIGNAL_PREFIX):
+            continue
+        org = _safe_account(key[len(ORG_SIGNAL_PREFIX) :])
+        if org and isinstance(value, str) and _ISO_STAMP_RE.match(value.strip()):
+            stamps[org] = value.strip()
+    return stamps
+
+
 def _newest_focus_in(org_dir: Path) -> int:
     """The newest ``lastFocusedAt`` among one org's records, 0 if none."""
     newest = 0
@@ -273,20 +307,63 @@ def decide_scope(
     account_reason: str,
     org_focus: dict[str, int],
     *,
+    org_stated: dict[str, str] | None = None,
     account_dir: Path | None = None,
 ) -> ScopeResolution:
-    """THE decision, given the account and one focus stamp per organisation.
+    """THE decision, given the account and one stamp per organisation.
 
     Held apart from how the stamps were gathered because there are two
     gatherers that must not drift: the filesystem scan
     (:func:`resolve_active_scope`) and the engine's persisted SQLite index
     (:mod:`app.services.coding_sessions.claude_index_store`, which already
-    stores every record's stamp and must not re-walk 79,000 files to answer
-    this). ``org_focus`` maps organisation -> its newest ``lastFocusedAt``, and
-    it must already be restricted to ``account``'s own organisations.
+    stores every record's focus stamp and must not re-walk 79,000 files to
+    answer this).
+
+    ``org_stated`` is what the APP says — ``dxt:allowlistLastUpdated:<org>``
+    from its own config — and it decides whenever it names one of this
+    account's organisations. ``org_focus`` (organisation -> its newest
+    ``lastFocusedAt``, already restricted to ``account``) is only the fallback,
+    and a TIE on the maximum there is UNKNOWN: on 2026-09-18 all five of the
+    signed-in account's organisations carried the identical stamp
+    ``1789718916078`` while holding 203, 203, 204, 204 and 218 stars, so
+    "the newest" was a coin flip that landed on 203.
     """
     if account is None:
         return ScopeResolution(reason=account_reason, signals=signals)
+
+    def resolved(org: str, how: str) -> ScopeResolution:
+        return ScopeResolution(
+            scope=(account_dir / org) if account_dir is not None else None,
+            account=account,
+            org=org,
+            signals=signals,
+            reason=(
+                f"the app states it is signed into {account}; of its "
+                f"{len(org_focus)} organisation folder(s), {org} {how}"
+            ),
+        )
+
+    stated = {
+        org: stamp
+        for org, stamp in (org_stated or {}).items()
+        if org in org_focus
+    }
+    if stated:
+        best = max(stated.values())
+        winners = sorted(org for org, stamp in stated.items() if stamp == best)
+        if len(winners) == 1:
+            return resolved(winners[0], f"is the one the app last updated ({best})")
+        return ScopeResolution(
+            account=account,
+            signals=signals,
+            reason=(
+                f"the app states it is signed into {account} but names "
+                f"{len(winners)} of its organisations as last updated at the "
+                f"same moment ({best}), so the organisation — and therefore "
+                "the pin — is UNKNOWN"
+            ),
+        )
+
     ranked = sorted(
         ((focus, org) for org, focus in org_focus.items() if focus > 0),
         reverse=True,
@@ -296,24 +373,28 @@ def decide_scope(
             account=account,
             signals=signals,
             reason=(
-                f"the app states it is signed into {account}, but none of its "
+                f"the app states it is signed into {account}, but it names no "
+                f"organisation as last updated and none of its "
                 f"{len(org_focus)} organisation folder(s) carries a "
                 "lastFocusedAt stamp, so the organisation — and therefore the "
                 "pin — is UNKNOWN"
             ),
         )
-    org = ranked[0][1]
-    return ScopeResolution(
-        scope=(account_dir / org) if account_dir is not None else None,
-        account=account,
-        org=org,
-        signals=signals,
-        reason=(
-            f"the app states it is signed into {account}; of its "
-            f"{len(org_focus)} organisation folder(s), {org} carries the "
-            "newest lastFocusedAt"
-        ),
-    )
+    top = ranked[0][0]
+    tied = sorted(org for focus, org in ranked if focus == top)
+    if len(tied) > 1:
+        return ScopeResolution(
+            account=account,
+            signals=signals,
+            reason=(
+                f"the app states it is signed into {account} and names no "
+                f"organisation as last updated, and {len(tied)} of its "
+                f"organisations share the same newest lastFocusedAt ({top}) — "
+                "that stamp is copied between scopes, so picking one would be "
+                "a coin flip; the pin is UNKNOWN"
+            ),
+        )
+    return resolved(tied[0], f"carries the newest lastFocusedAt ({top})")
 
 
 def resolve_active_scope(
@@ -361,7 +442,12 @@ def resolve_active_scope(
         if org_dir.is_dir():
             org_focus[name] = _newest_focus_in(org_dir)
     return decide_scope(
-        account, signals, reason, org_focus, account_dir=account_dir
+        account,
+        signals,
+        reason,
+        org_focus,
+        org_stated=stated_org_stamps(support),
+        account_dir=account_dir,
     )
 
 

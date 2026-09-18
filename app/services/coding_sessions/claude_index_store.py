@@ -57,6 +57,7 @@ from app.services.coding_sessions.claude_session_index import (
 from app.services.coding_sessions.claude_scope import (
     decide_scope,
     signed_in_account,
+    stated_org_stamps,
 )
 from app.services.coding_sessions.claude_usage import (
     PENDING_STAMP,
@@ -521,7 +522,12 @@ class ClaudeIndexStore:
                     if focus > org_focus.get(org_dir.name, 0):
                         org_focus[org_dir.name] = focus
             resolution = decide_scope(
-                account, signals, account_reason, org_focus, account_dir=account_dir
+                account,
+                signals,
+                account_reason,
+                org_focus,
+                org_stated=stated_org_stamps(),
+                account_dir=account_dir,
             )
             active_scope = str(resolution.scope) if resolution.scope else None
             if active_scope:

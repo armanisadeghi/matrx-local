@@ -697,3 +697,138 @@ def test_an_account_signal_that_would_escape_the_index_tree_is_refused(
     )
     entries, _totals = read_session_index(root, ledger_path=ledger)
     assert entries["cli-esc"].is_pinned is True
+
+
+# ---------------------------------------------------------------------------
+# The same law, one level down: the ORG is stated too (CS-33 / F1, second pass)
+#
+# Ranking lastFocusedAt among ONE account's organisations looked safe — the
+# contamination that was measured crossed accounts. Then it was measured
+# inside an account: at 01:29 on 2026-09-18 all FIVE organisations of the
+# signed-in account carried the identical maximum stamp 1789718916078 while
+# holding 203, 203, 204, 204 and 218 stars, and "the newest" was a coin flip
+# that landed on 203 while the app was showing 218. The app names its own
+# organisation in the same config file it names its account in, one
+# `dxt:allowlistLastUpdated:<org>` key per organisation, and on that machine
+# the right one (218 stars) was hours ahead of every sibling.
+# ---------------------------------------------------------------------------
+
+SECOND_ORG = "09b4b1ef-090b-42f2-a680-2c51863e549d"
+
+
+def _stated_orgs(app_support: Path, stamps: dict[str, str]) -> None:
+    """Merge the app's per-organisation stamps into its config, as it does."""
+    config = app_support / "config.json"
+    document = json.loads(config.read_text()) if config.exists() else {}
+    for org, stamp in stamps.items():
+        document[f"dxt:allowlistLastUpdated:{org}"] = stamp
+    config.write_text(json.dumps(document))
+
+
+def test_the_org_the_app_names_wins_over_a_tied_focus_stamp(tmp_path: Path) -> None:
+    """The real 01:29 failure: every org tied, and the app named the right one."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078  # the real shared stamp
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=True,
+    )
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=STALE_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=False,
+    )
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=SECOND_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=False,
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _stated_orgs(
+        tmp_path,
+        {
+            ACTIVE_ORG: "2026-09-18T08:33:08.496Z",
+            STALE_ORG: "2026-09-18T04:33:08.532Z",
+            SECOND_ORG: "2026-09-16T00:19:21.832Z",
+        },
+    )
+
+    resolution = resolve_active_scope(root)
+    assert resolution.org == ACTIVE_ORG, resolution.reason
+    assert "last updated" in resolution.reason
+    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert entries["cli-tie"].is_pinned is True
+
+
+def test_a_tied_focus_stamp_with_no_stated_org_is_unknown_not_a_coin_flip(
+    tmp_path: Path,
+) -> None:
+    """No statement + a tie = UNKNOWN. An arbitrary winner is not an answer."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078
+    for org, starred in ((ACTIVE_ORG, True), (STALE_ORG, False), (SECOND_ORG, False)):
+        _write(
+            root,
+            account=ACTIVE_ACCOUNT,
+            org=org,
+            session="local_flip",
+            cli_session_id="cli-flip",
+            last_focused_at=tied,
+            is_starred=starred,
+        )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    resolution = resolve_active_scope(root)
+    assert resolution.scope is None
+    assert resolution.org is None
+    assert "coin flip" in resolution.reason
+    assert str(tied) in resolution.reason
+
+    ledger = _ledger(
+        tmp_path, {"local_flip.json": {"isPinned": True, "pinnedRank": 2}}
+    )
+    entries, _totals = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-flip"].is_pinned is True, "a coin flip cleared a real pin"
+
+
+def test_the_store_uses_the_stated_org_too(tmp_path: Path, monkeypatch: Any) -> None:
+    """Production reads the store, so the store must not flip the coin either."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078
+    for org, starred in ((ACTIVE_ORG, True), (STALE_ORG, False)):
+        _write(
+            root,
+            account=ACTIVE_ACCOUNT,
+            org=org,
+            session="local_sorg",
+            cli_session_id="cli-sorg",
+            last_focused_at=tied,
+            is_starred=starred,
+        )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _stated_orgs(
+        tmp_path,
+        {
+            ACTIVE_ORG: "2026-09-18T08:33:08.496Z",
+            STALE_ORG: "2026-09-18T04:33:08.532Z",
+        },
+    )
+    monkeypatch.setenv("CLAUDE_DESKTOP_APP_SUPPORT_DIR", str(tmp_path))
+
+    store = _refresh(root, tmp_path / "store" / "index.sqlite3")
+    snapshot = store.load()
+    assert snapshot.active_scope == str(root / ACTIVE_ACCOUNT / ACTIVE_ORG)
+    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {"cli-sorg": True}

@@ -163,9 +163,9 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
     `is_new` + `store` required; this repo's copy of the gate is
     `app/services/ai/local_ai_task.py::resolve_conversation_gate` — change one, change
     both). → `/Users/armanisadeghi/code/common-docs/systems/agents/conversation-start-contract/FEATURE.md`
-13. **Migrations are applied the moment they're created** (`migrations/NNN_name.sql`,
-    Supabase MCP `apply_migration`, project `brsgrqvjdzwihsvnfqkf`); an unapplied
-    migration on disk = `PGRST204` at runtime — apply it before anything else.
+13. **Arman's preference (2026-09-18): change the database directly through the Supabase MCP** (project `brsgrqvjdzwihsvnfqkf`). The database is the source of truth, and type/model generation PULLS from it into the codebase. A migration FILE is fine only if you OWN it end to end: write it, apply it, regenerate, and confirm it broke nothing. If you will not own it end to end, use the MCP. **Never hand Arman a command to run — he does not use terminals.**
+    If you do write `migrations/NNN_name.sql`, apply it the moment it exists — an unapplied
+    migration on disk = `PGRST204` at runtime.
 14. **React hook/effect rules** (each maps to a shipped polling outage): `actions`
     wrapped in `useMemo`; never `actions` as an effect dep; init fetches inside the
     hook; persistent state in app-level Context providers; polling gated on the

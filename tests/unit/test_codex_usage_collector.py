@@ -5,7 +5,9 @@ import sqlite3
 import threading
 
 import pytest
+from fastapi import HTTPException
 
+from app.api import codex_usage_routes
 from app.services.codex_usage import collector
 
 
@@ -58,9 +60,12 @@ def test_missing_frozen_candidate_exhausts_but_is_not_complete(tmp_path):
 
 def test_one_shared_scan_survives_waiter_cancellation_and_rejects_other_range(monkeypatch):
     started, release = threading.Event(), threading.Event()
+    advances = 0
     scan = collector.UsageScan(dt.datetime(2026, 9, 12, tzinfo=UTC), dt.datetime(2026, 9, 13, tzinfo=UTC), dt.datetime.now(UTC), {}, {}, [])
     monkeypatch.setattr(collector, "create_scan", lambda *_: scan)
     def slow_advance(value):
+        nonlocal advances
+        advances += 1
         started.set(); release.wait(2); value.last_scan_at = dt.datetime.now(UTC)
     monkeypatch.setattr(collector, "advance_scan", slow_advance)
 
@@ -76,6 +81,36 @@ def test_one_shared_scan_survives_waiter_cancellation_and_rejects_other_range(mo
         release.set()
         resolved = await same
         assert resolved["collection"]["state"] == "refreshed"
+        assert advances == 1, "same-range refreshes must share one collector run"
+    asyncio.run(exercise())
+
+
+def test_busy_range_is_an_explicit_409_not_a_generic_local_failure(monkeypatch):
+    """A route call while the real collector owns another range stays actionable."""
+    started, release = threading.Event(), threading.Event()
+    scan = collector.UsageScan(dt.datetime(2026, 9, 12, tzinfo=UTC), dt.datetime(2026, 9, 13, tzinfo=UTC), dt.datetime.now(UTC), {}, {}, [])
+    service = collector.CodexUsageSnapshotService()
+    monkeypatch.setattr(collector, "create_scan", lambda *_: scan)
+    monkeypatch.setattr(codex_usage_routes, "snapshot_service", service)
+
+    def slow_advance(value):
+        started.set(); release.wait(2); value.last_scan_at = dt.datetime.now(UTC)
+
+    monkeypatch.setattr(collector, "advance_scan", slow_advance)
+
+    async def exercise():
+        active = asyncio.create_task(service.read(scan.start, scan.end, refresh=True))
+        await asyncio.to_thread(started.wait, 1)
+        with pytest.raises(HTTPException) as failure:
+            await codex_usage_routes.get_codex_usage(
+                start="2026-09-14T00:00:00Z",
+                end="2026-09-15T00:00:00Z",
+            )
+        assert failure.value.status_code == 409
+        assert "collecting" in str(failure.value.detail)
+        release.set()
+        await active
+
     asyncio.run(exercise())
 
 

@@ -890,3 +890,42 @@ async def test_the_real_codex_adapter_reaches_the_overview(
         assert row["project"] == "demo-repo"
         assert row["continuation"]["command"].startswith("codex resume ")
     assert elapsed < 1.0, f"the overview took {elapsed:.2f}s to answer from rows"
+
+
+@pytest.mark.anyio
+async def test_a_truncated_list_says_it_is_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CAP NEVER LIES, and with four providers this cap is really reached.
+
+    Claude Code alone never hit it (~2,000 conversations). Measured on this Mac
+    2026-09-18 the four providers together produce 1,831 Codex sessions, 4,570
+    Cursor chats and Claude Code's own, so the row limit truncates for real —
+    and a short list that does not say it is short is exactly the silent
+    failure law 4 forbids.
+    """
+    rows = [_row("codex", f"codex-{index}") for index in range(5)]
+    _install(monkeypatch, [_FakeProvider("codex", rows)])
+    _no_queue_patches(monkeypatch)
+
+    async def _cloud(provider="codex", *, force=False):
+        return {}, {
+            "checked": True,
+            "reason": None,
+            "detail": None,
+            "sessions": 0,
+            "checked_at": "2026-09-18T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+
+    out = await overview_module.overview(limit=2)
+    assert len(out["conversations"]) == 2
+    assert out["totals"]["conversations"] == 5, "the true count must survive the cap"
+    assert out["totals"]["listed"] == 2
+    assert out["totals"]["list_truncated"] is True
+    assert out["totals"]["list_limit"] == 2
+
+    whole = await overview_module.overview(limit=50)
+    assert whole["totals"]["list_truncated"] is False
+    assert whole["totals"]["listed"] == whole["totals"]["conversations"] == 5

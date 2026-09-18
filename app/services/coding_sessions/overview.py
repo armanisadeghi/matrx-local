@@ -206,6 +206,15 @@ async def overview(limit: int = _MAX_CONVERSATIONS) -> dict[str, Any]:
         "conversations": conversations[:limit],
         "totals": {
             "conversations": len(conversations),
+            # A CAP NEVER LIES. With Claude Code alone this limit was never
+            # reached (~2,000 conversations); with four providers it is — 1,831
+            # Codex sessions and 4,570 Cursor chats on this Mac alone. The
+            # screen must be able to say "showing 5,000 of 8,401", so the
+            # number shown and the fact that it is short are both stated here
+            # rather than left to be inferred from a list length.
+            "listed": len(conversations[:limit]),
+            "list_truncated": len(conversations) > limit,
+            "list_limit": limit,
             "transcript_only": transcript_only,
             "transcripts_on_disk": transcripts_on_disk,
             "pinned": pinned_total,

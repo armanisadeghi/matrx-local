@@ -1,5 +1,5 @@
 {
-  "_source": "Claude desktop session-index record, captured 2026-09-17 from the app's active account+org scope. Paths/ids scrubbed; KEY NAMES and value types are verbatim. `isStarred` is the app's pin field (verified 28/28 against the app's own reported pin state).",
+  "_source": "Claude desktop session-index record, captured 2026-09-17 from the app's active account+org scope. Paths/ids scrubbed; KEY NAMES and value types are verbatim. `isStarred` is NOT the pin (re-measured 2026-09-18: 206 unarchived records flagged true while the sidebar showed ~48 and the app's starred list held 56; the pin is the app's IndexedDB starred list, see claude_starred_pin_state.json). It stays in the shape as a diagnostic.",
   "_observed": {
     "records_in_scope": 1568,
     "isStarred_true": 218,

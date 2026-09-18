@@ -65,7 +65,6 @@ from app.services.coding_sessions.claude_scope import (
 )
 from app.services.coding_sessions.claude_usage import (
     PENDING_STAMP,
-    USAGE_FIELDS,
     UsageCursor,
     UsageIncrement,
     read_usage_increment,
@@ -446,15 +445,9 @@ class ClaudeIndexStore:
 
         record_counts: dict[str, int] = {}
         candidates: list[tuple[Path, int, ClaudeSessionIndexEntry]] = []
-        # The pin observation, rebuilt from the scope-resolved columns so the
-        # store and the full scan apply ONE rule (LivePins) to one input.
-        observed: dict[str, bool | None] = {}
         for row in rows:
             session_id = str(row["cli_session_id"])
             record_counts[session_id] = int(row["record_count"] or 1)
-            if int(row["in_active_scope"] or 0):
-                starred = row["active_is_starred"]
-                observed[session_id] = None if starred is None else bool(starred)
             local_cwd = row["local_cwd"]
             archived = row["is_archived"]
             candidates.append(
@@ -477,8 +470,11 @@ class ClaudeIndexStore:
         # The ledger is read at LOAD time, not refresh time: it is one small
         # JSON file, and a pin or a rename the sync agent lands there must
         # reach the screen without waiting for 67,224 files to be re-stated.
+        # The pin is every account's observed starred list, read here at load
+        # time for the same reason — one small JSON file the session-sync
+        # agent rewrites — and through the ONE rule the full scan applies.
         entries = merge_entries(
-            candidates, ledger=ledger, live_pins=LivePins(observed)
+            candidates, ledger=ledger, live_pins=LivePins.from_observations()
         )
         if record_paths:
             entries = {

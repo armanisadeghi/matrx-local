@@ -1,34 +1,42 @@
-"""The app's OWN pin field is the pin truth — and an unpin must be observable.
+"""The app's own STARRED LIST is the pin truth — and an unpin must be observable.
 
-Live bug, 2026-09-17 (Arman): "conversations are getting pinned but never
-unpinned; the list of pinned conversations grows endlessly and sync never
-resolves it." Measured on his machine that day:
+Measured 2026-09-18 on Arman's Mac, overturning the 2026-09-17 premise that the
+index records' ``isStarred`` flag is the pin:
 
-    the app's real pinned set   218
-    the sidebar ledger          257   (73 sessions pinned that are NOT pinned,
-                                       34 truly-pinned sessions missing)
-    the server                  276
+* The Claude desktop sidebar draws pinned Claude Code conversations from ONE
+  list in the app's claude.ai IndexedDB — database ``keyval-store``, store
+  ``keyval``, key ``store:pin-state:dframe-starred-code``, value
+  ``{"state": {"starredIds": ["local_<id>", ..., "session_<cloud id>"]},
+  "updatedAt": <ms>}`` — one list per ACCOUNT, rebuilt on every account switch.
+* The signed-in scope's index records carried ``isStarred: true`` on 206
+  unarchived conversations; the sidebar showed ~48 and ``starredIds`` held 56.
+  Conversations Arman sees pinned (``local_ba6006c0…``, ``local_6250b1df…``,
+  ``local_69a4ccf1…``) are in ``starredIds``; conversations flagged
+  ``isStarred: true`` that he does NOT see pinned (``local_d5542855…``
+  "Prompt", ``local_08264bc8…`` "Extension vault") are absent from it. The
+  flag also spreads: the session-sync agent copies whole records between the
+  48 account/org folders. AI Matrx held 285 favourites vs 56 real.
 
-Root cause: pins moved. The desktop app now records a pin as ``isStarred`` on
-its own per-account session-index record; the machine's session-sync agent was
-still deriving pins from ``pinnedOrder`` in the app's Chromium localStorage,
-which is an append-only DISPLAY-ORDER array — it keeps a reference forever
-after the person unpins, so an unpin was literally unrepresentable upstream.
+Arman's ruling: a conversation is pinned iff at least one account's sidebar
+shows it pinned. The session-sync agent records each account's latest list in
+``~/.claude/claude-code-pin-observations.json`` (``CLAUDE_PIN_OBSERVATIONS``);
+the engine's :class:`LivePins` reads the union of those lists. So these tests
+pin down:
 
-So these tests pin down three things, using a fixture of the record shape
-observed on 2026-09-17 (``fixtures/claude_index_records.json``):
+1. In any account's list -> pinned, with the best rank any account gives it.
+2. Observed, and in no account's list -> an explicit ``is_pinned=false`` that
+   reaches the payload — whatever ``isStarred`` or a stale ledger says.
+3. No observation at all (absent, unreadable, empty) -> UNKNOWN: the ledger
+   stands exactly as before. Guessing ``false`` would mass-unpin the server.
 
-1. The pin comes from the ACTIVE account+org scope's ``isStarred``.
-2. ``isStarred: false`` there is an OBSERVED UNPIN — it must reach the payload
-   as ``is_pinned=false``, even when a stale ledger still says pinned.
-3. An absent ``isStarred`` (and an undeterminable scope) is UNKNOWN — never
-   ``false``. Guessing ``false`` would mass-unpin every conversation the app
-   has no opinion about.
+The second half of this file guards the ACCOUNT/ORG scope rule, which still
+decides which account a freshly read list belongs to.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +52,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "claude_index_records.json"
 ACTIVE_ACCOUNT = "d2eb2e1d-684b-41cc-a6a8-00bac619f70c"
 ACTIVE_ORG = "71840439-c44e-482f-a693-702306599d49"
 STALE_ORG = "8fa7c825-32a9-4a72-a6d5-f88377421373"
+OTHER_ACCOUNT = "9a49ffc8-a284-4c45-b20d-68ba8cc14930"  # arman26@gmail.com
 
 
 def _fixture_record() -> dict[str, Any]:
@@ -82,10 +91,8 @@ def _signed_in(app_support: Path, account: str) -> None:
     The desktop app keeps it in two plain files beside its session index:
     ``config.json`` -> ``lastKnownAccountUuid`` and
     ``cowork-enabled-cli-ops.json`` -> ``ownerAccountId``. Both were read on
-    the real machine on 2026-09-18 and agreed
-    (``d2eb2e1d-684b-41cc-a6a8-00bac619f70c`` = dev@aimatrx.com), matching the
-    app's localStorage ``rq-cache-confirmed-account``. A fixture that writes
-    neither is a machine the app has said nothing about, which is UNKNOWN.
+    the real machine on 2026-09-18 and agreed. A fixture that writes neither
+    is a machine the app has said nothing about, which is UNKNOWN.
     """
     app_support.mkdir(parents=True, exist_ok=True)
     (app_support / "config.json").write_text(
@@ -102,217 +109,154 @@ def _ledger(tmp_path: Path, entries: dict[str, dict[str, Any]]) -> Path:
     return path
 
 
+def _observe(lists: dict[str, list[str]]) -> Path:
+    """Each account's observed starred list, in the session-sync agent's shape.
+
+    Written to ``CLAUDE_PIN_OBSERVATIONS``, which ``tests/conftest.py`` points
+    at a fresh file per test, so no test can read the real one.
+    """
+    path = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
+    path.write_text(
+        json.dumps(
+            {
+                account: {
+                    "email": None,
+                    "observed_at": "2026-09-18T10:27:01+00:00",
+                    "updated_at": 1789752420786,
+                    "local": names,
+                    "cloud": [],
+                }
+                for account, names in lists.items()
+            }
+        )
+    )
+    return path
+
+
 def test_fixture_carries_the_observed_record_shape() -> None:
-    """If the app renames these keys, this fails before anything mis-syncs."""
+    """If the app renames these keys, this fails before anything mis-syncs.
+
+    ``isStarred`` stays in the shape because the readers still report it as a
+    diagnostic; it decides no pin.
+    """
     record = _fixture_record()
-    assert "isStarred" in record, "pin field renamed — re-measure the app"
+    assert "isStarred" in record
     assert "lastFocusedAt" in record, "scope signal renamed — re-measure"
     assert "cliSessionId" in record
-    assert isinstance(record["isStarred"], bool)
 
 
 def test_active_scope_is_the_most_recently_focused(tmp_path: Path) -> None:
     root = tmp_path / "claude-code-sessions"
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=STALE_ORG,
-        session="local_aaa",
-        cli_session_id="cli-a",
-        last_focused_at=1_000,
-        is_starred=True,
-    )
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_aaa",
-        cli_session_id="cli-a",
-        last_focused_at=9_000,
-        is_starred=False,
-    )
+    _write(root, account=ACTIVE_ACCOUNT, org=STALE_ORG, session="local_aaa",
+           cli_session_id="cli-a", last_focused_at=1_000, is_starred=True)
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_aaa",
+           cli_session_id="cli-a", last_focused_at=9_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
     assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
 
 
-def test_unpin_in_the_active_scope_beats_a_stale_pinned_ledger(
-    tmp_path: Path,
-) -> None:
-    """THE BUG. The person unpinned; the ledger still says pinned."""
+def test_isstarred_true_but_in_no_starred_list_is_not_pinned(tmp_path: Path) -> None:
+    """GUARD (a) — THE 2026-09-18 BUG: "Prompt" was flagged, never pinned.
+
+    The record says ``isStarred: true`` and the ledger says pinned, but no
+    account's starred list holds it, so the sidebar does not show it pinned —
+    and neither may AI Matrx.
+    """
     root = tmp_path / "claude-code-sessions"
-    # Another account still holds the old pin — this is the norm on Arman's
-    # machine (48 scopes, each with its own isStarred). It must not win.
-    _write(
-        root,
-        account="other-account",
-        org=STALE_ORG,
-        session="local_bbb",
-        cli_session_id="cli-b",
-        last_focused_at=1_000,
-        is_starred=True,
-    )
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_bbb",
-        cli_session_id="cli-b",
-        last_focused_at=9_000,
-        is_starred=False,
-    )
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_prompt",
+           cli_session_id="cli-prompt", last_focused_at=9_000, is_starred=True)
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_real",
+           cli_session_id="cli-real", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    ledger = _ledger(tmp_path, {"local_bbb.json": {"isPinned": True, "pinnedRank": 7}})
+    _observe({ACTIVE_ACCOUNT: ["local_real.json"]})
+    ledger = _ledger(
+        tmp_path, {"local_prompt.json": {"isPinned": True, "pinnedRank": 7}}
+    )
 
     entries, _ = read_session_index(root, ledger_path=ledger)
 
-    entry = entries["cli-b"]
-    assert entry.is_pinned is False, "an unpin must be observed, not ignored"
+    entry = entries["cli-prompt"]
+    assert entry.is_pinned is False, "isStarred decided the pin again"
     assert entry.pinned_rank is None
     payload = entry.metadata_payload()
     assert payload["is_pinned"] is False, "the unpin must reach the server"
     assert "pinned_rank" not in payload
 
 
-def test_pin_in_the_active_scope_is_reported_pinned(tmp_path: Path) -> None:
+def test_in_a_starred_list_is_pinned_with_its_rank(tmp_path: Path) -> None:
+    """GUARD (b): in the list -> pinned, rank = its index in the list."""
     root = tmp_path / "claude-code-sessions"
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_ccc",
-        cli_session_id="cli-c",
-        last_focused_at=9_000,
-        is_starred=True,
-    )
-    ledger = _ledger(tmp_path, {"local_ccc.json": {"isPinned": True, "pinnedRank": 3}})
-
-    entries, _ = read_session_index(root, ledger_path=ledger)
-
-    entry = entries["cli-c"]
-    assert entry.is_pinned is True
-    assert entry.pinned_rank == 3, "rank stays a display hint from the ledger"
-    assert entry.metadata_payload()["is_pinned"] is True
-
-
-def test_absent_pin_field_in_a_live_scope_means_not_pinned(tmp_path: Path) -> None:
-    """1,331 of 1,568 records had no isStarred key.
-
-    The app documents an absent pin record as not pinned, and all 14 sampled
-    absences matched that on 2026-09-17. So in a scope that demonstrably does
-    record pins, absent is an honest ``false`` — and that is what clears the
-    stale pins off the server.
-    """
-    root = tmp_path / "claude-code-sessions"
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_ddd",
-        cli_session_id="cli-d",
-        last_focused_at=9_000,
-        is_starred=None,
-    )
-    # Something in this scope IS pinned, so the scope speaks pins.
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_ddd2",
-        cli_session_id="cli-d2",
-        last_focused_at=8_000,
-        is_starred=True,
-    )
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_first",
+           cli_session_id="cli-first", last_focused_at=9_000, is_starred=None)
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_second",
+           cli_session_id="cli-second", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    ledger = _ledger(tmp_path, {"local_ddd.json": {"isPinned": True, "pinnedRank": 4}})
+    _observe({ACTIVE_ACCOUNT: ["local_first.json", "local_second.json"]})
 
-    entries, _ = read_session_index(root, ledger_path=ledger)
+    entries, _ = read_session_index(root, ledger_path=tmp_path / "missing.json")
 
-    assert entries["cli-d"].is_pinned is False
-    assert entries["cli-d"].metadata_payload()["is_pinned"] is False
-    assert entries["cli-d2"].is_pinned is True
-
-
-def test_a_scope_with_no_pins_at_all_never_mass_unpins(tmp_path: Path) -> None:
-    """A freshly signed-in account has no pin records. That is not an unpin.
-
-    Without this guard one sync pass after an account switch would unpin every
-    conversation the person has on the server.
-    """
-    root = tmp_path / "claude-code-sessions"
-    for n in range(3):
-        _write(
-            root,
-            account="fresh-account",
-            org=ACTIVE_ORG,
-            session=f"local_h{n}",
-            cli_session_id=f"cli-h{n}",
-            last_focused_at=9_000 + n,
-            is_starred=None,
-        )
-    ledger = _ledger(
-        tmp_path,
-        {f"local_h{n}.json": {"isPinned": True, "pinnedRank": n} for n in range(3)},
-    )
-
-    entries, _ = read_session_index(root, ledger_path=ledger)
-
-    assert [entries[f"cli-h{n}"].is_pinned for n in range(3)] == [True, True, True]
+    assert (entries["cli-first"].is_pinned, entries["cli-first"].pinned_rank) == (True, 0)
+    assert (entries["cli-second"].is_pinned, entries["cli-second"].pinned_rank) == (True, 1)
+    payload = entries["cli-second"].metadata_payload()
+    assert payload["is_pinned"] is True
+    assert payload["pinned_rank"] == 1
 
 
-def test_no_active_scope_falls_back_to_the_ledger(tmp_path: Path) -> None:
-    """Scope undeterminable (no lastFocusedAt anywhere) = keep the old source.
-
-    Degrading to "nothing is pinned" here would unpin the person's whole
-    sidebar on the server the first time the signal went missing.
-    """
-    root = tmp_path / "claude-code-sessions"
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_eee",
-        cli_session_id="cli-e",
-        last_focused_at=0,
-        is_starred=None,
-    )
-    ledger = _ledger(tmp_path, {"local_eee.json": {"isPinned": True, "pinnedRank": 1}})
-
-    entries, _ = read_session_index(root, ledger_path=ledger)
-
-    entry = entries["cli-e"]
-    assert entry.is_pinned is True
-    assert entry.pinned_rank == 1
-
-
-def test_session_missing_from_the_active_scope_falls_back_to_the_ledger(
+def test_two_accounts_observations_are_a_union_with_the_best_rank(
     tmp_path: Path,
 ) -> None:
-    """A session the active account has never seen is not an unpin."""
+    """GUARD (d): pinned iff at least one account's sidebar shows it pinned."""
     root = tmp_path / "claude-code-sessions"
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_fff",
-        cli_session_id="cli-f",
-        last_focused_at=9_000,
-        is_starred=True,
-    )
-    _write(
-        root,
-        account="other-account",
-        org=STALE_ORG,
-        session="local_ggg",
-        cli_session_id="cli-g",
-        last_focused_at=1_000,
-        is_starred=None,
-    )
-    ledger = _ledger(tmp_path, {"local_ggg.json": {"isPinned": True, "pinnedRank": 2}})
+    for n, name in enumerate(("mine", "theirs", "both", "neither")):
+        _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session=f"local_{name}",
+               cli_session_id=f"cli-{name}", last_focused_at=9_000 - n,
+               is_starred=True)
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _observe({
+        ACTIVE_ACCOUNT: ["local_mine.json", "local_x.json", "local_both.json"],
+        OTHER_ACCOUNT: ["local_both.json", "local_theirs.json"],
+    })
+
+    entries, _ = read_session_index(root, ledger_path=tmp_path / "missing.json")
+
+    assert {k: (v.is_pinned, v.pinned_rank) for k, v in entries.items()} == {
+        "cli-mine": (True, 0),
+        "cli-theirs": (True, 1),
+        "cli-both": (True, 0),  # best rank: index 0 in the other account's list
+        "cli-neither": (False, None),
+    }
+
+
+def test_no_observations_at_all_the_ledger_stands(tmp_path: Path) -> None:
+    """GUARD (e): nothing observed is UNKNOWN — never "unpin everything"."""
+    root = tmp_path / "claude-code-sessions"
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_led",
+           cli_session_id="cli-led", last_focused_at=9_000, is_starred=False)
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_none",
+           cli_session_id="cli-none", last_focused_at=8_000, is_starred=True)
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    assert not Path(os.environ["CLAUDE_PIN_OBSERVATIONS"]).exists()
+    ledger = _ledger(tmp_path, {"local_led.json": {"isPinned": True, "pinnedRank": 3}})
 
     entries, _ = read_session_index(root, ledger_path=ledger)
 
-    assert entries["cli-g"].is_pinned is True
-    assert entries["cli-g"].pinned_rank == 2
+    assert (entries["cli-led"].is_pinned, entries["cli-led"].pinned_rank) == (True, 3)
+    # No ledger opinion and no observation: nothing is sent at all.
+    assert entries["cli-none"].is_pinned is None
+    assert "is_pinned" not in entries["cli-none"].metadata_payload()
+
+
+def test_an_unreadable_or_empty_observations_file_is_unknown(tmp_path: Path) -> None:
+    root = tmp_path / "claude-code-sessions"
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_u",
+           cli_session_id="cli-u", last_focused_at=9_000, is_starred=False)
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    ledger = _ledger(tmp_path, {"local_u.json": {"isPinned": True, "pinnedRank": 2}})
+    observations = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
+    for body in ("{not json", "{}", json.dumps({ACTIVE_ACCOUNT: {"local": []}})):
+        observations.write_text(body)
+        entries, _ = read_session_index(root, ledger_path=ledger)
+        assert entries["cli-u"].is_pinned is True, f"{body!r} cleared a real pin"
 
 
 # ── the persisted store is what production reads ─────────────────────────────
@@ -338,33 +282,21 @@ def test_store_reports_the_unpin_exactly_like_the_scan(
 ) -> None:
     """THE BUG, through the path production actually uses.
 
-    The stale scope's record is the FRESHEST (higher lastActivityAt), so it
-    wins the store's one-row-per-conversation collapse — which is precisely
-    how a pin the person removed kept being re-asserted to the server.
+    A copy flagged ``isStarred: true`` is the FRESHEST record, so it wins the
+    store's one-row-per-conversation collapse; no account's list holds it.
     """
     root = tmp_path / "claude-code-sessions"
-    stale = _write(
-        root,
-        account="other-account",
-        org=STALE_ORG,
-        session="local_iii",
-        cli_session_id="cli-i",
-        last_focused_at=1_000,
-        is_starred=True,
-    )
+    stale = _write(root, account=OTHER_ACCOUNT, org=STALE_ORG, session="local_iii",
+                   cli_session_id="cli-i", last_focused_at=1_000, is_starred=True)
     record = json.loads(stale.read_text())
     record["lastActivityAt"] = 9_999_999_999
     stale.write_text(json.dumps(record))
-    _write(
-        root,
-        account=ACTIVE_ACCOUNT,
-        org=ACTIVE_ORG,
-        session="local_iii",
-        cli_session_id="cli-i",
-        last_focused_at=9_000,
-        is_starred=False,
-    )
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_iii",
+           cli_session_id="cli-i", last_focused_at=9_000, is_starred=True)
+    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_kept",
+           cli_session_id="cli-kept", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _observe({ACTIVE_ACCOUNT: ["local_kept.json"]})
     ledger = _ledger(tmp_path, {"local_iii.json": {"isPinned": True, "pinnedRank": 5}})
     monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(ledger))
 
@@ -374,46 +306,29 @@ def test_store_reports_the_unpin_exactly_like_the_scan(
     entry = snapshot.entries["cli-i"]
     assert entry.is_pinned is False, "the store must see the unpin too"
     assert entry.metadata_payload()["is_pinned"] is False
-    # And it must agree with the full scan, conversation for conversation.
+    assert snapshot.entries["cli-kept"].is_pinned is True
     scan, _ = read_session_index(root, ledger_path=ledger)
     assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
         k: v.is_pinned for k, v in scan.items()
     }
 
 
-def test_store_and_scan_agree_on_pins_across_scopes(
+def test_store_and_scan_agree_on_pins_across_accounts(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Every pin state, both paths, one assertion."""
+    """Every pin state, both paths, one assertion — ranks included."""
     root = tmp_path / "claude-code-sessions"
-    cases = {
-        "cli-p1": (True, True),  # pinned in active scope, stale says pinned
-        "cli-p2": (False, True),  # UNPINNED in active scope, stale says pinned
-        "cli-p3": (None, False),  # no pin key in active scope
-        "cli-p4": (True, None),  # pinned in active scope only
-    }
-    for n, (active, stale_state) in enumerate(cases.items()):
-        active_starred, stale_starred = stale_state
-        _write(
-            root,
-            account=ACTIVE_ACCOUNT,
-            org=ACTIVE_ORG,
-            session=f"local_p{n}",
-            cli_session_id=active,
-            last_focused_at=9_000 + n,
-            is_starred=active_starred,
-        )
-        if stale_starred is not None:
-            _write(
-                root,
-                account="other-account",
-                org=STALE_ORG,
-                session=f"local_p{n}",
-                cli_session_id=active,
-                last_focused_at=1_000,
-                is_starred=stale_starred,
-            )
+    for n in range(4):
+        _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session=f"local_p{n}",
+               cli_session_id=f"cli-p{n}", last_focused_at=9_000 + n,
+               is_starred=n % 2 == 0)
+        _write(root, account=OTHER_ACCOUNT, org=STALE_ORG, session=f"local_p{n}",
+               cli_session_id=f"cli-p{n}", last_focused_at=1_000, is_starred=True)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _observe({
+        ACTIVE_ACCOUNT: ["local_p1.json"],
+        OTHER_ACCOUNT: ["local_p3.json", "local_p1.json"],
+    })
     ledger = _ledger(
         tmp_path,
         {f"local_p{n}.json": {"isPinned": True, "pinnedRank": n} for n in range(4)},
@@ -424,19 +339,24 @@ def test_store_and_scan_agree_on_pins_across_scopes(
     snapshot = store.load(record_paths=True)
     scan, _ = read_session_index(root, ledger_path=ledger)
 
-    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
-        "cli-p1": True,
-        "cli-p2": False,
-        "cli-p3": False,
-        "cli-p4": True,
+    expected = {
+        "cli-p0": (False, None),
+        "cli-p1": (True, 0),
+        "cli-p2": (False, None),
+        "cli-p3": (True, 0),
     }
-    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
-        k: v.is_pinned for k, v in scan.items()
-    }
+    assert {k: (v.is_pinned, v.pinned_rank) for k, v in snapshot.entries.items()} == expected
+    assert {k: (v.is_pinned, v.pinned_rank) for k, v in scan.items()} == expected
 
 
 # ---------------------------------------------------------------------------
 # 2026-09-18: the scope signal itself was contaminable (CS-33 / F1)
+#
+# These guard the ACCOUNT/ORG scope rule. Since the second 2026-09-18 finding
+# the scope no longer decides a pin (the app's starred list does, above); it
+# decides which account a freshly read starred list is recorded under and
+# which records the extractor publishes verdicts for, so the rule still has
+# to be right.
 #
 # A zero-authorship verifier measured the previous rule — "the scope holding
 # the newest ``lastFocusedAt`` is the live scope" — failing on the real
@@ -454,7 +374,6 @@ def test_store_and_scan_agree_on_pins_across_scopes(
 # account. These tests are the two accounts sharing a stamp.
 # ---------------------------------------------------------------------------
 
-OTHER_ACCOUNT = "9a49ffc8-a284-4c45-b20d-68ba8cc14930"  # arman26@gmail.com
 
 
 def test_a_stamp_copied_into_another_account_cannot_steal_the_scope(
@@ -492,10 +411,6 @@ def test_a_stamp_copied_into_another_account_cannot_steal_the_scope(
     assert scope == root / ACTIVE_ACCOUNT / ACTIVE_ORG, (
         "the scope was taken from an account the app is not signed into"
     )
-    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
-    assert entries["cli-shared"].is_pinned is False, (
-        "another account's stale pin reached the payload"
-    )
 
 
 def test_a_newer_stamp_in_another_account_cannot_steal_the_scope(
@@ -524,8 +439,6 @@ def test_a_newer_stamp_in_another_account_cannot_steal_the_scope(
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
 
     assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
-    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
-    assert entries["cli-newer"].is_pinned is False
 
 
 def test_the_org_is_still_ranked_by_focus_inside_the_signed_in_account(
@@ -554,8 +467,6 @@ def test_the_org_is_still_ranked_by_focus_inside_the_signed_in_account(
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
 
     assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
-    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
-    assert entries["cli-org"].is_pinned is False
 
 
 def test_signals_that_disagree_resolve_to_unknown_not_to_a_majority(
@@ -590,14 +501,6 @@ def test_signals_that_disagree_resolve_to_unknown_not_to_a_majority(
     assert "disagree" in resolution.reason
     assert ACTIVE_ACCOUNT in resolution.reason and OTHER_ACCOUNT in resolution.reason
 
-    ledger = _ledger(
-        tmp_path, {"local_dis.json": {"isPinned": True, "pinnedRank": 0}}
-    )
-    entries, _totals = read_session_index(root, ledger_path=ledger)
-    assert entries["cli-dis"].is_pinned is True, (
-        "an undeterminable scope cleared a pin the ledger held"
-    )
-
 
 def test_no_account_signal_at_all_is_unknown_with_a_reason(tmp_path: Path) -> None:
     """No statement from the app = UNKNOWN, and the reason says so in English."""
@@ -614,11 +517,6 @@ def test_no_account_signal_at_all_is_unknown_with_a_reason(tmp_path: Path) -> No
     resolution = resolve_active_scope(root)
     assert resolution.scope is None
     assert "no signed-in account" in resolution.reason
-    ledger = _ledger(
-        tmp_path, {"local_none.json": {"isPinned": True, "pinnedRank": 3}}
-    )
-    entries, _totals = read_session_index(root, ledger_path=ledger)
-    assert entries["cli-none"].is_pinned is True
 
 
 def test_the_store_applies_the_same_account_rule_as_the_scan(
@@ -656,14 +554,7 @@ def test_the_store_applies_the_same_account_rule_as_the_scan(
     snapshot = store.load()
     assert snapshot.active_scope == str(root / ACTIVE_ACCOUNT / ACTIVE_ORG)
     assert ACTIVE_ACCOUNT in (snapshot.active_scope_reason or "")
-    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
-        "cli-store": False
-    }
-
-    scan, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
-    assert {k: v.is_pinned for k, v in scan.items()} == {
-        k: v.is_pinned for k, v in snapshot.entries.items()
-    }
+    assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
 
 
 def test_an_account_signal_that_would_escape_the_index_tree_is_refused(
@@ -692,11 +583,6 @@ def test_an_account_signal_that_would_escape_the_index_tree_is_refused(
     resolution = resolve_active_scope(root)
     assert resolution.scope is None
     assert resolution.account is None
-    ledger = _ledger(
-        tmp_path, {"local_esc.json": {"isPinned": True, "pinnedRank": 0}}
-    )
-    entries, _totals = read_session_index(root, ledger_path=ledger)
-    assert entries["cli-esc"].is_pinned is True
 
 
 # ---------------------------------------------------------------------------
@@ -769,8 +655,6 @@ def test_the_org_the_app_names_wins_over_a_tied_focus_stamp(tmp_path: Path) -> N
     resolution = resolve_active_scope(root)
     assert resolution.org == ACTIVE_ORG, resolution.reason
     assert "last updated" in resolution.reason
-    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
-    assert entries["cli-tie"].is_pinned is True
 
 
 def test_a_tied_focus_stamp_with_no_stated_org_is_unknown_not_a_coin_flip(
@@ -796,12 +680,6 @@ def test_a_tied_focus_stamp_with_no_stated_org_is_unknown_not_a_coin_flip(
     assert resolution.org is None
     assert "coin flip" in resolution.reason
     assert str(tied) in resolution.reason
-
-    ledger = _ledger(
-        tmp_path, {"local_flip.json": {"isPinned": True, "pinnedRank": 2}}
-    )
-    entries, _totals = read_session_index(root, ledger_path=ledger)
-    assert entries["cli-flip"].is_pinned is True, "a coin flip cleared a real pin"
 
 
 def test_the_store_uses_the_stated_org_too(tmp_path: Path, monkeypatch: Any) -> None:
@@ -831,4 +709,3 @@ def test_the_store_uses_the_stated_org_too(tmp_path: Path, monkeypatch: Any) -> 
     store = _refresh(root, tmp_path / "store" / "index.sqlite3")
     snapshot = store.load()
     assert snapshot.active_scope == str(root / ACTIVE_ACCOUNT / ACTIVE_ORG)
-    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {"cli-sorg": True}

@@ -867,6 +867,7 @@ Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/codin
   with an opaque compound keyset cursor through
   `/coding-session/claude/labels/operations/{operation_id}` and proves final
   state through the operation's `/verify` endpoint.
+- **SUPERSEDED 2026-09-18 (P1 lane):** `isStarred` is NOT the pin; the pin is each account's IndexedDB starred list — see the 2026-09-18 change-log entry. The bullet below records the 2026-09-17 state.
 - **THE PIN IS THE APP'S OWN `isStarred`, IN THE SCOPE IT IS SIGNED INTO (2026-09-17).** The
   desktop app records a pin as `isStarred` on its own per-session index record, and pins are per
   `<account>/<org>` scope: this Mac carries 48 scopes whose pinned counts ranged 140–256 while the
@@ -1104,6 +1105,7 @@ as `cancelled`, outbox drained to zero with validated receipts.
 
 ## Change log
 
+- 2026-09-18 — **The pin is the app's own starred list, per account; `isStarred` is a diagnostic.** The sidebar draws pins from IndexedDB `keyval-store`/`keyval`/`store:pin-state:dframe-starred-code` (one list per account; empty-then-full on every switch, so an empty latest value is UNKNOWN). Measured that day: 206 unarchived records flagged `isStarred: true`, ~48 shown pinned, 56 in the list, 285 favourites on AI Matrx. `scripts/claude_code_pins_extract.py` now publishes `app_starred`; the session-sync agent keeps each account's last list in `~/.claude/claude-code-pin-observations.json` and pins the ledger to their union; `LivePins` (both readers) reads that union (`CLAUDE_PIN_OBSERVATIONS` overrides the path) — in it = pinned, observed and absent = explicit unpin, no observations = ledger stands. Guards: `tests/unit/test_claude_pin_truth.py`, `tests/unit/test_claude_pins_extractor.py`.
 - 2026-09-17 — **Every artifact PATH gets a placement of its own in AI Matrx.** Sharing a
   cloud row by content was not neutral: the web Artifacts panel lists `files.files` rows
   carrying `metadata.cli_session_id`, so a path aliased onto another session's row is

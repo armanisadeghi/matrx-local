@@ -25,8 +25,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-import sys
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -65,10 +64,9 @@ class ClaudeSessionIndexEntry:
     worktree_name: str | None
     is_archived: bool | None
     last_activity_at: int
-    # Pins + categories come from the canonical sidebar ledger, not the index
-    # records — the desktop app keeps them in its localStorage, which the
-    # machine's session-sync agent extracts into the ledger. None = the ledger
-    # has no opinion (never observed), so nothing is sent for that field.
+    # Pins come from every account's observed starred list (:class:`LivePins`),
+    # categories from the canonical sidebar ledger — never from the index
+    # records. None = no opinion (never observed), so nothing is sent.
     is_pinned: bool | None = None
     pinned_rank: int | None = None
     category: str | None = None
@@ -132,59 +130,106 @@ def read_sidebar_ledger(path: Path | None = None) -> dict[str, dict[str, Any]]:
 
 
 def record_is_starred(record: dict[str, Any]) -> bool | None:
-    """The app's pin field on one record. ``None`` = no pin key at all."""
+    """The record's ``isStarred`` flag. A DIAGNOSTIC — it is NOT the pin.
+
+    Measured 2026-09-18: the signed-in scope carried ``isStarred: true`` on 206
+    unarchived conversations while the app's sidebar showed ~48 pinned, and the
+    session-sync agent spreads the flag by copying whole records between the
+    account/org folders. The pin is the app's starred list (see
+    :class:`LivePins`).
+    """
     value = record.get("isStarred")
     return value if isinstance(value, bool) else None
 
 
+MAX_OBSERVATIONS_BYTES = 8_388_608
+
+
+def default_pin_observations_path() -> Path:
+    """Every account's last-observed starred list (the session-sync agent's)."""
+    configured = os.environ.get("CLAUDE_PIN_OBSERVATIONS")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".claude/claude-code-pin-observations.json"
+
+
+def read_pin_master(path: Path | None = None) -> dict[str, int] | None:
+    """THE MASTER SET: ``local_<id>.json`` -> best rank, or ``None`` = UNKNOWN.
+
+    The file is ``{"<account uuid>": {"local": ["local_<id>.json", ...], ...}}``,
+    written by ``~/.claude/sync-claude-code-sessions.py`` from each account's
+    starred list in the desktop app's IndexedDB
+    (``store:pin-state:dframe-starred-code``), the one list the app's sidebar
+    draws pins from. A conversation is pinned iff at least one account's list
+    holds it (Arman, 2026-09-18); its rank is the best (lowest) index any
+    account gives it. Absent, unreadable, or empty -> ``None``: the pin is
+    UNKNOWN and nothing may be concluded from it.
+    """
+    source = path or default_pin_observations_path()
+    try:
+        if source.stat().st_size > MAX_OBSERVATIONS_BYTES:
+            return None
+        data = json.loads(source.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    master: dict[str, int] = {}
+    for observation in data.values():
+        local = observation.get("local") if isinstance(observation, dict) else None
+        if not isinstance(local, list):
+            continue
+        for rank, name in enumerate(local):
+            if isinstance(name, str) and (name not in master or rank < master[name]):
+                master[name] = rank
+    return master or None
+
+
 @dataclass(frozen=True)
 class LivePins:
-    """The app's own pin opinion, per conversation, from the signed-in scope.
+    """The pin opinion, per conversation, from every account's starred list.
 
-    This is THE pin rule, held in one object because it has two callers that
-    must not drift: the full disk scan (:func:`read_session_index`) and the
-    persisted incremental store
-    (:mod:`app.services.coding_sessions.claude_index_store`), which is what
-    production actually reads. A fix applied to only one of them is invisible
-    in the app — the shape of this bug on 2026-09-17.
+    THE pin rule, held in one object because it has two callers that must not
+    drift: the full disk scan (:func:`read_session_index`) and the persisted
+    incremental store (:mod:`app.services.coding_sessions.claude_index_store`),
+    which is what production actually reads.
 
-    ``by_session`` maps ``cliSessionId`` -> the ``isStarred`` on that
-    conversation's record IN THE ACTIVE SCOPE: ``True``/``False`` explicitly,
-    or ``None`` when the record carries no pin key. A conversation with no
-    record in the active scope is absent from the mapping entirely — the
-    signed-in account has never seen it and cannot speak to its pin.
+    ``master`` maps the conversation's record filename (``local_<id>.json``,
+    the key the app's starred list, the sidebar ledger and the index records
+    share) -> its best rank across accounts, or is ``None`` when no account
+    has been observed — UNKNOWN, so the sidebar ledger stands exactly as
+    before. With observations present, a conversation absent from every
+    account's list is an explicit ``False``: that is how an unpin reaches AI
+    Matrx.
     """
 
-    by_session: dict[str, bool | None] = field(default_factory=dict)
+    master: dict[str, int] | None = None
+
+    @classmethod
+    def from_observations(cls, path: Path | None = None) -> "LivePins":
+        return cls(read_pin_master(path))
 
     @property
     def speaks(self) -> bool:
-        """Whether this scope may be believed when it says "not pinned".
-
-        A scope carrying no pin opinion at all is a freshly signed-in account,
-        not a person who unpinned everything: believing it would clear the
-        whole sidebar on the server in one pass.
-        """
-        return any(isinstance(value, bool) for value in self.by_session.values())
+        return self.master is not None
 
     def resolve(
         self,
-        session_id: str,
+        record_names: Iterable[str],
         ledger_pinned: object,
         ledger_rank: object,
     ) -> tuple[bool | None, int | None]:
         """``(is_pinned, pinned_rank)`` for one conversation.
 
-        The app's own field wins where it speaks; an absent pin key in a
-        live scope is an honest "not pinned" (the app documents an absent pin
-        record that way, and 14 of 14 sampled absences matched on
-        2026-09-17). Otherwise the sidebar ledger stands, so a machine whose
-        scope cannot be read keeps the pins it already had.
+        ``record_names`` are the filenames of every record carrying the
+        conversation (normally one name, copied into every account folder).
         """
+        if self.master is not None:
+            ranks = [self.master[name] for name in record_names if name in self.master]
+            if ranks:
+                return True, min(ranks)
+            return False, None
         rank = ledger_rank if isinstance(ledger_rank, int) else None
-        if self.speaks and session_id in self.by_session:
-            pinned = self.by_session[session_id] is True
-            return pinned, (rank if pinned else None)
         pinned_from_ledger = ledger_pinned if isinstance(ledger_pinned, bool) else None
         if not pinned_from_ledger:
             rank = None
@@ -256,8 +301,6 @@ def read_session_index(
     """
     sessions_root = root or default_sessions_root()
     totals = {"files": 0, "records": 0, "unreadable": 0}
-    scope = active_index_scope(sessions_root)
-    observed: dict[str, bool | None] = {}
     candidates_seen: list[tuple[Path, int, ClaudeSessionIndexEntry]] = []
     if not sessions_root.exists() or not sessions_root.is_dir():
         return {}, totals
@@ -285,13 +328,11 @@ def read_session_index(
         entry = entry_from_record(record)
         if entry is None:
             continue
-        if scope is not None and path.parent == scope:
-            observed[entry.cli_session_id] = record_is_starred(record)
         candidates_seen.append((path, info.st_mtime_ns, entry))
     entries = merge_entries(
         candidates_seen,
         ledger=read_sidebar_ledger(ledger_path),
-        live_pins=LivePins(observed),
+        live_pins=LivePins.from_observations(),
     )
     totals["records"] = len(entries)
     return entries, totals
@@ -324,25 +365,21 @@ def merge_entries(
     for session_id in paths:
         paths[session_id].sort()
     ledger = read_sidebar_ledger() if ledger is None else ledger
-    pins = live_pins if live_pins is not None else LivePins()
+    pins = live_pins if live_pins is not None else LivePins.from_observations()
     enriched: dict[str, ClaudeSessionIndexEntry] = {}
     for session_id, entry in entries.items():
         record_paths = tuple(paths[session_id])
         fields = ledger.get(record_paths[0].name, {}) if record_paths else {}
+        # THE APP'S STARRED LISTS WIN. Every account's list, as last observed,
+        # is the pin (in any list -> pinned; observed and in none -> an unpin
+        # AI Matrx must hear about). No observation at all is UNKNOWN and the
+        # ledger stands. The rule lives in :meth:`LivePins.resolve` so the
+        # store path shares it exactly.
         is_pinned, rank = pins.resolve(
-            session_id, fields.get("isPinned"), fields.get("pinnedRank")
+            {path.name for path in record_paths},
+            fields.get("isPinned"),
+            fields.get("pinnedRank"),
         )
-        # THE APP'S OWN PIN FIELD WINS. ``isStarred`` in the scope the app is
-        # signed into is the same state the app reports for the conversation,
-        # and its absence means "never pinned here" — the app documents an
-        # absent pin record as not pinned, and 14 of 14 sampled absences
-        # matched that on 2026-09-17. So an UNPIN is finally representable:
-        # the ledger's ``pinnedOrder`` source could only ever add.
-        #
-        # Unknown stays unknown, in the two cases where it genuinely is: no
-        # scope could be identified, or the signed-in account has no record of
-        # this conversation at all and cannot speak to its pin. The rule lives
-        # in :meth:`LivePins.resolve` so the store path shares it exactly.
         category = _clean_text(fields.get("categoryName"))
         # THE LEDGER WINS for the sidebar labels it carries. The machine's
         # session-sync agent (~/.claude/sync-claude-code-sessions.py) merges
@@ -380,6 +417,7 @@ __all__ = [
     "LivePins",
     "active_index_scope",
     "default_ledger_path",
+    "default_pin_observations_path",
     "record_focused_at",
     "record_is_starred",
     "ScopeResolution",
@@ -389,5 +427,6 @@ __all__ = [
     "entry_from_record",
     "merge_entries",
     "read_session_index",
+    "read_pin_master",
     "read_sidebar_ledger",
 ]

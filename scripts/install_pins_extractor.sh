@@ -13,7 +13,7 @@
 # Prove the change before installing it:
 #   ~/.claude/.sync-venv/bin/python3 scripts/claude_code_pins_extract.py \
 #       --dry-run --diff
-# A non-empty diff against the app's own isStarred set means STOP.
+# Anything but 0 differences against the app's own starred list means STOP.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

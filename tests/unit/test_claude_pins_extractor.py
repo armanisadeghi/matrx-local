@@ -4,31 +4,33 @@ Two programs decide whether a Claude Code conversation is pinned:
 
 * ``scripts/claude_code_pins_extract.py`` — installed as
   ``~/.claude/claude-code-pins-extract.py`` and run by the machine's launchd
-  session-sync agent, which writes the canonical sidebar ledger every pass.
-  Everything downstream of that ledger (rank, category, title, archive state,
-  and every other consumer) believes what it says.
+  session-sync agent every pass. It reads the signed-in account's starred list
+  from the app's IndexedDB; the agent records it per account in
+  ``~/.claude/claude-code-pin-observations.json`` and pins the ledger to the
+  union of every account's list.
 * ``app.services.coding_sessions.claude_session_index.LivePins`` — what this
-  engine applies when it reads the app's records itself.
+  engine applies, reading that same observations file.
 
-They drifted on 2026-09-17 and the ledger lied to every consumer: the engine
-had moved to the app's own ``isStarred`` field while the extractor still
-derived pins from ``pinnedOrder``, an append-only display-order array in the
-app's localStorage that can only ever ADD. Measured on Arman's Mac that day:
-the app showed 218 pinned, the extractor's ``pinnedOrder`` held 295 refs, and
-the ledger claimed 257 — 73 pinned that were not, 34 truly-pinned missing.
+Measured 2026-09-18 on Arman's Mac: the sidebar draws pins from ONE list per
+account — IndexedDB ``keyval-store`` / ``keyval`` /
+``store:pin-state:dframe-starred-code`` (``fixtures/claude_starred_pin_state.json``
+carries the value shape verbatim, including the empty-then-full write the app
+makes on every account switch). ``isStarred`` on the index records is NOT the
+pin: 206 unarchived records carried it while the sidebar showed ~48 and the
+list held 56 (``local_d5542855…`` "Prompt" and ``local_08264bc8…``
+"Extension vault" flagged, not pinned). The 2026-09-17 extractor used the flag
+and AI Matrx grew to 285 favourites vs 56 real.
 
-So this is the agreement guard. It builds a tree of records in the shape the
-app really writes (``fixtures/claude_index_records.json``, key names verbatim)
-and asserts that BOTH implementations return the same verdict for every
-conversation, including the two kinds of "unknown" that must never become
-``false``. Either side changing its rule, or the app renaming its field, fails
-here rather than quietly clearing someone's sidebar.
+So this is the agreement guard, plus the extractor's own UNKNOWN rules: an
+empty latest value, an unreadable store, or an account the app has not stated
+publishes NO list — never "unpin everything".
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +41,17 @@ from app.services.coding_sessions.claude_session_index import read_session_index
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXTRACTOR_PATH = REPO_ROOT / "scripts" / "claude_code_pins_extract.py"
 FIXTURE = Path(__file__).parent / "fixtures" / "claude_index_records.json"
+STARRED_FIXTURE = Path(__file__).parent / "fixtures" / "claude_starred_pin_state.json"
 
 ACTIVE_ACCOUNT = "d2eb2e1d-684b-41cc-a6a8-00bac619f70c"
 ACTIVE_ORG = "71840439-c44e-482f-a693-702306599d49"
-STALE_ORG = "8fa7c825-32a9-4a72-a6d5-f88377421373"
+OTHER_ACCOUNT = "9a49ffc8-a284-4c45-b20d-68ba8cc14930"  # arman26@gmail.com
+
+ONE = "local_11111111-1111-1111-1111-111111111111.json"
+TWO = "local_22222222-2222-2222-2222-222222222222.json"
+THREE = "local_33333333-3333-3333-3333-333333333333.json"
+FLAGGED = "local_44444444-4444-4444-4444-444444444444.json"  # "Prompt"
+PLAIN = "local_55555555-5555-5555-5555-555555555555.json"
 
 
 @pytest.fixture(scope="module")
@@ -57,232 +66,152 @@ def extractor() -> Any:
     return module
 
 
+def _versions() -> list[tuple[int, str]]:
+    """Every stored version of the starred key, as the IndexedDB reader yields."""
+    doc = json.loads(STARRED_FIXTURE.read_text())
+    return [(v["ldb_seq_no"], v["value"]) for v in doc["versions"]]
+
+
 def _record(**overrides: Any) -> dict[str, Any]:
-    """The real record shape, so a future app rename fails here loudly."""
     record = json.loads(FIXTURE.read_text())["record"]
     for key, value in overrides.items():
-        if value is _ABSENT:
+        if value is None:
             record.pop(key, None)
         else:
             record[key] = value
     return record
 
 
-class _Absent:
-    pass
-
-
-_ABSENT = _Absent()
-
-
-OTHER_ACCOUNT = "9a49ffc8-a284-4c45-b20d-68ba8cc14930"  # arman26@gmail.com
-
-
-def _sessions_root(tmp_path: Path) -> Path:
-    """The app's session-index root, a sibling of its own state files.
-
-    It is not ``tmp_path`` itself: ``claude_scope`` reads the signed-in account
-    from the app's plain JSON beside the index tree, so the fixture has to have
-    both in their real relationship.
-    """
-    root = tmp_path / "claude-code-sessions"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def _signed_in(tmp_path: Path, account: str = ACTIVE_ACCOUNT) -> None:
-    """Write the app's OWN statement of the account it is signed into."""
-    (tmp_path / "config.json").write_text(
-        json.dumps({"lastKnownAccountUuid": account})
-    )
+    (tmp_path / "config.json").write_text(json.dumps({"lastKnownAccountUuid": account}))
     (tmp_path / "cowork-enabled-cli-ops.json").write_text(
         json.dumps({"ownerAccountId": account})
     )
 
 
-def _write(
-    root: Path, *, org: str, session: str, account: str = ACTIVE_ACCOUNT, **fields: Any
-) -> Path:
-    scope = root / account / org
+def _tree(tmp_path: Path, flags: dict[str, bool | None]) -> Path:
+    """The session-index root with one record per name in the active scope."""
+    root = tmp_path / "claude-code-sessions"
+    scope = root / ACTIVE_ACCOUNT / ACTIVE_ORG
     scope.mkdir(parents=True, exist_ok=True)
-    path = scope / f"local_{session}.json"
-    record = _record(sessionId=f"local_{session}", cliSessionId=session, **fields)
-    path.write_text(json.dumps(record))
-    return path
+    for n, (name, starred) in enumerate(flags.items()):
+        sid = name.removesuffix(".json")
+        (scope / name).write_text(json.dumps(_record(
+            sessionId=sid, cliSessionId=sid.removeprefix("local_"),
+            isStarred=starred, lastFocusedAt=1789684595177 - n,
+        )))
+    _signed_in(tmp_path)
+    return root
 
 
-def _extractor_scope(extractor: Any, root: Path) -> Any:
-    """The extractor's scope, through the SHARED rule it imports."""
-    assert extractor.SCOPE_IMPORT_ERROR is None, extractor.SCOPE_IMPORT_ERROR
-    return extractor.resolve_active_scope(root)
+def _extract(extractor: Any, monkeypatch: Any, root: Path, versions: Any) -> dict:
+    monkeypatch.setattr(extractor, "read_localstorage", lambda _dir: {})
+    if isinstance(versions, Exception):
+        def _raise(_dir: str) -> list:
+            raise versions
+        monkeypatch.setattr(extractor, "read_starred_values", _raise)
+    else:
+        monkeypatch.setattr(extractor, "read_starred_values", lambda _dir: versions)
+    result = extractor.extract(
+        sessions_root=str(root), leveldb_dir=str(root.parent),
+        indexeddb_dir=str(root.parent),
+    )
+    assert result["ok"] is True
+    return result
 
 
-def _extractor_verdicts(extractor: Any, root: Path) -> dict[str, bool] | None:
-    resolution = _extractor_scope(extractor, root)
-    if resolution.scope is None:
-        return None
-    return extractor.pin_verdicts(extractor.scope_pin_states(str(resolution.scope)))
+def test_the_fixture_carries_the_app_value_shape(extractor: Any) -> None:
+    """If the app renames the key or the value shape, this fails first."""
+    doc = json.loads(STARRED_FIXTURE.read_text())
+    assert doc["key"] == extractor.STARRED_KEY == "store:pin-state:dframe-starred-code"
+    value = json.loads(doc["versions"][-1]["value"])
+    assert isinstance(value["state"]["starredIds"], list)
+    assert isinstance(value["updatedAt"], int)
 
 
-def _engine_verdicts(root: Path) -> dict[str, bool | None]:
-    """``local_<sessionId>.json`` -> ``is_pinned`` as this engine resolves it."""
-    entries, _totals = read_session_index(root, ledger_path=root / "no-ledger.json")
-    out: dict[str, bool | None] = {}
-    for entry in entries.values():
-        for path in entry.record_paths:
-            out[path.name] = entry.is_pinned
-    return out
+def test_the_latest_value_wins_over_the_account_switch_empty_write(
+    extractor: Any,
+) -> None:
+    """The app writes EMPTY then FULL on every switch; the full one is truth."""
+    latest = extractor.latest_starred(_versions())
+    assert latest["updated_at"] == 1789752420786
+    local, cloud = extractor.split_starred(latest["ids"])
+    assert local == [ONE, TWO, THREE]
+    assert cloud == ["session_01AAAAAAAAAAAAAAAAAAAAAA", "session_01BBBBBBBBBBBBBBBBBBBBBB"]
+    # Order of arrival is irrelevant: updatedAt decides, not the read order.
+    assert extractor.latest_starred(list(reversed(_versions())))["updated_at"] == 1789752420786
 
 
-# The cases the app really produces, and what the ONE rule says about each.
-#   pinned           the app's pin, set on the signed-in scope's record
-#   unpinned         the person removed the pin — an OBSERVED false
-#   never-pinned     no pin key at all: an honest false in a scope that speaks
-#   stale-scope-only pinned in a signed-OUT scope; that scope does not decide
-CASES = {
-    "11111111-1111-1111-1111-111111111111": True,   # isStarred: true
-    "22222222-2222-2222-2222-222222222222": False,  # isStarred: false
-    "33333333-3333-3333-3333-333333333333": False,  # no isStarred key
-}
-STALE_ONLY = "44444444-4444-4444-4444-444444444444"
+def test_an_empty_latest_value_is_unknown_never_unpin_everything(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """GUARD (c): the switch caught between its two writes publishes nothing."""
+    root = _tree(tmp_path, {ONE: True, TWO: False})
+    caught_mid_switch = _versions()[:2]  # full (older), then empty (latest)
+    result = _extract(extractor, monkeypatch, root, caught_mid_switch)
+    assert "app_starred" not in result
+    assert "pin_states" not in result, "an empty list was published as unpins"
+    assert "empty" in result["pin_note"]
 
 
-def _build_live_tree(root: Path) -> None:
-    _write(root, org=ACTIVE_ORG, session=list(CASES)[0],
-           isStarred=True, lastFocusedAt=1789684595177)
-    _write(root, org=ACTIVE_ORG, session=list(CASES)[1],
-           isStarred=False, lastFocusedAt=1789684595100)
-    _write(root, org=ACTIVE_ORG, session=list(CASES)[2],
-           isStarred=_ABSENT, lastFocusedAt=1789684595000)
-    # A signed-out scope that still holds a pin the person removed long ago —
-    # the exact shape that grew the server's pinned list to 276.
-    _write(root, org=STALE_ORG, session=list(CASES)[0],
-           isStarred=False, lastFocusedAt=1700000000000)
-    _write(root, org=STALE_ORG, session=STALE_ONLY,
-           isStarred=True, lastFocusedAt=1700000000001)
+def test_isstarred_is_not_the_pin_and_the_list_order_is_the_rank(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """GUARDS (a) and (b), at the extractor."""
+    root = _tree(tmp_path, {ONE: None, TWO: False, THREE: True, FLAGGED: True, PLAIN: None})
+    result = _extract(extractor, monkeypatch, root, _versions())
+    assert result["pin_source"] == "app_starred"
+    assert result["app_starred"]["account"] == ACTIVE_ACCOUNT
+    assert result["app_starred"]["local"] == [ONE, TWO, THREE]
+    assert result["pin_states"] == {
+        ONE: True, TWO: True, THREE: True, FLAGGED: False, PLAIN: False,
+    }
+    assert result["pinned"] == {ONE: 0, TWO: 1, THREE: 2}
+    assert result["counts"]["diag_isStarred_true_not_starred"] == 1
 
 
 def test_extractor_and_engine_agree_on_every_conversation(
-    extractor: Any, tmp_path: Path
+    extractor: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    root = _sessions_root(tmp_path)
-    _build_live_tree(root)
-    _signed_in(tmp_path)
-    published = _extractor_verdicts(extractor, root)
-    assert published is not None, "the live scope speaks; verdicts must be published"
-    engine = _engine_verdicts(root)
-    for session, expected in CASES.items():
-        name = f"local_{session}.json"
-        assert published[name] is expected, f"extractor disagrees on {name}"
-        assert engine[name] is expected, f"engine disagrees on {name}"
-    # The signed-out scope's record is not the signed-in account's opinion, so
-    # the extractor never publishes a verdict for it.
-    assert f"local_{STALE_ONLY}.json" not in published
+    """The observation the extractor publishes is exactly what the engine pins."""
+    root = _tree(tmp_path, {ONE: None, TWO: False, THREE: True, FLAGGED: True, PLAIN: None})
+    result = _extract(extractor, monkeypatch, root, _versions())
+    starred = result["app_starred"]
+    # What the session-sync agent writes for the signed-in account.
+    Path(os.environ["CLAUDE_PIN_OBSERVATIONS"]).write_text(json.dumps({
+        starred["account"]: {"local": starred["local"], "cloud": starred["cloud"]}
+    }))
+    entries, _ = read_session_index(root, ledger_path=root / "no-ledger.json")
+    engine = {e.record_paths[0].name: (e.is_pinned, e.pinned_rank) for e in entries.values()}
+    published = {
+        name: (pinned, result["pinned"].get(name))
+        for name, pinned in result["pin_states"].items()
+    }
+    assert engine == published
 
 
-def test_a_scope_with_no_pin_opinion_is_unknown_never_false(
-    extractor: Any, tmp_path: Path
+def test_an_account_the_app_has_not_stated_publishes_no_list(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A freshly signed-in account is not a person who unpinned everything."""
-    root = _sessions_root(tmp_path)
-    for index, session in enumerate(CASES):
-        _write(root, org=ACTIVE_ORG, session=session,
-               isStarred=_ABSENT, lastFocusedAt=1789684595000 + index)
-    _signed_in(tmp_path)
-    assert _extractor_verdicts(extractor, root) is None
-    engine = _engine_verdicts(root)
-    assert set(engine.values()) == {None}, engine
-
-
-def test_no_identifiable_scope_is_unknown_never_false(
-    extractor: Any, tmp_path: Path
-) -> None:
-    """No ``lastFocusedAt`` anywhere: nothing may be concluded about a pin."""
-    root = _sessions_root(tmp_path)
-    for session in CASES:
-        _write(root, org=ACTIVE_ORG, session=session,
-               isStarred=True, lastFocusedAt=_ABSENT)
-    _signed_in(tmp_path)
-    resolution = _extractor_scope(extractor, root)
-    assert resolution.scope is None
-    assert "lastFocusedAt" in resolution.reason
-    assert _extractor_verdicts(extractor, root) is None
-    engine = _engine_verdicts(root)
-    assert set(engine.values()) == {None}, engine
-
-
-def test_the_extractor_refuses_a_scope_stolen_by_a_copied_stamp(
-    extractor: Any, tmp_path: Path
-) -> None:
-    """THE 18:04 FAILURE, as a fixture: two accounts, one identical stamp.
-
-    On 2026-09-17 the extractor published dev@aimatrx.com's 218 starred
-    sessions as the pin truth while the app was signed into arman26@gmail.com
-    (228 stars) — 21 pins that were not pinned, 31 real pins missing — because
-    both readers ranked ``lastFocusedAt`` ACROSS accounts and that stamp is
-    copied between scopes. Here the signed-out account holds the stamp and the
-    stale pin; the extractor must publish the signed-in account's verdict, and
-    the engine must agree conversation for conversation.
-    """
-    root = _sessions_root(tmp_path)
-    shared_stamp = 1_789_714_654_476  # the real copied value
-    session = list(CASES)[0]
-    _write(root, org=ACTIVE_ORG, session=session,
-           isStarred=False, lastFocusedAt=shared_stamp)
-    _write(root, org=ACTIVE_ORG, session=session, account=OTHER_ACCOUNT,
-           isStarred=True, lastFocusedAt=shared_stamp)
-    _signed_in(tmp_path, ACTIVE_ACCOUNT)
-
-    resolution = _extractor_scope(extractor, root)
-    assert resolution.account == ACTIVE_ACCOUNT, resolution.reason
-    published = _extractor_verdicts(extractor, root)
-    assert published == {f"local_{session}.json": False}, published
-    engine = _engine_verdicts(root)
-    assert engine[f"local_{session}.json"] is False
-
-
-def test_the_extractor_publishes_nothing_when_the_signals_disagree(
-    extractor: Any, tmp_path: Path
-) -> None:
-    """Two of the app's own files naming different accounts = UNKNOWN."""
-    root = _sessions_root(tmp_path)
-    _write(root, org=ACTIVE_ORG, session=list(CASES)[0],
-           isStarred=True, lastFocusedAt=1789684595177)
-    (tmp_path / "config.json").write_text(
-        json.dumps({"lastKnownAccountUuid": ACTIVE_ACCOUNT})
-    )
+    root = _tree(tmp_path, {ONE: True})
     (tmp_path / "cowork-enabled-cli-ops.json").write_text(
         json.dumps({"ownerAccountId": OTHER_ACCOUNT})
-    )
-    resolution = _extractor_scope(extractor, root)
-    assert resolution.scope is None
-    assert "disagree" in resolution.reason
-    assert _extractor_verdicts(extractor, root) is None
+    )  # the app's own files now disagree
+    result = _extract(extractor, monkeypatch, root, _versions())
+    assert "app_starred" not in result
+    assert "pin_states" not in result
+    assert "UNKNOWN" in result["pin_note"]
 
 
-def test_pinned_order_supplies_rank_but_never_the_pin(extractor: Any) -> None:
-    """``pinnedOrder`` is a display order, and append-only: rank only.
-
-    It held 295 refs while the app showed 218 pinned. If its membership were
-    ever read as a pin again, the ledger would start lying the same way.
-    """
-    slice_key = extractor.ORDER_KEYS[0]
-    raw = {
-        slice_key: json.dumps(
-            {"value": {"pinnedOrder": [
-                "code:local_11111111-1111-1111-1111-111111111111",
-                "code:local_99999999-9999-9999-9999-999999999999",  # stale ref
-                "chat:something-else",                               # not a code session
-            ]}}
-        )
-    }
-    ranks = extractor.pinned_order_ranks(raw)
-    assert ranks == {
-        "local_11111111-1111-1111-1111-111111111111.json": 0,
-        "local_99999999-9999-9999-9999-999999999999.json": 1,
-    }
-    # And the rule that decides a pin cannot see this structure at all.
-    assert extractor.pin_verdicts({"local_99999999-9999-9999-9999-999999999999.json": None}) is None
+def test_an_unreadable_store_is_unknown_and_says_why(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    root = _tree(tmp_path, {ONE: True})
+    result = _extract(extractor, monkeypatch, root, OSError("copy failed"))
+    assert "app_starred" not in result
+    assert "pin_states" not in result
+    assert "could not be read" in result["pin_note"]
+    assert "copy failed" in result["pin_note"]
 
 
 def test_the_extractor_carries_no_second_copy_of_the_scope_rule() -> None:
@@ -326,17 +255,18 @@ def test_a_missing_scope_rule_publishes_no_verdict_and_says_why(
     extractor: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Nothing fails silently: no rule = no pin verdict, with the remedy."""
-    root = _sessions_root(tmp_path)
-    _write(root, org=ACTIVE_ORG, session=list(CASES)[0],
-           isStarred=True, lastFocusedAt=1789684595177)
-    _signed_in(tmp_path)
+    root = _tree(tmp_path, {ONE: True})
     monkeypatch.setattr(
         extractor,
         "SCOPE_IMPORT_ERROR",
         "the shared scope rule (claude_scope.py) is not importable",
     )
     monkeypatch.setattr(extractor, "read_localstorage", lambda _dir: {})
-    result = extractor.extract(sessions_root=str(root), leveldb_dir=str(tmp_path))
+    monkeypatch.setattr(extractor, "read_starred_values", lambda _dir: _versions())
+    result = extractor.extract(
+        sessions_root=str(root), leveldb_dir=str(tmp_path), indexeddb_dir=str(tmp_path)
+    )
     assert result["ok"] is True
     assert "pin_states" not in result, "a verdict was published with no rule"
+    assert "app_starred" not in result
     assert "claude_scope.py" in result["pin_note"]

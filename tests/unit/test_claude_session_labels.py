@@ -7,6 +7,7 @@ in AI Matrx cannot differ, and a rename in Claude Code must reach us.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -45,6 +46,7 @@ def _write_index_record(
     account: str = "acct-1",
     org: str = "org-1",
     cli_session_id: str,
+    pinned: bool | None = None,
     **fields: Any,
 ) -> Path:
     folder = root / account / org
@@ -70,7 +72,26 @@ def _write_index_record(
     }
     path = folder / f"local_{uuid4()}.json"
     path.write_text(json.dumps(record))
+    if pinned is not None:
+        _observe_pin(account, path.name, pinned)
     return path
+
+
+def _observe_pin(account: str, name: str, pinned: bool) -> None:
+    """Record ``name`` in (or out of) ``account``'s observed starred list.
+
+    The pin is the app's own starred list per account, as the machine's
+    session-sync agent last observed it (``CLAUDE_PIN_OBSERVATIONS``, isolated
+    per test by ``tests/conftest.py``) — never a record's ``isStarred`` flag.
+    """
+    path = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
+    data = json.loads(path.read_text()) if path.exists() else {}
+    local = data.setdefault(account, {"local": [], "cloud": []})["local"]
+    if pinned and name not in local:
+        local.append(name)
+    if not pinned and name in local:
+        local.remove(name)
+    path.write_text(json.dumps(data))
 
 
 async def _account_a() -> _AccountSnapshot:
@@ -633,14 +654,14 @@ async def test_unpin_reaches_a_claude_sdk_composite_binding(env) -> None:
     root = tmp_path / "claude-code-sessions"
     unpinned = str(uuid4())
     still_pinned = str(uuid4())
-    # One signed-in scope, the app's own pin field on each record.
+    # One signed-in account; its observed starred list decides each pin.
     _write_index_record(
         root,
         cli_session_id=unpinned,
         title="Stale composite pin",
         lastActivityAt=20,
         lastFocusedAt=1789684595177,
-        isStarred=False,
+        pinned=False,
     )
     _write_index_record(
         root,
@@ -648,7 +669,7 @@ async def test_unpin_reaches_a_claude_sdk_composite_binding(env) -> None:
         title="Genuinely pinned",
         lastActivityAt=21,
         lastFocusedAt=1789684595100,
-        isStarred=True,
+        pinned=True,
     )
     project_key = "claude-local:matrx-local"
     composites = {
@@ -731,7 +752,7 @@ async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> N
         title="Pinned here",
         lastActivityAt=30,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     _write_index_record(
         root,
@@ -739,7 +760,7 @@ async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> N
         title="Unpinned here",
         lastActivityAt=31,
         lastFocusedAt=1789684595176,
-        isStarred=False,
+        pinned=False,
     )
     _write_index_record(
         root,
@@ -747,7 +768,7 @@ async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> N
         title="Agreed",
         lastActivityAt=32,
         lastFocusedAt=1789684595175,
-        isStarred=True,
+        pinned=True,
     )
 
     index_reader = lambda: read_session_index(  # noqa: E731
@@ -839,7 +860,7 @@ async def test_a_field_ai_matrx_has_never_observed_is_not_a_divergence(
         title="Pinned here, unknown there",
         lastActivityAt=40,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     index_reader = lambda: read_session_index(  # noqa: E731
         root, ledger_path=tmp_path / "no-ledger.json"
@@ -895,7 +916,7 @@ async def test_the_status_line_states_the_pin_divergence_and_the_last_pass(
         title="Pinned here",
         lastActivityAt=50,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     _write_index_record(
         root,
@@ -903,7 +924,7 @@ async def test_the_status_line_states_the_pin_divergence_and_the_last_pass(
         title="Unpinned here",
         lastActivityAt=51,
         lastFocusedAt=1789684595176,
-        isStarred=False,
+        pinned=False,
     )
     index_reader = lambda: read_session_index(  # noqa: E731
         root, ledger_path=tmp_path / "no-ledger.json"
@@ -1149,7 +1170,7 @@ async def test_the_echo_alone_can_never_produce_a_divergence(env: Any) -> None:
         title="Pinned here, echo agrees, favourite does not",
         lastActivityAt=60,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     index_reader = lambda: read_session_index(  # noqa: E731
         root, ledger_path=tmp_path / "no-ledger.json"
@@ -1185,7 +1206,7 @@ async def test_the_live_refuted_row_now_produces_an_unpin_free_pin(env: Any) -> 
         title="The live row",
         lastActivityAt=61,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     index_reader = lambda: read_session_index(  # noqa: E731
         root, ledger_path=tmp_path / "no-ledger.json"
@@ -1315,7 +1336,7 @@ async def test_a_server_that_never_reports_favourites_is_unknown_not_zero(
         title="Pinned here, server silent",
         lastActivityAt=70,
         lastFocusedAt=1789684595177,
-        isStarred=True,
+        pinned=True,
     )
     index_reader = lambda: read_session_index(  # noqa: E731
         root, ledger_path=tmp_path / "no-ledger.json"

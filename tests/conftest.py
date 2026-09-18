@@ -333,6 +333,10 @@ def _claude_dirs_are_never_the_real_ones(
             monkeypatch.setenv(name, str(target))
     if "CLAUDE_SIDEBAR_LEDGER" not in os.environ:
         monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(root / "sidebar-ledger.json"))
+    if "CLAUDE_PIN_OBSERVATIONS" not in os.environ:
+        monkeypatch.setenv(
+            "CLAUDE_PIN_OBSERVATIONS", str(root / "pin-observations.json")
+        )
 
 
 @pytest.fixture(autouse=True)

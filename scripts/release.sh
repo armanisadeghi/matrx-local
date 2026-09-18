@@ -854,7 +854,7 @@ fi
 # screams; it says UNMEASURED-for-report loudly rather than pretending it filed.
 info "Scanning and reporting mandate references (non-blocking)..."
 if command -v uvx >/dev/null 2>&1; then
-    uvx --from matrx-mandate-scan==0.2.1 matrx-mandate-scan check || true
+    uvx --from matrx-mandate-scan==0.2.2 matrx-mandate-scan check || true
     ok "Mandate references scanned (findings above, if any, never block)."
 else
     warn "uvx not found — this release reported NO mandate references. Install uv (https://astral.sh/uv) so the fleet board stops calling matrx-local unmeasured."

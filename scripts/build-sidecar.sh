@@ -70,7 +70,7 @@ fi
 echo ""
 echo "── Mandate references (loud, non-blocking) ──────────────────────────────"
 if command -v uvx &>/dev/null; then
-    uvx --from matrx-mandate-scan==0.2.1 matrx-mandate-scan check || true
+    uvx --from matrx-mandate-scan==0.2.2 matrx-mandate-scan check || true
 else
     echo "WARNING: uvx not found, so this sidecar build reported NO mandate references." >&2
     echo "         Install uv (https://astral.sh/uv) so the fleet board stops calling" >&2

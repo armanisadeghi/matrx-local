@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The standalone helper's app bundle. It exists so the person has something to open in
+         Applications and so macOS can bind the keychain item's ACL to a stable code identity;
+         the binary inside is byte-identical to the one the desktop app ships as a sidecar. -->
+    <key>CFBundleName</key>
+    <string>AI Matrx Home Connection</string>
+    <key>CFBundleDisplayName</key>
+    <string>AI Matrx Home Connection</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.aimatrx.home-connection</string>
+    <key>CFBundleExecutable</key>
+    <string>matrx-egress</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- A menu-bar-only app: no Dock icon, no window, no app switcher entry. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+</dict>
+</plist>

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Debian postinst — runs as root, so it can only say what the person should run.
+#
+# `systemctl --user enable` needs the person's own session bus; root cannot enable a user unit for
+# somebody else. Printing the one command is honest; pretending to have enabled it would not be.
+set -e
+cat <<'MESSAGE'
+
+AI Matrx Home Connection is installed.
+
+To connect this computer to your AI Matrx account, run:
+
+    matrx-egress pair
+
+To have it start whenever you sign in, run:
+
+    systemctl --user enable --now matrx-egress
+
+MESSAGE
+exit 0

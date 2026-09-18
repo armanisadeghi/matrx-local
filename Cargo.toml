@@ -12,6 +12,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/matrx-egress",
     "crates/matrx-sync",
     "crates/matrx-syncd",
     "desktop/src-tauri",

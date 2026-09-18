@@ -1,0 +1,353 @@
+# Build and package the AI Matrx Home Connection helper (matrx-egress).
+#
+# The helper ships two ways (contract rule 6, "One helper implementation"): as a Tauri sidecar
+# inside the desktop app — release.yml's job, once another change declares it in tauri.conf.json —
+# and as the standalone installers this workflow builds.
+#
+# Three products, one binary:
+#
+#   AI-Matrx-Home-Connection-macos.pkg            universal (arm64 + x86_64), signed + notarized
+#   AI-Matrx-Home-Connection-windows-setup.exe    NSIS, per-user
+#   ai-matrx-home-connection_amd64.deb            cargo-deb, systemd USER unit
+#
+# Every asset is uploaded to BOTH a versioned tag (`egress-v<version>`) and the moving
+# `egress-latest` release that `residential_egress.helper_download_base_url` points at, so the
+# download links on /connect-computer never change and history is still kept.
+#
+# Signing secrets are the desktop app's, by the SAME names release.yml uses:
+# APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY (Developer ID
+# Application), APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID. A .pkg additionally needs a Developer ID
+# *Installer* identity, which this repo does not have a secret for: when
+# APPLE_INSTALLER_SIGNING_IDENTITY is absent the pkg is built UNSIGNED, notarization is skipped,
+# and the job summary says so in plain words rather than shipping something that quietly fails
+# Gatekeeper on a user's Mac.
+
+name: Egress helper
+
+on:
+  push:
+    tags:
+      - "egress-v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built installers to the egress-latest release"
+        type: boolean
+        default: true
+
+concurrency:
+  group: matrx-local-egress-helper
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ── The gate every platform build waits on ───────────────────────────────────
+  verify:
+    name: Tests and lints
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> desktop/src-tauri/target"
+
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          # libdbus/libsecret: the Secret Service store `keyring` resolves on Linux.
+          sudo apt-get install -y libdbus-1-dev libsecret-1-dev pkg-config
+
+      - name: Resolve the version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="matrx-egress"))')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=egress-v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "matrx-egress $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      # The unit battery, and the two `#[ignore]` proofs are deliberately NOT run here: they reach
+      # the public internet, and a test that depends on somebody else's site is not a gate.
+      - name: cargo test
+        run: cargo test -p matrx-egress
+
+      - name: cargo clippy
+        run: cargo clippy -p matrx-egress --all-targets -- -D warnings
+
+  # ── macOS: a universal binary inside an app bundle, inside a .pkg ────────────
+  macos:
+    name: macOS installer
+    needs: verify
+    runs-on: macos-15
+    # Job-level, because a step's `if:` can read `env` but not `secrets` — and an unsigned build
+    # must be a stated outcome, not a step that fails on an empty secret.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> desktop/src-tauri/target"
+
+      - name: Build both architectures
+        run: |
+          ./scripts/build-egress.sh --target aarch64-apple-darwin
+          ./scripts/build-egress.sh --target x86_64-apple-darwin
+
+      - name: Make one universal binary
+        run: |
+          set -euo pipefail
+          TARGET_DIR="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          mkdir -p dist
+          lipo -create \
+            "$TARGET_DIR/aarch64-apple-darwin/release/matrx-egress" \
+            "$TARGET_DIR/x86_64-apple-darwin/release/matrx-egress" \
+            -output dist/matrx-egress
+          lipo -info dist/matrx-egress
+
+      - name: Import the Apple certificate
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+      - name: Assemble the app bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="dist/root/Applications/AI Matrx Home Connection.app"
+          mkdir -p "$APP/Contents/MacOS"
+          cp crates/matrx-egress/packaging/Info.plist "$APP/Contents/Info.plist"
+          cp dist/matrx-egress "$APP/Contents/MacOS/matrx-egress"
+          chmod +x "$APP/Contents/MacOS/matrx-egress"
+          # The CLI lives beside it as a symlink, so `matrx-egress status` works in a terminal and
+          # there is still exactly ONE binary on the machine — two copies could drift.
+          mkdir -p dist/root/usr/local/bin
+          ln -sf "/Applications/AI Matrx Home Connection.app/Contents/MacOS/matrx-egress" \
+            dist/root/usr/local/bin/matrx-egress
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_SIGNING_IDENTITY" "$APP/Contents/MacOS/matrx-egress"
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+          else
+            echo "NOT SIGNED: APPLE_SIGNING_IDENTITY is not set, so this build is for testing only." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build the .pkg
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/scripts
+          cp crates/matrx-egress/packaging/macos-postinstall.sh dist/scripts/postinstall
+          chmod +x dist/scripts/postinstall
+          pkgbuild \
+            --root dist/root \
+            --scripts dist/scripts \
+            --identifier com.aimatrx.home-connection \
+            --version "$VERSION" \
+            --install-location / \
+            dist/unsigned.pkg
+          if [[ -n "${APPLE_INSTALLER_SIGNING_IDENTITY:-}" ]]; then
+            productsign --sign "$APPLE_INSTALLER_SIGNING_IDENTITY" \
+              dist/unsigned.pkg "dist/AI-Matrx-Home-Connection-macos.pkg"
+            pkgutil --check-signature "dist/AI-Matrx-Home-Connection-macos.pkg"
+            echo "signed=true" >> "$GITHUB_ENV"
+          else
+            mv dist/unsigned.pkg "dist/AI-Matrx-Home-Connection-macos.pkg"
+            echo "signed=false" >> "$GITHUB_ENV"
+            {
+              echo "### The macOS installer is NOT signed"
+              echo ""
+              echo "A .pkg needs a **Developer ID Installer** identity, and this repository has no"
+              echo "\`APPLE_INSTALLER_SIGNING_IDENTITY\` secret. The binary inside is signed with the"
+              echo "app identity, but macOS will refuse to open the installer itself until the"
+              echo "secret is set. Set it to ship an installer people can actually open."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Notarize and staple
+        if: ${{ env.signed == 'true' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          PKG="dist/AI-Matrx-Home-Connection-macos.pkg"
+          RESULT="$(xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --output-format json)"
+          jq -e '.status == "Accepted"' <<< "$RESULT" >/dev/null || {
+            echo "Apple did not accept the installer for notarization" >&2
+            exit 1
+          }
+          xcrun stapler staple "$PKG"
+          xcrun stapler validate "$PKG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: egress-macos
+          path: dist/AI-Matrx-Home-Connection-macos.pkg
+          if-no-files-found: error
+
+  # ── Windows: NSIS, per-user ──────────────────────────────────────────────────
+  windows:
+    name: Windows installer
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> desktop/src-tauri/target"
+
+      - name: Build
+        shell: bash
+        run: cargo build -p matrx-egress --release
+
+      - name: Build the installer
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          TARGET_DIR="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          mkdir -p dist
+          cp "$TARGET_DIR/release/matrx-egress.exe" dist/matrx-egress.exe
+          cp crates/matrx-egress/packaging/windows-installer.nsi dist/installer.nsi
+          cd dist
+          # NSIS is preinstalled on the GitHub Windows image; if that ever changes this fails
+          # loudly rather than producing no installer and a green tick.
+          "/c/Program Files (x86)/NSIS/makensis.exe" -V3 "-DVERSION=$VERSION" installer.nsi
+          ls -l AI-Matrx-Home-Connection-windows-setup.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: egress-windows
+          path: dist/AI-Matrx-Home-Connection-windows-setup.exe
+          if-no-files-found: error
+
+  # ── Linux: a .deb with the systemd user unit ─────────────────────────────────
+  linux:
+    name: Linux package
+    needs: verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> desktop/src-tauri/target"
+
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libsecret-1-dev pkg-config
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build the .deb
+        run: |
+          set -euo pipefail
+          ./scripts/build-egress.sh
+          # `--no-build`: the binary the assets point at is the one build-egress.sh just made, so
+          # cargo-deb packages exactly what was tested rather than rebuilding with other flags.
+          cargo deb -p matrx-egress --no-build --output dist/ai-matrx-home-connection_amd64.deb
+          dpkg --contents dist/ai-matrx-home-connection_amd64.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: egress-linux
+          path: dist/ai-matrx-home-connection_amd64.deb
+          if-no-files-found: error
+
+  # ── Publish: the versioned tag AND the moving egress-latest release ──────────
+  publish:
+    name: Publish installers
+    needs: [verify, macos, windows, linux]
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload to both releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+
+          NOTES="AI Matrx Home Connection $VERSION — the helper that lends a computer's internet connection to its owner's own AI Matrx work, and only when a site has blocked AI Matrx's servers."
+
+          # The versioned release: history, never moved.
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "Home Connection $VERSION" --notes "$NOTES"
+          gh release upload "$TAG" --clobber dist/*
+
+          # The moving release the download buttons point at
+          # (`residential_egress.helper_download_base_url`). Its tag is retargeted at this commit
+          # so a download is always of THIS build.
+          if gh release view egress-latest >/dev/null 2>&1; then
+            gh release edit egress-latest --target "$GITHUB_SHA" --notes "$NOTES"
+          else
+            gh release create egress-latest --target "$GITHUB_SHA" \
+              --title "Home Connection (latest)" --notes "$NOTES"
+          fi
+          gh release upload egress-latest --clobber dist/*
+
+          {
+            echo "### Published"
+            echo ""
+            echo "| Asset | Where |"
+            echo "|---|---|"
+            for FILE in dist/*; do
+              echo "| \`$(basename "$FILE")\` | \`$TAG\` and \`egress-latest\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

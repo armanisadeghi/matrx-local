@@ -1,0 +1,17 @@
+# The .deb's systemd USER unit — never a system service.
+#
+# The helper lends ONE person's internet connection and holds ONE person's credential in their
+# Secret Service keyring. A system service would run as root, with no keyring and nobody to pair
+# as. The package's postinst prints the one command that enables it for the person installing it.
+[Unit]
+Description=AI Matrx Home Connection
+Documentation=https://aimatrx.com/connect-computer
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/matrx-egress --no-tray
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

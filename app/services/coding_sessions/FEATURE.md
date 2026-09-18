@@ -501,6 +501,34 @@ held 1,671 of those conversations:
   `read_usage_increment(seen_keys=…)`; only the session being read is ever loaded (worst
   case on this Mac: 1,914 keys), a rewritten transcript drops its keys with its rows,
   and there is no N to exceed.
+- **A SUB-AGENT'S TURNS ARE THE SESSION'S SPEND (2026-09-18, CS-33/F5).** Arman:
+  *"sub-agent turns ARE the session's spend. Count every transcript under a session (the
+  nested */*/… .jsonl), attribute it to the parent session, and show the split (main vs
+  sub-agents) as a column so nobody mistakes it."* Claude Code writes a session's own
+  turns to `<project>/<session>.jsonl` and every sub-agent it runs to
+  `<project>/<session>/subagents/[workflows/<wf>/]agent-<id>.jsonl` — 6,447 of this Mac's
+  8,147 transcripts on 2026-09-18, 419 under one session. `walk_transcripts` globbed
+  `*/*.jsonl`, exactly one level, so the Usage screen reported roughly a QUARTER of the
+  real spend (measured over 30 days: 120,479 → 451,748 requests, 40.1 B → 110.2 B
+  cache-read tokens). The walk now descends to any depth and returns a `TranscriptFile`
+  carrying the parent `session_id` (the directory name, which every record repeats in its
+  own `sessionId` field) and a `lane` of `main` / `subagent`. The usage tables are keyed by
+  TRANSCRIPT (`SCHEMA_VERSION = 3`) so each file has its own byte cursor and can be
+  rewritten without erasing its siblings, while `transcript_usage_key` is queried by
+  SESSION, so a turn is deduplicated in the PARENT's key space and can never be counted
+  twice because it appeared in two files. `usage_rows` sums a session's transcripts back
+  together grouped by `(session, lane, hour, model)`; every `UsageRow` carries
+  `main_requests` / `main_total_tokens` / `subagent_requests` / `subagent_total_tokens`
+  (they always add to the row's own totals) and `metrics.subagents` says whether the
+  provider records the split at all — the tab shows a `Sub-agent tokens` column with the
+  share as a percent only when it does, never a zero pretending to be a measurement.
+  **The fixed-depth glob was a CLASS:** `sync_truth_reader.transcript_paths` globbed
+  `<session>/*.jsonl` and found no sidechains at all; the history importer and the
+  local-runtime mirror walked `subagents/` with one `iterdir` and missed the 286 files
+  under `subagents/workflows/`. All four are fixed, and the importer's recursion is the
+  one shared `_subagent_streams` helper. `local_runtime._find_transcript` still matches
+  `*/<id>.jsonl` on purpose: native resume resumes the parent session, not a sub-agent
+  stream.
 - **Refresh announces itself and never blanks the list (2026-09-14).** Arman: *"The
   refresh button, when you click it, does nothing. It just stares at you."* The
   overview read is slow by nature (36s cold, ~4.3s warm on this Mac), so the rules
@@ -700,7 +728,9 @@ the ordered publisher; neither repair silently drops an event.
 
 - **The source is Claude's documented local JSONL.** Main transcripts come from
   `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<project>/<session>.jsonl`; subordinate JSONL files
-  become independent `subagent:<id>` streams.
+  become independent `subagent:<id>` streams, where `<id>` is the file's path under
+  `subagents/` with the extension dropped (`agent-x`, or `workflows/wf_y/agent-x` for a
+  workflow's sub-agent — any depth, via `_subagent_streams`).
 - **Review is privacy-minimal.** It never returns transcript text or a raw directory. It exposes a
   project display basename plus an opaque SHA-256 project key. Preparation hashes the exact bytes of
   every selected main/subagent stream. The import reopens bounded regular files without following

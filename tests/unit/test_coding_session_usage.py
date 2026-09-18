@@ -86,6 +86,39 @@ def _fixture_root(tmp_path: Path) -> Path:
     return tmp_path / "projects"
 
 
+SUBAGENT_FIXTURES = FIXTURES / "subagents"
+
+
+def _subagent_sources() -> list[tuple[str, Path]]:
+    """(parent session id, transcript) for every real sub-agent fixture.
+
+    The fixture tree mirrors the real layout exactly, so the parent id is the
+    directory Claude nests the streams under — the same id the records' own
+    ``sessionId`` field carries (asserted below, never assumed).
+    """
+    found: list[tuple[str, Path]] = []
+    for path in sorted(SUBAGENT_FIXTURES.rglob("*.jsonl")):
+        found.append((path.relative_to(SUBAGENT_FIXTURES).parts[0], path))
+    return found
+
+
+def _nested_fixture_root(tmp_path: Path) -> Path:
+    """The real layout: main transcripts PLUS the sub-agent streams under them.
+
+    ``<project>/<session>.jsonl`` for the main turn stream and
+    ``<project>/<session>/subagents/[workflows/<wf>/]agent-<id>.jsonl`` for
+    every sub-agent turn the session spent tokens on (6,447 of this Mac's
+    8,147 transcripts on 2026-09-18).
+    """
+    root = _fixture_root(tmp_path)
+    project = next(root.iterdir())
+    for _parent, source in _subagent_sources():
+        target = project / source.relative_to(SUBAGENT_FIXTURES)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    return root
+
+
 def _totals_of(cells: dict) -> Counter[str]:
     total: Counter[str] = Counter()
     for counter in cells.values():
@@ -270,6 +303,148 @@ def test_a_rewritten_transcript_restarts_from_zero(tmp_path: Path) -> None:
     assert "x|y" not in increment.new_keys
 
 
+
+# ── sub-agent turns are the session's spend (CS-33/F5) ─────────────────────
+#
+# "sub-agent turns ARE the session's spend. Count every transcript under a
+# session (the nested */*/… .jsonl), attribute it to the parent session, and
+# show the split (main vs sub-agents) as a column so nobody mistakes it"
+# (Arman, 2026-09-18). Until this lane the walk globbed ``*/*.jsonl`` — one
+# directory level — and reached 1,665 of this Mac's 8,147 transcripts.
+
+
+def test_the_fixture_subagents_are_real_streams_of_their_parent() -> None:
+    """The attribution comes from the files, not from a guessed mapping."""
+    sources = _subagent_sources()
+    assert sources, "no sub-agent fixture; the nesting guards below prove nothing"
+    depths = {len(path.relative_to(SUBAGENT_FIXTURES).parts) for _parent, path in sources}
+    assert max(depths) > 3, f"no fixture deeper than <session>/subagents/<file>: {depths}"
+    for parent, path in sources:
+        ids = {
+            json.loads(raw).get("sessionId")
+            for raw in path.read_text().splitlines()
+            if raw.strip()
+        } - {None}
+        assert ids == {parent}, f"{path.name} says {ids}, nested under {parent}"
+        expected, lines, _models, _days = expected_usage(path)
+        assert expected["requests"], f"{path.name} has no priced turn"
+        assert lines > expected["requests"], f"{path.name} has no duplicate lines"
+
+
+def test_the_walk_reaches_every_transcript_under_a_session(tmp_path: Path) -> None:
+    root = _nested_fixture_root(tmp_path)
+    found = walk_transcripts(root)
+    on_disk = {path.resolve() for path in root.rglob("*.jsonl")}
+    assert {entry.path.resolve() for entry in found.values()} == on_disk
+    nested = {
+        entry.session_id
+        for entry in found.values()
+        if entry.kind == "subagent"
+    }
+    assert nested == {parent for parent, _path in _subagent_sources()}
+
+
+def test_a_sessions_usage_includes_its_subagent_turns(tmp_path: Path) -> None:
+    root = _nested_fixture_root(tmp_path)
+    store = ClaudeIndexStore(tmp_path / "index.sqlite3")
+    refresh_transcripts_sync(store, sidebar_ids=set(), root=root)
+    # The plain rule, per session: every transcript nested under it counts.
+    expected: dict[str, Counter[str]] = {}
+    for source in FIXTURES.glob("*.jsonl"):
+        expected.setdefault(source.stem, Counter()).update(expected_usage(source)[0])
+    subagent_expected: dict[str, Counter[str]] = {}
+    for parent, source in _subagent_sources():
+        counts = expected_usage(source)[0]
+        expected.setdefault(parent, Counter()).update(counts)
+        subagent_expected.setdefault(parent, Counter()).update(counts)
+    stored = store.usage_rows("0000-00-00T00", "9999-12-31T23")
+    got: dict[str, Counter[str]] = {}
+    for row in stored:
+        bucket = got.setdefault(row["session_id"], Counter())
+        for name in (*USAGE_FIELDS, "requests"):
+            bucket[name] += row[name]
+    # The numbers first: a walk that stops one level down misses these.
+    assert got == expected
+    # Then the split, per session, on the same rows.
+    got_subagent: dict[str, Counter[str]] = {}
+    for row in stored:
+        if row["lane"] != "subagent":
+            continue
+        lane = got_subagent.setdefault(row["session_id"], Counter())
+        for name in (*USAGE_FIELDS, "requests"):
+            lane[name] += row[name]
+    assert got_subagent == subagent_expected
+
+
+def test_the_report_splits_main_from_subagent_spend(tmp_path: Path) -> None:
+    root = _nested_fixture_root(tmp_path)
+    store = ClaudeIndexStore(tmp_path / "index.sqlite3")
+    refresh_transcripts_sync(store, sidebar_ids=set(), root=root)
+    cells = store.usage_rows("0000-00-00T00", "9999-12-31T23")
+    report = claude_report(
+        cells,
+        start=dt.datetime(2026, 8, 1, tzinfo=UTC),
+        end=dt.datetime(2026, 10, 1, tzinfo=UTC),
+        tz_offset_minutes=0,
+        status=store.usage_status(),
+        prices={},
+        limits=claude_limits(_limits_fixture(tmp_path)),
+    )
+    UsageReport.model_validate(report.model_dump())
+    assert report.metrics.subagents is True
+    sub_expected: Counter[str] = Counter()
+    for _parent, source in _subagent_sources():
+        sub_expected.update(expected_usage(source)[0])
+    sub_tokens = sum(
+        sub_expected[name] for name in USAGE_FIELDS
+    )
+    # The totals and EVERY grouping expose the split, and it adds up.
+    assert report.totals.subagent_requests == sub_expected["requests"]
+    assert report.totals.subagent_total_tokens == sub_tokens
+    assert report.totals.main_requests == report.totals.requests - sub_expected["requests"]
+    assert report.totals.main_total_tokens == report.totals.total_tokens - sub_tokens
+    for grouping in (report.by_day, report.by_model, report.by_session, report.by_project):
+        assert sum(row.subagent_requests for row in grouping) == sub_expected["requests"]
+        for row in grouping:
+            assert row.main_requests + row.subagent_requests == row.requests
+            assert row.main_total_tokens + row.subagent_total_tokens == row.total_tokens
+    # A session whose sub-agents did the spending says so on its own row.
+    parents = {parent for parent, _path in _subagent_sources()}
+    rows = {row.key: row for row in report.by_session}
+    for parent in parents:
+        assert rows[parent].subagent_requests > 0, parent
+
+
+def test_a_subagent_turn_is_deduped_in_the_parents_key_space(tmp_path: Path) -> None:
+    """The same stream copied to a second path under the parent counts ONCE.
+
+    Claude re-writes a sub-agent's turns, and a per-file key space would count
+    every repeat again. The keys belong to the PARENT session.
+    """
+    root = _nested_fixture_root(tmp_path)
+    project = next(root.iterdir())
+    parent, source = next(
+        (parent, path) for parent, path in _subagent_sources() if (project / parent).is_dir()
+    )
+    twin = project / parent / "subagents" / "workflows" / "wf_twin" / source.name
+    twin.parent.mkdir(parents=True, exist_ok=True)
+    twin.write_bytes(source.read_bytes())
+    store = ClaudeIndexStore(tmp_path / "index.sqlite3")
+    refresh_transcripts_sync(store, sidebar_ids=set(), root=root)
+    counted: Counter[str] = Counter()
+    for row in store.usage_rows("0000-00-00T00", "9999-12-31T23"):
+        if row["session_id"] != parent:
+            continue
+        for name in (*USAGE_FIELDS, "requests"):
+            counted[name] += row[name]
+    once: Counter[str] = Counter()
+    for path in [FIXTURES / f"{parent}.jsonl", *(p for q, p in _subagent_sources() if q == parent)]:
+        if path.exists():
+            once.update(expected_usage(path)[0])
+    for name in (*USAGE_FIELDS, "requests"):
+        assert counted[name] == once[name], name
+
+
 # ── the store and the refresh: no second walk, bounded, resumable ───────────
 
 
@@ -295,11 +470,11 @@ def test_refresh_transcripts_lands_usage_in_the_same_pass(tmp_path: Path) -> Non
 
 
 def test_usage_read_is_bounded_and_resumes_next_refresh(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
+    root = _nested_fixture_root(tmp_path)
     store = ClaudeIndexStore(tmp_path / "index.sqlite3")
     store.ensure_ready()
     found = walk_transcripts(root)
-    smallest = min(size for size, _m, _p in found.values())
+    smallest = min(entry.size for entry in found.values())
     first = refresh_usage_sync(store, found, byte_budget=smallest + 10)
     assert first["budget_exhausted"]
     assert first["pending_sessions"] > 0
@@ -318,6 +493,8 @@ def test_usage_read_is_bounded_and_resumes_next_refresh(tmp_path: Path) -> None:
             got[name] += row[name]
     expected: Counter[str] = Counter()
     for source in FIXTURES.glob("*.jsonl"):
+        expected.update(expected_usage(source)[0])
+    for _parent, source in _subagent_sources():
         expected.update(expected_usage(source)[0])
     assert got == expected
 
@@ -421,7 +598,10 @@ def test_codex_and_claude_reports_are_one_shape(tmp_path: Path) -> None:
     for payload in (codex, claude):
         UsageReport.model_validate(payload)
     assert _keys(codex) == _keys(claude)
-    assert codex["metrics"] == claude["metrics"] == {"tokens": True, "requests": True, "cost": True, "lines": False}
+    # One shape, and each provider says what IT records: only Claude Code
+    # keeps sub-agent turns on this Mac, so only its column exists.
+    assert codex["metrics"] == {"tokens": True, "requests": True, "cost": True, "lines": False, "subagents": False}
+    assert claude["metrics"] == {"tokens": True, "requests": True, "cost": True, "lines": False, "subagents": True}
     # Same token semantics on both sides: input excludes cache reads, total includes everything.
     for payload in (codex, claude):
         row = payload["totals"]
@@ -526,7 +706,7 @@ def test_cursor_reports_lines_and_plan_and_says_tokens_live_elsewhere(tmp_path: 
         )
     report = cursor_report(start=dt.datetime(2026, 9, 1, tzinfo=UTC), end=dt.datetime(2026, 10, 1, tzinfo=UTC), tz_offset_minutes=0, db_path=db)
     UsageReport.model_validate(report.model_dump())
-    assert report.metrics.model_dump() == {"tokens": False, "requests": False, "cost": False, "lines": True}
+    assert report.metrics.model_dump() == {"tokens": False, "requests": False, "cost": False, "lines": True, "subagents": False}
     assert [row.key for row in report.by_day] == ["2026-09-13"]
     assert report.by_day[0].extra["accepted_lines"] == 131 and report.totals.extra["suggested_lines"] == 169
     assert report.limits.plan == "ultra" and report.limits.status == "unavailable"
@@ -541,7 +721,7 @@ def test_vscode_says_exactly_what_is_missing() -> None:
     UsageReport.model_validate(report.model_dump())
     assert report.source.kind == "none"
     assert "not installed" in (report.cost.reason or "") and report.by_day == []
-    assert report.metrics.model_dump() == {"tokens": False, "requests": False, "cost": False, "lines": False}
+    assert report.metrics.model_dump() == {"tokens": False, "requests": False, "cost": False, "lines": False, "subagents": False}
 
 
 def test_build_report_rejects_a_bad_provider_and_range() -> None:

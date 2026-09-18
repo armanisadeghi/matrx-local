@@ -35,6 +35,10 @@ function row(partial: Partial<UsageRow> & { key: string }): UsageRow {
     cache_creation_tokens: 0,
     total_tokens: 0,
     requests: 0,
+    main_requests: 0,
+    main_total_tokens: 0,
+    subagent_requests: 0,
+    subagent_total_tokens: 0,
     cost: null,
     extra: {},
     ...partial,
@@ -47,7 +51,7 @@ function report(partial: Partial<UsageReport> & { provider: UsageReport["provide
     range: { start: "2026-09-17T07:00:00+00:00", end: "2026-09-17T19:00:00+00:00" },
     tz_offset_minutes: -420,
     source: { kind: "local_transcripts", description: "From transcripts.", complete: true, can_resume: false, pending_sessions: 0, updated_at: "2026-09-17T11:59:00+00:00", notes: [] },
-    metrics: { tokens: true, requests: true, cost: true, lines: false },
+    metrics: { tokens: true, requests: true, cost: true, lines: false, subagents: false },
     totals: row({ key: "total", label: "Total" }),
     by_day: [],
     by_model: [],
@@ -70,14 +74,15 @@ const snapshot = {
 
 const claude = report({
   provider: "claude_code",
-  totals: row({ key: "total", label: "Total", input_tokens: 10, output_tokens: 20, cache_read_tokens: 30, cache_creation_tokens: 40, total_tokens: 100, requests: 3, cost: 1.5 }),
+  metrics: { tokens: true, requests: true, cost: true, lines: false, subagents: true },
+  totals: row({ key: "total", label: "Total", input_tokens: 10, output_tokens: 20, cache_read_tokens: 30, cache_creation_tokens: 40, total_tokens: 100, requests: 3, main_requests: 1, main_total_tokens: 25, subagent_requests: 2, subagent_total_tokens: 75, cost: 1.5 }),
   by_day: [
-    row({ key: "2026-09-16", label: "2026-09-16", input_tokens: 4, output_tokens: 8, cache_read_tokens: 12, cache_creation_tokens: 16, total_tokens: 40, requests: 1, cost: 0.5 }),
-    row({ key: "2026-09-17", label: "2026-09-17", input_tokens: 6, output_tokens: 12, cache_read_tokens: 18, cache_creation_tokens: 24, total_tokens: 60, requests: 2, cost: 1.0 }),
+    row({ key: "2026-09-16", label: "2026-09-16", input_tokens: 4, output_tokens: 8, cache_read_tokens: 12, cache_creation_tokens: 16, total_tokens: 40, requests: 1, main_requests: 1, main_total_tokens: 40, cost: 0.5 }),
+    row({ key: "2026-09-17", label: "2026-09-17", input_tokens: 6, output_tokens: 12, cache_read_tokens: 18, cache_creation_tokens: 24, total_tokens: 60, requests: 2, subagent_requests: 2, subagent_total_tokens: 60, cost: 1.0 }),
   ],
-  by_model: [row({ key: "claude-fable-5-1", label: "claude-fable-5-1", model: "claude-fable-5-1", total_tokens: 100, requests: 3, cost: 1.5 })],
-  by_session: [row({ key: "s1", label: "Fix the usage tab", project: "matrx-local", total_tokens: 100, requests: 3, cost: 1.5 })],
-  by_project: [row({ key: "matrx-local", label: "matrx-local", total_tokens: 100, requests: 3, cost: 1.5 })],
+  by_model: [row({ key: "claude-fable-5-1", label: "claude-fable-5-1", model: "claude-fable-5-1", total_tokens: 100, requests: 3, main_total_tokens: 25, main_requests: 1, subagent_total_tokens: 75, subagent_requests: 2, cost: 1.5 })],
+  by_session: [row({ key: "s1", label: "Fix the usage tab", project: "matrx-local", total_tokens: 100, requests: 3, main_total_tokens: 25, main_requests: 1, subagent_total_tokens: 75, subagent_requests: 2, cost: 1.5 })],
+  by_project: [row({ key: "matrx-local", label: "matrx-local", total_tokens: 100, requests: 3, main_total_tokens: 25, main_requests: 1, subagent_total_tokens: 75, subagent_requests: 2, cost: 1.5 })],
   limits: {
     status: "available",
     observed_at: "2026-09-17T11:00:00+00:00",
@@ -93,7 +98,7 @@ const claude = report({
 const cursor = report({
   provider: "cursor",
   source: { kind: "local_state_db", description: "Daily lines from Cursor's state database.", complete: true, can_resume: false, pending_sessions: null, updated_at: null, notes: ["Cursor keeps token and request usage on cursor.com."] },
-  metrics: { tokens: false, requests: false, cost: false, lines: true },
+  metrics: { tokens: false, requests: false, cost: false, lines: true, subagents: false },
   totals: row({ key: "total", label: "Total", extra: { suggested_lines: 169, accepted_lines: 131 } }),
   by_day: [row({ key: "2026-09-13", label: "2026-09-13", extra: { suggested_lines: 169, accepted_lines: 131 } })],
   cost: { available: false, unit: null, label: "Cost", reason: "Cursor keeps no token or cost record on this Mac; see cursor.com → Settings → Usage.", unpriced_models: [] },
@@ -103,7 +108,7 @@ const cursor = report({
 const vscode = report({
   provider: "vscode",
   source: { kind: "none", description: "No local usage source.", complete: true, can_resume: false, pending_sessions: null, updated_at: null, notes: ["VS Code exposes no local usage data, and the AI Matrx VS Code extension is not installed on this Mac."] },
-  metrics: { tokens: false, requests: false, cost: false, lines: false },
+  metrics: { tokens: false, requests: false, cost: false, lines: false, subagents: false },
   cost: { available: false, unit: null, label: "Cost", reason: "VS Code exposes no local usage data.", unpriced_models: [] },
   limits: { status: "unavailable", observed_at: null, reason: "VS Code exposes no local usage data.", plan: null, windows: [] },
 });
@@ -189,6 +194,28 @@ describe("UsageTab", () => {
     expect(rows.length).toBe(1);
     expect(rows[0]!.textContent).toContain("Fix the usage tab");
     expect(rows[0]!.textContent).toContain("matrx-local");
+  });
+
+  it("shows the sub-agent share as its own column, and no such column for a provider that never records one", async () => {
+    await render();
+    const table = container.querySelector("[data-testid='usage-table']")!;
+    expect(table.textContent).toContain("Sub-agent tokens");
+    // The by-day rows: one is all main, one is all sub-agent, and the column
+    // says which — 0% vs 100% — instead of leaving the reader to guess.
+    const rows = [...table.querySelectorAll("tbody tr")].map((item) => item.textContent ?? "");
+    expect(rows[0]).toContain("0%");
+    expect(rows[1]).toContain("100%");
+    const total = table.querySelector("[data-testid='usage-total-row']")!;
+    expect(total.textContent).toContain("75");
+    expect(total.textContent).toContain("75%");
+    // And the totals card names the split in words.
+    expect(container.querySelector("[data-testid='usage-totals']")?.textContent).toContain("1 main · 2 sub-agent");
+    // Cursor records no sub-agents, so there is no column pretending to zero.
+    await act(async () => {
+      findButton("Cursor").click();
+      await Promise.resolve();
+    });
+    expect(container.querySelector("[data-testid='usage-table']")!.textContent).not.toContain("Sub-agent");
   });
 
   it("shows the provider's limits as windows with the plan", async () => {

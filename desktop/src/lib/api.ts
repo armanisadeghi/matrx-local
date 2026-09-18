@@ -113,6 +113,17 @@ export interface UsageRow {
   cache_creation_tokens: number;
   total_tokens: number;
   requests: number;
+  /**
+   * The main/sub-agent split of the two headline measures — a sub-agent's
+   * turns ARE the parent session's spend, and this is how much of the row is
+   * theirs. `main_* + subagent_*` is always the row's own total. Zero for a
+   * provider that does not record sub-agents (`metrics.subagents === false`),
+   * which is why the tab hides the column instead of showing a zero.
+   */
+  main_requests: number;
+  main_total_tokens: number;
+  subagent_requests: number;
+  subagent_total_tokens: number;
   /** In `cost.unit`; null when any part of the row is unpriced. */
   cost: number | null;
   /** Provider measures that are not tokens (Cursor's lines). */
@@ -139,7 +150,7 @@ export interface UsageReport {
     updated_at: string | null;
     notes: string[];
   };
-  metrics: { tokens: boolean; requests: boolean; cost: boolean; lines: boolean };
+  metrics: { tokens: boolean; requests: boolean; cost: boolean; lines: boolean; subagents: boolean };
   totals: UsageRow;
   by_day: UsageRow[];
   by_model: UsageRow[];

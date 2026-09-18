@@ -76,9 +76,13 @@ def transcript_paths(session_id: str) -> list[Path]:
         main = project / f"{session_id}.jsonl"
         if main.is_file():
             found.append(main)
+        # ``<session>/subagents/[workflows/<wf>/]agent-<id>.jsonl`` — the
+        # streams are NEVER directly in the session directory, so the old
+        # ``*.jsonl`` glob here found none of them and this reader reported a
+        # session's sub-agent turns as absent (CS-33/F5, 2026-09-18).
         sidechains = project / session_id
         if sidechains.is_dir():
-            found.extend(sorted(p for p in sidechains.glob("*.jsonl") if p.is_file()))
+            found.extend(sorted(p for p in sidechains.rglob("*.jsonl") if p.is_file()))
     return found
 
 

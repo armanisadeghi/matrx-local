@@ -43,6 +43,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
+from uuid import UUID
 
 from app.services.coding_sessions.claude_session_index import (
     MAX_INDEX_FILE_BYTES,
@@ -67,13 +68,16 @@ from app.services.coding_sessions.claude_usage import (
     read_usage_increment,
 )
 
-# 2: is_starred (pin truth). The transcript_usage / transcript_usage_cursor /
-# transcript_usage_key tables (2026-09-17 CS-24, 2026-09-18 CS-33) are
-# ADDITIVE: _migrate creates them on any write connection, so they never need
-# a version bump of their own. An older database keeps a now-unread
-# recent_keys column on transcript_usage_cursor; it has a default, so the
-# writes above never mention it.
-SCHEMA_VERSION = 2
+# 2: is_starred (pin truth).
+# 3: the usage tables are keyed by TRANSCRIPT, not by session (2026-09-18
+#    CS-33/F5). A session's spend is spread over many files — its own turn
+#    stream plus one per sub-agent — so the cursor, the counted-key set and
+#    the usage cells all carry the transcript they came from, and each row
+#    also carries the parent ``session_id`` and its ``lane`` (main /
+#    subagent). The old per-session primary keys cannot hold that, so this is
+#    a version bump: ``ensure_ready`` rebuilds, and the next refresh re-reads
+#    the tree it had already read.
+SCHEMA_VERSION = 3
 
 # Transcript bytes one refresh may read for usage before handing the rest to
 # the next refresh. 10 GB of transcripts on this Mac (2026-09-17) become
@@ -229,9 +233,14 @@ class ClaudeIndexStore:
                 value TEXT
             );
             -- Per-turn usage, deduplicated per message, one row per
-            -- (session, UTC hour, model). Read by GET /coding-session/usage.
+            -- (transcript, UTC hour, model), carrying the parent session and
+            -- the lane it was spent in. Read by GET /coding-session/usage,
+            -- which sums the transcripts of a session back together and
+            -- keeps the main/sub-agent split as its own column.
             CREATE TABLE IF NOT EXISTS transcript_usage (
+                transcript_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
+                lane TEXT NOT NULL,
                 hour TEXT NOT NULL,
                 model TEXT NOT NULL,
                 input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -239,29 +248,42 @@ class ClaudeIndexStore:
                 cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_read_tokens INTEGER NOT NULL DEFAULT 0,
                 requests INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (session_id, hour, model)
+                PRIMARY KEY (transcript_id, hour, model)
             );
             CREATE INDEX IF NOT EXISTS transcript_usage_hour
                 ON transcript_usage (hour);
+            CREATE INDEX IF NOT EXISTS transcript_usage_session
+                ON transcript_usage (session_id);
             -- Where the usage reader stopped in each transcript: a stamp that
-            -- differs from the walk's means the tail is still to be read.
+            -- differs from the walk's means the tail is still to be read. One
+            -- row per FILE — a session has one per sub-agent as well as its
+            -- own, and they grow independently.
             CREATE TABLE IF NOT EXISTS transcript_usage_cursor (
-                session_id TEXT PRIMARY KEY,
+                transcript_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
                 offset INTEGER NOT NULL DEFAULT 0,
                 size INTEGER NOT NULL DEFAULT -1,
                 mtime_ns INTEGER NOT NULL DEFAULT -1
             );
-            -- Every (message id, request id) this session has been counted
-            -- for. The dedupe is bounded by the SESSION, never by a tail of
-            -- recent keys: Claude re-writes an earlier message hundreds of
-            -- messages later (205 such messages in one real 52.6 MB
-            -- transcript, 2026-09-18) and a windowed dedupe counted every one
-            -- of them twice. Only the session being read is ever loaded.
+            CREATE INDEX IF NOT EXISTS transcript_usage_cursor_session
+                ON transcript_usage_cursor (session_id);
+            -- Every (message id, request id) counted, against the transcript
+            -- it was read from AND the session that spent it. The dedupe is
+            -- bounded by the SESSION — every key of every transcript under it
+            -- is handed to the reader — never by a tail of recent keys:
+            -- Claude re-writes an earlier message hundreds of messages later
+            -- (205 such messages in one real 52.6 MB transcript, 2026-09-18)
+            -- and a windowed dedupe counted every one of them twice. The
+            -- transcript half of the key is what lets ONE rewritten file
+            -- start over without erasing its siblings' contribution.
             CREATE TABLE IF NOT EXISTS transcript_usage_key (
-                session_id TEXT NOT NULL,
+                transcript_id TEXT NOT NULL,
                 key TEXT NOT NULL,
-                PRIMARY KEY (session_id, key)
+                session_id TEXT NOT NULL,
+                PRIMARY KEY (transcript_id, key)
             ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS transcript_usage_key_session
+                ON transcript_usage_key (session_id);
             """
         )
         connection.execute(
@@ -755,19 +777,20 @@ class ClaudeIndexStore:
     # that grew — see claude_usage.py for the record shape and the dedupe.
 
     def usage_cursors(self) -> dict[str, UsageCursor]:
+        """transcript id -> where the reader stopped in that ONE file."""
         if not self.path.exists():
             return {}
         try:
             with self.connect() as connection:
                 rows = connection.execute(
-                    "SELECT session_id, offset, size, mtime_ns "
+                    "SELECT transcript_id, offset, size, mtime_ns "
                     "FROM transcript_usage_cursor"
                 ).fetchall()
         except sqlite3.DatabaseError:
             return {}
         cursors: dict[str, UsageCursor] = {}
         for row in rows:
-            cursors[str(row["session_id"])] = UsageCursor(
+            cursors[str(row["transcript_id"])] = UsageCursor(
                 offset=int(row["offset"] or 0),
                 size=int(row["size"] if row["size"] is not None else PENDING_STAMP),
                 mtime_ns=int(row["mtime_ns"] if row["mtime_ns"] is not None else PENDING_STAMP),
@@ -777,8 +800,10 @@ class ClaudeIndexStore:
     def usage_keys(self, session_id: str) -> set[str]:
         """Every message key this ONE session has already been counted for.
 
-        One session at a time by design: the whole tree's keys are never in
-        memory together, only the transcript whose tail is being read.
+        Across every transcript under it — its own turn stream and each
+        sub-agent's — because a sub-agent turn is the session's spend and must
+        be counted once for the session, not once per file. One session at a
+        time by design: the whole tree's keys are never in memory together.
         """
         if not self.path.exists():
             return set()
@@ -795,35 +820,43 @@ class ClaudeIndexStore:
             return set()
 
     def apply_usage_increments(
-        self, increments: Sequence[tuple[str, UsageIncrement]]
+        self, increments: Sequence[tuple["TranscriptFile", UsageIncrement]]
     ) -> None:
-        """Add each increment's cells to the store, in one transaction."""
+        """Add each increment's cells to the store, in one transaction.
+
+        Each increment belongs to ONE transcript, so a rewritten file replaces
+        only its own rows and keys — the sibling sub-agent streams of the same
+        session keep theirs.
+        """
         if not increments:
             return
         with self.connect(write=True) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            for session_id, increment in increments:
+            for entry, increment in increments:
+                transcript_id = entry.transcript_id
                 if increment.restarted:
                     connection.execute(
-                        "DELETE FROM transcript_usage WHERE session_id = ?",
-                        (session_id,),
+                        "DELETE FROM transcript_usage WHERE transcript_id = ?",
+                        (transcript_id,),
                     )
                     connection.execute(
-                        "DELETE FROM transcript_usage_key WHERE session_id = ?",
-                        (session_id,),
+                        "DELETE FROM transcript_usage_key WHERE transcript_id = ?",
+                        (transcript_id,),
                     )
                 connection.executemany(
-                    "INSERT OR IGNORE INTO transcript_usage_key (session_id, key) VALUES (?, ?)",
-                    [(session_id, key) for key in increment.new_keys],
+                    "INSERT OR IGNORE INTO transcript_usage_key "
+                    "(transcript_id, key, session_id) VALUES (?, ?, ?)",
+                    [(transcript_id, key, entry.session_id) for key in increment.new_keys],
                 )
                 for (hour, model), cell in increment.cells.items():
                     connection.execute(
                         """
                         INSERT INTO transcript_usage (
-                            session_id, hour, model, input_tokens, output_tokens,
+                            transcript_id, session_id, lane, hour, model,
+                            input_tokens, output_tokens,
                             cache_creation_tokens, cache_read_tokens, requests
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (session_id, hour, model) DO UPDATE SET
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (transcript_id, hour, model) DO UPDATE SET
                             input_tokens = input_tokens + excluded.input_tokens,
                             output_tokens = output_tokens + excluded.output_tokens,
                             cache_creation_tokens =
@@ -832,7 +865,9 @@ class ClaudeIndexStore:
                             requests = requests + excluded.requests
                         """,
                         (
-                            session_id,
+                            transcript_id,
+                            entry.session_id,
+                            entry.lane,
                             hour,
                             model,
                             int(cell["input_tokens"]),
@@ -845,18 +880,26 @@ class ClaudeIndexStore:
                 cursor = increment.cursor
                 connection.execute(
                     "INSERT OR REPLACE INTO transcript_usage_cursor "
-                    "(session_id, offset, size, mtime_ns) VALUES (?, ?, ?, ?)",
-                    (session_id, cursor.offset, cursor.size, cursor.mtime_ns),
+                    "(transcript_id, session_id, offset, size, mtime_ns) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        transcript_id,
+                        entry.session_id,
+                        cursor.offset,
+                        cursor.size,
+                        cursor.mtime_ns,
+                    ),
                 )
             connection.execute("COMMIT")
 
     def prune_usage(self, alive: Iterable[str]) -> int:
+        """Drop the usage of every transcript id no longer on disk."""
         alive_set = set(alive)
         with self.connect(write=True) as connection:
             stored = [
-                str(row["session_id"])
+                str(row["transcript_id"])
                 for row in connection.execute(
-                    "SELECT session_id FROM transcript_usage_cursor"
+                    "SELECT transcript_id FROM transcript_usage_cursor"
                 )
             ]
             gone = [value for value in stored if value not in alive_set]
@@ -866,14 +909,15 @@ class ClaudeIndexStore:
                     batch = gone[start : start + 500]
                     marks = ",".join("?" * len(batch))
                     connection.execute(
-                        f"DELETE FROM transcript_usage WHERE session_id IN ({marks})", batch
-                    )
-                    connection.execute(
-                        f"DELETE FROM transcript_usage_cursor WHERE session_id IN ({marks})",
+                        f"DELETE FROM transcript_usage WHERE transcript_id IN ({marks})",
                         batch,
                     )
                     connection.execute(
-                        f"DELETE FROM transcript_usage_key WHERE session_id IN ({marks})",
+                        f"DELETE FROM transcript_usage_cursor WHERE transcript_id IN ({marks})",
+                        batch,
+                    )
+                    connection.execute(
+                        f"DELETE FROM transcript_usage_key WHERE transcript_id IN ({marks})",
                         batch,
                     )
                 connection.execute("COMMIT")
@@ -883,8 +927,12 @@ class ClaudeIndexStore:
         """Every usage cell with ``start_hour <= hour < end_hour``, labelled.
 
         Hour keys are ``YYYY-MM-DDTHH`` (UTC), so the comparison is textual.
-        The session's title and project come from the same rows the Sessions
-        tab shows, so the two tabs never name one conversation two ways.
+        The many transcripts of one session are summed back together HERE, by
+        (session, lane, hour, model): the parent session owns the spend of
+        every sub-agent it ran, and ``lane`` keeps that share visible instead
+        of silently folded in. The session's title and project come from the
+        same rows the Sessions tab shows, so the two tabs never name one
+        conversation two ways.
         """
         if not self.path.exists():
             return []
@@ -892,15 +940,19 @@ class ClaudeIndexStore:
             with self.connect() as connection:
                 rows = connection.execute(
                     """
-                    SELECT u.session_id, u.hour, u.model, u.input_tokens,
-                           u.output_tokens, u.cache_creation_tokens,
-                           u.cache_read_tokens, u.requests,
+                    SELECT u.session_id, u.lane, u.hour, u.model,
+                           SUM(u.input_tokens) AS input_tokens,
+                           SUM(u.output_tokens) AS output_tokens,
+                           SUM(u.cache_creation_tokens) AS cache_creation_tokens,
+                           SUM(u.cache_read_tokens) AS cache_read_tokens,
+                           SUM(u.requests) AS requests,
                            COALESCE(s.title, t.title) AS title,
                            COALESCE(s.workspace_name, t.project) AS project
                     FROM transcript_usage u
                     LEFT JOIN sessions s ON s.cli_session_id = u.session_id
                     LEFT JOIN transcripts t ON t.session_id = u.session_id
                     WHERE u.hour >= ? AND u.hour < ?
+                    GROUP BY u.session_id, u.lane, u.hour, u.model
                     """,
                     (start_hour, end_hour),
                 ).fetchall()
@@ -909,6 +961,7 @@ class ClaudeIndexStore:
         return [
             {
                 "session_id": str(row["session_id"]),
+                "lane": str(row["lane"]),
                 "hour": str(row["hour"]),
                 "model": str(row["model"]),
                 "input_tokens": int(row["input_tokens"] or 0),
@@ -1153,17 +1206,107 @@ def default_transcripts_root() -> Path:
     return base / "projects"
 
 
-def walk_transcripts(root: Path) -> dict[str, tuple[int, int, Path]]:
-    """session id -> (size, mtime_ns, path) for every transcript on disk."""
-    found: dict[str, tuple[int, int, Path]] = {}
+MAIN_LANE = "main"
+SUBAGENT_LANE = "subagent"
+
+
+@dataclass(frozen=True)
+class TranscriptFile:
+    """ONE transcript file on disk, and the session whose spend it is.
+
+    Claude Code writes a session's own turns to
+    ``<project>/<session>.jsonl`` and every sub-agent it runs to
+    ``<project>/<session>/subagents/[workflows/<wf>/]agent-<id>.jsonl``. Both
+    are the session's spend ("sub-agent turns ARE the session's spend" —
+    Arman, 2026-09-18), so both are walked, both are attributed to the parent
+    session, and ``lane`` keeps the share visible.
+    """
+
+    # Stable identity of the FILE: its path relative to the projects root.
+    transcript_id: str
+    # The PARENT session — the file's own name for a main transcript, the
+    # directory Claude nested it under for a sub-agent stream. Claude writes
+    # the same id into every record's ``sessionId`` field.
+    session_id: str
+    lane: str
+    size: int
+    mtime_ns: int
+    path: Path
+
+    @property
+    def kind(self) -> str:
+        return self.lane
+
+
+def _session_dir_id(name: str) -> str | None:
+    """``name`` if it is a session UUID, else None.
+
+    A project directory also holds plugin state Claude keeps beside the
+    transcripts (``vercel-plugin/skill-injections.jsonl``, ``memory/``) —
+    those are not turn streams and are not a session's spend.
+    """
+    try:
+        UUID(name)
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return name
+
+
+def walk_transcripts(root: Path) -> dict[str, TranscriptFile]:
+    """transcript id -> :class:`TranscriptFile` for EVERY transcript on disk.
+
+    Every depth, not one level: the nested sub-agent streams are 6,447 of this
+    Mac's 8,147 transcripts (2026-09-18), and a ``*/*.jsonl`` glob reached
+    none of them — which is why the Usage screen reported roughly a quarter of
+    the real spend.
+    """
+    found: dict[str, TranscriptFile] = {}
     if not root.is_dir():
         return found
-    for path in root.glob("*/*.jsonl"):
+
+    def add(path: Path, session_id: str, lane: str) -> None:
         try:
             info = path.stat()
         except OSError:
+            return
+        transcript_id = path.relative_to(root).as_posix()
+        found[transcript_id] = TranscriptFile(
+            transcript_id=transcript_id,
+            session_id=session_id,
+            lane=lane,
+            size=int(info.st_size),
+            mtime_ns=int(info.st_mtime_ns),
+            path=path,
+        )
+
+    try:
+        projects = sorted(root.iterdir())
+    except OSError:
+        return found
+    for project in projects:
+        if not project.is_dir():
             continue
-        found[path.stem] = (int(info.st_size), int(info.st_mtime_ns), path)
+        try:
+            children = sorted(project.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_file() and child.suffix == ".jsonl":
+                session_id = _session_dir_id(child.stem)
+                if session_id is not None:
+                    add(child, session_id, MAIN_LANE)
+                continue
+            if not child.is_dir():
+                continue
+            session_id = _session_dir_id(child.name)
+            if session_id is None:
+                continue
+            # Any depth under the session directory: Claude nests a workflow's
+            # sub-agents one level deeper again
+            # (``subagents/workflows/wf_…/agent-….jsonl``).
+            for nested in sorted(child.rglob("*.jsonl")):
+                if nested.is_file():
+                    add(nested, session_id, SUBAGENT_LANE)
     return found
 
 
@@ -1187,9 +1330,16 @@ def refresh_transcripts_sync(
     store.ensure_ready()
     known = store.known_transcripts()
     found = walk_transcripts(transcripts_root)
+    # The transcripts table is the SIDEBAR's half: one row per session, sized
+    # and titled from the session's own turn stream. The usage half below
+    # reads every file, sub-agent streams included.
+    mains = {
+        entry.session_id: entry for entry in found.values() if entry.lane == MAIN_LANE
+    }
     rows: list[dict[str, Any]] = []
     summaries_read = 0
-    for session_id, (size, mtime_ns, path) in found.items():
+    for session_id, entry in mains.items():
+        size, mtime_ns, path = entry.size, entry.mtime_ns, entry.path
         orphan = session_id not in sidebar_ids
         previous = known.get(session_id)
         summary_mtime = previous[3] if previous is not None else None
@@ -1225,19 +1375,21 @@ def refresh_transcripts_sync(
             }
         )
     store.upsert_transcripts(rows)
-    removed = store.prune_transcripts(found.keys())
+    removed = store.prune_transcripts(mains.keys())
     usage = refresh_usage_sync(store, found, byte_budget=usage_byte_budget)
     duration = time.monotonic() - started
     store.write_meta(
         {
             "transcripts_updated_at": _now_iso(),
-            "transcripts": len(found),
+            "transcripts": len(mains),
+            "transcript_files": len(found),
             "transcript_summaries_read": summaries_read,
             "transcripts_duration_seconds": round(duration, 3),
         }
     )
     return {
-        "transcripts": len(found),
+        "transcripts": len(mains),
+        "transcript_files": len(found),
         "changed": len(rows),
         "summaries_read": summaries_read,
         "removed": removed,
@@ -1248,7 +1400,7 @@ def refresh_transcripts_sync(
 
 def refresh_usage_sync(
     store: ClaudeIndexStore,
-    found: dict[str, tuple[int, int, Path]],
+    found: dict[str, TranscriptFile],
     *,
     byte_budget: int = DEFAULT_USAGE_BYTE_BUDGET,
 ) -> dict[str, Any]:
@@ -1259,46 +1411,73 @@ def refresh_usage_sync(
     is not the walk's stamp; pending ones are read oldest-first within
     ``byte_budget`` and the rest wait for the next refresh, which the meta
     counters say plainly.
+
+    One entry per FILE, so a session with 432 sub-agent streams is 433 units
+    of work here. The ``usage_pending_sessions`` / ``usage_sessions_read``
+    meta keys keep their names (they feed ``UsageSource.pending_sessions``,
+    which every provider shares) but count TRANSCRIPTS — the report's note
+    says "transcript(s)" for exactly that reason.
     """
     started = time.monotonic()
     cursors = store.usage_cursors()
     pending = [
-        (session_id, size, mtime_ns, path)
-        for session_id, (size, mtime_ns, path) in found.items()
-        if (cursor := cursors.get(session_id)) is None
-        or (cursor.size, cursor.mtime_ns) != (size, mtime_ns)
+        entry
+        for transcript_id, entry in found.items()
+        if (cursor := cursors.get(transcript_id)) is None
+        or (cursor.size, cursor.mtime_ns) != (entry.size, entry.mtime_ns)
     ]
     # Oldest transcripts first: the first ever build then lands history in
     # order, and the sessions a person is working in right now are small
     # tails that fit any refresh.
-    pending.sort(key=lambda item: item[2])
-    increments: list[tuple[str, UsageIncrement]] = []
+    pending.sort(key=lambda entry: entry.mtime_ns)
+    increments: list[tuple[TranscriptFile, UsageIncrement]] = []
     bytes_read = 0
     unreadable = 0
     read_sessions = 0
     exhausted = False
-    for session_id, size, mtime_ns, path in pending:
+    # The counted keys of each session touched in THIS pass, loaded once and
+    # extended as its transcripts are read: a session's sub-agent streams are
+    # deduplicated in the PARENT's key space, so the same turn can never be
+    # counted twice because it appeared in two files.
+    session_keys: dict[str, set[str]] = {}
+
+    def keys_for(session_id: str) -> set[str]:
+        known = session_keys.get(session_id)
+        if known is None:
+            known = store.usage_keys(session_id)
+            session_keys[session_id] = known
+        return known
+
+    for entry in pending:
         remaining = byte_budget - bytes_read
         if remaining <= 0:
             exhausted = True
             break
         try:
-            cursor = cursors.get(session_id)
+            cursor = cursors.get(entry.transcript_id)
             increment = read_usage_increment(
-                path,
+                entry.path,
                 cursor,
-                size=size,
-                mtime_ns=mtime_ns,
+                size=entry.size,
+                mtime_ns=entry.mtime_ns,
                 byte_budget=remaining,
-                # Only a transcript already partly read can repeat a key the
-                # store holds; a first read starts with nothing to load.
-                seen_keys=store.usage_keys(session_id) if cursor and cursor.offset else None,
+                seen_keys=keys_for(entry.session_id),
             )
         except OSError:
             unreadable += 1
             continue
         bytes_read += increment.bytes_read
-        increments.append((session_id, increment))
+        increments.append((entry, increment))
+        if increment.restarted:
+            # This file's keys are REPLACED, so what the session still holds
+            # is whatever its other transcripts contributed. Land the deletion
+            # now, then forget the cached set: the next file of this session
+            # re-reads the truth from the store.
+            store.apply_usage_increments(increments)
+            increments = []
+            session_keys.pop(entry.session_id, None)
+        else:
+            keys_for(entry.session_id).update(increment.new_keys)
         if increment.truncated:
             exhausted = True
             break
@@ -1345,6 +1524,9 @@ __all__ = [
     "default_transcripts_root",
     "refresh_transcripts_sync",
     "walk_transcripts",
+    "MAIN_LANE",
+    "SUBAGENT_LANE",
+    "TranscriptFile",
     "SCHEMA_VERSION",
     "ClaudeIndexStore",
     "IndexSnapshot",

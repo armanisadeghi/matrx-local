@@ -44,6 +44,14 @@ PROVIDERS: tuple[Provider, ...] = ("claude_code", "codex", "cursor", "vscode")
 # carries input/output/cached-read only, so writes are priced from input.
 CACHE_WRITE_MULTIPLIER = 1.25
 
+# The main/sub-agent split every row carries beside its own totals.
+SPLIT_FIELDS = (
+    "main_requests",
+    "main_total_tokens",
+    "subagent_requests",
+    "subagent_total_tokens",
+)
+
 
 class UsageRow(BaseModel):
     key: str
@@ -56,6 +64,16 @@ class UsageRow(BaseModel):
     cache_creation_tokens: int = 0
     total_tokens: int = 0
     requests: int = 0
+    # The main/sub-agent split of the two headline measures. "Sub-agent turns
+    # ARE the session's spend… show the split (main vs sub-agents) as a column
+    # so nobody mistakes it" (Arman, 2026-09-18). ``main_* + subagent_*`` is
+    # always the row's own total; a provider that runs no sub-agents (or does
+    # not record them — see ``metrics.subagents``) leaves them at zero and the
+    # tab shows no column rather than a zero pretending to be a measurement.
+    main_requests: int = 0
+    main_total_tokens: int = 0
+    subagent_requests: int = 0
+    subagent_total_tokens: int = 0
     # In the report's cost unit; None when any part of the row is unpriced.
     cost: float | None = None
     # Provider-specific measures that are not tokens (Cursor's lines).
@@ -77,6 +95,9 @@ class UsageMetrics(BaseModel):
     requests: bool
     cost: bool
     lines: bool
+    # Whether this provider records sub-agent turns separately on this Mac.
+    # False means "not recorded", never "none happened".
+    subagents: bool = False
 
 
 class UsageCost(BaseModel):
@@ -154,7 +175,7 @@ def _sum_rows(rows: list[UsageRow], *, key: str, label: str) -> UsageRow:
     priced = True
     cost = 0.0
     for row in rows:
-        for name in (*USAGE_FIELDS, "total_tokens", "requests"):
+        for name in (*USAGE_FIELDS, *SPLIT_FIELDS, "total_tokens", "requests"):
             setattr(total, name, getattr(total, name) + getattr(row, name))
         extra.update(row.extra)
         if row.cost is None:
@@ -194,6 +215,18 @@ def _fold(
             for name in USAGE_FIELDS:
                 setattr(row, name, getattr(row, name) + int(cell.get(name, 0)))
             row.requests += int(cell.get("requests", 0))
+            # A cell says which lane it was spent in; a provider that does not
+            # record lanes leaves the split at zero.
+            lane = str(cell.get("lane") or "")
+            if lane:
+                tokens = sum(int(cell.get(name, 0)) for name in USAGE_FIELDS)
+                requests = int(cell.get("requests", 0))
+                if lane == "subagent":
+                    row.subagent_requests += requests
+                    row.subagent_total_tokens += tokens
+                else:
+                    row.main_requests += requests
+                    row.main_total_tokens += tokens
             if price is not None:
                 value = price(cell)
                 if value is None:
@@ -483,6 +516,7 @@ def claude_report(
     pending = status.get("pending_sessions")
     notes = [
         "Each turn is counted once per message (Claude Code writes one line per streamed block).",
+        "A session's total includes every sub-agent it ran; the Sub-agents column is that share of it.",
         "Hour resolution: a range edge inside an hour includes that whole hour.",
         f"Cache writes are priced at {CACHE_WRITE_MULTIPLIER}x the input rate (the 5-minute rate); 1-hour writes cost more than shown.",
     ]
@@ -506,7 +540,7 @@ def claude_report(
             updated_at=status.get("updated_at"),
             notes=notes,
         ),
-        metrics=UsageMetrics(tokens=True, requests=True, cost=cost.available, lines=False),
+        metrics=UsageMetrics(tokens=True, requests=True, cost=cost.available, lines=False, subagents=True),
         totals=totals,
         by_day=by_day,
         by_model=by_model,
@@ -618,7 +652,7 @@ def codex_report(
             notes=[str(note) for note in coverage.get("notes") or []]
             + ["Ten-minute resolution: a range edge inside a ten-minute bin includes that bin."],
         ),
-        metrics=UsageMetrics(tokens=True, requests=True, cost=True, lines=False),
+        metrics=UsageMetrics(tokens=True, requests=True, cost=True, lines=False, subagents=False),
         totals=totals,
         by_day=by_day,
         by_model=by_model,
@@ -721,7 +755,7 @@ def cursor_report(
             complete=complete,
             notes=notes,
         ),
-        metrics=UsageMetrics(tokens=False, requests=False, cost=False, lines=True),
+        metrics=UsageMetrics(tokens=False, requests=False, cost=False, lines=True, subagents=False),
         totals=totals,
         by_day=rows,
         by_model=[],
@@ -759,7 +793,7 @@ def vscode_report(*, start: dt.datetime, end: dt.datetime, tz_offset_minutes: in
         range=UsageRange(start=start.isoformat(), end=end.isoformat()),
         tz_offset_minutes=tz_offset_minutes,
         source=UsageSource(kind="none", description="No local usage source.", complete=True, notes=[reason]),
-        metrics=UsageMetrics(tokens=False, requests=False, cost=False, lines=False),
+        metrics=UsageMetrics(tokens=False, requests=False, cost=False, lines=False, subagents=False),
         totals=empty,
         by_day=[],
         by_model=[],

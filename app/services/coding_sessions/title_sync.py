@@ -308,6 +308,33 @@ def _field_comparisons(
     ]
 
 
+def cloud_disagrees(local: dict[str, Any], cloud: dict[str, Any]) -> list[str]:
+    """Fields AI Matrx demonstrably holds differently from this Mac.
+
+    WHY THIS EXISTS. The pass used to decide "is there anything to say?" by
+    comparing the local payload against the digest of the payload it last
+    SENT. That is local-to-local: once a payload has left this Mac the pass is
+    permanently satisfied, whatever the server ended up holding. Measured on
+    the live database 2026-09-18 by a zero-authorship verifier: Claude's real
+    pinned set was 218, the server held 160 distinct favourites — 116 pinned
+    here and not favourite there, 58 favourite there and not pinned here — and
+    no ``is_favorite`` anywhere had moved since 2026-09-15 18:49 UTC while the
+    same bindings were being updated every few minutes. The engine believed it
+    had already told the server, so it never said it again, and the divergence
+    could not heal by itself no matter how many passes ran.
+
+    A field counts as disagreeing only when BOTH sides have observed it and
+    the values differ. A field AI Matrx has never observed is not a
+    difference, and neither is one this Mac cannot speak to — unknown is never
+    false, here as everywhere in this module.
+    """
+    return [
+        field
+        for field in _DETAIL_FIELDS
+        if field in local and field in cloud and local.get(field) != cloud.get(field)
+    ]
+
+
 def _record_paths_writable(entries: dict[str, ClaudeSessionIndexEntry]) -> bool:
     """Prove each known copy can be opened for writing without changing bytes."""
     paths = {path for entry in entries.values() for path in entry.record_paths}
@@ -738,6 +765,13 @@ class ClaudeSessionMetadataReconciler:
         index_totals = {"files": 0, "records": 0, "unreadable": 0}
         index_writable = False
         matched = no_labels = unchanged = queued = already_queued = 0
+        # The pin divergence, counted over the WHOLE ledger this pass walked —
+        # not only the sessions whose labels changed recently. These are what
+        # the Sessions screen says out loud, so the divergence can never again
+        # sit at 116/58 unseen for three days.
+        pins_local = pins_cloud = pins_to_add = pins_to_remove = 0
+        out_of_step = 0
+        out_of_step_fields: dict[str, int] = {}
         unreadable_identity = failed = acknowledged = 0
         unmatched: list[str] = []
         titles: list[dict[str, str]] = []
@@ -820,6 +854,27 @@ class ClaudeSessionMetadataReconciler:
                     and pushed_titles.get(provider_session_id)
                     != title_sha256(target_title)
                 )
+                disagreeing = cloud_disagrees(local_values, cloud_values)
+                if disagreeing:
+                    out_of_step += 1
+                    for field in disagreeing:
+                        out_of_step_fields[field] = (
+                            out_of_step_fields.get(field, 0) + 1
+                        )
+                if local_values.get("is_pinned") is True:
+                    pins_local += 1
+                if cloud_values.get("is_pinned") is True:
+                    pins_cloud += 1
+                if (
+                    "is_pinned" in local_values
+                    and "is_pinned" in cloud_values
+                    and local_values.get("is_pinned")
+                    != cloud_values.get("is_pinned")
+                ):
+                    if local_values.get("is_pinned") is True:
+                        pins_to_add += 1
+                    else:
+                        pins_to_remove += 1
                 chosen_values = dict(local_values)
                 direction = "none"
                 action = "none"
@@ -994,10 +1049,18 @@ class ClaudeSessionMetadataReconciler:
                             queued += int(not receipt.duplicate)
                             already_queued += int(receipt.duplicate)
                             state = "enqueued"
-                elif sent.get(provider_session_id) != digest:
+                elif sent.get(provider_session_id) != digest or disagreeing:
                     direction = "claude_to_ai_matrx"
                     action = "observe_ai_matrx"
-                    reason = "provider_details_changed"
+                    # Two different reasons to speak, and the screen must be
+                    # able to tell them apart: either this Mac's labels moved,
+                    # or AI Matrx is holding something different from what this
+                    # Mac holds and one pass has to close it.
+                    reason = (
+                        "provider_details_changed"
+                        if sent.get(provider_session_id) != digest
+                        else "ai_matrx_out_of_step"
+                    )
                     state = "detected"
                     detected += 1
                     if not dry_run:
@@ -1107,6 +1170,15 @@ class ClaudeSessionMetadataReconciler:
             "matched_without_labels": no_labels,
             "unchanged": unchanged,
             "detected": detected,
+            "ai_matrx_out_of_step": out_of_step,
+            "ai_matrx_out_of_step_fields": out_of_step_fields,
+            "pins": {
+                "local": pins_local,
+                "ai_matrx": pins_cloud,
+                "to_pin": pins_to_add,
+                "to_unpin": pins_to_remove,
+                "to_reconcile": pins_to_add + pins_to_remove,
+            },
             "queued": queued,
             "already_queued": already_queued,
             "acknowledged": acknowledged,
@@ -1529,6 +1601,85 @@ class ClaudeSessionMetadataReconciler:
             except asyncio.CancelledError:
                 raise
 
+    async def pin_divergence(self) -> dict[str, Any]:
+        """What the last full pass found about pins, for the screen to say.
+
+        Read back from that pass's own per-session rows rather than counted
+        again here: those rows already hold this Mac's payload AND what AI
+        Matrx was holding for every identity the pass walked, so the number on
+        the screen is the same number the comparison list can be opened on —
+        never a second, differently-computed one.
+
+        This exists because the divergence was invisible. On 2026-09-18 the
+        server held 116 of Claude's 218 pins as not-favourite and 58
+        favourites that were not pinned, and nothing on any screen said so;
+        the last ``is_favorite`` write had been three days earlier.
+        ``checked`` is false when no pass has completed, and then the counts
+        are None rather than 0 — an unread divergence is not a converged one.
+        """
+        row = await self._db.fetchone(
+            """SELECT operation_id, completed_at, status
+                 FROM coding_session_metadata_sync_operations
+                WHERE completed_at IS NOT NULL AND mode = 'apply'
+             ORDER BY completed_at DESC LIMIT 1"""
+        )
+        if row is None:
+            return {
+                "checked": False,
+                "reason": (
+                    "no reconcile pass has finished on this Mac yet, so the "
+                    "difference between this Mac's pins and AI Matrx's is "
+                    "not known"
+                ),
+                "local": None,
+                "ai_matrx": None,
+                "to_pin": None,
+                "to_unpin": None,
+                "to_reconcile": None,
+                "last_pass_at": None,
+                "last_pass_status": None,
+            }
+        rows = await self._db.fetchall(
+            """SELECT local_values_json, cloud_values_json
+                 FROM coding_session_metadata_sync_rows
+                WHERE operation_id = ?""",
+            (str(row["operation_id"]),),
+        )
+        local_pins = cloud_pins = to_pin = to_unpin = 0
+        for item in rows:
+            try:
+                local = json.loads(str(item["local_values_json"]))
+                cloud = json.loads(str(item["cloud_values_json"]))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(local, dict) or not isinstance(cloud, dict):
+                continue
+            if local.get("is_pinned") is True:
+                local_pins += 1
+            if cloud.get("is_pinned") is True:
+                cloud_pins += 1
+            if (
+                "is_pinned" in local
+                and "is_pinned" in cloud
+                and local.get("is_pinned") != cloud.get("is_pinned")
+            ):
+                if local.get("is_pinned") is True:
+                    to_pin += 1
+                else:
+                    to_unpin += 1
+        return {
+            "checked": True,
+            "reason": None,
+            "local": local_pins,
+            "ai_matrx": cloud_pins,
+            "to_pin": to_pin,
+            "to_unpin": to_unpin,
+            "to_reconcile": to_pin + to_unpin,
+            "last_pass_at": row["completed_at"],
+            "last_pass_status": row["status"],
+            "compared_sessions": len(rows),
+        }
+
     async def status(self) -> dict[str, Any]:
         await self._recover_interrupted_operations()
         index, index_totals = await self._read_index()
@@ -1568,6 +1719,10 @@ class ClaudeSessionMetadataReconciler:
             "synced_sessions": int(row["n"]) if row else 0,
             "acknowledged_sessions": int(row["n"]) if row else 0,
             "latest_operation": dict(latest) if latest is not None else None,
+            # The pin divergence the Sessions screen states out loud: how many
+            # pins this Mac holds, how many AI Matrx holds, how many one pass
+            # would still have to move, and when the last pass finished.
+            "pin_divergence": await self.pin_divergence(),
             "push_intents_by_state": {
                 str(item["status"]): int(item["count"]) for item in intents
             },

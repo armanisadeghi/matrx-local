@@ -29,6 +29,8 @@ from app.services.coding_sessions.service import (
 from app.services.coding_sessions.title_sync import (
     ClaudeSessionMetadataReconciler,
     ClaudeTitleSyncBlocked,
+    cloud_disagrees,
+    payload_digest,
     raw_session_id,
     session_metadata_request,
 )
@@ -686,3 +688,259 @@ async def test_unpin_reaches_a_claude_sdk_composite_binding(env) -> None:
     assert set(queued) == set(composites.values())
     assert queued[composites[unpinned]]["is_pinned"] is False
     assert queued[composites[still_pinned]]["is_pinned"] is True
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18 (CS-33 / F2): the pass could not heal a divergence it had caused
+#
+# A zero-authorship verifier measured the live database: Claude Code's real
+# pinned set was 218, the server held 160 distinct favourites — 116 pinned on
+# this Mac and not favourite there, 58 favourite there and not pinned here —
+# and no `is_favorite` anywhere had changed since 2026-09-15 18:49 UTC while
+# the same bindings were updated every few minutes. Every pass walked the
+# whole ledger and sent nothing, because the decision to speak compared the
+# local payload to the digest of the payload LAST SENT: once a payload had
+# left this Mac, the pass was permanently satisfied with whatever the server
+# had ended up holding.
+#
+# So the gate now also compares against what AI Matrx demonstrably holds, and
+# one pass sends every difference — both kinds.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_one_pass_sends_every_divergence_in_both_directions(env: Any) -> None:
+    """Both divergence kinds, already acknowledged locally, in one pass.
+
+    The local sent-digest row is written for every session BEFORE the pass, so
+    the old gate has nothing to say about any of them. Only a comparison
+    against AI Matrx's own values can find these.
+    """
+    db, outbox, tmp_path = env
+    root = tmp_path / "claude-code-sessions"
+
+    pinned_here_not_there = str(uuid4())  # the 116 class
+    favourite_there_not_here = str(uuid4())  # the 58 class
+    agreeing = str(uuid4())  # must stay silent
+
+    _write_index_record(
+        root,
+        cli_session_id=pinned_here_not_there,
+        title="Pinned here",
+        lastActivityAt=30,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    _write_index_record(
+        root,
+        cli_session_id=favourite_there_not_here,
+        title="Unpinned here",
+        lastActivityAt=31,
+        lastFocusedAt=1789684595176,
+        isStarred=False,
+    )
+    _write_index_record(
+        root,
+        cli_session_id=agreeing,
+        title="Agreed",
+        lastActivityAt=32,
+        lastFocusedAt=1789684595175,
+        isStarred=True,
+    )
+
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+
+    # What AI Matrx is holding for each: the two divergences and one agreement.
+    cloud = {
+        pinned_here_not_there: {"claude_is_pinned": False},
+        favourite_there_not_here: {"claude_is_pinned": True},
+        agreeing: {"claude_is_pinned": True},
+    }
+    sessions = [
+        {
+            "provider_session_id": session,
+            "provider_project_key": "claude-local:matrx-local",
+            "claude_title": entries[session].title,
+            **fields,
+        }
+        for session, fields in cloud.items()
+    ]
+
+    # Every one of them was already acknowledged locally — this is the state
+    # the engine was really in, and why nothing ever moved again.
+    for session in cloud:
+        payload = entries[session].metadata_payload()
+        await db.execute(
+            """INSERT INTO claude_session_metadata_sent
+                   (provider_session_id, payload_sha256, updated_at)
+               VALUES (?, ?, datetime('now'))""",
+            (session, payload_digest(payload)),
+        )
+    await db.commit()
+
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(sessions),
+        index_reader=index_reader,
+    )
+    result = await reconciler.sync()
+
+    assert result["matched"] == 3, result
+    # One pass, both kinds, and nothing extra.
+    assert result["pins"] == {
+        "local": 2,
+        "ai_matrx": 2,
+        "to_pin": 1,
+        "to_unpin": 1,
+        "to_reconcile": 2,
+    }, result["pins"]
+    assert result["ai_matrx_out_of_step"] == 2, result
+    assert result["ai_matrx_out_of_step_fields"].get("is_pinned") == 2
+
+    rows = await db.fetchall(
+        "SELECT envelope_json FROM coding_session_bridge_outbox ORDER BY id"
+    )
+    queued: dict[str, Any] = {}
+    for row in rows:
+        envelope = BridgeRequest.model_validate_json(row["envelope_json"])
+        assert envelope.hook_event is not None
+        queued[envelope.provider_session_id] = envelope.hook_event.payload
+    assert set(queued) == {pinned_here_not_there, favourite_there_not_here}, (
+        "one pass must send exactly the divergences — no more, no fewer"
+    )
+    assert queued[pinned_here_not_there]["is_pinned"] is True
+    assert queued[favourite_there_not_here]["is_pinned"] is False
+    assert agreeing not in queued, "an agreeing session must stay silent"
+
+
+@pytest.mark.anyio
+async def test_a_field_ai_matrx_has_never_observed_is_not_a_divergence(
+    env: Any,
+) -> None:
+    """Unknown is never false, on the cloud side of the comparison too.
+
+    A server row that carries no pin opinion has not disagreed with this Mac;
+    treating its absence as ``false`` would make every pass re-send every pin
+    forever and drown the outbox.
+    """
+    db, outbox, tmp_path = env
+    root = tmp_path / "claude-code-sessions"
+    session = str(uuid4())
+    _write_index_record(
+        root,
+        cli_session_id=session,
+        title="Pinned here, unknown there",
+        lastActivityAt=40,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+    await db.execute(
+        """INSERT INTO claude_session_metadata_sent
+               (provider_session_id, payload_sha256, updated_at)
+           VALUES (?, ?, datetime('now'))""",
+        (session, payload_digest(entries[session].metadata_payload())),
+    )
+    await db.commit()
+
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(
+            [
+                {
+                    "provider_session_id": session,
+                    "provider_project_key": "claude-local:matrx-local",
+                    "claude_title": entries[session].title,
+                }
+            ]
+        ),
+        index_reader=index_reader,
+    )
+    result = await reconciler.sync()
+    assert result["ai_matrx_out_of_step"] == 0, result
+    assert result["unchanged"] == 1, result
+    rows = await db.fetchall("SELECT count(*) AS n FROM coding_session_bridge_outbox")
+    assert int(rows[0]["n"]) == 0
+
+
+@pytest.mark.anyio
+async def test_the_status_line_states_the_pin_divergence_and_the_last_pass(
+    env: Any,
+) -> None:
+    """The numbers the Sessions screen says out loud, from the pass's own rows.
+
+    Before this, nothing on any screen mentioned that the server was 116/58
+    out of step, so it sat there for three days. ``checked: false`` before any
+    pass has run is part of the contract: an unread divergence must not render
+    as a converged zero.
+    """
+    db, outbox, tmp_path = env
+    root = tmp_path / "claude-code-sessions"
+    pinned_here = str(uuid4())
+    favourite_there = str(uuid4())
+    _write_index_record(
+        root,
+        cli_session_id=pinned_here,
+        title="Pinned here",
+        lastActivityAt=50,
+        lastFocusedAt=1789684595177,
+        isStarred=True,
+    )
+    _write_index_record(
+        root,
+        cli_session_id=favourite_there,
+        title="Unpinned here",
+        lastActivityAt=51,
+        lastFocusedAt=1789684595176,
+        isStarred=False,
+    )
+    index_reader = lambda: read_session_index(  # noqa: E731
+        root, ledger_path=tmp_path / "no-ledger.json"
+    )
+    entries, _totals = index_reader()
+    reconciler = ClaudeSessionMetadataReconciler(
+        db=db,
+        outbox=outbox,
+        client=_FakeClient(
+            [
+                {
+                    "provider_session_id": pinned_here,
+                    "provider_project_key": "claude-local:matrx-local",
+                    "claude_title": entries[pinned_here].title,
+                    "claude_is_pinned": False,
+                },
+                {
+                    "provider_session_id": favourite_there,
+                    "provider_project_key": "claude-local:matrx-local",
+                    "claude_title": entries[favourite_there].title,
+                    "claude_is_pinned": True,
+                },
+            ]
+        ),
+        index_reader=index_reader,
+    )
+
+    before = await reconciler.pin_divergence()
+    assert before["checked"] is False
+    assert before["to_reconcile"] is None
+    assert "no reconcile pass has finished" in before["reason"]
+
+    await reconciler.sync()
+
+    after = await reconciler.pin_divergence()
+    assert after["checked"] is True
+    assert after["local"] == 1
+    assert after["ai_matrx"] == 1
+    assert after["to_pin"] == 1
+    assert after["to_unpin"] == 1
+    assert after["to_reconcile"] == 2
+    assert after["compared_sessions"] == 2
+    assert after["last_pass_at"], "the screen must be able to say when"

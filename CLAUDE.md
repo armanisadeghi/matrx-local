@@ -5,7 +5,7 @@
 
 🚨 **MANDATORY: before launching, coordinating, or working any large build or campaign, READ the full doctrine — it is IN THIS REPO at `.claude/skills/campaign-pattern/SKILL.md`.**
 
-1. **Done means done — never on your own word.** Finished = verified by someone who did not build it, against the original vision, on the live surface, with real data — shown from the user's seat, doing what he said he does; counts of tests, rows and commits are instrumentation, not the outcome. Tests feeding manufactured data to their author's own code prove nothing and are defects. `common-docs/policies/reality-is-the-referee.md`.
+1. **Done means verified engineering, then handoff.** Implement the requested outcome, verify changed types and regressions, exercise UI changes in localhost from the user’s seat with real data, obtain independent verification, and commit/push. Deployment, production verification, and full release belong to dedicated agents; they never make a completed engineering task incomplete. Tests alone are not UI proof. `common-docs/policies/reality-is-the-referee.md` · `common-docs/policies/deployment-is-the-deploy-agents-job.md`.
 2. **Attack before you trust.** Hole-poke plans before commitment; adversarially re-verify "done" before believing it. An attack or verification that inherits the builder's frame — his file list, his path, his summary — is neither; it must be able to return what the builder does not already believe.
 3. **Fix the class, never the instance.** Root cause → census the siblings → a guard proven failing-then-passing.
 4. **Nothing fails silently.** Every stand-in announces itself with a remedy; a screen is absent or honest — never dead, disabled-looking, or lying.

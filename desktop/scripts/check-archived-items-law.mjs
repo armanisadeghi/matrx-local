@@ -151,6 +151,18 @@ function anyMatch(text, patterns) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+/** A literal on a SessionSummary is row metadata, not a list predicate. */
+function inSessionSummaryConstructor(code, at) {
+  const start = code.lastIndexOf("SessionSummary(", at);
+  if (start < 0) return false;
+  let depth = 0;
+  for (let i = start + "SessionSummary".length; i < at; i++) {
+    if (code[i] === "(") depth++;
+    else if (code[i] === ")" && --depth === 0) return false;
+  }
+  return depth > 0;
+}
+
 /**
  * The ONE statement a match belongs to. 🚨 The window MUST stop at the
  * statement boundary — a fixed character budget lets a neighbour's predicate
@@ -189,6 +201,7 @@ export function scanFile(file, raw) {
     const global = new RegExp(pattern.source, "g");
     let match;
     while ((match = global.exec(code)) !== null) {
+      if (python && inSessionSummaryConstructor(code, match.index)) continue;
       const window = chainWindow(code, match.index);
       if (anyMatch(window, WRITE_SIGNALS)) continue;
       if (anyMatch(window, SINGLE_RECORD_SIGNALS)) continue;
@@ -327,6 +340,20 @@ const GREEN_DELETED_AT = `
 const { data } = await db.from("saved_sessions").select("*").is("deleted_at", null);
 `;
 
+/** GREEN — a provider row records archive metadata; it does not select a list. */
+const GREEN_SUMMARY_FIELD = `
+row = SessionSummary(
+    provider="codex",
+    facts=make_facts(),
+    archived=False,
+)
+`;
+
+/** RED — a query after a constructed row must still be detected. */
+const RED_AFTER_SUMMARY = `${GREEN_SUMMARY_FIELD}
+rows = await db.fetchall("SELECT * FROM sessions WHERE is_archived = 0")
+`;
+
 function selfTest() {
   const failures = [];
   const expectRed = (name, source, file = "self-test.ts") => {
@@ -349,6 +376,7 @@ function selfTest() {
   expectRed("TS-PREDICATE", RED_TS_PREDICATE);
   expectRed("HTTP-PARAM", RED_HTTP_PARAM);
   expectRed("PY-CLAUSE", RED_PY_CLAUSE, "self-test.py");
+  expectRed("PY-CLAUSE-AFTER-SUMMARY", RED_AFTER_SUMMARY, "self-test.py");
   expectRed("COLUMN-NO-CONTROL", RED_COLUMN_NO_CONTROL, "self-test.tsx");
   expectRed("COMMENT-ONLY-CONTROL", RED_COMMENT_ONLY_CONTROL);
   expectGreen("PY-PARAMETER", GREEN_PY_PARAMETER, "self-test.py");
@@ -358,6 +386,7 @@ function selfTest() {
   expectGreen("WRITE", GREEN_WRITE);
   expectGreen("EXEMPT", GREEN_EXEMPT, "self-test.py");
   expectGreen("DELETED-AT", GREEN_DELETED_AT);
+  expectGreen("SUMMARY-FIELD", GREEN_SUMMARY_FIELD, "self-test.py");
 
   if (failures.length > 0) {
     console.error("\n🚨 check:archived-items-law SELF-TEST FAILED\n");

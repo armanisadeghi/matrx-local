@@ -1,7 +1,7 @@
 {
   "name": "aimatrx-desktop",
   "private": true,
-  "version": "1.4.155",
+  "version": "1.4.157",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -40,8 +40,8 @@
     "check:signout-scope:self-test": "node scripts/check-signout-scope.mjs --self-test",
     "check:session-custody": "node scripts/check-session-custody.mjs",
     "check:session-custody:self-test": "node scripts/check-session-custody.mjs --self-test",
-    "check:mandate-references": "uvx --from matrx-mandate-scan==0.2.1 matrx-mandate-scan check",
-    "check:mandate-references:strict": "uvx --from matrx-mandate-scan==0.2.1 matrx-mandate-scan check --strict"
+    "check:mandate-references": "uvx --from matrx-mandate-scan==0.2.2 matrx-mandate-scan check",
+    "check:mandate-references:strict": "uvx --from matrx-mandate-scan==0.2.2 matrx-mandate-scan check --strict"
   },
   "dependencies": {
     "@ai-matrx/agents": "latest",

@@ -54,6 +54,10 @@ from app.services.coding_sessions.claude_session_index import (
     record_focused_at,
     record_is_starred,
 )
+from app.services.coding_sessions.claude_scope import (
+    decide_scope,
+    signed_in_account,
+)
 from app.services.coding_sessions.claude_usage import (
     PENDING_STAMP,
     USAGE_FIELDS,
@@ -62,9 +66,12 @@ from app.services.coding_sessions.claude_usage import (
     read_usage_increment,
 )
 
-# 2: is_starred (pin truth). The transcript_usage / transcript_usage_cursor
-# tables (2026-09-17, CS-24) are ADDITIVE: _migrate creates them on any write
-# connection, so they never need a version bump of their own.
+# 2: is_starred (pin truth). The transcript_usage / transcript_usage_cursor /
+# transcript_usage_key tables (2026-09-17 CS-24, 2026-09-18 CS-33) are
+# ADDITIVE: _migrate creates them on any write connection, so they never need
+# a version bump of their own. An older database keeps a now-unread
+# recent_keys column on transcript_usage_cursor; it has a default, so the
+# writes above never mention it.
 SCHEMA_VERSION = 2
 
 # Transcript bytes one refresh may read for usage before handing the rest to
@@ -109,6 +116,12 @@ class IndexSnapshot:
     complete: bool = False
     last_duration_seconds: float | None = None
     last_changed_files: int | None = None
+    # The account+org scope the pins were read from, and — always — why, in
+    # English. ``active_scope`` is None when the rule refused to guess, and
+    # the reason then says what the app failed to state. See
+    # :mod:`app.services.coding_sessions.claude_scope`.
+    active_scope: str | None = None
+    active_scope_reason: str | None = None
 
 
 _RECORD_COLUMNS = (
@@ -235,9 +248,19 @@ class ClaudeIndexStore:
                 session_id TEXT PRIMARY KEY,
                 offset INTEGER NOT NULL DEFAULT 0,
                 size INTEGER NOT NULL DEFAULT -1,
-                mtime_ns INTEGER NOT NULL DEFAULT -1,
-                recent_keys TEXT NOT NULL DEFAULT '[]'
+                mtime_ns INTEGER NOT NULL DEFAULT -1
             );
+            -- Every (message id, request id) this session has been counted
+            -- for. The dedupe is bounded by the SESSION, never by a tail of
+            -- recent keys: Claude re-writes an earlier message hundreds of
+            -- messages later (205 such messages in one real 52.6 MB
+            -- transcript, 2026-09-18) and a windowed dedupe counted every one
+            -- of them twice. Only the session being read is ever loaded.
+            CREATE TABLE IF NOT EXISTS transcript_usage_key (
+                session_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                PRIMARY KEY (session_id, key)
+            ) WITHOUT ROWID;
             """
         )
         connection.execute(
@@ -254,6 +277,7 @@ class ClaudeIndexStore:
                 "DROP TABLE IF EXISTS transcripts;"
                 "DROP TABLE IF EXISTS transcript_usage;"
                 "DROP TABLE IF EXISTS transcript_usage_cursor;"
+                "DROP TABLE IF EXISTS transcript_usage_key;"
                 "DROP TABLE IF EXISTS meta;"
             )
             self._migrate(connection)
@@ -425,6 +449,8 @@ class ClaudeIndexStore:
             complete=meta.get("complete") == "1",
             last_duration_seconds=float(duration) if duration else None,
             last_changed_files=int(changed) if changed and changed.isdigit() else None,
+            active_scope=meta.get("active_scope") or None,
+            active_scope_reason=meta.get("active_scope_reason") or None,
         )
 
     def rebuild_sessions(self) -> dict[str, Any]:
@@ -467,15 +493,37 @@ class ClaudeIndexStore:
             # Resolve the pin from the scope the app is signed into. The
             # winning record above is the one touched most recently by ANY
             # account; the pin belongs to one specific scope, so it is a
-            # second pass. See :func:`claude_session_index.active_index_scope`.
-            scope_row = connection.execute(
-                "SELECT path FROM records WHERE lastrecord_focused_at > 0 "
-                "AND cli_session_id IS NOT NULL AND unreadable = 0 "
-                "ORDER BY lastrecord_focused_at DESC, path ASC LIMIT 1"
-            ).fetchone()
-            active_scope = (
-                str(Path(str(scope_row["path"])).parent) if scope_row else None
+            # second pass — and the ACCOUNT half of that scope comes from the
+            # app's own statement of who is signed in, never from a timestamp.
+            #
+            # This used to be one ``ORDER BY lastrecord_focused_at DESC LIMIT
+            # 1`` over every record on the machine, which is how a stamp
+            # copied into a scope the app is NOT signed into became the
+            # engine's pin truth (2026-09-17: one stamp was the maximum in
+            # nine scopes across five accounts). THE rule now lives once, in
+            # :mod:`app.services.coding_sessions.claude_scope`; this path only
+            # supplies the per-organisation stamps it already stores, so it
+            # never re-walks the tree to answer the question.
+            account, signals, account_reason = signed_in_account()
+            org_focus: dict[str, int] = {}
+            account_dir: Path | None = None
+            if account is not None:
+                for row in connection.execute(
+                    "SELECT path, lastrecord_focused_at AS focus FROM records "
+                    "WHERE account = ? AND lastrecord_focused_at > 0 "
+                    "AND unreadable = 0",
+                    (account,),
+                ):
+                    org_dir = Path(str(row["path"])).parent
+                    if account_dir is None:
+                        account_dir = org_dir.parent
+                    focus = int(row["focus"] or 0)
+                    if focus > org_focus.get(org_dir.name, 0):
+                        org_focus[org_dir.name] = focus
+            resolution = decide_scope(
+                account, signals, account_reason, org_focus, account_dir=account_dir
             )
+            active_scope = str(resolution.scope) if resolution.scope else None
             if active_scope:
                 connection.execute(
                     """
@@ -501,6 +549,14 @@ class ClaudeIndexStore:
                 "INSERT OR REPLACE INTO meta (key, value) VALUES "
                 "('active_scope', ?)",
                 (active_scope or "",),
+            )
+            # Nothing fails silently: when the scope is UNKNOWN the pins stay
+            # exactly as they were, and the reason is stored in English so the
+            # screen and a diagnosis can say why rather than show a number.
+            connection.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES "
+                "('active_scope_reason', ?)",
+                (resolution.reason,),
             )
             accounts = {
                 str(row["account"]): int(row["n"])
@@ -698,24 +754,39 @@ class ClaudeIndexStore:
         try:
             with self.connect() as connection:
                 rows = connection.execute(
-                    "SELECT session_id, offset, size, mtime_ns, recent_keys "
+                    "SELECT session_id, offset, size, mtime_ns "
                     "FROM transcript_usage_cursor"
                 ).fetchall()
         except sqlite3.DatabaseError:
             return {}
         cursors: dict[str, UsageCursor] = {}
         for row in rows:
-            try:
-                keys = json.loads(row["recent_keys"] or "[]")
-            except (TypeError, ValueError):
-                keys = []
             cursors[str(row["session_id"])] = UsageCursor(
                 offset=int(row["offset"] or 0),
                 size=int(row["size"] if row["size"] is not None else PENDING_STAMP),
                 mtime_ns=int(row["mtime_ns"] if row["mtime_ns"] is not None else PENDING_STAMP),
-                recent_keys=[str(key) for key in keys] if isinstance(keys, list) else [],
             )
         return cursors
+
+    def usage_keys(self, session_id: str) -> set[str]:
+        """Every message key this ONE session has already been counted for.
+
+        One session at a time by design: the whole tree's keys are never in
+        memory together, only the transcript whose tail is being read.
+        """
+        if not self.path.exists():
+            return set()
+        try:
+            with self.connect() as connection:
+                return {
+                    str(row["key"])
+                    for row in connection.execute(
+                        "SELECT key FROM transcript_usage_key WHERE session_id = ?",
+                        (session_id,),
+                    )
+                }
+        except sqlite3.DatabaseError:
+            return set()
 
     def apply_usage_increments(
         self, increments: Sequence[tuple[str, UsageIncrement]]
@@ -731,6 +802,14 @@ class ClaudeIndexStore:
                         "DELETE FROM transcript_usage WHERE session_id = ?",
                         (session_id,),
                     )
+                    connection.execute(
+                        "DELETE FROM transcript_usage_key WHERE session_id = ?",
+                        (session_id,),
+                    )
+                connection.executemany(
+                    "INSERT OR IGNORE INTO transcript_usage_key (session_id, key) VALUES (?, ?)",
+                    [(session_id, key) for key in increment.new_keys],
+                )
                 for (hour, model), cell in increment.cells.items():
                     connection.execute(
                         """
@@ -760,14 +839,8 @@ class ClaudeIndexStore:
                 cursor = increment.cursor
                 connection.execute(
                     "INSERT OR REPLACE INTO transcript_usage_cursor "
-                    "(session_id, offset, size, mtime_ns, recent_keys) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        session_id,
-                        cursor.offset,
-                        cursor.size,
-                        cursor.mtime_ns,
-                        json.dumps(cursor.recent_keys),
-                    ),
+                    "(session_id, offset, size, mtime_ns) VALUES (?, ?, ?, ?)",
+                    (session_id, cursor.offset, cursor.size, cursor.mtime_ns),
                 )
             connection.execute("COMMIT")
 
@@ -791,6 +864,10 @@ class ClaudeIndexStore:
                     )
                     connection.execute(
                         f"DELETE FROM transcript_usage_cursor WHERE session_id IN ({marks})",
+                        batch,
+                    )
+                    connection.execute(
+                        f"DELETE FROM transcript_usage_key WHERE session_id IN ({marks})",
                         batch,
                     )
                 connection.execute("COMMIT")
@@ -1200,12 +1277,16 @@ def refresh_usage_sync(
             exhausted = True
             break
         try:
+            cursor = cursors.get(session_id)
             increment = read_usage_increment(
                 path,
-                cursors.get(session_id),
+                cursor,
                 size=size,
                 mtime_ns=mtime_ns,
                 byte_budget=remaining,
+                # Only a transcript already partly read can repeat a key the
+                # store holds; a first read starts with nothing to load.
+                seen_keys=store.usage_keys(session_id) if cursor and cursor.offset else None,
             )
         except OSError:
             unreadable += 1

@@ -45,6 +45,20 @@ def _write_index_record(
 ) -> Path:
     folder = root / account / org
     folder.mkdir(parents=True, exist_ok=True)
+    # A machine's session index is only readable in the scope the app says it
+    # is signed into, and the app says so in its own plain files beside the
+    # index tree — never by a per-record timestamp, which IS copied between
+    # scopes (see app/services/coding_sessions/claude_scope.py). A fixture
+    # that writes records but no such statement is a machine whose pins are
+    # UNKNOWN, which is why this helper writes both.
+    app_support = root.parent
+    app_support.mkdir(parents=True, exist_ok=True)
+    (app_support / "config.json").write_text(
+        json.dumps({"lastKnownAccountUuid": account})
+    )
+    (app_support / "cowork-enabled-cli-ops.json").write_text(
+        json.dumps({"ownerAccountId": account})
+    )
     record: dict[str, Any] = {
         "sessionId": f"local_{uuid4()}",
         "cliSessionId": cli_session_id,

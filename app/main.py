@@ -2461,7 +2461,18 @@ app.add_middleware(
     allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-User-Id", "X-API-Key", "Accept"],
+    # Cache-Control: FirstRunScreen.tsx sends `Cache-Control: no-cache` on its
+    # SSE fetch() to /setup/install so the stream is never buffered — a
+    # non-safelisted header, so its absence here failed that route's
+    # preflight with 400 (MXL CORS first-run defect, 2026-09-17).
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-User-Id",
+        "X-API-Key",
+        "Accept",
+        "Cache-Control",
+    ],
     allow_private_network=True,
     # The AI streaming surface's response headers the browser must be able to
     # read cross-origin (matrx-frontend asserts X-Conversation-ID on every

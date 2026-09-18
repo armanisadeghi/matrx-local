@@ -290,7 +290,13 @@ async def _refresh_cloud_inventory(provider: str = "claude_code") -> None:
     """Fetch and cache, alone. Failures are cached too — they are answers."""
     async with _CLOUD_LOCK:
         try:
-            await _fetch_cloud_inventory()
+            # THE PROVIDER MUST TRAVEL. Without it this cached every provider's
+            # answer under claude_code, so Codex, Cursor and VS Code reported
+            # "the cloud check is in flight" for ever — a state that never
+            # resolves, which is exactly the silent failure the per-provider
+            # cache exists to prevent. Found live 2026-09-18 on a signed-in
+            # engine: Codex had 163 bound sessions and the screen never said so.
+            await _fetch_cloud_inventory(provider)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — the screen keeps its previous answer
@@ -418,6 +424,21 @@ def _explain_inventory_block(reason: str) -> str:
         if "HTTP 401" in detail or "HTTP 403" in detail:
             return "AI Matrx rejected this Mac's sign-in. Sign in again in Matrx Local, then refresh."
         return f"AI Matrx refused the session list: {detail}"
+    if reason.startswith("identity_list_"):
+        # These are the identity client's FAIL-CLOSED verdicts: it returns rows
+        # only after the server proves the snapshot is complete, because a
+        # partial inventory is not a smaller truth, it is unsafe input. Seen on
+        # screen 2026-09-18 for cursor and vscode, which the server answers with
+        # an inventory that does not satisfy its own completeness contract, so
+        # the raw code reached the person. A code is not a sentence.
+        return (
+            "AI Matrx answered this provider's session list with a snapshot it "
+            "could not prove complete, so this Mac will not treat it as the "
+            "truth about what the cloud holds. Every row for that provider "
+            "reads \"Unknown\" rather than guessing. Nothing here is lost — it "
+            "clears on the next server release that answers the list "
+            f"completely. (Server reason: {reason}.)"
+        )
     return reason
 
 

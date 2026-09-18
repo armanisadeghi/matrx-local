@@ -960,6 +960,7 @@ if $DRY_RUN; then
     preview "Would commit: '$COMMIT_MSG'"
     preview "Would create tag: $NEW_TAG"
     preview "Would push to $REMOTE/$BRANCH"
+    preview "Would prepare one draft release for $NEW_TAG"
     preview "Would dispatch one Release workflow for $NEW_TAG"
     $MONITOR && preview "Would monitor GitHub Actions builds until completion"
     echo ""
@@ -1079,6 +1080,31 @@ Resolve by hand:
 EOF
 )"
     fi
+fi
+
+# Create the single draft with the authenticated local gh identity. GitHub's
+# per-job GITHUB_TOKEN may be allowed to read/upload a release yet receive 403
+# when POSTing its initial draft; that failure otherwise strands a verified tag
+# before any platform builds start. The workflow validates this same tag/SHA
+# and reuses the draft. Never replace a published or mismatched release.
+info "Preparing the draft release for $NEW_TAG..."
+RELEASE_SHA="$(git rev-parse HEAD)"
+if EXISTING_RELEASE="$(gh release view "$NEW_TAG" --repo "$GITHUB_REPO" \
+        --json isDraft,targetCommitish 2>&1)"; then
+    EXISTING_DRAFT="$(jq -r .isDraft <<< "$EXISTING_RELEASE")"
+    EXISTING_SHA="$(jq -r .targetCommitish <<< "$EXISTING_RELEASE")"
+    [[ "$EXISTING_DRAFT" == "true" && "$EXISTING_SHA" == "$RELEASE_SHA" ]] \
+        || die_after_commit "Existing $NEW_TAG release is published or points to another source cutoff; refusing to reuse it."
+    ok "Existing draft $NEW_TAG points to $RELEASE_SHA."
+elif [[ "$EXISTING_RELEASE" != *"release not found"* ]]; then
+    die_after_commit "Could not check whether $NEW_TAG already has a release: $EXISTING_RELEASE"
+elif gh release create "$NEW_TAG" --repo "$GITHUB_REPO" --draft \
+        --verify-tag --target "$RELEASE_SHA" \
+        --title "AI Matrx $NEW_TAG" \
+        --notes "See the assets below to download and install this version." >/dev/null; then
+    ok "Created draft $NEW_TAG for $RELEASE_SHA."
+else
+    die_after_commit "Could not create the draft for $NEW_TAG after pushing the tag. No build was dispatched; inspect GitHub release permissions, then create a draft for $RELEASE_SHA and dispatch release.yml on $NEW_TAG."
 fi
 
 # ── Dispatch the one release workflow ────────────────────────────────────────

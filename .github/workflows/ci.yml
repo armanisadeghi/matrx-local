@@ -48,6 +48,21 @@ jobs:
         continue-on-error: true
         run: uv run --frozen python scripts/check_tool_db_drift.py
 
+      # MANDATE REFERENCES — a non-blocking job step (ruling D23). It reports
+      # every Mandate this repo names across python, TypeScript and Rust, plus
+      # every bypass. `continue-on-error` is the law, not a convenience.
+      #
+      # The version is pinned EXACTLY: "always latest" governs @ai-matrx npm
+      # packages, while this is a python release gate whose findings are compared
+      # between revisions and may not drift underneath that comparison.
+      #
+      # CI carries no SUPABASE_SECRET_KEY, so the step SCANS and prints and says
+      # UNMEASURED-for-report — loudly. release.sh and the scheduled remediation
+      # task are what submit.
+      - name: Mandate references (non-blocking; scan only in CI)
+        continue-on-error: true
+        run: uvx --from matrx-mandate-scan==0.2.0 matrx-mandate-scan check
+
       - name: Lint (advisory)
         run: uv run ruff check app || true
 

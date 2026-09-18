@@ -52,6 +52,31 @@ if ! $PREFLIGHT_OK; then
     exit 1
 fi
 
+# ── Mandate references — LOUD AND NEVER A BRAKE (ruling D23) ─────────────────
+#
+# This hook exists because a HAND-RUN build must not be able to skip the check.
+# `scripts/release.sh` carries it too, but the sidecar is also built directly —
+# and matrx-local is the one repo whose mandate surface spans three languages
+# (app/ python, desktop/ TypeScript, crates/ + desktop/src-tauri Rust). It scans
+# the whole repository from the git root whichever directory it is invoked from.
+#
+# 🚨 THE VERSION IS PINNED EXACTLY, ON PURPOSE. "Always latest" is the law for
+# @ai-matrx NPM packages; this is a python release gate whose findings are
+# compared between revisions, so what it measures may not drift underneath the
+# comparison. Bump the pin deliberately.
+#
+# It NEVER blocks: `check` always exits 0 without --strict, and `|| true` covers
+# a crash inside uvx itself. A missing uv says so instead of being silent.
+echo ""
+echo "── Mandate references (loud, non-blocking) ──────────────────────────────"
+if command -v uvx &>/dev/null; then
+    uvx --from matrx-mandate-scan==0.2.0 matrx-mandate-scan check || true
+else
+    echo "WARNING: uvx not found, so this sidecar build reported NO mandate references." >&2
+    echo "         Install uv (https://astral.sh/uv) so the fleet board stops calling" >&2
+    echo "         matrx-local unmeasured. The build continues (D23)." >&2
+fi
+
 # Detect platform triple
 detect_target() {
     local os arch

@@ -15,7 +15,7 @@
     "ensure:syncd": "bash ../scripts/build-syncd.sh",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:build": "(pnpm check:mandate-references || true) && tauri build",
     "typecheck": "tsc -b --pretty false",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
@@ -39,7 +39,9 @@
     "check:signout-scope": "node scripts/check-signout-scope.mjs",
     "check:signout-scope:self-test": "node scripts/check-signout-scope.mjs --self-test",
     "check:session-custody": "node scripts/check-session-custody.mjs",
-    "check:session-custody:self-test": "node scripts/check-session-custody.mjs --self-test"
+    "check:session-custody:self-test": "node scripts/check-session-custody.mjs --self-test",
+    "check:mandate-references": "uvx --from matrx-mandate-scan==0.2.0 matrx-mandate-scan check",
+    "check:mandate-references:strict": "uvx --from matrx-mandate-scan==0.2.0 matrx-mandate-scan check --strict"
   },
   "dependencies": {
     "@ai-matrx/agents": "latest",

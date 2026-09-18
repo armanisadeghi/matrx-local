@@ -831,6 +831,35 @@ else
     warn "Tool-registry drift detected — release continues, but treat the report above as a bug."
 fi
 
+# ── Mandate references (loud, deliberately non-blocking — ruling D23) ────────
+#
+# Every Mandate this build names — across all THREE of this repo's languages:
+# app/ python, desktop/ TypeScript, crates/ + desktop/src-tauri Rust — is
+# reported to the platform with its exact file, symbol and line, together with
+# every place intelligence is reached outside a Mandate. The fleet board at
+# /administration/mandates/references is what reads it.
+#
+# It may NEVER block a release (D23, and law 1 of
+# common-docs/projects/mandate-declaration-reporting/REGISTER.md): `check`
+# always exits 0 without --strict, and `|| true` covers a crash inside uvx.
+#
+# 🚨 THE VERSION IS PINNED EXACTLY, ON PURPOSE. The "always latest" law governs
+# @ai-matrx NPM packages (check:matrx-packages above enforces it). This is a
+# PYTHON release gate whose findings are compared between revisions —
+# reconciliation is keyed on (identity, revision_kind, revision) and the identity
+# hash includes the scanner's own classification — so what it measures must not
+# drift underneath the comparison. Bump the pin in a commit that says why.
+#
+# Without a SUPABASE_SECRET_KEY in the environment it still scans and still
+# screams; it says UNMEASURED-for-report loudly rather than pretending it filed.
+info "Scanning and reporting mandate references (non-blocking)..."
+if command -v uvx >/dev/null 2>&1; then
+    uvx --from matrx-mandate-scan==0.2.0 matrx-mandate-scan check || true
+    ok "Mandate references scanned (findings above, if any, never block)."
+else
+    warn "uvx not found — this release reported NO mandate references. Install uv (https://astral.sh/uv) so the fleet board stops calling matrx-local unmeasured."
+fi
+
 # ── Mirror snapshot drift (confirmed drift blocks; unavailable is loud) ──────
 # The cloud schema is the spec for the local chat replica, and schema_mirror/
 # snapshot.json is how this build knows it. When the cloud grows a column the

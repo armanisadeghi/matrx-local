@@ -192,11 +192,11 @@ Each of these is a decision, not an oversight.
    both commands still take effect on THIS computer immediately and the status says the account
    has not been told, with the remedy. **The gateway owner needs to decide** whether to accept a
    device token on its own row.
-4. **The tray's web links.** The contract names `/connect-computer` and "Settings → Devices &
-   Sync" without giving the latter's path. Both menu items therefore point at
-   `<web>/connect-computer` (the removal item adds `?remove=<device_id>`), the base is the
-   `--web` flag, and both paths live in one place (`supervisor::WebUrls`). **The frontend owner
-   should confirm** the computers-list path and the `?remove=` parameter.
+4. **The tray's web links.** Both menu items open the computers list,
+   `<web>/settings?tab=devices` (the removal item adds `&computer=<device_id>` so the page can
+   bring that computer into view; Remove lives on that list and names its consequence first).
+   Settled by the owner 2026-09-18; the base is the `--web` flag and both paths live in one
+   place (`supervisor::WebUrls`).
 5. **A `4401` does not delete the keychain item.** The status says the computer was removed and
    the helper stops; the token stays so a server-side mistake cannot cost the person their
    pairing. `sign-out` is the one command that forgets it.

@@ -45,10 +45,10 @@ enum Desired {
     Stopped,
 }
 
-/// The pages the tray opens. The contract fixes `/connect-computer` as the frontend's pairing and
-/// setup surface and names "Settings → Devices & Sync" as the list of computers without giving its
-/// path, so the base is a flag and the paths are in ONE place — a frontend that lands the list
-/// somewhere else is a one-line change here, not a hunt.
+/// The pages the tray opens. The list of computers is Settings → Devices & Sync at
+/// `/settings?tab=devices` (contract § The web app); removal is the Remove control on that
+/// list, which names its consequence before acting. The base is a flag and both paths live in
+/// ONE place — a frontend that moves the list is a one-line change here, not a hunt.
 #[derive(Debug, Clone)]
 pub struct WebUrls {
     /// `https://aimatrx.com`.
@@ -66,13 +66,14 @@ impl Default for WebUrls {
 impl WebUrls {
     /// Where the person manages the computers on their account.
     pub fn computers(&self) -> String {
-        format!("{}/connect-computer", self.base.trim_end_matches('/'))
+        format!("{}/settings?tab=devices", self.base.trim_end_matches('/'))
     }
 
-    /// Where the person confirms removing this one.
+    /// Where the person confirms removing this one: the same list, whose Remove control asks
+    /// first. `device_id` rides along so the page can bring that computer into view.
     pub fn confirm_removal(&self, device_id: &str) -> String {
         format!(
-            "{}/connect-computer?remove={device_id}",
+            "{}/settings?tab=devices&computer={device_id}",
             self.base.trim_end_matches('/')
         )
     }
@@ -376,17 +377,17 @@ mod tests {
     #[test]
     fn the_tray_opens_the_pages_the_contract_names() {
         let web = WebUrls::default();
-        assert_eq!(web.computers(), "https://aimatrx.com/connect-computer");
+        assert_eq!(web.computers(), "https://aimatrx.com/settings?tab=devices");
         assert_eq!(
             web.confirm_removal("d-1"),
-            "https://aimatrx.com/connect-computer?remove=d-1"
+            "https://aimatrx.com/settings?tab=devices&computer=d-1"
         );
         let local = WebUrls {
             base: "http://matrx.localhost:3001/".into(),
         };
         assert_eq!(
             local.computers(),
-            "http://matrx.localhost:3001/connect-computer"
+            "http://matrx.localhost:3001/settings?tab=devices"
         );
     }
 

@@ -284,7 +284,7 @@ export function QuickActionBar(props: QuickActionBarProps) {
 
   const hasUpdate =
     updateState.status?.status === "available" ||
-    updateState.status?.status === "installed";
+    updateState.status?.status === "prepared";
 
   const cloudStatus = serviceStatus.cloudSyncStatus;
   const cloudDot = cloudSyncDotColor(cloudStatus);

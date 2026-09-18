@@ -58,10 +58,9 @@ export function EngineSupervisorStrip({
     }
   };
 
-  // A corrupt bundled engine file is repaired by replacing the app, which is
-  // what the updater does. If there is nothing newer, say so — an update check
-  // that quietly does nothing would be exactly the silent failure this banner
-  // exists to prevent.
+  // A corrupt bundled engine file is repaired by a verified staged update. If
+  // there is nothing newer, say so — an update check that quietly does nothing
+  // would be exactly the silent failure this banner exists to prevent.
   const handleReinstall = async () => {
     setReinstalling(true);
     setReinstallNote(null);
@@ -70,7 +69,9 @@ export function EngineSupervisorStrip({
       setReinstallNote(
         result.status === "up_to_date"
           ? "You are already on the newest build, so there is nothing newer to install. Open Details for the engine's log — the failing line is at the end."
-          : `Installing ${result.version ?? "the newest build"} — AI Matrx will restart when it finishes.`,
+          : result.status === "prepared"
+            ? `${result.version ?? "The newest build"} is ready. Restart AI Matrx from the update prompt to apply it.`
+            : `The newest build is available. Open the update prompt to prepare it.`,
       );
     } catch (error) {
       setReinstallNote(

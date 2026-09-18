@@ -23,7 +23,7 @@ import type {
   CodingSessionArtifactsSessionDetail,
   CodingSessionArtifactsSessionSummary,
 } from "@/lib/api";
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 
 /**
  * The per-row artifacts number: the lane's file count for this session, or
@@ -62,26 +62,26 @@ export function ArtifactsCell({
   return (
     <button
       type="button"
-      title={`${summary.files.toLocaleString()} file${summary.files === 1 ? "" : "s"} kept (${formatFileSize(summary.bytes)}) · ${summary.uploaded.toLocaleString()} confirmed in AI Matrx${summary.unplaced > 0 ? ` · ${summary.unplaced.toLocaleString()} not listed under this session yet (being re-filed under their own path)` : ""}${summary.placement_failed > 0 ? ` · ${summary.placement_failed.toLocaleString()} AI Matrx would not file under their own path` : ""}${summary.awaiting_confirmation > 0 ? ` · ${summary.awaiting_confirmation.toLocaleString()} not read back yet` : ""} · ${summary.pending_upload.toLocaleString()} pending${summary.missing_in_cloud > 0 ? ` · ${summary.missing_in_cloud.toLocaleString()} missing in AI Matrx (re-uploading)` : ""}${summary.failed_upload > 0 ? ` · ${summary.failed_upload.toLocaleString()} failed` : ""}. Click to see every file.`}
+      title={`${formatCount(summary.files)} file${summary.files === 1 ? "" : "s"} kept (${formatFileSize(summary.bytes)}) · ${formatCount(summary.uploaded)} confirmed in AI Matrx${summary.unplaced > 0 ? ` · ${formatCount(summary.unplaced)} not listed under this session yet (being re-filed under their own path)` : ""}${summary.placement_failed > 0 ? ` · ${formatCount(summary.placement_failed)} AI Matrx would not file under their own path` : ""}${summary.awaiting_confirmation > 0 ? ` · ${formatCount(summary.awaiting_confirmation)} not read back yet` : ""} · ${formatCount(summary.pending_upload)} pending${summary.missing_in_cloud > 0 ? ` · ${formatCount(summary.missing_in_cloud)} missing in AI Matrx (re-uploading)` : ""}${summary.failed_upload > 0 ? ` · ${formatCount(summary.failed_upload)} failed` : ""}. Click to see every file.`}
       className="underline decoration-dotted underline-offset-4 hover:decoration-solid"
       onClick={(event) => {
         event.stopPropagation();
         onOpen();
       }}
     >
-      {summary.files.toLocaleString()}
+      {formatCount(summary.files)}
       <span className="ml-1 text-xs text-muted-foreground">
-        ({summary.uploaded.toLocaleString()}↑
-        {summary.awaiting_confirmation > 0 ? ` ${summary.awaiting_confirmation.toLocaleString()} unconfirmed` : ""}
-        {summary.pending_upload > 0 ? ` ${summary.pending_upload.toLocaleString()} pending` : ""}
+        ({formatCount(summary.uploaded)}↑
+        {summary.awaiting_confirmation > 0 ? ` ${formatCount(summary.awaiting_confirmation)} unconfirmed` : ""}
+        {summary.pending_upload > 0 ? ` ${formatCount(summary.pending_upload)} pending` : ""}
         {summary.unplaced > 0 ? (
-          <span className="text-destructive"> {summary.unplaced.toLocaleString()} unlisted</span>
+          <span className="text-destructive"> {formatCount(summary.unplaced)} unlisted</span>
         ) : null}
         {summary.missing_in_cloud > 0 ? (
-          <span className="text-destructive"> {summary.missing_in_cloud.toLocaleString()} missing</span>
+          <span className="text-destructive"> {formatCount(summary.missing_in_cloud)} missing</span>
         ) : null}
         {summary.failed_upload > 0 ? (
-          <span className="text-destructive"> {summary.failed_upload.toLocaleString()} failed</span>
+          <span className="text-destructive"> {formatCount(summary.failed_upload)} failed</span>
         ) : null}
         )
       </span>
@@ -128,26 +128,26 @@ export function SessionArtifactsDialog({
     try {
       const result = await engine.verifyCodingSessionArtifacts();
       const refiling = result.queued_for_refiling ?? 0;
-      const parts = [`${result.confirmed.toLocaleString()} confirmed`];
+      const parts = [`${formatCount(result.confirmed)} confirmed`];
       if (result.missing_in_cloud > 0) {
         parts.push(
-          `${result.missing_in_cloud.toLocaleString()} were missing from AI Matrx${(result.still_missing_in_cloud ?? 0) > 0 ? ` (${result.still_missing_in_cloud.toLocaleString()} still to go)` : ""}`,
+          `${formatCount(result.missing_in_cloud)} were missing from AI Matrx${(result.still_missing_in_cloud ?? 0) > 0 ? ` (${formatCount(result.still_missing_in_cloud)} still to go)` : ""}`,
         );
       }
       if (refiling > 0) {
         parts.push(
-          `${refiling.toLocaleString()} were filed under another path and are being re-filed under this session's own${(result.still_unplaced ?? 0) > 0 ? ` (${result.still_unplaced.toLocaleString()} still to go)` : ""}`,
+          `${formatCount(refiling)} were filed under another path and are being re-filed under this session's own${(result.still_unplaced ?? 0) > 0 ? ` (${formatCount(result.still_unplaced)} still to go)` : ""}`,
         );
       }
       if (result.missing_in_cloud > 0 || refiling > 0) {
         parts.push(
-          `${(result.re_uploaded ?? 0).toLocaleString()} re-uploaded from the durable copy`,
+          `${formatCount((result.re_uploaded ?? 0))} re-uploaded from the durable copy`,
         );
       }
       setVerifyResult(
         result.missing_in_cloud > 0 || refiling > 0
           ? `${parts.join(" · ")}.`
-          : `${result.confirmed.toLocaleString()} file id${result.confirmed === 1 ? "" : "s"} read back from AI Matrx; every path has its own file there.`,
+          : `${formatCount(result.confirmed)} file id${result.confirmed === 1 ? "" : "s"} read back from AI Matrx; every path has its own file there.`,
       );
       await load();
     } catch (nextError) {
@@ -180,34 +180,34 @@ export function SessionArtifactsDialog({
         <div className="flex items-center justify-between gap-3">
           {detail ? (
             <span className="text-sm">
-              {detail.files.toLocaleString()} file{detail.files === 1 ? "" : "s"} kept ·{" "}
-              {formatFileSize(detail.bytes)} · {detail.uploaded.toLocaleString()} confirmed in AI
+              {formatCount(detail.files)} file{detail.files === 1 ? "" : "s"} kept ·{" "}
+              {formatFileSize(detail.bytes)} · {formatCount(detail.uploaded)} confirmed in AI
               Matrx{" "}
-              {`(${detail.cloud_rows.toLocaleString()} file${detail.cloud_rows === 1 ? "" : "s"} there`}
+              {`(${formatCount(detail.cloud_rows)} file${detail.cloud_rows === 1 ? "" : "s"} there`}
               {detail.deduplicated > 0
-                ? `, ${detail.deduplicated.toLocaleString()} of these paths share an identical file`
+                ? `, ${formatCount(detail.deduplicated)} of these paths share an identical file`
                 : ""}
               {")"}
               {detail.unplaced > 0
-                ? ` · ${detail.unplaced.toLocaleString()} not listed under this session yet (being re-filed under their own path)`
+                ? ` · ${formatCount(detail.unplaced)} not listed under this session yet (being re-filed under their own path)`
                 : ""}
               {detail.placement_failed > 0
-                ? ` · ${detail.placement_failed.toLocaleString()} AI Matrx would not file under their own path`
+                ? ` · ${formatCount(detail.placement_failed)} AI Matrx would not file under their own path`
                 : ""}
               {detail.superseded_versions > 0
-                ? ` · ${detail.superseded_versions.toLocaleString()} earlier version${detail.superseded_versions === 1 ? "" : "s"}`
+                ? ` · ${formatCount(detail.superseded_versions)} earlier version${detail.superseded_versions === 1 ? "" : "s"}`
                 : ""}
               {detail.awaiting_confirmation > 0
-                ? ` · ${detail.awaiting_confirmation.toLocaleString()} not read back yet`
+                ? ` · ${formatCount(detail.awaiting_confirmation)} not read back yet`
                 : ""}
-              {` · ${detail.pending_upload.toLocaleString()} pending`}
+              {` · ${formatCount(detail.pending_upload)} pending`}
               {detail.missing_in_cloud > 0
-                ? ` · ${detail.missing_in_cloud.toLocaleString()} missing in AI Matrx (re-uploading)`
+                ? ` · ${formatCount(detail.missing_in_cloud)} missing in AI Matrx (re-uploading)`
                 : ""}
-              {detail.failed_upload > 0 ? ` · ${detail.failed_upload.toLocaleString()} failed` : ""}
-              {detail.abandoned_upload > 0 ? ` · ${detail.abandoned_upload.toLocaleString()} abandoned` : ""}
-              {detail.skipped_over_size > 0 ? ` · ${detail.skipped_over_size.toLocaleString()} skipped (over size)` : ""}
-              {detail.skipped_over_count > 0 ? ` · ${detail.skipped_over_count.toLocaleString()} skipped (over count)` : ""}
+              {detail.failed_upload > 0 ? ` · ${formatCount(detail.failed_upload)} failed` : ""}
+              {detail.abandoned_upload > 0 ? ` · ${formatCount(detail.abandoned_upload)} abandoned` : ""}
+              {detail.skipped_over_size > 0 ? ` · ${formatCount(detail.skipped_over_size)} skipped (over size)` : ""}
+              {detail.skipped_over_count > 0 ? ` · ${formatCount(detail.skipped_over_count)} skipped (over count)` : ""}
             </span>
           ) : (
             <span className="text-sm text-muted-foreground">{error ? "Not available" : "Loading…"}</span>

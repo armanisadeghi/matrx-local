@@ -6,19 +6,17 @@
  *   2. If an update is available, begin downloading in the background immediately.
  *      Progress is tracked internally but NOT shown until the user opens the
  *      install flow (dialog / banner install / About "Install Update").
- *   3. When a background download completes, status becomes "installed" —
+ *   3. When a background download completes, status becomes "prepared" —
  *      the banner can offer "Restart" without the user ever seeing a progress bar.
- *   4. The last fully downloaded version is stored in localStorage so we skip
- *      re-downloading the same build after navigating away or restarting the app
- *      (until a newer version appears or the app version catches up).
+ *   4. The Rust backend holds the verified staged artifact. Renderer storage
+ *      never claims an update is ready.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { isTauri, checkForUpdates, restartApp, type UpdateStatus } from "@/lib/sidecar";
+import { isTauri, checkForUpdates, restartForUpdate, type UpdateStatus } from "@/lib/sidecar";
 import { loadSettings } from "@/lib/settings";
 import { useWindowLeader } from "@/hooks/use-window-leader";
 
-import { APP_VERSION } from "@/lib/app-version";
 
 export interface AutoUpdateState {
   /** Current status of the update system */
@@ -57,33 +55,7 @@ export interface AutoUpdateActions {
 }
 
 const DISMISSED_VERSION_KEY = "matrx-update-dismissed-version";
-/** Persisted when a background download completes — skip redundant downloads for this version. */
-const PREPARED_UPDATE_VERSION_KEY = "matrx-update-prepared-version";
 const STARTUP_DELAY_MS = 15_000;
-
-function getPreparedUpdateVersion(): string | null {
-  try {
-    return localStorage.getItem(PREPARED_UPDATE_VERSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setPreparedUpdateVersion(v: string): void {
-  try {
-    localStorage.setItem(PREPARED_UPDATE_VERSION_KEY, v);
-  } catch {
-    /* ignore */
-  }
-}
-
-function clearPreparedUpdateVersion(): void {
-  try {
-    localStorage.removeItem(PREPARED_UPDATE_VERSION_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -96,19 +68,6 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
   const preDownloadInProgressRef = useRef(false);
-
-  // Drop stale "prepared" record if we're already running that version
-  useEffect(() => {
-    if (!isTauri()) return;
-    try {
-      const p = localStorage.getItem(PREPARED_UPDATE_VERSION_KEY);
-      if (p && p === APP_VERSION) {
-        localStorage.removeItem(PREPARED_UPDATE_VERSION_KEY);
-      }
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   // Listen for real-time download progress events from Rust
   useEffect(() => {
@@ -130,11 +89,8 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
               Math.round(((payload.downloaded ?? 0) / payload.content_length) * 100),
             );
             setProgress(pct);
-          } else if (payload.status === "installed") {
+          } else if (payload.status === "prepared") {
             setProgress(100);
-            if (payload.version) {
-              setPreparedUpdateVersion(payload.version);
-            }
             setShowDownloadProgress(false);
             preDownloadInProgressRef.current = false;
           }
@@ -144,8 +100,8 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
         } else {
           unlisten();
         }
-      } catch {
-        // event API not available
+      } catch (error) {
+        console.error("[auto-update] Progress listener unavailable:", error);
       }
     })();
 
@@ -158,22 +114,19 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
 
   const startSilentPreDownload = useCallback(async (forVersion: string) => {
     if (!isTauri() || preDownloadInProgressRef.current) return;
-    if (getPreparedUpdateVersion() === forVersion) return;
 
     preDownloadInProgressRef.current = true;
     setProgress(0);
     try {
       const result = await checkForUpdates(true);
       setStatus(result);
-      if (result.status === "installed") {
+      if (result.status === "prepared") {
         setProgress(100);
-        if (result.version) {
-          setPreparedUpdateVersion(result.version);
-        }
+        setShowDownloadProgress(false);
       }
     } catch (err) {
       console.error("[auto-update] Background pre-download failed:", err);
-      clearPreparedUpdateVersion();
+      setStatus({ status: "error", version: forVersion, body: "The update could not be prepared. Retry the download." });
     } finally {
       preDownloadInProgressRef.current = false;
     }
@@ -187,30 +140,23 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
       try {
         const result = await checkForUpdates(false);
 
-        if (result.status === "up_to_date") {
-          clearPreparedUpdateVersion();
+        if (result.status === "up_to_date" || result.status === "prepared") {
           setStatus(result);
+          if (result.status === "prepared") setProgress(100);
         } else if (result.status === "available" && result.version) {
-          if (getPreparedUpdateVersion() === result.version) {
-            setStatus({
-              status: "installed",
-              version: result.version,
-              ...(result.body !== undefined ? { body: result.body } : {}),
-            });
-            setProgress(100);
-          } else {
-            setStatus(result);
-            if (opts?.showResult) {
-              setDialogOpen(true);
-              setDismissed(false);
-            }
-            void startSilentPreDownload(result.version);
+          setStatus(result);
+          if (opts?.showResult) {
+            setDialogOpen(true);
+            setDismissed(false);
           }
+          void startSilentPreDownload(result.version);
         } else {
           setStatus(result);
         }
-      } catch {
-        // Network error or updater not available — fail silently
+      } catch (error) {
+        console.error("[auto-update] Update check failed:", error);
+        setStatus({ status: "error", body: "Update check failed. Retry later." });
+        if (opts?.showResult) setDialogOpen(true);
       } finally {
         setBusy(false);
       }
@@ -221,7 +167,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const install = useCallback(async () => {
     if (!isTauri()) return;
 
-    if (status?.status === "installed") {
+    if (status?.status === "prepared") {
       setShowDownloadProgress(false);
       setDialogOpen(true);
       return;
@@ -240,16 +186,17 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     try {
       const result = await checkForUpdates(true);
       setStatus(result);
-      if (result.status === "installed") {
+      if (result.status === "prepared") {
         setProgress(100);
-        if (result.version) {
-          setPreparedUpdateVersion(result.version);
-        }
         setShowDownloadProgress(false);
       }
     } catch (err) {
       console.error("[auto-update] Install failed:", err);
-      clearPreparedUpdateVersion();
+      setStatus({
+        status: "error",
+        ...(status?.version ? { version: status.version } : {}),
+        body: "The update could not be prepared. Retry the download.",
+      });
     } finally {
       preDownloadInProgressRef.current = false;
     }
@@ -259,10 +206,21 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     setRestarting(true);
     // Brief delay so the UI can render the restarting state before the process exits
     await new Promise((r) => setTimeout(r, 500));
-    await restartApp();
+    try {
+      await restartForUpdate();
+    } catch (error) {
+      console.error("[auto-update] Applying prepared update failed:", error);
+      setStatus({
+        status: "error",
+        ...(status?.version ? { version: status.version } : {}),
+        body: "The update could not be installed. The current app was restored; retry the download.",
+      });
+      setRestarting(false);
+      return;
+    }
     // If restartApp doesn't terminate (e.g. dev/browser env), reset after a few seconds
     setTimeout(() => setRestarting(false), 5000);
-  }, []);
+  }, [status?.version]);
 
   const dismiss = useCallback(() => {
     setDialogOpen(false);

@@ -21,6 +21,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 mod lifecycle_log;
+mod update_staging;
 #[cfg(target_os = "macos")]
 mod appkit_terminate;
 // FS-C5b: the app's side of the sync daemon — it holds the control token so the webview never
@@ -1829,6 +1830,7 @@ fn parse_engine_port_from_discovery(text: &str) -> Option<u16> {
 #[tauri::command]
 async fn restart_for_update(
     app: tauri::AppHandle,
+    update_staging_state: tauri::State<'_, UpdateStagingState>,
     sidecar_state: tauri::State<'_, SidecarState>,
     transcription_state: tauri::State<'_, TranscriptionState>,
     llm_process: tauri::State<'_, llm::commands::LlmProcessHandle>,
@@ -1836,9 +1838,21 @@ async fn restart_for_update(
     wake_word_state: tauri::State<'_, WakeWordAppState>,
     recording_state: tauri::State<'_, RecordingState>,
 ) -> Result<(), String> {
-    restart_app_impl(
-        app,
-        "auto-updater installed an update; app will relaunch".into(),
+    let _operation = update_staging_state.operation.lock().await;
+    let prepared = update_staging_state
+        .prepared
+        .lock()
+        .map_err(|_| "Update preparation state is unavailable. Retry the download.".to_string())?
+        .take()
+        .ok_or_else(|| "No verified update is prepared. Download the update before restarting.".to_string())?;
+
+    if !prepared.artifact_path.is_file() {
+        return Err("The prepared update is no longer available. Download it again.".to_string());
+    }
+    let preflight = preflight_update_install(&prepared)?;
+
+    shutdown_before_restart(
+        "verified update is prepared; applying after owned shutdown",
         &sidecar_state,
         &transcription_state,
         &llm_process,
@@ -1846,7 +1860,39 @@ async fn restart_for_update(
         &wake_word_state,
         &recording_state,
     )
-    .await
+    .await;
+
+    let install_result = install_prepared_update(&app, &prepared);
+    if install_result.is_err() {
+        #[cfg(target_os = "macos")]
+        match restore_macos_rollback(&preflight.0, &preflight.1) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&preflight.1);
+                let _ = update_staging::record_install_failure(
+                    prepared.artifact_path.parent().expect("prepared artifact has parent"),
+                    "The update could not be installed. The previous app was restored; retry the download.",
+                );
+                app.request_restart();
+                return Ok(());
+            }
+            Err(restore_error) => return Err(restore_error),
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = update_staging::record_install_failure(
+                prepared.artifact_path.parent().expect("prepared artifact has parent"),
+                "The update could not be installed. AI Matrx restarted without applying it; retry the download.",
+            );
+            app.request_restart();
+            return Ok(());
+        }
+    }
+
+    let _ = std::fs::remove_file(&prepared.artifact_path);
+    #[cfg(target_os = "macos")]
+    let _ = std::fs::remove_dir_all(&preflight.1);
+    app.request_restart();
+    Ok(())
 }
 
 /// Relaunch the complete application through the ownership-safe shutdown
@@ -1886,19 +1932,16 @@ async fn restart_app_impl(
     wake_word_state: &WakeWordAppState,
     recording_state: &RecordingState,
 ) -> Result<(), String> {
-    graceful_shutdown_sync(
-        &format!("restart_app command ({})", reason),
+    shutdown_before_restart(
+        &reason,
         sidecar_state,
         transcription_state,
         llm_process,
-        Some(llm_server_state),
-        Some(wake_word_state),
-        Some(recording_state),
-    );
-
-    // Give child processes a moment to exit cleanly before we restart.
-    // This avoids orphaned port bindings on the new instance's startup.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        llm_server_state,
+        wake_word_state,
+        recording_state,
+    )
+    .await;
 
     // `request_restart()` fires RunEvent::ExitRequested + RunEvent::Exit and
     // then relaunches through the proper OS shutdown sequence, so macOS does
@@ -1907,6 +1950,27 @@ async fn restart_app_impl(
     // task and need the Tokio runtime to wind down cleanly.
     app.request_restart();
     Ok(())
+}
+
+async fn shutdown_before_restart(
+    reason: &str,
+    sidecar_state: &SidecarState,
+    transcription_state: &TranscriptionState,
+    llm_process: &llm::commands::LlmProcessHandle,
+    llm_server_state: &llm::commands::LlmServerState,
+    wake_word_state: &WakeWordAppState,
+    recording_state: &RecordingState,
+) {
+    graceful_shutdown_sync(
+        &format!("restart_app command ({reason})"),
+        sidecar_state,
+        transcription_state,
+        llm_process,
+        Some(llm_server_state),
+        Some(wake_word_state),
+        Some(recording_state),
+    );
+
 }
 
 /// Reload only the invoking window's webview. The engine and Rust-owned
@@ -2124,35 +2188,184 @@ struct UpdateProgress {
     downloaded: u64,
 }
 
-/// Check for app updates and optionally install them.
+struct PreparedUpdate {
+    update: tauri_plugin_updater::Update,
+    verified_bytes: Vec<u8>,
+    artifact_path: std::path::PathBuf,
+    progress: UpdateProgress,
+}
+
+struct UpdateStagingState {
+    /// Both preparing and applying mutate the same artifact and must be
+    /// single-filed across all windows.
+    operation: tokio::sync::Mutex<()>,
+    prepared: Mutex<Option<PreparedUpdate>>,
+}
+
+impl Default for UpdateStagingState {
+    fn default() -> Self {
+        Self {
+            operation: tokio::sync::Mutex::new(()),
+            prepared: Mutex::new(None),
+        }
+    }
+}
+
+fn update_staging_directory(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_cache_dir()
+        .map(|path| path.join("verified-updates"))
+        .map_err(|error| {
+            log::error!("update staging directory is unavailable: {}", error);
+            "The update could not be prepared. Retry the download.".to_string()
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_rollback_backup(
+    staging_directory: &std::path::Path,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        log::error!("cannot locate application executable before update install: {}", error);
+        "The update cannot be safely applied. Download it again and retry.".to_string()
+    })?;
+    let bundle = update_staging::macos_bundle_root(&executable).ok_or_else(|| {
+        log::error!("refusing update install: executable is not inside a macOS application bundle");
+        "The update cannot be safely applied from this application location.".to_string()
+    })?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let backup = staging_directory.join(format!("rollback-{}-{nonce}.app", std::process::id()));
+    update_staging::copy_macos_bundle(&bundle, &backup).map_err(|error| {
+        log::error!("could not preserve macOS application rollback bundle: {}", error);
+        "The update cannot be safely applied because a rollback copy could not be made.".to_string()
+    })?;
+    if !backup.is_dir() {
+        log::error!("macOS application rollback copy was not created");
+        return Err("The update cannot be safely applied because its rollback copy is unavailable.".to_string());
+    }
+    Ok((bundle, backup))
+}
+
+#[cfg(target_os = "macos")]
+fn restore_macos_rollback(bundle: &std::path::Path, backup: &std::path::Path) -> Result<(), String> {
+    if !backup.is_dir() {
+        log::error!("macOS update rollback copy disappeared before restore");
+        return Err("The update failed and its rollback copy is unavailable. Do not restart; download the app again.".to_string());
+    }
+    if bundle.exists() {
+        std::fs::remove_dir_all(bundle).map_err(|error| {
+            log::error!("could not clear failed macOS update bundle before rollback: {}", error);
+            "The update failed and the previous app could not be restored. Do not restart; download the app again.".to_string()
+        })?;
+    }
+    update_staging::copy_macos_bundle(backup, bundle).map_err(|error| {
+        log::error!("could not restore macOS application rollback bundle: {}", error);
+        "The update failed and the previous app could not be restored. Do not restart; download the app again.".to_string()
+    })?;
+    if !bundle.is_dir() {
+        return Err("The update failed and the previous app could not be restored. Do not restart; download the app again.".to_string());
+    }
+    Ok(())
+}
+
+fn install_prepared_update(app: &tauri::AppHandle, prepared: &PreparedUpdate) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    let progress = UpdateProgress {
+        status: "installing".to_string(),
+        version: prepared.progress.version.clone(),
+        body: None,
+        content_length: prepared.progress.content_length,
+        downloaded: prepared.progress.downloaded,
+    };
+    let _ = app.emit("update-progress", progress);
+    if let Err(error) = prepared.update.install(&prepared.verified_bytes) {
+        log::error!("verified updater artifact failed to install: {}", error);
+        return Err("The update could not be installed. The current app was restored; retry the download.".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+type UpdateInstallPreflight = (std::path::PathBuf, std::path::PathBuf);
+#[cfg(not(target_os = "macos"))]
+type UpdateInstallPreflight = ();
+
+fn preflight_update_install(prepared: &PreparedUpdate) -> Result<UpdateInstallPreflight, String> {
+    let staging_directory = prepared.artifact_path.parent().ok_or_else(|| {
+        "The prepared update is no longer available. Download it again.".to_string()
+    })?;
+    #[cfg(target_os = "macos")]
+    {
+        macos_rollback_backup(staging_directory)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = staging_directory;
+        Ok(())
+    }
+}
+
+/// Check for app updates and optionally prepare a verified staged artifact.
 ///
-/// When `install` is true, downloads and installs the update, emitting
+/// When `prepare` is true, downloads and stages the verified update, emitting
 /// `update-progress` events with cumulative byte counts so the frontend
 /// can render an accurate progress bar.
 #[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<UpdateProgress, String> {
+async fn check_for_updates(
+    app: tauri::AppHandle,
+    prepare: bool,
+    update_staging_state: tauri::State<'_, UpdateStagingState>,
+) -> Result<UpdateProgress, String> {
+    let _operation = update_staging_state.operation.lock().await;
+    if let Some(message) = update_staging::take_install_failure(&update_staging_directory(&app)?).map_err(|error| {
+        log::error!("could not read update recovery notice: {}", error);
+        "Update recovery status is unavailable. Retry later.".to_string()
+    })? {
+        return Ok(UpdateProgress {
+            status: "error".to_string(),
+            version: None,
+            body: Some(message),
+            content_length: None,
+            downloaded: 0,
+        });
+    }
+    if let Some(prepared) = update_staging_state.prepared.lock().map_err(|_| "Update preparation state is unavailable. Retry the download.".to_string())?.as_ref() {
+        if prepared.artifact_path.is_file() {
+            return Ok(prepared.progress.clone());
+        }
+    }
     let updater = app
         .updater()
-        .map_err(|e| format!("Updater not available: {}", e))?;
+        .map_err(|e| {
+            log::error!("updater is unavailable: {}", e);
+            "Updates are unavailable right now. Retry later.".to_string()
+        })?;
 
     let update = updater
         .check()
         .await
-        .map_err(|e| format!("Update check failed: {}", e))?;
+        .map_err(|e| {
+            log::error!("update check failed: {}", e);
+            "Update check failed. Retry later.".to_string()
+        })?;
 
     match update {
         Some(update) => {
             let version = update.version.clone();
             let body = update.body.clone();
 
-            if install {
+            if prepare {
                 let app_handle = app.clone();
                 let ver = version.clone();
                 let total_downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let dl = total_downloaded.clone();
 
-                update
-                    .download_and_install(
+                let verified_bytes = update
+                    .download(
                         move |chunk_length, content_length| {
                             let cumulative = dl.fetch_add(
                                 chunk_length as u64,
@@ -2172,18 +2385,27 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
                         || {},
                     )
                     .await
-                    .map_err(|e| format!("Update install failed: {}", e))?;
+                    .map_err(|e| {
+                        log::error!("update download or signature verification failed: {}", e);
+                        "The update could not be verified. Retry the download.".to_string()
+                    })?;
 
                 let final_downloaded = total_downloaded.load(std::sync::atomic::Ordering::Relaxed);
 
                 let result = UpdateProgress {
+<<<<<<< Updated upstream
                     status: "installed".to_string(),
                     version: Some(version.clone()),
+=======
+                    status: "prepared".to_string(),
+                    version: Some(version),
+>>>>>>> Stashed changes
                     body,
                     content_length: None,
                     downloaded: final_downloaded,
                 };
 
+<<<<<<< Updated upstream
                 // The files on disk have just been swapped under us. Nothing
                 // about this process changed, so every surface that reports a
                 // version is now reporting the OLD build — announce it at the
@@ -2193,6 +2415,30 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
                      remedy: restart AI Matrx (Settings → About → Restart, or the update banner)",
                     app.package_info().version
                 ));
+=======
+                let artifact_path = update_staging::stage_verified_artifact(
+                    &update_staging_directory(&app)?,
+                    &verified_bytes,
+                )
+                .map_err(|error| {
+                    log::error!("could not stage verified update artifact: {}", error);
+                    "The update could not be prepared. Retry the download.".to_string()
+                })?;
+                update_staging::cleanup_abandoned_artifacts(
+                    artifact_path.parent().expect("staged artifact has parent"),
+                    Some(&artifact_path),
+                )
+                .map_err(|error| {
+                    log::error!("could not clean abandoned staged updates: {}", error);
+                    "The update could not be prepared. Retry the download.".to_string()
+                })?;
+                *update_staging_state.prepared.lock().map_err(|_| "Update preparation state is unavailable. Retry the download.".to_string())? = Some(PreparedUpdate {
+                    update,
+                    verified_bytes,
+                    artifact_path,
+                    progress: result.clone(),
+                });
+>>>>>>> Stashed changes
                 let _ = app.emit("update-progress", result.clone());
                 Ok(result)
             } else {
@@ -2518,6 +2764,7 @@ pub fn run() {
             lines: Arc::new(Mutex::new(Vec::new())),
         })
         .manage(EngineSupervisorState::default())
+        .manage(UpdateStagingState::default())
         .manage(CloseToTray(AtomicBool::new(true)))
         .manage(windows::WindowRegistry::default())
         .manage(PendingOAuthUrl(Mutex::new(None)))

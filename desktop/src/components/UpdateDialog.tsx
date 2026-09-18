@@ -38,28 +38,47 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
   // says so, because `*_length` almost everywhere else in this fleet is a
   // CHARACTER count (see the note on UpdateStatus in lib/sidecar.ts).
   const totalBytes = status?.content_length;
+<<<<<<< Updated upstream
   // Same rule as the banner: "installed but not running" is a derived truth
   // from the bundle on disk, not an in-memory status that a reload can lose.
   const versions = useVersionStateOrNull();
   const isInstalled =
     (versions?.restartRequired ?? false) || status?.status === "installed";
   const pendingVersion = versions?.pendingVersion ?? status?.version ?? null;
+=======
+  const isPrepared = status?.status === "prepared";
+  const isError = status?.status === "error";
+>>>>>>> Stashed changes
   const showAsAvailable =
     status?.status === "available" ||
     (status?.status === "downloading" && !showDownloadProgress);
 
+<<<<<<< Updated upstream
   // "Ready to Install" was a lie in the other direction: it is already
   // installed on disk. What is left is the restart.
   const titleText = isInstalled
     ? "Restart to Finish Update"
+=======
+  const titleText = isError
+    ? "Update Needs Attention"
+    : isPrepared
+    ? "Ready to Apply"
+>>>>>>> Stashed changes
     : isDownloadingUi
       ? "Downloading Update"
       : "Update Available";
 
+<<<<<<< Updated upstream
   const descriptionText = isInstalled
     ? pendingVersion
       ? `Version ${pendingVersion.replace(/^v/i, "")} is installed on disk. This window keeps running ${APP_VERSION} until AI Matrx restarts.`
       : "A newer build is installed on disk. AI Matrx keeps running the previous build until it restarts."
+=======
+  const descriptionText = isError
+    ? (status?.body ?? "The update could not be completed. Retry the download.")
+    : isPrepared
+    ? "The update has been verified and prepared. Restart to apply the new version."
+>>>>>>> Stashed changes
     : isDownloadingUi
       ? "Downloading the update…"
       : "A new version of AI Matrx is available. If you already checked for updates, the download may be running in the background — tap Install to see progress or finish setup.";
@@ -69,7 +88,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
       <DialogContent className="flex max-h-[85vh] max-w-md flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
           <DialogTitle className="flex items-center gap-2">
-            {isInstalled ? (
+            {isPrepared ? (
               <CheckCircle2 className="h-5 w-5 text-green-500" />
             ) : (
               <ArrowUpCircle className="h-5 w-5 text-primary" />
@@ -127,7 +146,12 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
         </div>
 
         <DialogFooter className="shrink-0 px-6 py-4 border-t">
-          {isInstalled ? (
+          {isError ? (
+            <>
+              <Button variant="ghost" onClick={actions.dismiss}>Later</Button>
+              <Button onClick={() => void actions.install()} disabled={busy}>Retry download</Button>
+            </>
+          ) : isPrepared ? (
             <Button onClick={() => void actions.restart()} disabled={restarting} className="gap-2">
               {restarting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -159,7 +183,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
                 ) : (
                   <Download className="h-4 w-4" />
                 )}
-                Download & Install
+                Download & Prepare
               </Button>
             </>
           )}

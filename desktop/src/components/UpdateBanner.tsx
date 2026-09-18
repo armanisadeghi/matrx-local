@@ -38,6 +38,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
   const dismissedVersionRef = useRef<string | null>(null);
   const versions = useVersionStateOrNull();
 
+<<<<<<< Updated upstream
   // The derived truth wins over the ephemeral status: the bundle on disk is
   // ahead of this process whether or not this renderer watched it happen.
   // EITHER signal is enough, and neither may mask the other: the derived state
@@ -46,6 +47,10 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
   const isInstalled =
     (versions?.restartRequired ?? false) || status?.status === "installed";
   const pendingVersion = versions?.pendingVersion ?? status?.version ?? null;
+=======
+  const isPrepared = status?.status === "prepared";
+  const isError = status?.status === "error";
+>>>>>>> Stashed changes
   const isDownloadingUi = showDownloadProgress && status?.status === "downloading";
   // BYTES. The Tauri updater's `content_length` IS the HTTP Content-Length of
   // the artifact; the byte-size formatter is right here and the local name
@@ -72,7 +77,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
 
     if (!status) return;
 
-    if (isInstalled || isDownloadingUi || showAsAvailable) {
+    if (isPrepared || isDownloadingUi || showAsAvailable || isError) {
       if (
         (showAsAvailable || isDownloadingUi) &&
         status.version &&
@@ -83,7 +88,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
       setVisible(true);
       setDismissed(false);
     }
-  }, [status, isInstalled, isDownloadingUi, showAsAvailable]);
+  }, [status, isPrepared, isDownloadingUi, showAsAvailable, isError]);
 
   const handleDismiss = () => {
     setVisible(false);
@@ -102,6 +107,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     actions.openDialog();
   };
 
+<<<<<<< Updated upstream
   // The restart state renders on the FIRST paint, with no effect in between:
   // it is derived from the bundle on disk, and a state that has to wait for an
   // effect is a state that a fast reload can skip.
@@ -109,6 +115,10 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     if (!visible || dismissed) return null;
     if (!showAsAvailable && !isDownloadingUi) return null;
   }
+=======
+  if (!visible || dismissed) return null;
+  if (!showAsAvailable && !isDownloadingUi && !isPrepared && !isError) return null;
+>>>>>>> Stashed changes
 
   return (
     <div
@@ -122,7 +132,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     >
       <div className="flex items-start gap-3 p-4 pb-3">
         <div className="mt-0.5 shrink-0">
-          {isInstalled ? (
+          {isPrepared ? (
             <RefreshCw className="h-4 w-4 text-green-500" />
           ) : isDownloadingUi ? (
             <Loader2 className="h-4 w-4 text-primary animate-spin" />
@@ -133,23 +143,39 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
 
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold leading-tight">
+<<<<<<< Updated upstream
             {isInstalled
               ? (versions?.restartHeadline ??
                 "Update installed — restart AI Matrx to finish")
+=======
+            {isError
+              ? "Update needs attention"
+              : isPrepared
+              ? "Update ready to apply"
+>>>>>>> Stashed changes
               : isDownloadingUi
                 ? "Downloading update…"
                 : "Update available"}
           </p>
+<<<<<<< Updated upstream
           {(pendingVersion ?? status?.version) && (
             <p className="text-xs text-muted-foreground mt-0.5">
               {isInstalled
                 ? `v${(pendingVersion ?? "").replace(/^v/i, "")} is installed on disk — this window still runs ${APP_VERSION}`
+=======
+          {isError && status?.body ? (
+            <p className="text-xs text-destructive mt-0.5">{status.body}</p>
+          ) : status?.version && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {isPrepared
+                ? `v${status.version} — restart to apply`
+>>>>>>> Stashed changes
                 : isDownloadingUi
                   ? `v${status?.version}`
                   : `${APP_VERSION} → v${status?.version}`}
             </p>
           )}
-          {showAsAvailable && !isDownloadingUi && !isInstalled && (
+          {showAsAvailable && !isDownloadingUi && !isPrepared && (
             <p className="text-xs text-muted-foreground mt-1">
               Download runs in the background — choose Install when you&apos;re ready.
             </p>
@@ -183,7 +209,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
       )}
 
       <div className="flex items-center gap-2 px-4 pb-4">
-        {isInstalled ? (
+        {isPrepared ? (
           <Button
             size="sm"
             onClick={() => void actions.restart()}
@@ -205,6 +231,10 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
             className="flex-1 h-8 text-xs"
           >
             View Progress
+          </Button>
+        ) : isError ? (
+          <Button size="sm" onClick={handleInstall} disabled={busy} className="flex-1 gap-1.5 h-8 text-xs">
+            <RefreshCw className="h-3.5 w-3.5" /> Retry download
           </Button>
         ) : (
           <>
@@ -244,4 +274,3 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     </div>
   );
 }
-

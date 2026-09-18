@@ -22,7 +22,7 @@
  */
 
 import type { ClaudeCloudCheck, ClaudeIndexReport, ClaudeOverview } from "@/lib/api";
-import { formatRelativeTime } from "@ai-matrx/kit/format";
+import { formatCount, formatRelativeTime } from "@ai-matrx/kit/format";
 
 export type IndexState = "cold" | "refreshing" | "fresh" | "unreported";
 
@@ -100,14 +100,14 @@ export function indexNotice(overview: ClaudeOverview | null): IndexNotice | null
       headline: "Reading your conversations for the first time…",
       detail:
         report.files_read > 0
-          ? `${report.files_read.toLocaleString()} index files read so far. They appear here as soon as this finishes.`
+          ? `${formatCount(report.files_read)} index files read so far. They appear here as soon as this finishes.`
           : "Nothing has been read yet. Your conversations appear here as soon as this finishes.",
     };
   }
   const parts: string[] = [];
   if (report.changed_files !== null && report.changed_files > 0) {
     parts.push(
-      `${report.changed_files.toLocaleString()} changed record${report.changed_files === 1 ? "" : "s"}`,
+      `${formatCount(report.changed_files)} changed record${report.changed_files === 1 ? "" : "s"}`,
     );
   }
   if (report.duration_seconds !== null) {
@@ -157,7 +157,7 @@ export function cloudHeaderText(
   switch (cloudPhase(cloud)) {
     case "checked": {
       const when = cloudAgeLabel(cloud) ?? `checked ${stampFallback(cloud?.checked_at)}`;
-      return `AI Matrx holds ${(cloud?.sessions ?? 0).toLocaleString()} of them (${when})`;
+      return `AI Matrx holds ${formatCount((cloud?.sessions ?? 0))} of them (${when})`;
     }
     case "in_flight":
       return "AI Matrx is being asked which of them it holds";

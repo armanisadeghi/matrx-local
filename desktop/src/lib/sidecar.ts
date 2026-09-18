@@ -142,7 +142,7 @@ export async function setCloseToTray(enabled: boolean): Promise<void> {
 }
 
 export interface UpdateStatus {
-  status: "up_to_date" | "available" | "downloading" | "installed";
+  status: "up_to_date" | "available" | "downloading" | "prepared" | "installing" | "error";
   version?: string;
   body?: string;
   /** BYTES — the HTTP Content-Length of the update artifact, from the Tauri
@@ -152,6 +152,7 @@ export interface UpdateStatus {
   downloaded?: number;
 }
 
+<<<<<<< Updated upstream
 /**
  * The version of the app bundle **as it currently sits on disk**.
  *
@@ -173,10 +174,19 @@ export async function getInstalledAppVersion(): Promise<string | null> {
 
 /** Check for updates via the Tauri updater plugin. */
 export async function checkForUpdates(install = false): Promise<UpdateStatus> {
+=======
+/** Check for updates and, when requested, prepare a verified artifact. */
+export async function checkForUpdates(prepare = false): Promise<UpdateStatus> {
+>>>>>>> Stashed changes
   const inv = await loadTauriInvoke();
   if (!inv) return { status: "up_to_date" };
-  const result = await inv("check_for_updates", { install }) as UpdateStatus;
+  const result = await inv("check_for_updates", { prepare }) as UpdateStatus;
   return result;
+}
+
+/** Apply the backend-owned verified artifact after the owned shutdown path. */
+export async function restartForUpdate(): Promise<void> {
+  await invokeTauri<void>("restart_for_update");
 }
 
 /**

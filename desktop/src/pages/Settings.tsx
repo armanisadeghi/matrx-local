@@ -4578,6 +4578,7 @@ export function Settings({
                       <div className="flex items-center justify-between">
                         <div>
                           <Label>Updates</Label>
+<<<<<<< Updated upstream
                           {/* ONE sentence, from the ONE helper. It can never
                               say "latest" while a newer build sits on disk —
                               the bug Arman read as the app lying to him. */}
@@ -4590,6 +4591,25 @@ export function Settings({
                         </div>
                         <div className="flex gap-2">
                           {versions.restartRequired ? (
+=======
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {updateStatus?.status === "prepared"
+                              ? "Update prepared \u2014 restart to apply"
+                              : updateShowDownloadProgress &&
+                                  updateStatus?.status === "downloading"
+                                ? "Downloading update…"
+                                : updateStatus?.status === "available" ||
+                                    (updateStatus?.status === "downloading" &&
+                                      !updateShowDownloadProgress)
+                                  ? `v${updateStatus.version} available — preparing in the background; use Install when ready`
+                                  : updateStatus?.status === "up_to_date"
+                                    ? "You're on the latest version"
+                                    : "Check for new releases"}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          {updateStatus?.status === "prepared" ? (
+>>>>>>> Stashed changes
                             <Button
                               size="sm"
                               disabled={updateRestarting}

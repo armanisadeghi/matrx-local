@@ -27,7 +27,7 @@ import { laneBlockerTone } from "@/lib/lane-blocker";
 import { PROVIDER_LABELS } from "@/lib/coding-sessions/providers";
 import type { CodingSessionsSnapshot } from "@/lib/coding-sessions/overview-store";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 
 const PROVIDERS: CodingSessionProvider[] = ["claude_code", "codex", "cursor", "vscode"];
 
@@ -137,13 +137,13 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
         </table>
         {snapshot.bridge && (
           <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-            {snapshot.bridge.pending.total.toLocaleString()} deliver
+            {formatCount(snapshot.bridge.pending.total)} deliver
             {snapshot.bridge.pending.total === 1 ? "y" : "ies"} waiting across all apps
             {snapshot.bridge.pending.item_count
-              ? ` (${snapshot.bridge.pending.item_count.toLocaleString()} events, ${formatFileSize(snapshot.bridge.pending.payload_bytes)})`
+              ? ` (${formatCount(snapshot.bridge.pending.item_count)} events, ${formatFileSize(snapshot.bridge.pending.payload_bytes)})`
               : ""}
             {snapshot.bridge.quarantine.total > 0
-              ? ` · ${snapshot.bridge.quarantine.total.toLocaleString()} refused and preserved`
+              ? ` · ${formatCount(snapshot.bridge.quarantine.total)} refused and preserved`
               : ""}
             {snapshot.bridge.publisher.active
               ? snapshot.bridge.publisher.blocker
@@ -161,11 +161,11 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
           <p className="border-t px-4 py-2 text-xs text-muted-foreground">
             Publisher: last tick{" "}
             {formatStamp(snapshot.bridge.publisher.ticks.last_tick_at)} · sent{" "}
-            {snapshot.bridge.publisher.ticks.last_tick_sent.toLocaleString()} · failed{" "}
-            {snapshot.bridge.publisher.ticks.last_tick_failed.toLocaleString()} · eligible{" "}
+            {formatCount(snapshot.bridge.publisher.ticks.last_tick_sent)} · failed{" "}
+            {formatCount(snapshot.bridge.publisher.ticks.last_tick_failed)} · eligible{" "}
             {snapshot.bridge.publisher.ticks.last_tick_eligible === null
               ? "not measured"
-              : snapshot.bridge.publisher.ticks.last_tick_eligible.toLocaleString()}
+              : formatCount(snapshot.bridge.publisher.ticks.last_tick_eligible)}
             {/* The one field that explains a zero. */}
             {snapshot.bridge.publisher.ticks.last_tick_blocked
               ? ` · blocked: ${snapshot.bridge.publisher.ticks.last_tick_blocked}`
@@ -279,26 +279,26 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
             )}
 
             <p className="px-4 py-2 text-sm">
-              <span className="tabular-nums">{snapshot.artifacts.sessions.toLocaleString()}</span> session
+              <span className="tabular-nums">{formatCount(snapshot.artifacts.sessions)}</span> session
               {snapshot.artifacts.sessions === 1 ? "" : "s"} ·{" "}
-              <span className="tabular-nums">{snapshot.artifacts.files.toLocaleString()}</span> file
+              <span className="tabular-nums">{formatCount(snapshot.artifacts.files)}</span> file
               {snapshot.artifacts.files === 1 ? "" : "s"} · {formatFileSize(snapshot.artifacts.bytes)} ·{" "}
               <span
                 className="text-emerald-600 dark:text-emerald-400"
-                title={`Confirmed by reading the file id back from AI Matrx. AI Matrx holds ${snapshot.artifacts.cloud_rows.toLocaleString()} file(s) for these ${snapshot.artifacts.files.toLocaleString()} captured path(s): ${snapshot.artifacts.deduplicated.toLocaleString()} path(s) are byte-identical copies that share an existing file, and ${snapshot.artifacts.superseded_versions.toLocaleString()} earlier version(s) were superseded.`}
+                title={`Confirmed by reading the file id back from AI Matrx. AI Matrx holds ${formatCount(snapshot.artifacts.cloud_rows)} file(s) for these ${formatCount(snapshot.artifacts.files)} captured path(s): ${formatCount(snapshot.artifacts.deduplicated)} path(s) are byte-identical copies that share an existing file, and ${formatCount(snapshot.artifacts.superseded_versions)} earlier version(s) were superseded.`}
               >
-                {snapshot.artifacts.uploaded.toLocaleString()} confirmed in AI Matrx
+                {formatCount(snapshot.artifacts.uploaded)} confirmed in AI Matrx
               </span>{" "}
               ·{" "}
               <span className="tabular-nums">
-                {snapshot.artifacts.cloud_rows.toLocaleString()} file
+                {formatCount(snapshot.artifacts.cloud_rows)} file
                 {snapshot.artifacts.cloud_rows === 1 ? "" : "s"} there
               </span>
               {snapshot.artifacts.deduplicated > 0 ? (
                 <>
                   {" · "}
                   <span className="tabular-nums">
-                    {snapshot.artifacts.deduplicated.toLocaleString()} share an identical file
+                    {formatCount(snapshot.artifacts.deduplicated)} share an identical file
                   </span>
                 </>
               ) : null}
@@ -306,31 +306,31 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
                 <>
                   {" · "}
                   <span className="tabular-nums">
-                    {snapshot.artifacts.awaiting_confirmation.toLocaleString()} not read back yet
+                    {formatCount(snapshot.artifacts.awaiting_confirmation)} not read back yet
                   </span>
                 </>
               ) : null}
               {" · "}
-              <span className="tabular-nums">{snapshot.artifacts.pending_upload.toLocaleString()}</span> pending
+              <span className="tabular-nums">{formatCount(snapshot.artifacts.pending_upload)}</span> pending
               {" · "}
               <span className={snapshot.artifacts.missing_in_cloud > 0 ? "text-destructive" : "tabular-nums"}>
-                {snapshot.artifacts.missing_in_cloud.toLocaleString()} missing in AI Matrx
+                {formatCount(snapshot.artifacts.missing_in_cloud)} missing in AI Matrx
               </span>
               {" · "}
               <span className={snapshot.artifacts.failed_upload > 0 ? "text-destructive" : "tabular-nums"}>
-                {snapshot.artifacts.failed_upload.toLocaleString()} failed
+                {formatCount(snapshot.artifacts.failed_upload)} failed
               </span>
               {" · "}
               <span className={snapshot.artifacts.abandoned_upload > 0 ? "text-destructive" : "tabular-nums"}>
-                {snapshot.artifacts.abandoned_upload.toLocaleString()} abandoned
+                {formatCount(snapshot.artifacts.abandoned_upload)} abandoned
               </span>
               {" · "}
               <span
                 className="tabular-nums"
-                title={`Skipped: ${snapshot.artifacts.skipped_over_size.toLocaleString()} over ${formatFileSize(snapshot.artifacts.limits.max_file_bytes)}, ${snapshot.artifacts.skipped_over_count.toLocaleString()} past the ${snapshot.artifacts.limits.max_files_per_session.toLocaleString()}-file per-session cap.`}
+                title={`Skipped: ${formatCount(snapshot.artifacts.skipped_over_size)} over ${formatFileSize(snapshot.artifacts.limits.max_file_bytes)}, ${formatCount(snapshot.artifacts.skipped_over_count)} past the ${formatCount(snapshot.artifacts.limits.max_files_per_session)}-file per-session cap.`}
               >
-                skipped {snapshot.artifacts.skipped_over_size.toLocaleString()} over size /{" "}
-                {snapshot.artifacts.skipped_over_count.toLocaleString()} over count
+                skipped {formatCount(snapshot.artifacts.skipped_over_size)} over size /{" "}
+                {formatCount(snapshot.artifacts.skipped_over_count)} over count
               </span>
             </p>
 
@@ -343,7 +343,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
               {snapshot.artifacts.cloud_enabled ? "" : " · cloud publishing off"}
               {" · last tick "}
               {"at" in snapshot.artifacts.last_tick
-                ? `${formatStamp(snapshot.artifacts.last_tick.at)} · ${snapshot.artifacts.last_tick.seconds}s · captured ${snapshot.artifacts.last_tick.captured.toLocaleString()} · uploaded ${snapshot.artifacts.last_tick.uploaded.toLocaleString()} · failed ${snapshot.artifacts.last_tick.failed.toLocaleString()} · read back ${(snapshot.artifacts.last_tick.confirmed ?? 0).toLocaleString()} · missing ${(snapshot.artifacts.last_tick.missing_in_cloud ?? 0).toLocaleString()}`
+                ? `${formatStamp(snapshot.artifacts.last_tick.at)} · ${snapshot.artifacts.last_tick.seconds}s · captured ${formatCount(snapshot.artifacts.last_tick.captured)} · uploaded ${formatCount(snapshot.artifacts.last_tick.uploaded)} · failed ${formatCount(snapshot.artifacts.last_tick.failed)} · read back ${formatCount((snapshot.artifacts.last_tick.confirmed ?? 0))} · missing ${formatCount((snapshot.artifacts.last_tick.missing_in_cloud ?? 0))}`
                 : "never"}
               {` · scans every ${snapshot.artifacts.limits.scan_interval_seconds}s`}
             </p>
@@ -390,7 +390,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
                     )}
                   </div>
                   <span className="tabular-nums text-muted-foreground">
-                    {account.conversations.toLocaleString()} records
+                    {formatCount(account.conversations)} records
                   </span>
                 </div>
               ))}

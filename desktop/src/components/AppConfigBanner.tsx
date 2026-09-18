@@ -134,7 +134,7 @@ function UpdateRequiredStrip({
   actions: AutoUpdateActions;
 }) {
   const status = state.status?.status;
-  const installed = status === "installed";
+  const prepared = status === "prepared";
   const available = status === "available";
   const downloading = status === "downloading";
 
@@ -152,7 +152,7 @@ function UpdateRequiredStrip({
           please update to keep everything working with the platform.
         </span>
       </div>
-      {installed ? (
+      {prepared ? (
         <Button
           size="sm"
           className="h-7 shrink-0 bg-amber-600 px-2.5 text-xs text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"

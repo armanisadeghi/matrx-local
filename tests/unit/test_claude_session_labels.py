@@ -78,19 +78,22 @@ def _write_index_record(
 
 
 def _observe_pin(account: str, name: str, pinned: bool) -> None:
-    """Record ``name`` in (or out of) ``account``'s observed starred list.
+    """Put ``name`` in the sync's master verdict as pinned or PROVED unpinned.
 
-    The pin is the app's own starred list per account, as the machine's
-    session-sync agent last observed it (``CLAUDE_PIN_OBSERVATIONS``, isolated
-    per test by ``tests/conftest.py``) — never a record's ``isStarred`` flag.
+    The engine applies only the ``master`` section of the observations file
+    (``CLAUDE_PIN_OBSERVATIONS``, isolated per test by ``tests/conftest.py``) —
+    never a record's ``isStarred`` flag. An explicit unpin exists there only
+    once every account has been observed, so ``pinned=False`` stands for that
+    fully covered state.
     """
     path = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
     data = json.loads(path.read_text()) if path.exists() else {}
-    local = data.setdefault(account, {"local": [], "cloud": []})["local"]
-    if pinned and name not in local:
-        local.append(name)
-    if not pinned and name in local:
-        local.remove(name)
+    master = data.setdefault("master", {"pinned": [], "unpinned": []})
+    data.setdefault("accounts", {}).setdefault(account, {"local": [], "cloud": []})
+    for key in ("pinned", "unpinned"):
+        if name in master[key]:
+            master[key].remove(name)
+    master["pinned" if pinned else "unpinned"].append(name)
     path.write_text(json.dumps(data))
 
 

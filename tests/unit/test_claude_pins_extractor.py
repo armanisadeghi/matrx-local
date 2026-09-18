@@ -104,8 +104,23 @@ def _tree(tmp_path: Path, flags: dict[str, bool | None]) -> Path:
     return root
 
 
-def _extract(extractor: Any, monkeypatch: Any, root: Path, versions: Any) -> dict:
-    monkeypatch.setattr(extractor, "read_localstorage", lambda _dir: {})
+# The app's own statement of the 10:27 switch into the signed-in account
+# (localStorage, captured 2026-09-18): the session marker and the valve.
+SWITCH_MARKER = 1789752419131
+SWITCH_RAW = {
+    "rq-cache-confirmed-account-session": json.dumps(
+        {"account": ACTIVE_ACCOUNT, "marker": str(SWITCH_MARKER)}
+    ),
+    f"frame-pinned-valve:{ACTIVE_ORG}:{ACTIVE_ACCOUNT}": "1789752419844",
+}
+
+
+def _extract(
+    extractor: Any, monkeypatch: Any, root: Path, versions: Any,
+    raw: dict[str, str] | None = None,
+) -> dict:
+    ls = SWITCH_RAW if raw is None else raw
+    monkeypatch.setattr(extractor, "read_localstorage", lambda _dir: dict(ls))
     if isinstance(versions, Exception):
         def _raise(_dir: str) -> list:
             raise versions
@@ -132,7 +147,8 @@ def test_the_fixture_carries_the_app_value_shape(extractor: Any) -> None:
 def test_the_latest_value_wins_over_the_account_switch_empty_write(
     extractor: Any,
 ) -> None:
-    """The app writes EMPTY then FULL on every switch; the full one is truth."""
+    """At a switch the app writes a PARTIAL list, then the full one (10:27:00.245
+    then .786, measured 2026-09-18); the latest by ``updatedAt`` is truth."""
     latest = extractor.latest_starred(_versions())
     assert latest["updated_at"] == 1789752420786
     local, cloud = extractor.split_starred(latest["ids"])
@@ -145,9 +161,14 @@ def test_the_latest_value_wins_over_the_account_switch_empty_write(
 def test_an_empty_latest_value_is_unknown_never_unpin_everything(
     extractor: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """GUARD (c): the switch caught between its two writes publishes nothing."""
+    """GUARD (c): an empty latest value publishes nothing."""
     root = _tree(tmp_path, {ONE: True, TWO: False})
-    caught_mid_switch = _versions()[:2]  # full (older), then empty (latest)
+    empty_latest = [
+        *_versions(),
+        (9999, json.dumps({"state": {"starredIds": []}, "version": 0,
+                           "updatedAt": 1789752499999})),
+    ]
+    caught_mid_switch = empty_latest
     result = _extract(extractor, monkeypatch, root, caught_mid_switch)
     assert "app_starred" not in result
     assert "pin_states" not in result, "an empty list was published as unpins"
@@ -178,8 +199,14 @@ def test_extractor_and_engine_agree_on_every_conversation(
     result = _extract(extractor, monkeypatch, root, _versions())
     starred = result["app_starred"]
     # What the session-sync agent writes for the signed-in account.
+    # What the session-sync agent's master holds once coverage is complete:
+    # this list pinned, every other conversation proved unpinned.
     Path(os.environ["CLAUDE_PIN_OBSERVATIONS"]).write_text(json.dumps({
-        starred["account"]: {"local": starred["local"], "cloud": starred["cloud"]}
+        "accounts": {starred["account"]: {"local": starred["local"], "cloud": []}},
+        "master": {
+            "pinned": starred["local"],
+            "unpinned": [n for n, p in result["pin_states"].items() if not p],
+        },
     }))
     entries, _ = read_session_index(root, ledger_path=root / "no-ledger.json")
     engine = {e.record_paths[0].name: (e.is_pinned, e.pinned_rank) for e in entries.values()}
@@ -188,6 +215,46 @@ def test_extractor_and_engine_agree_on_every_conversation(
         for name, pinned in result["pin_states"].items()
     }
     assert engine == published
+
+
+def test_a_list_not_newer_than_the_switch_marker_is_unknown(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """R-P1 attribution race: a list older than the switch is the OLD account's.
+
+    A pass landing between the app's switch and its refill would otherwise
+    file the previous account's list under the new account.
+    """
+    root = _tree(tmp_path, {ONE: True})
+    later_switch = {
+        **SWITCH_RAW,
+        "rq-cache-confirmed-account-session": json.dumps(
+            {"account": ACTIVE_ACCOUNT, "marker": "1789752500000"}
+        ),
+    }
+    result = _extract(extractor, monkeypatch, root, _versions(), raw=later_switch)
+    assert "app_starred" not in result
+    assert "pin_states" not in result
+    assert "previous account" in result["pin_note"]
+    # And the valve alone is enough when it is the newer marker.
+    valve_later = {f"frame-pinned-valve:{ACTIVE_ORG}:{ACTIVE_ACCOUNT}": "1789752500000"}
+    result = _extract(extractor, monkeypatch, root, _versions(), raw=valve_later)
+    assert "app_starred" not in result
+    # A list written after the switch is accepted and carries the marker.
+    result = _extract(extractor, monkeypatch, root, _versions())
+    assert result["app_starred"]["switch_marker_at"] == 1789752419844
+
+
+def test_a_session_marker_naming_another_account_is_unknown(
+    extractor: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    root = _tree(tmp_path, {ONE: True})
+    mid_switch = {"rq-cache-confirmed-account-session": json.dumps(
+        {"account": OTHER_ACCOUNT, "marker": "1789752419131"}
+    )}
+    result = _extract(extractor, monkeypatch, root, _versions(), raw=mid_switch)
+    assert "app_starred" not in result
+    assert "mid-switch" in result["pin_note"]
 
 
 def test_an_account_the_app_has_not_stated_publishes_no_list(

@@ -153,17 +153,21 @@ def default_pin_observations_path() -> Path:
     return Path.home() / ".claude/claude-code-pin-observations.json"
 
 
-def read_pin_master(path: Path | None = None) -> dict[str, int] | None:
-    """THE MASTER SET: ``local_<id>.json`` -> best rank, or ``None`` = UNKNOWN.
+def read_pin_master(path: Path | None = None) -> tuple[dict[str, int], frozenset[str]] | None:
+    """THE master pin verdict: ``(pinned name -> rank, unpinned names)``.
 
-    The file is ``{"<account uuid>": {"local": ["local_<id>.json", ...], ...}}``,
-    written by ``~/.claude/sync-claude-code-sessions.py`` from each account's
-    starred list in the desktop app's IndexedDB
-    (``store:pin-state:dframe-starred-code``), the one list the app's sidebar
-    draws pins from. A conversation is pinned iff at least one account's list
-    holds it (Arman, 2026-09-18); its rank is the best (lowest) index any
-    account gives it. Absent, unreadable, or empty -> ``None``: the pin is
-    UNKNOWN and nothing may be concluded from it.
+    The file is written by ``~/.claude/sync-claude-code-sessions.py``::
+
+        {"accounts": {...each account's last starred list...},
+         "master": {"pinned": ["local_<id>.json", ...],   # ordered: rank = index
+                    "unpinned": ["local_<id>.json", ...], # empty until coverage
+                    "coverage": {...}, "computed_at": "..."}}
+
+    The engine applies ONLY ``master`` — it never re-derives anything from the
+    raw per-account lists, so the sidebar ledger and AI Matrx cannot disagree.
+    The sync puts a conversation in ``unpinned`` only when every known account
+    was observed within 14 days and none of them pins it. Absent, unreadable,
+    or no ``master`` -> ``None``: the pin is UNKNOWN and the ledger stands.
     """
     source = path or default_pin_observations_path()
     try:
@@ -172,46 +176,53 @@ def read_pin_master(path: Path | None = None) -> dict[str, int] | None:
         data = json.loads(source.read_bytes())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
-    if not isinstance(data, dict):
+    master = data.get("master") if isinstance(data, dict) else None
+    if not isinstance(master, dict):
         return None
-    master: dict[str, int] = {}
-    for observation in data.values():
-        local = observation.get("local") if isinstance(observation, dict) else None
-        if not isinstance(local, list):
-            continue
-        for rank, name in enumerate(local):
-            if isinstance(name, str) and (name not in master or rank < master[name]):
-                master[name] = rank
-    return master or None
+    pinned_list = master.get("pinned")
+    unpinned_list = master.get("unpinned")
+    if not isinstance(pinned_list, list) or not isinstance(unpinned_list, list):
+        return None
+    pinned: dict[str, int] = {}
+    for rank, name in enumerate(pinned_list):
+        if isinstance(name, str) and name not in pinned:
+            pinned[name] = rank
+    unpinned = frozenset(
+        name for name in unpinned_list if isinstance(name, str) and name not in pinned
+    )
+    return pinned, unpinned
 
 
 @dataclass(frozen=True)
 class LivePins:
-    """The pin opinion, per conversation, from every account's starred list.
+    """The master pin verdict, per conversation.
 
     THE pin rule, held in one object because it has two callers that must not
     drift: the full disk scan (:func:`read_session_index`) and the persisted
     incremental store (:mod:`app.services.coding_sessions.claude_index_store`),
     which is what production actually reads.
 
-    ``master`` maps the conversation's record filename (``local_<id>.json``,
-    the key the app's starred list, the sidebar ledger and the index records
-    share) -> its best rank across accounts, or is ``None`` when no account
-    has been observed — UNKNOWN, so the sidebar ledger stands exactly as
-    before. With observations present, a conversation absent from every
-    account's list is an explicit ``False``: that is how an unpin reaches AI
-    Matrx.
+    ``pinned`` maps a record filename (``local_<id>.json`` — the key the app's
+    starred list, the sidebar ledger and the index records share) to its rank;
+    ``unpinned`` holds the names the sync has PROVED unpinned in every account.
+    Anything in neither is UNKNOWN and the sidebar ledger's value stands — so a
+    machine with one of eight accounts observed can add pins but never remove
+    one. ``None`` pinned = no master at all: the ledger stands everywhere.
     """
 
-    master: dict[str, int] | None = None
+    pinned: dict[str, int] | None = None
+    unpinned: frozenset[str] = frozenset()
 
     @classmethod
     def from_observations(cls, path: Path | None = None) -> "LivePins":
-        return cls(read_pin_master(path))
+        master = read_pin_master(path)
+        if master is None:
+            return cls()
+        return cls(master[0], master[1])
 
     @property
     def speaks(self) -> bool:
-        return self.master is not None
+        return self.pinned is not None
 
     def resolve(
         self,
@@ -219,16 +230,14 @@ class LivePins:
         ledger_pinned: object,
         ledger_rank: object,
     ) -> tuple[bool | None, int | None]:
-        """``(is_pinned, pinned_rank)`` for one conversation.
-
-        ``record_names`` are the filenames of every record carrying the
-        conversation (normally one name, copied into every account folder).
-        """
-        if self.master is not None:
-            ranks = [self.master[name] for name in record_names if name in self.master]
+        """``(is_pinned, pinned_rank)`` for one conversation."""
+        names = set(record_names)
+        if self.pinned is not None:
+            ranks = [self.pinned[name] for name in names if name in self.pinned]
             if ranks:
                 return True, min(ranks)
-            return False, None
+            if names & self.unpinned:
+                return False, None
         rank = ledger_rank if isinstance(ledger_rank, int) else None
         pinned_from_ledger = ledger_pinned if isinstance(ledger_pinned, bool) else None
         if not pinned_from_ledger:
@@ -370,10 +379,10 @@ def merge_entries(
     for session_id, entry in entries.items():
         record_paths = tuple(paths[session_id])
         fields = ledger.get(record_paths[0].name, {}) if record_paths else {}
-        # THE APP'S STARRED LISTS WIN. Every account's list, as last observed,
-        # is the pin (in any list -> pinned; observed and in none -> an unpin
-        # AI Matrx must hear about). No observation at all is UNKNOWN and the
-        # ledger stands. The rule lives in :meth:`LivePins.resolve` so the
+        # THE MASTER VERDICT WINS where it speaks: pinned in any account's
+        # starred list -> pinned; proved unpinned in EVERY account -> an unpin
+        # AI Matrx must hear about. Anything else is UNKNOWN and the ledger
+        # stands. The rule lives in :meth:`LivePins.resolve` so the
         # store path shares it exactly.
         is_pinned, rank = pins.resolve(
             {path.name for path in record_paths},

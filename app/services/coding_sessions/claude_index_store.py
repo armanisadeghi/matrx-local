@@ -470,7 +470,7 @@ class ClaudeIndexStore:
         # The ledger is read at LOAD time, not refresh time: it is one small
         # JSON file, and a pin or a rename the sync agent lands there must
         # reach the screen without waiting for 67,224 files to be re-stated.
-        # The pin is every account's observed starred list, read here at load
+        # The pin is the session-sync agent's master verdict, read here at load
         # time for the same reason — one small JSON file the session-sync
         # agent rewrites — and through the ONE rule the full scan applies.
         entries = merge_entries(

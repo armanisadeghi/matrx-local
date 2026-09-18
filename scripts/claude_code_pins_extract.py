@@ -33,11 +33,22 @@ in the app's claude.ai IndexedDB::
 
 ``local_<id>`` names a local conversation by its index-record filename
 (``local_<id>.json``, the ledger's key); ``session_<id>`` is a cloud session.
-Each ACCOUNT has its own list: the app rewrites the key EMPTY and refills it
-within the same second on every account switch (seen 10:27:00.245 empty ->
-10:27:00.786 full), so the latest value (highest ``updatedAt``) is the
-signed-in account's list, an empty value is never truth when a later full one
-exists, and an EMPTY LATEST VALUE IS UNKNOWN — never "unpin everything".
+The list is rebuilt on every account switch: at the 10:27 switch the app wrote
+a PARTIAL value (53 local, 0 cloud) at 10:27:00.245 and the full one (53 local
++ 2 cloud) at 10:27:00.786. So the latest value (highest ``updatedAt``) is the
+signed-in account's list ONLY when it was written after that switch, and an
+EMPTY LATEST VALUE IS UNKNOWN — never "unpin everything".
+
+ATTRIBUTION. The app states each switch itself, in localStorage:
+``rq-cache-confirmed-account-session`` = ``{"account": <uuid>, "marker": <ms>}``
+and ``frame-pinned-valve:<org>:<account>`` = ``<ms>`` (10:26:59.844 at that
+switch). A list is attributed to the signed-in account only when its
+``updatedAt`` is LATER than the newest such marker for that account (and the
+session marker names the same account). Otherwise a pass landing between the
+switch and the refill would file the previous account's list under the new
+one. Without any app marker the ``config.json`` mtime stands in; a list not
+later than the marker is UNKNOWN for this pass. (Whether LOCAL pins are really
+per account is unproven: the local part did not change across that switch.)
 
 ``isStarred`` on the per-conversation index records is NOT the pin. That day
 the signed-in scope carried ``isStarred: true`` on 206 unarchived
@@ -134,6 +145,9 @@ else:
 # signal claude_scope cannot read for itself, because reading it needs the
 # LevelDB this script already opens for the categories.
 ACCOUNT_KEY = "rq-cache-confirmed-account"
+# The app's own account-switch markers (see ATTRIBUTION above).
+SESSION_MARKER_KEY = "rq-cache-confirmed-account-session"
+VALVE_PREFIX = "frame-pinned-valve:"
 
 LEVELDB_DIR = os.path.expanduser(
     "~/Library/Application Support/Claude/Local Storage/leveldb"
@@ -221,9 +235,11 @@ def read_localstorage(leveldb_dir: str = LEVELDB_DIR) -> dict[str, str]:
     try:
         latest: dict[str, tuple[int, str]] = {}
         db = LocalStoreDb(pathlib.Path(copy))
-        wanted = {GROUPS_KEY, ACCOUNT_KEY}
+        wanted = {GROUPS_KEY, ACCOUNT_KEY, SESSION_MARKER_KEY}
         for rec in db.iter_all_records():
-            if rec.script_key in wanted and rec.value is not None:
+            if rec.value is not None and (
+                rec.script_key in wanted or rec.script_key.startswith(VALVE_PREFIX)
+            ):
                 seq = rec.leveldb_seq_number
                 cur = latest.get(rec.script_key)
                 if cur is None or seq > cur[0]:
@@ -305,13 +321,60 @@ def split_starred(ids: list) -> tuple[list[str], list[str]]:
     return local, cloud
 
 
+def switch_marker(
+    raw: dict[str, str], account: str | None, config_path: str | None = None
+) -> tuple[int | None, str, str | None]:
+    """``(marker ms, source, refusal)`` — the newest switch INTO ``account``.
+
+    ``refusal`` is set when the app's own session marker names a DIFFERENT
+    account: the app is mid-switch, so nothing may be attributed this pass.
+    """
+    markers: list[tuple[int, str]] = []
+    blob = raw.get(SESSION_MARKER_KEY)
+    if blob:
+        try:
+            doc = json.loads(blob)
+        except (TypeError, ValueError):
+            doc = None
+        if isinstance(doc, dict):
+            named = doc.get("account")
+            if account and isinstance(named, str) and named and named != account:
+                return None, SESSION_MARKER_KEY, (
+                    f"the app's session marker names account {named} while the "
+                    f"signed-in account is {account} — mid-switch, so the list is "
+                    "UNKNOWN for this pass"
+                )
+            try:
+                markers.append((int(str(doc.get("marker"))), SESSION_MARKER_KEY))
+            except (TypeError, ValueError):
+                pass
+    for key, value in raw.items():
+        if account and key.startswith(VALVE_PREFIX) and key.endswith(f":{account}"):
+            try:
+                markers.append((int(str(value).strip().strip('"')), key))
+            except (TypeError, ValueError):
+                pass
+    if markers:
+        at, source = max(markers)
+        return at, source, None
+    if config_path:
+        try:
+            return int(os.stat(config_path).st_mtime * 1000), config_path, None
+        except OSError:
+            pass
+    return None, "none", None
+
+
 def app_starred_from(
-    values: list[tuple[int, str]], account: str | None
+    values: list[tuple[int, str]],
+    account: str | None,
+    marker: int | None = None,
 ) -> tuple[dict | None, str | None]:
     """``(app_starred, note)`` — exactly one of the two is ``None``.
 
-    THE RULE: the latest value is the signed-in account's list; an empty
-    latest value, an unparseable store, or an unknown account is UNKNOWN.
+    THE RULE: the latest value is the signed-in account's list only when it
+    postdates the switch ``marker``; an empty latest value, an unparseable
+    store, an unknown account, or a list not later than the marker is UNKNOWN.
     """
     latest = latest_starred(values)
     if latest is None:
@@ -323,17 +386,23 @@ def app_starred_from(
     if not local and not cloud:
         return None, (
             f"the latest {STARRED_KEY!r} value (updatedAt {latest['updated_at']}) is "
-            "empty — the app empties it on every account switch before refilling "
-            "it, so an empty list is UNKNOWN, never 'unpin everything'"
+            "empty, so the pin is UNKNOWN — never 'unpin everything'"
         )
     if not account:
         return None, (
             "the app's starred list was read but the account it belongs to is "
             "UNKNOWN — keep the pins the ledger already holds"
         )
+    if marker is not None and latest["updated_at"] <= marker:
+        return None, (
+            f"the starred list (updatedAt {latest['updated_at']}) is not later than "
+            f"the app's last switch into account {account} (marker {marker}), so it "
+            "may still be the previous account's list — UNKNOWN for this pass"
+        )
     return {
         "key": STARRED_KEY,
         "updated_at": latest["updated_at"],
+        "switch_marker_at": marker,
         "account": account,
         "local": local,
         "cloud": cloud,
@@ -431,7 +500,15 @@ def extract(
             "is UNKNOWN — keep the pins the ledger already holds"
         )
     else:
-        app_starred, note = app_starred_from(values, resolution.account)
+        marker, marker_source, refusal = switch_marker(
+            raw, resolution.account,
+            os.path.join(os.path.dirname(os.path.abspath(sessions_root)), "config.json"),
+        )
+        result["switch_marker"] = {"at": marker, "source": marker_source}
+        if refusal is not None:
+            app_starred, note = None, refusal
+        else:
+            app_starred, note = app_starred_from(values, resolution.account, marker)
         if resolution.account is None and note is not None:
             note = f"{note} ({resolution.reason})"
     if note is not None:
@@ -497,7 +574,8 @@ def print_diff(result: dict, ledger_path: str, indexeddb_dir: str) -> int:
 
     # ---- vs the app's own truth, re-read independently ---------------------
     again, _note = app_starred_from(
-        read_starred_values(indexeddb_dir), starred["account"]
+        read_starred_values(indexeddb_dir), starred["account"],
+        starred.get("switch_marker_at"),
     )
     truth = list((again or {}).get("local") or [])
     published = list(starred["local"])

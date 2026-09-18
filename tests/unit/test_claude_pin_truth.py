@@ -19,15 +19,20 @@ index records' ``isStarred`` flag is the pin:
 
 Arman's ruling: a conversation is pinned iff at least one account's sidebar
 shows it pinned. The session-sync agent records each account's latest list in
-``~/.claude/claude-code-pin-observations.json`` (``CLAUDE_PIN_OBSERVATIONS``);
-the engine's :class:`LivePins` reads the union of those lists. So these tests
-pin down:
+``~/.claude/claude-code-pin-observations.json`` (``CLAUDE_PIN_OBSERVATIONS``)
+and computes ONE verdict there, the ``master`` section; the engine's
+:class:`LivePins` applies ONLY that section. Fix round 1 (review R-P1,
+2026-09-18): the first version let the engine re-derive a union from the raw
+lists, so ONE observed account of eight turned ~1,900 conversations into
+explicit unpins on AI Matrx. So these tests pin down:
 
-1. In any account's list -> pinned, with the best rank any account gives it.
-2. Observed, and in no account's list -> an explicit ``is_pinned=false`` that
-   reaches the payload — whatever ``isStarred`` or a stale ledger says.
-3. No observation at all (absent, unreadable, empty) -> UNKNOWN: the ledger
-   stands exactly as before. Guessing ``false`` would mass-unpin the server.
+1. ``master.pinned`` -> pinned, rank = position.
+2. ``master.unpinned`` -> an explicit ``is_pinned=false`` that reaches the
+   payload, whatever ``isStarred`` or a stale ledger says. The sync fills it
+   ONLY when every known account was observed within 14 days.
+3. In neither -> UNKNOWN: the ledger stands. With one account of eight
+   observed nothing is unpinned at all.
+4. No master (absent, unreadable, raw lists only) -> UNKNOWN everywhere.
 
 The second half of this file guards the ACCOUNT/ORG scope rule, which still
 decides which account a freshly read list belongs to.
@@ -109,58 +114,34 @@ def _ledger(tmp_path: Path, entries: dict[str, dict[str, Any]]) -> Path:
     return path
 
 
-def _observe(lists: dict[str, list[str]]) -> Path:
-    """Each account's observed starred list, in the session-sync agent's shape.
+def _master(pinned: list[str], unpinned: list[str] = (), **extra: Any) -> Path:
+    """The sync's ONE verdict, in its real shape.
 
     Written to ``CLAUDE_PIN_OBSERVATIONS``, which ``tests/conftest.py`` points
-    at a fresh file per test, so no test can read the real one.
+    at a fresh file per test, so no test can read the real one. ``extra``
+    lets a test add the raw ``accounts`` section the engine must IGNORE.
     """
     path = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
-    path.write_text(
-        json.dumps(
-            {
-                account: {
-                    "email": None,
-                    "observed_at": "2026-09-18T10:27:01+00:00",
-                    "updated_at": 1789752420786,
-                    "local": names,
-                    "cloud": [],
-                }
-                for account, names in lists.items()
-            }
-        )
-    )
+    complete = bool(unpinned)
+    path.write_text(json.dumps({
+        **extra,
+        "master": {
+            "pinned": list(pinned),
+            "unpinned": list(unpinned),
+            "coverage": {"observed": 8 if complete else 1, "known": 8,
+                         "complete": complete},
+            "computed_at": "2026-09-18T12:00:00+00:00",
+        },
+    }))
     return path
 
 
-def test_fixture_carries_the_observed_record_shape() -> None:
-    """If the app renames these keys, this fails before anything mis-syncs.
+def test_isstarred_true_and_proved_unpinned_is_not_pinned(tmp_path: Path) -> None:
+    """GUARD (a) — "Prompt" was flagged ``isStarred: true``, never pinned.
 
-    ``isStarred`` stays in the shape because the readers still report it as a
-    diagnostic; it decides no pin.
-    """
-    record = _fixture_record()
-    assert "isStarred" in record
-    assert "lastFocusedAt" in record, "scope signal renamed — re-measure"
-    assert "cliSessionId" in record
-
-
-def test_active_scope_is_the_most_recently_focused(tmp_path: Path) -> None:
-    root = tmp_path / "claude-code-sessions"
-    _write(root, account=ACTIVE_ACCOUNT, org=STALE_ORG, session="local_aaa",
-           cli_session_id="cli-a", last_focused_at=1_000, is_starred=True)
-    _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_aaa",
-           cli_session_id="cli-a", last_focused_at=9_000, is_starred=False)
-    _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
-
-
-def test_isstarred_true_but_in_no_starred_list_is_not_pinned(tmp_path: Path) -> None:
-    """GUARD (a) — THE 2026-09-18 BUG: "Prompt" was flagged, never pinned.
-
-    The record says ``isStarred: true`` and the ledger says pinned, but no
-    account's starred list holds it, so the sidebar does not show it pinned —
-    and neither may AI Matrx.
+    With full coverage the sync proves no account pins it, so it is in
+    ``master.unpinned``: the unpin must reach the payload whatever the flag or
+    a stale ledger says.
     """
     root = tmp_path / "claude-code-sessions"
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_prompt",
@@ -168,7 +149,7 @@ def test_isstarred_true_but_in_no_starred_list_is_not_pinned(tmp_path: Path) -> 
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_real",
            cli_session_id="cli-real", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    _observe({ACTIVE_ACCOUNT: ["local_real.json"]})
+    _master(["local_real.json"], ["local_prompt.json"])
     ledger = _ledger(
         tmp_path, {"local_prompt.json": {"isPinned": True, "pinnedRank": 7}}
     )
@@ -181,17 +162,53 @@ def test_isstarred_true_but_in_no_starred_list_is_not_pinned(tmp_path: Path) -> 
     payload = entry.metadata_payload()
     assert payload["is_pinned"] is False, "the unpin must reach the server"
     assert "pinned_rank" not in payload
+    assert entries["cli-real"].is_pinned is True
 
 
-def test_in_a_starred_list_is_pinned_with_its_rank(tmp_path: Path) -> None:
-    """GUARD (b): in the list -> pinned, rank = its index in the list."""
+def test_one_of_eight_accounts_observed_emits_zero_unpins(tmp_path: Path) -> None:
+    """THE R-P1 CRITICAL: partial coverage must never become explicit unpins.
+
+    One account observed: its pins are added, and every other conversation —
+    ledger-pinned or not, ``isStarred`` or not — keeps exactly the state it
+    had. Not one ``is_pinned: false`` may be produced.
+    """
+    root = tmp_path / "claude-code-sessions"
+    for n, name in enumerate(("mine", "ledger_pin", "flagged", "plain")):
+        _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session=f"local_{name}",
+               cli_session_id=f"cli-{name}", last_focused_at=9_000 - n,
+               is_starred=name == "flagged")
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _master(["local_mine.json"])  # coverage 1/8 -> unpinned is empty
+    ledger = _ledger(tmp_path, {
+        "local_ledger_pin.json": {"isPinned": True, "pinnedRank": 4},
+        "local_plain.json": {"isPinned": False},
+    })
+
+    entries, _ = read_session_index(root, ledger_path=ledger)
+
+    got = {k: (v.is_pinned, v.pinned_rank) for k, v in entries.items()}
+    assert got == {
+        "cli-mine": (True, 0),
+        "cli-ledger_pin": (True, 4),   # untouched
+        "cli-flagged": (None, None),   # UNKNOWN, never False
+        "cli-plain": (False, None),    # the ledger's own prior state, untouched
+    }
+    unpins = [
+        k for k, v in entries.items()
+        if v.is_pinned is False and k != "cli-plain"
+    ]
+    assert unpins == [], f"partial coverage produced unpins: {unpins}"
+
+
+def test_master_pinned_order_is_the_rank(tmp_path: Path) -> None:
+    """GUARD (b): pinned with rank = position in ``master.pinned``."""
     root = tmp_path / "claude-code-sessions"
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_first",
            cli_session_id="cli-first", last_focused_at=9_000, is_starred=None)
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_second",
            cli_session_id="cli-second", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    _observe({ACTIVE_ACCOUNT: ["local_first.json", "local_second.json"]})
+    _master(["local_first.json", "local_second.json"])
 
     entries, _ = read_session_index(root, ledger_path=tmp_path / "missing.json")
 
@@ -202,29 +219,33 @@ def test_in_a_starred_list_is_pinned_with_its_rank(tmp_path: Path) -> None:
     assert payload["pinned_rank"] == 1
 
 
-def test_two_accounts_observations_are_a_union_with_the_best_rank(
-    tmp_path: Path,
-) -> None:
-    """GUARD (d): pinned iff at least one account's sidebar shows it pinned."""
+def test_the_engine_reads_only_master_never_the_raw_lists(tmp_path: Path) -> None:
+    """ONE rule, computed once — by the sync. Raw per-account lists are inert.
+
+    A file holding only raw ``accounts`` (the first, flat shape included) is
+    UNKNOWN, and when a master exists the raw lists cannot add or remove.
+    """
     root = tmp_path / "claude-code-sessions"
-    for n, name in enumerate(("mine", "theirs", "both", "neither")):
+    for n, name in enumerate(("raw_only", "master_pin", "other")):
         _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session=f"local_{name}",
                cli_session_id=f"cli-{name}", last_focused_at=9_000 - n,
-               is_starred=True)
+               is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    _observe({
-        ACTIVE_ACCOUNT: ["local_mine.json", "local_x.json", "local_both.json"],
-        OTHER_ACCOUNT: ["local_both.json", "local_theirs.json"],
-    })
+    ledger = _ledger(tmp_path, {"local_other.json": {"isPinned": True, "pinnedRank": 2}})
+    raw = {ACTIVE_ACCOUNT: {"local": ["local_raw_only.json"], "cloud": []}}
+    observations = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
 
-    entries, _ = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    for body in (raw, {"accounts": raw}):  # flat + current shape, no master
+        observations.write_text(json.dumps(body))
+        entries, _ = read_session_index(root, ledger_path=ledger)
+        assert entries["cli-raw_only"].is_pinned is None, body
+        assert entries["cli-other"].is_pinned is True, body
 
-    assert {k: (v.is_pinned, v.pinned_rank) for k, v in entries.items()} == {
-        "cli-mine": (True, 0),
-        "cli-theirs": (True, 1),
-        "cli-both": (True, 0),  # best rank: index 0 in the other account's list
-        "cli-neither": (False, None),
-    }
+    _master(["local_master_pin.json"], accounts=raw)
+    entries, _ = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-raw_only"].is_pinned is None, "a raw list decided a pin"
+    assert entries["cli-master_pin"].is_pinned is True
+    assert (entries["cli-other"].is_pinned, entries["cli-other"].pinned_rank) == (True, 2)
 
 
 def test_no_observations_at_all_the_ledger_stands(tmp_path: Path) -> None:
@@ -246,14 +267,14 @@ def test_no_observations_at_all_the_ledger_stands(tmp_path: Path) -> None:
     assert "is_pinned" not in entries["cli-none"].metadata_payload()
 
 
-def test_an_unreadable_or_empty_observations_file_is_unknown(tmp_path: Path) -> None:
+def test_an_unreadable_or_malformed_observations_file_is_unknown(tmp_path: Path) -> None:
     root = tmp_path / "claude-code-sessions"
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_u",
            cli_session_id="cli-u", last_focused_at=9_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
     ledger = _ledger(tmp_path, {"local_u.json": {"isPinned": True, "pinnedRank": 2}})
     observations = Path(os.environ["CLAUDE_PIN_OBSERVATIONS"])
-    for body in ("{not json", "{}", json.dumps({ACTIVE_ACCOUNT: {"local": []}})):
+    for body in ("{not json", "{}", json.dumps({"master": {"pinned": "x"}})):
         observations.write_text(body)
         entries, _ = read_session_index(root, ledger_path=ledger)
         assert entries["cli-u"].is_pinned is True, f"{body!r} cleared a real pin"
@@ -283,7 +304,7 @@ def test_store_reports_the_unpin_exactly_like_the_scan(
     """THE BUG, through the path production actually uses.
 
     A copy flagged ``isStarred: true`` is the FRESHEST record, so it wins the
-    store's one-row-per-conversation collapse; no account's list holds it.
+    store's one-row-per-conversation collapse; the master proves it unpinned.
     """
     root = tmp_path / "claude-code-sessions"
     stale = _write(root, account=OTHER_ACCOUNT, org=STALE_ORG, session="local_iii",
@@ -296,7 +317,7 @@ def test_store_reports_the_unpin_exactly_like_the_scan(
     _write(root, account=ACTIVE_ACCOUNT, org=ACTIVE_ORG, session="local_kept",
            cli_session_id="cli-kept", last_focused_at=8_000, is_starred=False)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    _observe({ACTIVE_ACCOUNT: ["local_kept.json"]})
+    _master(["local_kept.json"], ["local_iii.json"])
     ledger = _ledger(tmp_path, {"local_iii.json": {"isPinned": True, "pinnedRank": 5}})
     monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(ledger))
 
@@ -325,10 +346,8 @@ def test_store_and_scan_agree_on_pins_across_accounts(
         _write(root, account=OTHER_ACCOUNT, org=STALE_ORG, session=f"local_p{n}",
                cli_session_id=f"cli-p{n}", last_focused_at=1_000, is_starred=True)
     _signed_in(tmp_path, ACTIVE_ACCOUNT)
-    _observe({
-        ACTIVE_ACCOUNT: ["local_p1.json"],
-        OTHER_ACCOUNT: ["local_p3.json", "local_p1.json"],
-    })
+    # p0 proved unpinned, p1/p3 pinned, p2 UNKNOWN (the ledger's rank stands).
+    _master(["local_p1.json", "local_p3.json"], ["local_p0.json"])
     ledger = _ledger(
         tmp_path,
         {f"local_p{n}.json": {"isPinned": True, "pinnedRank": n} for n in range(4)},
@@ -342,8 +361,8 @@ def test_store_and_scan_agree_on_pins_across_accounts(
     expected = {
         "cli-p0": (False, None),
         "cli-p1": (True, 0),
-        "cli-p2": (False, None),
-        "cli-p3": (True, 0),
+        "cli-p2": (True, 2),
+        "cli-p3": (True, 1),
     }
     assert {k: (v.is_pinned, v.pinned_rank) for k, v in snapshot.entries.items()} == expected
     assert {k: (v.is_pinned, v.pinned_rank) for k, v in scan.items()} == expected
@@ -353,7 +372,7 @@ def test_store_and_scan_agree_on_pins_across_accounts(
 # 2026-09-18: the scope signal itself was contaminable (CS-33 / F1)
 #
 # These guard the ACCOUNT/ORG scope rule. Since the second 2026-09-18 finding
-# the scope no longer decides a pin (the app's starred list does, above); it
+# the scope no longer decides a pin (the sync's master verdict does, above); it
 # decides which account a freshly read starred list is recorded under and
 # which records the extractor publishes verdicts for, so the rule still has
 # to be right.

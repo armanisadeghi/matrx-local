@@ -70,6 +70,8 @@ from app.services.coding_sessions.claude_history import (
     _bridge_provider_session_id,
     _conversation_id,
     _hash_source,
+    _stream_key,
+    _subagent_streams,
 )
 from app.services.coding_sessions.workspace_discovery import (
     WorkspaceDiscoveryResponse,
@@ -1438,10 +1440,13 @@ class LocalClaudeRuntime:
             try:
                 streams: list[tuple[str, Path]] = [("main", transcript)]
                 subagent_dir = transcript.parent / run.session_id / "subagents"
-                if subagent_dir.is_dir():
-                    for subagent in sorted(subagent_dir.iterdir()):
-                        if subagent.suffix == ".jsonl" and subagent.is_file():
-                            streams.append((f"subagent:{subagent.stem}", subagent))
+                # Any depth: a workflow's sub-agents live one level deeper
+                # (``subagents/workflows/wf_…/``), and the same helper the
+                # importer uses is the only place that rule lives.
+                for subagent in _subagent_streams(subagent_dir):
+                    streams.append(
+                        (f"subagent:{_stream_key(subagent_dir, subagent)}", subagent)
+                    )
                 revision, _bytes, _mtime = await asyncio.to_thread(
                     _hash_source, projects_root, tuple(streams)
                 )

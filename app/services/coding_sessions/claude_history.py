@@ -300,6 +300,43 @@ def _open_regular_under(root: Path, path: Path):
             os.close(fd)
 
 
+def _stream_key(subagent_dir: Path, path: Path) -> str:
+    """``agent-x`` for a direct stream, ``workflows/wf_y/agent-x`` for a nested
+    one: the file's identity within the session, extension dropped."""
+    relative = path.relative_to(subagent_dir)
+    return relative.with_suffix("").as_posix()
+
+
+def _subagent_streams(subagent_dir: Path) -> list[Path]:
+    """Every sub-agent transcript under ``subagents/``, at ANY depth.
+
+    Claude nests a workflow's sub-agents one level deeper again
+    (``subagents/workflows/wf_…/agent-….jsonl``: 286 of this Mac's transcripts
+    on 2026-09-18), so a single ``iterdir`` missed them and the session was
+    imported without part of its own conversation. Symlinks are refused at
+    every level, as everywhere else in this importer.
+    """
+    if (
+        not subagent_dir.exists()
+        or subagent_dir.is_symlink()
+        or not stat.S_ISDIR(subagent_dir.lstat().st_mode)
+    ):
+        return []
+    found: list[Path] = []
+    queue = [subagent_dir]
+    while queue:
+        current = queue.pop()
+        for child in sorted(current.iterdir()):
+            if child.is_symlink():
+                continue
+            mode = child.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                queue.append(child)
+            elif stat.S_ISREG(mode) and child.suffix == ".jsonl":
+                found.append(child)
+    return sorted(found)
+
+
 def _hash_source(
     projects_root: Path,
     streams: tuple[tuple[str, Path], ...],
@@ -503,18 +540,10 @@ def _discover_sources(
             session_id = main_file.stem
             stream_list: list[tuple[str, Path]] = [("main", main_file)]
             subagent_dir = project_dir / session_id / "subagents"
-            if (
-                subagent_dir.exists()
-                and not subagent_dir.is_symlink()
-                and stat.S_ISDIR(subagent_dir.lstat().st_mode)
-            ):
-                for subagent in sorted(subagent_dir.iterdir()):
-                    if (
-                        not subagent.is_symlink()
-                        and stat.S_ISREG(subagent.lstat().st_mode)
-                        and subagent.suffix == ".jsonl"
-                    ):
-                        stream_list.append((f"subagent:{subagent.stem}", subagent))
+            for subagent in _subagent_streams(subagent_dir):
+                stream_list.append(
+                    (f"subagent:{_stream_key(subagent_dir, subagent)}", subagent)
+                )
             streams = tuple(stream_list)
             project_key = "claude-local:" + _sha256_text(str(project_dir.resolve()))
             blocked_reason = None

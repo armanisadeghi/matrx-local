@@ -141,13 +141,14 @@ export function UsageTab({ snapshot }: UsageTabProps) {
 
   const showing = report && report.provider === provider ? report : null;
   const rows = showing ? rowsFor(showing, view) : [];
-  const metrics = showing?.metrics ?? { tokens: false, requests: false, cost: false, lines: false };
+  const metrics = showing?.metrics ?? { tokens: false, requests: false, cost: false, lines: false, subagents: false };
   const unit = showing?.cost.unit ?? null;
   const columns = [
     ...(metrics.tokens
       ? ["Input", "Cache read", "Cache write", "Output", "Total tokens"]
       : []),
     ...(metrics.requests ? ["Requests"] : []),
+    ...(metrics.subagents ? ["Sub-agent tokens"] : []),
     ...(metrics.cost ? [showing?.cost.unit === "credits" ? "Est. credits" : "Est. cost"] : []),
     ...(metrics.lines ? ["Suggested lines", "Accepted lines"] : []),
   ];
@@ -264,9 +265,15 @@ export function UsageTab({ snapshot }: UsageTabProps) {
               }
             />
             <Metric
-              label={metrics.requests ? "Requests" : "Requests"}
+              label="Requests"
               value={metrics.requests ? fmt(showing.totals.requests) : "Not recorded"}
-              sub={metrics.requests ? "Model turns counted once each" : `${providerLabel(provider)} keeps no request count on this Mac`}
+              sub={
+                metrics.requests
+                  ? metrics.subagents
+                    ? `Counted once each · ${fmt(showing.totals.main_requests)} main · ${fmt(showing.totals.subagent_requests)} sub-agent`
+                    : "Model turns counted once each"
+                  : `${providerLabel(provider)} keeps no request count on this Mac`
+              }
             />
             <Metric
               label={showing.cost.label}
@@ -434,6 +441,20 @@ function UsageTr({
         </>
       )}
       {metrics.requests && <td className={cell}>{fmt(row.requests)}</td>}
+      {metrics.subagents && (
+        <td className={cell} title={`${fmt(row.subagent_requests)} of ${fmt(row.requests)} turns ran in sub-agents`}>
+          {row.total_tokens === 0 ? (
+            "—"
+          ) : (
+            <>
+              {fmt(row.subagent_total_tokens)}
+              <span className="ml-2 text-xs text-muted-foreground">
+                {Math.round((row.subagent_total_tokens / row.total_tokens) * 100)}%
+              </span>
+            </>
+          )}
+        </td>
+      )}
       {metrics.cost && <td className={cell}>{costText(row.cost, unit)}</td>}
       {metrics.lines && (
         <>

@@ -95,6 +95,15 @@ export interface UsageTabProps {
   snapshot: CodingSessionsSnapshot;
 }
 
+type UsageRequest = {
+  generation: number;
+  provider: CodingSessionProvider;
+  start: string;
+  end: string;
+  refresh: boolean;
+  tzOffsetMinutes: number;
+};
+
 export function UsageTab({ snapshot }: UsageTabProps) {
   const chips = providerChips(snapshot.overview, snapshot.readiness);
   const providers: CodingSessionProvider[] = [
@@ -109,28 +118,57 @@ export function UsageTab({ snapshot }: UsageTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const generation = useRef(0);
+  const activeRequest = useRef(false);
+  const queuedRequest = useRef<UsageRequest | null>(null);
 
   const load = useCallback(
-    async (refresh: boolean) => {
-      const mine = ++generation.current;
+    (refresh: boolean) => {
+      const range = usageRangeFor(preset, start, end, new Date());
+      const request: UsageRequest = {
+        generation: ++generation.current,
+        provider,
+        ...range,
+        refresh,
+        tzOffsetMinutes: tzOffsetMinutes(),
+      };
       setLoading(true);
       setError(null);
-      try {
-        const range = usageRangeFor(preset, start, end, new Date());
-        const next = await engine.getCodingSessionUsage({
-          provider,
-          ...range,
-          refresh,
-          tzOffsetMinutes: tzOffsetMinutes(),
-        });
-        if (mine === generation.current) setReport(next);
-      } catch (cause) {
-        if (mine === generation.current) {
-          setError(cause instanceof Error ? cause.message : `Unable to read ${providerLabel(provider)} usage.`);
-        }
-      } finally {
-        if (mine === generation.current) setLoading(false);
+
+      if (activeRequest.current) {
+        // The Local collector owns one bounded range scan at a time. Drop
+        // intermediate UI selections and run only the latest request next.
+        queuedRequest.current = request;
+        return;
       }
+
+      activeRequest.current = true;
+      void (async () => {
+        let current: UsageRequest | null = request;
+        while (current) {
+          try {
+            const next = await engine.getCodingSessionUsage({
+              provider: current.provider,
+              start: current.start,
+              end: current.end,
+              refresh: current.refresh,
+              tzOffsetMinutes: current.tzOffsetMinutes,
+            });
+            if (current.generation === generation.current) setReport(next);
+          } catch (cause) {
+            if (current.generation === generation.current) {
+              setError(
+                cause instanceof Error
+                  ? cause.message
+                  : `Unable to read ${providerLabel(current.provider)} usage.`,
+              );
+            }
+          }
+          current = queuedRequest.current;
+          queuedRequest.current = null;
+        }
+        activeRequest.current = false;
+        setLoading(false);
+      })();
     },
     [provider, preset, start, end],
   );
@@ -383,7 +421,9 @@ export function UsageTab({ snapshot }: UsageTabProps) {
                     </li>
                   ))}
                   <li className="text-xs text-muted-foreground">
-                    As {providerLabel(provider)} last cached it{showing.limits.observed_at ? ` (${formatStamp(showing.limits.observed_at)})` : ""}; not a live account read.
+                    {provider === "codex"
+                      ? `Account reading observed${showing.limits.observed_at ? ` ${formatStamp(showing.limits.observed_at)}` : ""}; it is not continuously live.`
+                      : `As ${providerLabel(provider)} last cached it${showing.limits.observed_at ? ` (${formatStamp(showing.limits.observed_at)})` : ""}; not a live account read.`}
                   </li>
                 </ul>
               ) : (

@@ -119,6 +119,15 @@ function findButton(text: string): HTMLButtonElement {
   return button;
 }
 
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setValue?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function render() {
   await act(async () => {
     root.render(<UsageTab snapshot={snapshot} />);
@@ -227,6 +236,34 @@ describe("UsageTab", () => {
     expect(limits.textContent).toContain("not a live account read");
   });
 
+  it("labels a Codex allowance observation without calling it a provider cache", async () => {
+    mocks.getCodingSessionUsage.mockImplementation(async ({ provider }: { provider: UsageReport["provider"] }) => {
+      if (provider === "claude_code") return claude;
+      return report({
+        provider: "codex",
+        limits: {
+          status: "available",
+          observed_at: "2026-09-17T11:00:00+00:00",
+          reason: null,
+          plan: null,
+          windows: [
+            { label: "Five-hour", used_percent: 25, remaining_percent: 75, window_minutes: 300, resets_at: null },
+          ],
+        },
+      });
+    });
+    await render();
+    await act(async () => {
+      findButton("Codex").click();
+      await Promise.resolve();
+    });
+    const limits = container.querySelector("[data-testid='usage-limits']")!;
+    expect(limits.textContent).toContain("Account reading observed");
+    expect(limits.textContent).toContain("not continuously live");
+    expect(limits.textContent).not.toContain("last cached it");
+    expect(limits.textContent).not.toContain("not a live account read");
+  });
+
   it("renders Cursor as lines, says where its tokens live, and shows its plan", async () => {
     await render();
     await act(async () => {
@@ -266,6 +303,56 @@ describe("UsageTab", () => {
     expect(alert.textContent).toContain("last answer this Mac read");
     expect(container.querySelector("[data-testid='usage-table']")).not.toBeNull();
     expect(mocks.getCodingSessionUsage.mock.calls[mocks.getCodingSessionUsage.mock.calls.length - 1]![0].refresh).toBe(true);
+  });
+
+  it("replaces rapid provider and range changes with one newest read after an active failure", async () => {
+    let rejectActive: (cause: Error) => void = () => {};
+    let resolveQueued: (value: UsageReport) => void = () => {};
+    mocks.getCodingSessionUsage.mockImplementationOnce(
+      () =>
+        new Promise<UsageReport>((_resolve, reject) => {
+          rejectActive = reject;
+        }),
+    );
+    mocks.getCodingSessionUsage.mockImplementationOnce(
+      () =>
+        new Promise<UsageReport>((resolve) => {
+          resolveQueued = resolve;
+        }),
+    );
+    await render();
+
+    await act(async () => {
+      findButton("Custom").click();
+    });
+    await act(async () => {
+      const [startDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
+      setInputValue(startDate!, "2026-09-12");
+    });
+    await act(async () => {
+      const [, endDate] = container.querySelectorAll<HTMLInputElement>("input[type='date']");
+      setInputValue(endDate!, "2026-09-14");
+    });
+    await act(async () => {
+      findButton("Codex").click();
+    });
+
+    expect(mocks.getCodingSessionUsage).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      rejectActive(new Error("first read failed"));
+      await Promise.resolve();
+    });
+    expect(mocks.getCodingSessionUsage).toHaveBeenCalledTimes(2);
+    const latestCall = mocks.getCodingSessionUsage.mock.calls[1]![0];
+    expect(latestCall.provider).toBe("codex");
+    expect(latestCall.start).toContain("2026-09-12");
+    expect(latestCall.end).toContain("2026-09-15");
+    await act(async () => {
+      resolveQueued(report({ provider: "codex", totals: row({ key: "total", label: "latest", total_tokens: 90 }) }));
+      await Promise.resolve();
+    });
+    expect(container.querySelector("[data-testid='usage-error']")).toBeNull();
+    expect(container.querySelector("[data-testid='usage-totals']")?.textContent).toContain("90");
   });
 
   it("shows the loading state before the first answer", async () => {

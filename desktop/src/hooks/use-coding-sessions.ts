@@ -27,6 +27,7 @@ const engineSources: CodingSessionsSources = {
   readiness: () => engine.getCodingSessionProviderReadiness(),
   artifactsStatus: () => engine.getCodingSessionArtifactsStatus(),
   artifactsSessions: () => engine.getCodingSessionArtifactsSessions(),
+  labelStatus: () => engine.getClaudeLabelStatus(),
   onEngineConnected: (listener) =>
     typeof engine.on === "function" ? engine.on("connected", listener) : () => undefined,
 };

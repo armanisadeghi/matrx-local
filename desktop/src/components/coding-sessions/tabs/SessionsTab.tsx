@@ -35,6 +35,7 @@ import {
   SessionArtifactsDialog,
 } from "@/components/coding-sessions/SessionArtifactsDialog";
 import { ContinueSessionDialog } from "@/components/coding-sessions/ContinueSessionDialog";
+import { PinDivergenceRow } from "@/components/coding-sessions/PinDivergenceRow";
 import {
   SESSION_STATE_HINT,
   SESSION_STATE_LABEL,
@@ -67,7 +68,7 @@ import {
 } from "@/lib/coding-sessions/session-conversation";
 import type { CodingSessionsSnapshot } from "@/lib/coding-sessions/overview-store";
 import { openExternal } from "@/lib/open-external";
-import { formatFileSize } from "@ai-matrx/kit/format";
+import { formatCount, formatFileSize } from "@ai-matrx/kit/format";
 
 /** The status cards, in the order a person reads them: good → needs a look. */
 const STATE_CARDS: CodingSessionState[] = [
@@ -571,6 +572,21 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
         </div>
       )}
 
+      {/* THE PIN LINE. The "Pinned in the coding agent" card above counts this
+          Mac's pins; on 2026-09-18 AI Matrx held 58 favourites this Mac did
+          not pin and 116 pins it did not hold, and no screen said so. One row,
+          with the reason instead of numbers when nothing has been measured. */}
+      {snapshot.labelStatusError ? (
+        <p
+          className="text-xs text-amber-600 dark:text-amber-400"
+          data-testid="pin-divergence-unreadable"
+        >
+          Pins: this Mac could not read its pin comparison — {snapshot.labelStatusError}
+        </p>
+      ) : (
+        <PinDivergenceRow divergence={snapshot.labelStatus?.pin_divergence} />
+      )}
+
       {/* The provider facet. Every chip is the engine's own answer. */}
       {chips.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" data-testid="provider-chips">
@@ -581,7 +597,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           >
             All apps
             <span className="ml-1.5 tabular-nums text-xs text-muted-foreground">
-              {(data?.conversations.length ?? 0).toLocaleString()}
+              {formatCount((data?.conversations.length ?? 0))}
             </span>
           </Button>
           {chips.map((chip) => (
@@ -591,14 +607,14 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
               variant={provider === chip.provider ? "secondary" : "ghost"}
               title={
                 chip.listed
-                  ? `${chip.count.toLocaleString()} ${chip.label} session${chip.count === 1 ? "" : "s"} on this Mac.`
+                  ? `${formatCount(chip.count)} ${chip.label} session${chip.count === 1 ? "" : "s"} on this Mac.`
                   : `This Mac's engine does not list ${chip.label} sessions yet.`
               }
               onClick={() => setProvider(chip.provider === provider ? null : chip.provider)}
             >
               {chip.label}
               <span className="ml-1.5 tabular-nums text-xs text-muted-foreground">
-                {chip.listed ? chip.count.toLocaleString() : "—"}
+                {chip.listed ? formatCount(chip.count) : "—"}
               </span>
             </Button>
           ))}
@@ -648,7 +664,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
             snapshot.overviewPending ? "opacity-50 transition-opacity" : undefined
           }
           toolbar={{
-            searchPlaceholder: `Search ${conversations.length.toLocaleString()} conversation${
+            searchPlaceholder: `Search ${formatCount(conversations.length)} conversation${
               conversations.length === 1 ? "" : "s"
             }`,
             leading: (
@@ -772,14 +788,14 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
 
       {totals && totals.unreadable > 0 && (
         <p className="text-xs text-muted-foreground">
-          {totals.unreadable.toLocaleString()} of {totals.index_files_read.toLocaleString()} index
+          {formatCount(totals.unreadable)} of {formatCount(totals.index_files_read)} index
           files could not be read.
         </p>
       )}
 
       {cloud?.checked && (
         <p className="text-xs text-muted-foreground" data-testid="cloud-checked-note">
-          AI Matrx holds {cloud.sessions.toLocaleString()} of these sessions ·{" "}
+          AI Matrx holds {formatCount(cloud.sessions)} of these sessions ·{" "}
           {cloudAgeLabel(cloud) ?? `checked ${formatStamp(cloud.checked_at)}`}
           {cloud.refreshing ? " · asking again now" : ""}
         </p>

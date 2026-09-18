@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   getCodingSessionProviderReadiness: vi.fn(),
   getCodingSessionArtifactsStatus: vi.fn(),
   getCodingSessionArtifactsSessions: vi.fn(),
+  getClaudeLabelStatus: vi.fn(),
   syncClaudeEverything: vi.fn(),
   resumeCodingSessionDelivery: vi.fn(),
   syncCodingSessionArtifacts: vi.fn(),
@@ -245,6 +246,34 @@ function findButton(text: string): HTMLButtonElement {
   return match as HTMLButtonElement;
 }
 
+/**
+ * The pin comparison the Sessions tab states out loud. Measured numbers from
+ * the 2026-09-18 divergence: 218 pinned here, 160 favourite in AI Matrx.
+ */
+const labelStatus = {
+  schema_version: 3,
+  source: "claude_desktop_session_index",
+  index_available: true,
+  index_writable: true,
+  pushed_sessions: 0,
+  index_files: 1,
+  index_records: 1,
+  synced_sessions: 0,
+  last_sync: null,
+  pin_divergence: {
+    checked: true,
+    reason: null,
+    local: 218,
+    ai_matrx: 160,
+    to_pin: 116,
+    to_unpin: 58,
+    to_reconcile: 58,
+    last_pass_at: "2026-09-18T11:57:00+00:00",
+    last_pass_status: "completed",
+    compared_sessions: 2033,
+  },
+} as const;
+
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
     true;
@@ -260,6 +289,7 @@ beforeEach(() => {
   mocks.getCodingSessionProviderReadiness.mockReset().mockResolvedValue(readiness);
   mocks.getCodingSessionArtifactsStatus.mockReset().mockResolvedValue(null);
   mocks.getCodingSessionArtifactsSessions.mockReset().mockResolvedValue({ sessions: [] });
+  mocks.getClaudeLabelStatus.mockReset().mockResolvedValue(labelStatus);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -608,6 +638,48 @@ describe("The cloud check that has not happened yet", () => {
  * badged every non-Claude row "CLI only", and left a provider with no rows and
  * no reason on screen.
  */
+describe("The pin divergence on the real screen", () => {
+  it("states this Mac's pins, AI Matrx's, and what is still to reconcile", async () => {
+    await render("/coding-sessions");
+    const row = container.querySelector("[data-testid='pin-divergence']");
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain(
+      "Pins: 218 on this Mac · 160 in AI Matrx · 58 still to reconcile",
+    );
+  });
+
+  it("shows the reason and no numbers when nothing has been compared yet", async () => {
+    mocks.getClaudeLabelStatus.mockResolvedValue({
+      ...labelStatus,
+      pin_divergence: {
+        checked: false,
+        reason: "no reconcile pass has finished on this Mac yet",
+        local: null,
+        ai_matrx: null,
+        to_pin: null,
+        to_unpin: null,
+        to_reconcile: null,
+        last_pass_at: null,
+        last_pass_status: null,
+      },
+    });
+    await render("/coding-sessions");
+    const row = container.querySelector("[data-testid='pin-divergence']");
+    expect(row?.textContent).toBe(
+      "Pins: not compared yet — no reconcile pass has finished on this Mac yet.",
+    );
+  });
+
+  it("says this Mac could not read the comparison instead of showing a zero", async () => {
+    mocks.getClaudeLabelStatus.mockRejectedValue(new Error("engine offline"));
+    await render("/coding-sessions");
+    expect(container.querySelector("[data-testid='pin-divergence']")).toBeNull();
+    expect(
+      container.querySelector("[data-testid='pin-divergence-unreadable']")?.textContent,
+    ).toContain("Pins: this Mac could not read its pin comparison");
+  });
+});
+
 describe("A mixed four-provider list", () => {
   function mixedPayload(): CodingSessionsOverview {
     const base = overviewPayload(["Claude session"]);

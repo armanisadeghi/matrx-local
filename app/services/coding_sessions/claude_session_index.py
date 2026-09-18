@@ -30,14 +30,25 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
-# Claude keeps one index record per account per conversation, so this cap is
-# multiplied by however many accounts are on the machine. This Mac already
-# holds 50,000+ records (eight accounts x ~1,900 conversations) and was
-# hitting the old 50,000 ceiling, which silently dropped conversations off
-# the end of the list. 250,000 leaves real headroom; when it IS hit the
+from app.services.coding_sessions.claude_scope import (
+    MAX_INDEX_FILE_BYTES,
+    MAX_INDEX_FILES,
+    ScopeResolution,
+    active_index_scope,
+    default_app_support_dir,
+    default_sessions_root,
+    record_focused_at,
+    resolve_active_scope,
+)
+
+# ``MAX_INDEX_FILES`` / ``MAX_INDEX_FILE_BYTES`` are re-exported from
+# :mod:`app.services.coding_sessions.claude_scope`, which owns the bounded-read
+# caps because it owns the scope scan. Claude keeps one index record per account
+# per conversation, so the file cap is multiplied by however many accounts are
+# on the machine: this Mac already holds 79,000+ records (eight accounts x
+# ~1,900 conversations) and was hitting an old 50,000 ceiling, which silently
+# dropped conversations off the end of the list. When the cap IS hit the
 # overview reports ``index_limit_reached`` so the screen says so out loud.
-MAX_INDEX_FILES = 250_000
-MAX_INDEX_FILE_BYTES = 8_388_608
 MAX_LEDGER_BYTES = 33_554_432
 _TITLE_MAX_CHARS = 160
 
@@ -120,74 +131,10 @@ def read_sidebar_ledger(path: Path | None = None) -> dict[str, dict[str, Any]]:
     }
 
 
-def default_sessions_root() -> Path:
-    """Claude desktop's session-index root for this platform."""
-    configured = os.environ.get("CLAUDE_DESKTOP_SESSIONS_DIR")
-    if configured:
-        return Path(configured).expanduser()
-    home = Path.home()
-    if sys.platform == "darwin":
-        return home / "Library/Application Support/Claude/claude-code-sessions"
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA")
-        base = Path(appdata) if appdata else home / "AppData/Roaming"
-        return base / "Claude/claude-code-sessions"
-    config_home = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(config_home) if config_home else home / ".config"
-    return base / "Claude/claude-code-sessions"
-
-
 def record_is_starred(record: dict[str, Any]) -> bool | None:
     """The app's pin field on one record. ``None`` = no pin key at all."""
     value = record.get("isStarred")
     return value if isinstance(value, bool) else None
-
-
-def record_focused_at(record: dict[str, Any]) -> int:
-    """``lastFocusedAt`` as an int, 0 when the app never recorded one."""
-    value = record.get("lastFocusedAt")
-    return value if isinstance(value, int) and value > 0 else 0
-
-
-def active_index_scope(root: Path | None = None) -> Path | None:
-    """The ``<account>/<org>`` folder the desktop app is CURRENTLY signed into.
-
-    Pins are per account+org: on this machine 48 scopes each carry their own
-    ``isStarred``, ranging from 140 to 256 pinned (measured 2026-09-17), and
-    the only one that matches what the app actually shows is the scope the
-    person is signed into. Reading any other scope reports a pin the person
-    removed long ago — which is exactly how the server's pinned list grew to
-    276 while the app showed 218.
-
-    ``lastFocusedAt`` is the signal. It is written only by the app, only in the
-    scope in use, and the machine's session-sync agent does not copy it between
-    scopes (it syncs title / titleSource / isArchived only), so the scope
-    holding the newest one is the live scope. Verified 2026-09-17: the maximum
-    uniquely selected the app's own scope, and its ``isStarred`` then matched
-    the app's reported pin state on 28 of 28 sampled conversations, including
-    all 14 that the app reported as having no pin record at all.
-
-    ``None`` when no scope carries the signal — the caller must then keep its
-    previous source rather than conclude that nothing is pinned.
-    """
-    sessions_root = root or default_sessions_root()
-    if not sessions_root.exists() or not sessions_root.is_dir():
-        return None
-    best: tuple[int, Path] | None = None
-    for path in sorted(sessions_root.rglob("local_*.json"))[:MAX_INDEX_FILES]:
-        try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_INDEX_FILE_BYTES:
-                continue
-            record = json.loads(path.read_bytes())
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        focused = record_focused_at(record)
-        if focused and (best is None or focused > best[0]):
-            best = (focused, path.parent)
-    return best[1] if best else None
 
 
 @dataclass(frozen=True)
@@ -435,6 +382,9 @@ __all__ = [
     "default_ledger_path",
     "record_focused_at",
     "record_is_starred",
+    "ScopeResolution",
+    "resolve_active_scope",
+    "default_app_support_dir",
     "default_sessions_root",
     "entry_from_record",
     "merge_entries",

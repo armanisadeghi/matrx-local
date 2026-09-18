@@ -535,6 +535,30 @@ export interface ClaudeSessionDetailOperationPage {
   next_cursor: string | null;
 }
 
+/**
+ * GET /coding-session/claude/labels/status → `pin_divergence`.
+ *
+ * `checked: false` means NO reconcile pass has finished on this Mac, and then
+ * every count is `null` rather than 0 — an unread divergence is not a
+ * converged one. Engine contract:
+ * `app/services/coding_sessions/title_sync.py::pin_divergence`.
+ */
+export interface ClaudePinDivergence {
+  checked: boolean;
+  /** Plain English, present only when `checked` is false. */
+  reason: string | null;
+  /** Pins this Mac holds. */
+  local: number | null;
+  /** Pins AI Matrx holds. */
+  ai_matrx: number | null;
+  to_pin: number | null;
+  to_unpin: number | null;
+  to_reconcile: number | null;
+  last_pass_at: string | null;
+  last_pass_status: string | null;
+  compared_sessions?: number;
+}
+
 export interface ClaudeLabelSyncStatus {
   schema_version: 2 | 3;
   source: "claude_desktop_session_index";
@@ -551,6 +575,8 @@ export interface ClaudeLabelSyncStatus {
   acknowledged_sessions?: number;
   latest_operation?: ClaudeSessionDetailOperation | null;
   push_intents_by_state?: Record<string, number>;
+  /** Additive in schema_version 3; absent on older engines. */
+  pin_divergence?: ClaudePinDivergence;
 }
 
 /** GET /coding-session/runtime/capabilities — the local Claude Code runtime. */

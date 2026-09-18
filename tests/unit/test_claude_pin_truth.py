@@ -32,6 +32,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.services.coding_sessions.claude_scope import resolve_active_scope
 from app.services.coding_sessions.claude_session_index import (
     active_index_scope,
     read_session_index,
@@ -75,6 +76,26 @@ def _write(
     return path
 
 
+def _signed_in(app_support: Path, account: str) -> None:
+    """Write the app's OWN statement of which account it is signed into.
+
+    The desktop app keeps it in two plain files beside its session index:
+    ``config.json`` -> ``lastKnownAccountUuid`` and
+    ``cowork-enabled-cli-ops.json`` -> ``ownerAccountId``. Both were read on
+    the real machine on 2026-09-18 and agreed
+    (``d2eb2e1d-684b-41cc-a6a8-00bac619f70c`` = dev@aimatrx.com), matching the
+    app's localStorage ``rq-cache-confirmed-account``. A fixture that writes
+    neither is a machine the app has said nothing about, which is UNKNOWN.
+    """
+    app_support.mkdir(parents=True, exist_ok=True)
+    (app_support / "config.json").write_text(
+        json.dumps({"lastKnownAccountUuid": account})
+    )
+    (app_support / "cowork-enabled-cli-ops.json").write_text(
+        json.dumps({"ownerAccountId": account})
+    )
+
+
 def _ledger(tmp_path: Path, entries: dict[str, dict[str, Any]]) -> Path:
     path = tmp_path / "ledger.json"
     path.write_text(json.dumps(entries))
@@ -110,6 +131,7 @@ def test_active_scope_is_the_most_recently_focused(tmp_path: Path) -> None:
         last_focused_at=9_000,
         is_starred=False,
     )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
     assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
 
 
@@ -138,6 +160,7 @@ def test_unpin_in_the_active_scope_beats_a_stale_pinned_ledger(
         last_focused_at=9_000,
         is_starred=False,
     )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
     ledger = _ledger(tmp_path, {"local_bbb.json": {"isPinned": True, "pinnedRank": 7}})
 
     entries, _ = read_session_index(root, ledger_path=ledger)
@@ -199,6 +222,7 @@ def test_absent_pin_field_in_a_live_scope_means_not_pinned(tmp_path: Path) -> No
         last_focused_at=8_000,
         is_starred=True,
     )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
     ledger = _ledger(tmp_path, {"local_ddd.json": {"isPinned": True, "pinnedRank": 4}})
 
     entries, _ = read_session_index(root, ledger_path=ledger)
@@ -340,6 +364,7 @@ def test_store_reports_the_unpin_exactly_like_the_scan(
         last_focused_at=9_000,
         is_starred=False,
     )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
     ledger = _ledger(tmp_path, {"local_iii.json": {"isPinned": True, "pinnedRank": 5}})
     monkeypatch.setenv("CLAUDE_SIDEBAR_LEDGER", str(ledger))
 
@@ -388,6 +413,7 @@ def test_store_and_scan_agree_on_pins_across_scopes(
                 last_focused_at=1_000,
                 is_starred=stale_starred,
             )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
     ledger = _ledger(
         tmp_path,
         {f"local_p{n}.json": {"isPinned": True, "pinnedRank": n} for n in range(4)},
@@ -407,3 +433,402 @@ def test_store_and_scan_agree_on_pins_across_scopes(
     assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
         k: v.is_pinned for k, v in scan.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18: the scope signal itself was contaminable (CS-33 / F1)
+#
+# A zero-authorship verifier measured the previous rule — "the scope holding
+# the newest ``lastFocusedAt`` is the live scope" — failing on the real
+# machine. ``lastFocusedAt`` IS copied between scopes: the identical stamp
+# ``1789692097566`` sat in two different accounts' scopes at once, and
+# re-measured on 2026-09-18 the single stamp ``1789714654476`` was the maximum
+# in NINE scopes across FIVE accounts. At 18:04:13 on 2026-09-17 the ledger
+# therefore held, byte for byte, dev@aimatrx.com's starred set (218) while the
+# app was signed into arman26@gmail.com (228 stars): 21 pins that were not
+# pinned, 31 real pins missing, and the running engine reads that ledger at
+# load.
+#
+# So the ACCOUNT is now taken from the app's own statement of it and is never
+# ranked by a timestamp; only the ORG is ranked, and only inside that one
+# account. These tests are the two accounts sharing a stamp.
+# ---------------------------------------------------------------------------
+
+OTHER_ACCOUNT = "9a49ffc8-a284-4c45-b20d-68ba8cc14930"  # arman26@gmail.com
+
+
+def test_a_stamp_copied_into_another_account_cannot_steal_the_scope(
+    tmp_path: Path,
+) -> None:
+    """Two accounts, one identical stamp: the app's own account decides.
+
+    The other account's scope is written LAST and sorts first, so anything
+    resolving by stamp-then-order lands on it. Only the signed-in account's
+    scope may speak.
+    """
+    root = tmp_path / "claude-code-sessions"
+    shared_stamp = 1_789_714_654_476  # the real copied stamp
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_shared",
+        cli_session_id="cli-shared",
+        last_focused_at=shared_stamp,
+        is_starred=False,  # the person UNPINNED it in the account they use
+    )
+    _write(
+        root,
+        account=OTHER_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_shared",
+        cli_session_id="cli-shared",
+        last_focused_at=shared_stamp,  # identical — the contamination
+        is_starred=True,  # a stale pin in an account nobody is signed into
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    scope = active_index_scope(root)
+    assert scope == root / ACTIVE_ACCOUNT / ACTIVE_ORG, (
+        "the scope was taken from an account the app is not signed into"
+    )
+    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert entries["cli-shared"].is_pinned is False, (
+        "another account's stale pin reached the payload"
+    )
+
+
+def test_a_newer_stamp_in_another_account_cannot_steal_the_scope(
+    tmp_path: Path,
+) -> None:
+    """The other account is not merely tied — it is NEWER. Still irrelevant."""
+    root = tmp_path / "claude-code-sessions"
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_newer",
+        cli_session_id="cli-newer",
+        last_focused_at=1_000,
+        is_starred=False,
+    )
+    _write(
+        root,
+        account=OTHER_ACCOUNT,
+        org=STALE_ORG,
+        session="local_newer",
+        cli_session_id="cli-newer",
+        last_focused_at=9_999_999_999_999,
+        is_starred=True,
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
+    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert entries["cli-newer"].is_pinned is False
+
+
+def test_the_org_is_still_ranked_by_focus_inside_the_signed_in_account(
+    tmp_path: Path,
+) -> None:
+    """Ranking survives where contamination cannot reach: one account's orgs."""
+    root = tmp_path / "claude-code-sessions"
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=STALE_ORG,
+        session="local_org",
+        cli_session_id="cli-org",
+        last_focused_at=1_000,
+        is_starred=True,
+    )
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_org",
+        cli_session_id="cli-org",
+        last_focused_at=9_000,
+        is_starred=False,
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    assert active_index_scope(root) == root / ACTIVE_ACCOUNT / ACTIVE_ORG
+    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert entries["cli-org"].is_pinned is False
+
+
+def test_signals_that_disagree_resolve_to_unknown_not_to_a_majority(
+    tmp_path: Path,
+) -> None:
+    """A disagreement IS the contamination window — so it is never a guess.
+
+    Two of the app's own files naming different accounts means the app is
+    mid-switch or one file is stale. Picking either one can publish the wrong
+    person's sidebar, so the pin stays UNKNOWN and every ledger pin stands.
+    """
+    root = tmp_path / "claude-code-sessions"
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_dis",
+        cli_session_id="cli-dis",
+        last_focused_at=9_000,
+        is_starred=False,
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"lastKnownAccountUuid": ACTIVE_ACCOUNT})
+    )
+    (tmp_path / "cowork-enabled-cli-ops.json").write_text(
+        json.dumps({"ownerAccountId": OTHER_ACCOUNT})
+    )
+
+    resolution = resolve_active_scope(root)
+    assert resolution.scope is None
+    assert resolution.account is None
+    assert "disagree" in resolution.reason
+    assert ACTIVE_ACCOUNT in resolution.reason and OTHER_ACCOUNT in resolution.reason
+
+    ledger = _ledger(
+        tmp_path, {"local_dis.json": {"isPinned": True, "pinnedRank": 0}}
+    )
+    entries, _totals = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-dis"].is_pinned is True, (
+        "an undeterminable scope cleared a pin the ledger held"
+    )
+
+
+def test_no_account_signal_at_all_is_unknown_with_a_reason(tmp_path: Path) -> None:
+    """No statement from the app = UNKNOWN, and the reason says so in English."""
+    root = tmp_path / "claude-code-sessions"
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_none",
+        cli_session_id="cli-none",
+        last_focused_at=9_000,
+        is_starred=False,
+    )
+    resolution = resolve_active_scope(root)
+    assert resolution.scope is None
+    assert "no signed-in account" in resolution.reason
+    ledger = _ledger(
+        tmp_path, {"local_none.json": {"isPinned": True, "pinnedRank": 3}}
+    )
+    entries, _totals = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-none"].is_pinned is True
+
+
+def test_the_store_applies_the_same_account_rule_as_the_scan(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The store is what production reads — the contamination must not reach it.
+
+    The store used to answer this with one ``ORDER BY lastrecord_focused_at
+    DESC LIMIT 1`` over every record on the machine, so the copied stamp chose
+    the scope there too. Both readers must land on the same conversation state.
+    """
+    root = tmp_path / "claude-code-sessions"
+    shared_stamp = 1_789_714_654_476
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_store",
+        cli_session_id="cli-store",
+        last_focused_at=shared_stamp,
+        is_starred=False,
+    )
+    _write(
+        root,
+        account=OTHER_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_store",
+        cli_session_id="cli-store",
+        last_focused_at=shared_stamp,
+        is_starred=True,
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    store = _refresh(root, tmp_path / "store" / "index.sqlite3")
+    snapshot = store.load()
+    assert snapshot.active_scope == str(root / ACTIVE_ACCOUNT / ACTIVE_ORG)
+    assert ACTIVE_ACCOUNT in (snapshot.active_scope_reason or "")
+    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {
+        "cli-store": False
+    }
+
+    scan, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert {k: v.is_pinned for k, v in scan.items()} == {
+        k: v.is_pinned for k, v in snapshot.entries.items()
+    }
+
+
+def test_an_account_signal_that_would_escape_the_index_tree_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The account id becomes a path segment, so a separator is not an account.
+
+    The signal is a file the app writes, but it is still untrusted input to a
+    path join. A traversal value must read as "no account stated" — UNKNOWN,
+    which keeps the ledger's pins — never as a directory outside the index.
+    """
+    root = tmp_path / "claude-code-sessions"
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_esc",
+        cli_session_id="cli-esc",
+        last_focused_at=9_000,
+        is_starred=False,
+    )
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config.json").write_text(
+        json.dumps({"lastKnownAccountUuid": "../../../etc"})
+    )
+    resolution = resolve_active_scope(root)
+    assert resolution.scope is None
+    assert resolution.account is None
+    ledger = _ledger(
+        tmp_path, {"local_esc.json": {"isPinned": True, "pinnedRank": 0}}
+    )
+    entries, _totals = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-esc"].is_pinned is True
+
+
+# ---------------------------------------------------------------------------
+# The same law, one level down: the ORG is stated too (CS-33 / F1, second pass)
+#
+# Ranking lastFocusedAt among ONE account's organisations looked safe — the
+# contamination that was measured crossed accounts. Then it was measured
+# inside an account: at 01:29 on 2026-09-18 all FIVE organisations of the
+# signed-in account carried the identical maximum stamp 1789718916078 while
+# holding 203, 203, 204, 204 and 218 stars, and "the newest" was a coin flip
+# that landed on 203 while the app was showing 218. The app names its own
+# organisation in the same config file it names its account in, one
+# `dxt:allowlistLastUpdated:<org>` key per organisation, and on that machine
+# the right one (218 stars) was hours ahead of every sibling.
+# ---------------------------------------------------------------------------
+
+SECOND_ORG = "09b4b1ef-090b-42f2-a680-2c51863e549d"
+
+
+def _stated_orgs(app_support: Path, stamps: dict[str, str]) -> None:
+    """Merge the app's per-organisation stamps into its config, as it does."""
+    config = app_support / "config.json"
+    document = json.loads(config.read_text()) if config.exists() else {}
+    for org, stamp in stamps.items():
+        document[f"dxt:allowlistLastUpdated:{org}"] = stamp
+    config.write_text(json.dumps(document))
+
+
+def test_the_org_the_app_names_wins_over_a_tied_focus_stamp(tmp_path: Path) -> None:
+    """The real 01:29 failure: every org tied, and the app named the right one."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078  # the real shared stamp
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=ACTIVE_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=True,
+    )
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=STALE_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=False,
+    )
+    _write(
+        root,
+        account=ACTIVE_ACCOUNT,
+        org=SECOND_ORG,
+        session="local_tie",
+        cli_session_id="cli-tie",
+        last_focused_at=tied,
+        is_starred=False,
+    )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _stated_orgs(
+        tmp_path,
+        {
+            ACTIVE_ORG: "2026-09-18T08:33:08.496Z",
+            STALE_ORG: "2026-09-18T04:33:08.532Z",
+            SECOND_ORG: "2026-09-16T00:19:21.832Z",
+        },
+    )
+
+    resolution = resolve_active_scope(root)
+    assert resolution.org == ACTIVE_ORG, resolution.reason
+    assert "last updated" in resolution.reason
+    entries, _totals = read_session_index(root, ledger_path=tmp_path / "missing.json")
+    assert entries["cli-tie"].is_pinned is True
+
+
+def test_a_tied_focus_stamp_with_no_stated_org_is_unknown_not_a_coin_flip(
+    tmp_path: Path,
+) -> None:
+    """No statement + a tie = UNKNOWN. An arbitrary winner is not an answer."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078
+    for org, starred in ((ACTIVE_ORG, True), (STALE_ORG, False), (SECOND_ORG, False)):
+        _write(
+            root,
+            account=ACTIVE_ACCOUNT,
+            org=org,
+            session="local_flip",
+            cli_session_id="cli-flip",
+            last_focused_at=tied,
+            is_starred=starred,
+        )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+
+    resolution = resolve_active_scope(root)
+    assert resolution.scope is None
+    assert resolution.org is None
+    assert "coin flip" in resolution.reason
+    assert str(tied) in resolution.reason
+
+    ledger = _ledger(
+        tmp_path, {"local_flip.json": {"isPinned": True, "pinnedRank": 2}}
+    )
+    entries, _totals = read_session_index(root, ledger_path=ledger)
+    assert entries["cli-flip"].is_pinned is True, "a coin flip cleared a real pin"
+
+
+def test_the_store_uses_the_stated_org_too(tmp_path: Path, monkeypatch: Any) -> None:
+    """Production reads the store, so the store must not flip the coin either."""
+    root = tmp_path / "claude-code-sessions"
+    tied = 1_789_718_916_078
+    for org, starred in ((ACTIVE_ORG, True), (STALE_ORG, False)):
+        _write(
+            root,
+            account=ACTIVE_ACCOUNT,
+            org=org,
+            session="local_sorg",
+            cli_session_id="cli-sorg",
+            last_focused_at=tied,
+            is_starred=starred,
+        )
+    _signed_in(tmp_path, ACTIVE_ACCOUNT)
+    _stated_orgs(
+        tmp_path,
+        {
+            ACTIVE_ORG: "2026-09-18T08:33:08.496Z",
+            STALE_ORG: "2026-09-18T04:33:08.532Z",
+        },
+    )
+    monkeypatch.setenv("CLAUDE_DESKTOP_APP_SUPPORT_DIR", str(tmp_path))
+
+    store = _refresh(root, tmp_path / "store" / "index.sqlite3")
+    snapshot = store.load()
+    assert snapshot.active_scope == str(root / ACTIVE_ACCOUNT / ACTIVE_ORG)
+    assert {k: v.is_pinned for k, v in snapshot.entries.items()} == {"cli-sorg": True}

@@ -6,13 +6,20 @@ the machine's launchd session-sync agent (``~/.claude/sync-claude-code-sessions.
 runs every pass to refresh the canonical sidebar ledger
 (``~/.claude/claude-code-sidebar-state.json``). Install it with::
 
-    cp scripts/claude_code_pins_extract.py ~/.claude/claude-code-pins-extract.py
+    scripts/install_pins_extractor.sh        # this file AND claude_scope.py
 
 It lives in this repo because the pin rule it applies is the SAME rule this
 repo's engine applies in
 :class:`app.services.coding_sessions.claude_session_index.LivePins`, and the two
 must not drift: ``tests/unit/test_claude_pins_extractor.py`` fails if they
 disagree on one conversation.
+
+THE SCOPE RULE IS NOT IN THIS FILE. It lives once, in
+``app/services/coding_sessions/claude_scope.py``, which the installer copies
+beside this script as ``~/.claude/claude_scope.py`` and which this script
+imports. If that import fails, this script publishes NO pin verdict at all
+rather than fall back to a second copy of the rule that could drift from the
+engine's.
 
 WHERE EACH PIECE OF STATE LIVES
 -------------------------------
@@ -21,10 +28,18 @@ fix (2026-09-17).
 
 * **The pin** is ``isStarred`` on the app's own per-conversation index record,
   under ``<app support>/Claude/claude-code-sessions/<account>/<org>/local_<id>.json``.
-  It is per account+org: this Mac holds 48 scopes whose pinned counts range
+  It is per account+org: this Mac holds 49 scopes whose pinned counts range
   140-256, and only the scope the app is signed into matches what the sidebar
   shows. An unpin sets the field to ``false`` (or the record simply carries no
   pin key), so an unpin is finally representable.
+
+  WHICH scope is the app's is decided by ``claude_scope`` from the app's own
+  statement of the account it is signed into, never by ranking
+  ``lastFocusedAt`` across accounts. That stamp IS copied between scopes — on
+  2026-09-18 the single value 1789714654476 was the maximum in nine scopes
+  across five accounts — and on 2026-09-17 at 18:04 ranking it published
+  dev@aimatrx.com's 218 stars while the app was signed into arman26@gmail.com
+  (228): 21 pins that were not pinned, 31 real pins missing.
 
 * **The display order** of pinned items, and the custom sidebar groups, live in
   the app's embedded Chromium localStorage (a LevelDB) for the claude.ai origin::
@@ -42,9 +57,10 @@ fix (2026-09-17).
 
 UNKNOWN IS NEVER FALSE
 ----------------------
-When the pin cannot be read — no session-index root, no scope carrying the
-app's ``lastFocusedAt`` signal, or a freshly signed-in scope with no pin
-opinion at all — the ``pin_states`` key is OMITTED and ``pin_note`` says why.
+When the pin cannot be read — no session-index root, an account the app has
+not stated (or two of its own files disagreeing about it), no organisation
+carrying a focus stamp, or a freshly signed-in scope with no pin opinion at
+all — the ``pin_states`` key is OMITTED and ``pin_note`` says why in English.
 The caller must then leave every ledger pin exactly as it was. Writing
 ``false`` in that case would clear the whole sidebar (and, through the bridge,
 the server's pinned list) in one pass.
@@ -80,11 +96,42 @@ import argparse
 import json
 import os
 import pathlib
-import re
 import shutil
 import stat
 import sys
 import tempfile
+
+# THE scope rule, imported — never re-implemented here. Two layouts:
+# installed (this script and claude_scope.py side by side in ~/.claude) and
+# in-repo (tests load this file by path while the repo is importable).
+try:  # installed layout
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from claude_scope import (  # type: ignore[import-not-found]
+        ScopeResolution,
+        resolve_active_scope,
+    )
+except ImportError:  # in-repo layout
+    try:
+        from app.services.coding_sessions.claude_scope import (  # noqa: F401
+            ScopeResolution,
+            resolve_active_scope,
+        )
+    except ImportError as _scope_exc:  # nothing to apply the rule with
+        SCOPE_IMPORT_ERROR: str | None = (
+            "the shared scope rule (claude_scope.py) is not importable "
+            f"({_scope_exc}); install it beside this script with "
+            "scripts/install_pins_extractor.sh. No pin verdict is published, "
+            "so every pin the ledger holds stands."
+        )
+    else:
+        SCOPE_IMPORT_ERROR = None
+else:
+    SCOPE_IMPORT_ERROR = None
+
+# The app's own localStorage statement of the signed-in account — a third
+# signal claude_scope cannot read for itself, because reading it needs the
+# LevelDB this script already opens for the pin order.
+ACCOUNT_KEY = "rq-cache-confirmed-account"
 
 LEVELDB_DIR = os.path.expanduser(
     "~/Library/Application Support/Claude/Local Storage/leveldb"
@@ -95,14 +142,9 @@ SESSIONS_ROOT = os.path.expanduser(
 LEDGER_PATH = os.path.expanduser("~/.claude/claude-code-sidebar-state.json")
 ORDER_KEYS = ("LSS-persisted.dframe-local-slice", "dframe-store")
 GROUPS_KEY = "LSS-persisted.dframe-group-scopes"
-# This Mac holds 75,666 index records across 48 scopes. The cap is a guard
+# This Mac holds 79,152 index records across 49 scopes. The cap is a guard
 # against a runaway tree, not a working limit.
-MAX_INDEX_FILES = 250_000
 MAX_INDEX_FILE_BYTES = 8_388_608
-# ``lastFocusedAt`` sits in the first object of a small record; reading a
-# bounded prefix keeps the scope scan to one short read per file.
-_FOCUSED_PREFIX_BYTES = 8192
-_FOCUSED_RE = re.compile(rb'"lastFocusedAt"\s*:\s*(\d+)')
 
 
 def session_name(ref: object) -> str | None:
@@ -122,52 +164,6 @@ def record_is_starred(record: dict) -> bool | None:
     """
     value = record.get("isStarred")
     return value if isinstance(value, bool) else None
-
-
-def _index_files(root: str) -> list[str]:
-    if not os.path.isdir(root):
-        return []
-    found: list[str] = []
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in filenames:
-            if name.startswith("local_") and name.endswith(".json"):
-                found.append(os.path.join(dirpath, name))
-                if len(found) >= MAX_INDEX_FILES:
-                    return found
-    return found
-
-
-def active_index_scope(root: str = SESSIONS_ROOT) -> str | None:
-    """The ``<account>/<org>`` folder the desktop app is CURRENTLY signed into.
-
-    ``lastFocusedAt`` is the signal, exactly as
-    :func:`app.services.coding_sessions.claude_session_index.active_index_scope`
-    uses it: the app writes it only in the scope in use, and the session-sync
-    agent never copies it between scopes (it syncs title / titleSource /
-    isArchived only), so the scope holding the newest one is the live scope.
-    Verified 2026-09-17 against the app's own reported pin state on 28 of 28
-    sampled conversations, including all 14 with no pin record.
-
-    ``None`` when no record carries the signal — the caller must then keep the
-    pins it already has rather than conclude that nothing is pinned.
-    """
-    best: tuple[int, str] | None = None
-    for path in _index_files(root):
-        try:
-            info = os.lstat(path)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_INDEX_FILE_BYTES:
-                continue
-            with open(path, "rb") as handle:
-                blob = handle.read(_FOCUSED_PREFIX_BYTES)
-        except OSError:
-            continue
-        match = _FOCUSED_RE.search(blob)
-        if match is None:
-            continue
-        focused = int(match.group(1))
-        if focused > 0 and (best is None or focused > best[0]):
-            best = (focused, os.path.dirname(path))
-    return best[1] if best else None
 
 
 def scope_pin_states(scope: str) -> dict[str, bool | None]:
@@ -233,7 +229,7 @@ def read_localstorage(leveldb_dir: str = LEVELDB_DIR) -> dict[str, str]:
             os.remove(lock)
         latest: dict[str, tuple[int, str]] = {}
         db = LocalStoreDb(pathlib.Path(copy))
-        wanted = set(ORDER_KEYS) | {GROUPS_KEY}
+        wanted = set(ORDER_KEYS) | {GROUPS_KEY, ACCOUNT_KEY}
         for rec in db.iter_all_records():
             if rec.script_key in wanted and rec.value is not None:
                 seq = rec.leveldb_seq_number
@@ -301,6 +297,21 @@ def categories_and_groups(raw: dict[str, str]) -> tuple[dict[str, str], list[dic
     return categories, groups
 
 
+def _counts(
+    states: dict[str, bool | None], ranks: dict[str, int], result: dict
+) -> dict:
+    return {
+        "scope_records": len(states),
+        "starred_true": sum(1 for v in states.values() if v is True),
+        "starred_false": sum(1 for v in states.values() if v is False),
+        "starred_absent": sum(1 for v in states.values() if v is None),
+        "order_refs": len(ranks),
+        "ranked_pins": sum(
+            1 for name in (result.get("pinned") or {}) if ranks.get(name) is not None
+        ),
+    }
+
+
 def extract(
     *, sessions_root: str = SESSIONS_ROOT, leveldb_dir: str = LEVELDB_DIR
 ) -> dict:
@@ -316,18 +327,31 @@ def extract(
         "categories": categories,
         "groups": groups,
     }
-    scope = active_index_scope(sessions_root)
     states: dict[str, bool | None] = {}
     verdicts: dict[str, bool] | None = None
+    if SCOPE_IMPORT_ERROR is not None:
+        result["pin_note"] = SCOPE_IMPORT_ERROR
+        result["counts"] = _counts(states, ranks, result)
+        return result
+    # The app's localStorage statement of the account, handed to the shared
+    # rule as a third signal. Every signal that is present must agree; a
+    # disagreement is UNKNOWN, never a majority vote.
+    extra = {}
+    confirmed = (raw.get(ACCOUNT_KEY) or "").strip().strip('"')
+    if confirmed:
+        extra[ACCOUNT_KEY] = confirmed
+    resolution: ScopeResolution = resolve_active_scope(
+        pathlib.Path(sessions_root), extra_signals=extra or None
+    )
+    result["pin_scope_signals"] = dict(resolution.signals)
+    scope = str(resolution.scope) if resolution.scope else None
     if scope is None:
         result["pin_note"] = (
-            "no account+org scope carries the app's lastFocusedAt signal, so the "
-            "pin is UNKNOWN — keep the pins the ledger already holds"
+            f"{resolution.reason} — keep the pins the ledger already holds"
         )
     else:
-        result["pin_scope"] = os.path.join(
-            os.path.basename(os.path.dirname(scope)), os.path.basename(scope)
-        )
+        result["pin_scope"] = resolution.label
+        result["pin_scope_reason"] = resolution.reason
         states = scope_pin_states(scope)
         verdicts = pin_verdicts(states)
         if verdicts is None:
@@ -341,16 +365,7 @@ def extract(
         result["pinned"] = {
             name: ranks.get(name) for name, pinned in verdicts.items() if pinned
         }
-    result["counts"] = {
-        "scope_records": len(states),
-        "starred_true": sum(1 for v in states.values() if v is True),
-        "starred_false": sum(1 for v in states.values() if v is False),
-        "starred_absent": sum(1 for v in states.values() if v is None),
-        "order_refs": len(ranks),
-        "ranked_pins": sum(
-            1 for name in (result.get("pinned") or {}) if ranks.get(name) is not None
-        ),
-    }
+    result["counts"] = _counts(states, ranks, result)
     return result
 
 
@@ -388,10 +403,12 @@ def print_diff(result: dict, ledger_path: str, sessions_root: str) -> int:
         return 0
 
     # ---- vs the app's own truth, re-derived independently ------------------
-    scope = active_index_scope(sessions_root)
+    # Re-resolved here rather than taken from ``result``, so the diff is a
+    # second opinion on the scope as well as on the pins.
+    scope = resolve_active_scope(pathlib.Path(sessions_root)).scope
     truth = {
         name: value is True
-        for name, value in (scope_pin_states(scope) if scope else {}).items()
+        for name, value in (scope_pin_states(str(scope)) if scope else {}).items()
     }
     truth_pinned = {name for name, pinned in truth.items() if pinned}
     published = {name for name, pinned in states.items() if pinned}

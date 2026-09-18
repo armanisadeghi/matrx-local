@@ -563,7 +563,12 @@ export interface ClaudeLabelSyncStatus {
   schema_version: 2 | 3;
   source: "claude_desktop_session_index";
   index_available: boolean;
-  index_writable: boolean;
+  /** null = never measured. A probe nobody ran is not a verdict of "not
+   * writable": the engine measures it in full during a sync pass (it opens
+   * every one of ~79,000 record files, ~7 s) and reports that measurement
+   * with its age, rather than re-running it on every status poll. */
+  index_writable: boolean | null;
+  index_writable_measured_at: string | null;
   pushed_sessions: number;
   index_files: number;
   index_records: number;

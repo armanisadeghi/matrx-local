@@ -236,14 +236,18 @@ class SupabaseDocClient:
         return [_normalize_note_row(r) for r in rows]
 
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
-        try:
-            rows = await self._request(
-                "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
-            )
-            return _normalize_note_row(rows[0]) if rows else None
-        except Exception:
-            logger.debug("get_note(%s) returned no result", note_id, exc_info=True)
-            return None
+        """Return ``None`` only when the cloud successfully returns no row.
+
+        A failed read is not evidence that the note is absent.  In particular,
+        treating an auth, transport, or PostgREST schema failure as ``None``
+        makes the sync engine's failed conditional update fall through to an
+        unconditional upsert, which can overwrite cloud content that it could
+        not first inspect.
+        """
+        rows = await self._request(
+            "GET", "notes", params={"id": f"eq.{note_id}"}, schema=_WORKBENCH
+        )
+        return _normalize_note_row(rows[0]) if rows else None
 
     async def create_note(
         self,

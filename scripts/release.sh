@@ -780,12 +780,17 @@ fi
 # ── pnpm lockfile freshness check ────────────────────────────────────────────
 # CI runs `pnpm install --frozen-lockfile` and will fail if pnpm-lock.yaml is
 # out of sync with package.json. Catch this locally before pushing.
-info "Checking pnpm-lock.yaml is up to date with package.json..."
-LOCKFILE_CHECK=$(cd desktop && pnpm install --lockfile-only --frozen-lockfile --ignore-scripts 2>&1) || {
+info "Installing desktop dependencies from the frozen lockfile..."
+# A release must be runnable from a fresh clone.  --lockfile-only verifies the
+# manifest but leaves node_modules absent, so the later package guards and
+# TypeScript gate can fail for environmental reasons.  Install the exact frozen
+# graph here; --ignore-scripts keeps this deterministic and avoids running build
+# hooks during preflight.
+LOCKFILE_CHECK=$(cd desktop && pnpm install --frozen-lockfile --ignore-scripts 2>&1) || {
     echo "$LOCKFILE_CHECK" >&2
-    fail "pnpm-lock.yaml is out of sync or install failed. Fix and commit it before releasing."
+    fail "The frozen desktop dependency install failed. Fix the lockfile or dependency graph before releasing."
 }
-ok "pnpm-lock.yaml is up to date."
+ok "Desktop dependencies match the frozen lockfile."
 
 # ── @ai-matrx package currency ───────────────────────────────────────────────
 # BLOCKING. THE LATEST LAW says every @ai-matrx spec is "latest"; THE CATCH-UP

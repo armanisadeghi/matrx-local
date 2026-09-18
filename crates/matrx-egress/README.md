@@ -138,6 +138,42 @@ Quit
 `AI Matrx Home Connection — Paused` and the item reading **Resume** — the tray redraws from the
 status document's revision, so it can never disagree with `status`.
 
+**The menu when something is wrong**, read the same way on 2026-09-18 with the helper pointed at a
+gateway that closes the socket with `4401`:
+
+```
+AI Matrx Home Connection — Removed from your account          (disabled title)
+This computer was removed from your account —                 (disabled)
+run Connect again to add it back. Open AI                      (disabled)
+Matrx on the web and connect this computer                     (disabled)
+again.                                                         (disabled)
+──────────
+Connect this computer again…
+Open in AI Matrx
+──────────
+Quit
+```
+
+Two things to see in it. The title says WHICH kind of "not connected" this is — `signed_out` reads
+"Removed from your account", `error` reads "Not connected: <the reason>" — and the sentence and its
+remedy are on the lines under it, wrapped, where before there was nothing at all. And **Pause and
+Resume are gone**: after a `4401` there is no connection to pause and resuming would dial with a
+token the server has already refused, so the menu offers the one thing that is true instead. Same
+read against a refused server, where the helper is still retrying, keeps `Pause` and carries the
+reason: `AI Matrx Home Connection — Connecting` / "this computer could not reach AI Matrx:
+Connection refused (os error 61) Nothing to do — it will try again in about 3 seconds."
+
+What the menu says and what it offers is `menu::model` — plain data, no tray in it, asserted on
+every platform — so the drawing in `tray.rs` decides nothing.
+
+**The supervisor does not abandon the tray.** A `4401` or `4409` used to end `run()` while `main`
+kept the menu bar item alive, so `Resume` wrote into a watch channel with no receiver and the menu
+read "Connecting" for ever. The loop now parks in the terminal state instead: it stops dialling,
+records which ending it was, and every surface — menu, CLI, control socket — answers with the
+sentence rather than with silence. Proven failing-then-passing:
+`supervisor::tests::a_removed_computer_parks_and_answers_resume_with_the_truth` fails with "the run
+loop abandoned the tray" the moment that `return` comes back.
+
 ## Windows and Linux: written, reasoned, not run
 
 This machine is a Mac, so everything below was written against its documentation and is

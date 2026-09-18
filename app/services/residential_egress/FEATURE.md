@@ -125,5 +125,20 @@ note stands in until Arman approves the edit.
 
 ## Change log
 
+- 2026-09-18 — The helper and the tab stopped hiding what they knew. An
+  independent review found five places where a state was reached but never
+  said: the menu-bar item collapsed `signed_out` and `error` into one wordless
+  "— Not connected" and carried no sentence or remedy at all; after a `4401` /
+  `4409` the supervisor's run loop returned while the menu stayed up, so Resume
+  was a silent no-op and the title sat on "Connecting" for ever; this tab
+  rendered a wordless skeleton whenever the engine was not running; the switch
+  had no `catch`, so a failed save left it optimistically ON with no message;
+  and the remedy was hidden unless a `last_error` came with it, styled as a
+  grey hint. All five fixed. The menu's words and actions are now
+  `crates/matrx-egress/src/menu.rs` — plain data, asserted on every platform —
+  the run loop parks in a terminal state instead of returning, and the tab
+  renders the honest sentence, reverts the switch with an alert on failure, and
+  shows an error as an error. Live evidence and the failing-then-passing guard:
+  `crates/matrx-egress/README.md` § What is proven, and how.
 - 2026-09-18 — Created. `app/services/proxy/` deleted; supervisor, routes,
   setting, Settings tab, preflight entry, sidecar packaging added.

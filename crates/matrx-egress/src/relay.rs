@@ -21,6 +21,7 @@ use crate::backoff::Backoff;
 use crate::frame::{Frame, FrameType, MAX_DATA_PAYLOAD};
 use crate::policy;
 use crate::status::{State, StatusHandle};
+use crate::supervisor::Terminal;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -143,6 +144,20 @@ pub enum SessionEnd {
     Lost(String),
     /// The helper itself decided to stop (pause from the tray, quit).
     StoppedLocally,
+}
+
+impl SessionEnd {
+    /// Whether this ending is one that will not come back by itself — and which one.
+    ///
+    /// The supervisor parks on a `Some` instead of returning, so that every surface can go on
+    /// answering honestly rather than offering controls that would do nothing.
+    pub fn terminal(&self) -> Option<Terminal> {
+        match self {
+            SessionEnd::Removed => Some(Terminal::Removed),
+            SessionEnd::Replaced => Some(Terminal::Replaced),
+            _ => None,
+        }
+    }
 }
 
 /// Everything one session needs.
@@ -638,21 +653,11 @@ pub fn after_session(
     backoff: &mut Backoff,
 ) -> AfterSession {
     match end {
-        SessionEnd::Removed => {
-            status.set_error(
-                State::SignedOut,
-                "This computer was removed from your account — run Connect again to add it back.",
-                "Open AI Matrx on the web and connect this computer again.",
-            );
-            AfterSession::Stop
-        }
-        SessionEnd::Replaced => {
-            status.set_error(
-                State::SignedOut,
-                "Another copy of the Home Connection took over for this computer.",
-                "Only one copy runs at a time. Quit this one, or quit the other and start this one \
-                 again.",
-            );
+        SessionEnd::Removed | SessionEnd::Replaced => {
+            // One place spells these two out: `Terminal`, which the supervisor and the menu also
+            // read, so the tray can never say something the status file does not.
+            let terminal = end.terminal().expect("both arms are terminal");
+            status.set_error(terminal.state(), terminal.sentence(), terminal.remedy());
             AfterSession::Stop
         }
         SessionEnd::PausedFromWeb => {
@@ -752,7 +757,16 @@ mod tests {
             after_session(&SessionEnd::Replaced, &status, &mut backoff),
             AfterSession::Stop
         );
-        assert_eq!(status.snapshot().state, State::SignedOut);
+        // Replaced is NOT signed out: the account still lists this computer, another copy simply
+        // holds its connection. The two must not wear the same title in the menu.
+        assert_eq!(status.snapshot().state, State::Error);
+        assert_eq!(
+            after_session(&SessionEnd::Replaced, &status, &mut backoff)
+                .eq(&AfterSession::Stop)
+                .then(|| SessionEnd::Replaced.terminal())
+                .flatten(),
+            Some(crate::supervisor::Terminal::Replaced)
+        );
     }
 
     #[test]

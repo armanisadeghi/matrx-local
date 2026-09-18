@@ -79,6 +79,12 @@ impl Status {
     }
 
     /// The tray's title line, in plain English.
+    ///
+    /// `signed_out` and `error` are two different things and must never read the same: `signed_out`
+    /// is "the account does not have this computer any more", `error` is "it is still yours and it
+    /// is not working right now" — and the second one names the reason, because a title that says
+    /// only "Not connected" leaves the person with nowhere to go. The whole sentence and its
+    /// remedy are the lines underneath ([`crate::menu::detail_lines`]).
     pub fn title_line(&self) -> String {
         match self.state {
             State::Connected => match &self.device_name {
@@ -87,8 +93,15 @@ impl Status {
             },
             State::Connecting => "AI Matrx Home Connection — Connecting".to_string(),
             State::Paused => "AI Matrx Home Connection — Paused".to_string(),
-            State::SignedOut => "AI Matrx Home Connection — Not connected".to_string(),
-            State::Error => "AI Matrx Home Connection — Not connected".to_string(),
+            State::SignedOut => "AI Matrx Home Connection — Removed from your account".to_string(),
+            State::Error => match self
+                .last_error
+                .as_deref()
+                .and_then(crate::menu::short_reason)
+            {
+                Some(reason) => format!("AI Matrx Home Connection — Not connected: {reason}"),
+                None => "AI Matrx Home Connection — Not connected".to_string(),
+            },
         }
     }
 }
@@ -390,6 +403,22 @@ mod tests {
             "AI Matrx Home Connection — Paused"
         );
         handle.set_state(State::SignedOut);
+        assert_eq!(
+            handle.snapshot().title_line(),
+            "AI Matrx Home Connection — Removed from your account"
+        );
+        handle.set_error(
+            State::Error,
+            "AI Matrx could not be reached from here",
+            "Check this computer's internet connection.",
+        );
+        assert_eq!(
+            handle.snapshot().title_line(),
+            "AI Matrx Home Connection — Not connected: AI Matrx could not be reached from here"
+        );
+        // An error with no sentence still gets a title, never an empty one.
+        handle.set_state(State::Connected);
+        handle.set_error(State::Error, "", "Try again.");
         assert_eq!(
             handle.snapshot().title_line(),
             "AI Matrx Home Connection — Not connected"

@@ -29,6 +29,7 @@ mod icon;
 mod identity;
 mod install;
 mod keychain;
+mod menu;
 mod pairing;
 mod paths;
 mod policy;
@@ -548,9 +549,13 @@ fn start_relay(
             // reporting on.
             let runtime = Box::leak(Box::new(runtime));
             let _ = runtime;
-            tray::run(Arc::clone(&status), commands_tx, move || {
-                supervisor_for_tray.is_paused()
-            });
+            let supervisor_for_terminal = Arc::clone(&supervisor);
+            tray::run(
+                Arc::clone(&status),
+                commands_tx,
+                move || supervisor_for_tray.is_paused(),
+                move || supervisor_for_terminal.terminal(),
+            );
             // `tray::run` only returns if the event loop stopped without exiting the process.
             let _ = paths::remove_quietly(&control_path);
             return ExitCode::SUCCESS;
@@ -574,10 +579,11 @@ fn start_relay(
         let _ = paths::remove_quietly(&control_path);
     }
     // The five states have no word for "stopped", and leaving "connected" behind would be a
-    // status file that lies about a process which no longer exists. `signed_out` with the true
-    // sentence is what anything tailing the file should read.
+    // status file that lies about a process which no longer exists. `error` with the true
+    // sentence is what anything tailing the file should read — NOT `signed_out`, which now means
+    // exactly one thing ("the account no longer has this computer") and titles itself that way.
     status.set_error(
-        State::SignedOut,
+        State::Error,
         "The AI Matrx Home Connection is not running on this computer.",
         "Start it again to lend this computer's internet connection.",
     );

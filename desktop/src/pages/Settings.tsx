@@ -55,7 +55,7 @@ import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { VersionFacts } from "@/components/settings/VersionFacts";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Skeleton, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
+import { Alert, AlertDescription, Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Skeleton, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { useVersionState } from "@/contexts/VersionStateContext";
 import {
   Select,
@@ -293,6 +293,11 @@ export function Settings({
   // it is never conflated with "off", which is a state the engine names.
   const [egressStatus, setEgressStatus] = useState<EgressStatus | null>(null);
   const [egressBusy, setEgressBusy] = useState(false);
+  // The last failed switch, kept until the next attempt. A failed save must not
+  // vanish: it is the only account the person gets of why nothing changed.
+  const [egressToggleError, setEgressToggleError] = useState<string | null>(
+    null,
+  );
 
   // Cloud sync state
   const [syncing, setSyncing] = useState(false);
@@ -1248,6 +1253,7 @@ export function Settings({
   // side-effect) and then re-reads the honest status the engine returns.
   const handleEgressToggle = async (next: boolean) => {
     setEgressBusy(true);
+    setEgressToggleError(null);
     setSettings((prev) =>
       prev ? { ...prev, residentialEgressEnabled: next } : prev,
     );
@@ -1256,6 +1262,19 @@ export function Settings({
       // It is awaited here — unlike updateSetting's fire-and-forget — because
       // the status we read next must reflect what the engine actually did.
       await saveSetting("residentialEgressEnabled", next);
+    } catch (err) {
+      // The save failed, so the switch above is showing something that never
+      // happened. Put it back where it was and say so — an optimistic switch
+      // left sitting in the wrong position with no message is the screen
+      // lying about what this computer is doing (law 4).
+      setSettings((prev) =>
+        prev ? { ...prev, residentialEgressEnabled: !next } : prev,
+      );
+      setEgressToggleError(
+        next
+          ? `This computer's home connection could not be turned on: ${err}`
+          : `This computer's home connection could not be turned off: ${err}`,
+      );
     } finally {
       await loadEgressStatus();
       setEgressBusy(false);
@@ -3507,11 +3526,30 @@ export function Settings({
                   />
                 </div>
 
+                {egressToggleError && (
+                  <Alert variant="destructive">
+                    <AlertDescription className="text-xs">
+                      {egressToggleError} The switch has been put back where it
+                      was. Try again, and if it keeps failing, restart AI Matrx.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 <Separator />
 
                 <div className="space-y-2">
                   <Label>Status</Label>
-                  {egressStatus === null ? (
+                  {engineStatus !== "connected" ? (
+                    // The engine is what knows about the home connection, so
+                    // with it stopped there is no status to show. A wordless
+                    // skeleton here waited forever and said nothing; this says
+                    // what is true and what to do about it.
+                    <p className="text-xs text-muted-foreground">
+                      The AI Matrx engine is not running on this computer, so
+                      the home connection cannot say what it is doing. Start the
+                      engine from the Engine tab, then come back here.
+                    </p>
+                  ) : egressStatus === null ? (
                     <Skeleton className="h-5 w-56" />
                   ) : (
                     <>
@@ -3539,12 +3577,29 @@ export function Settings({
                           </span>
                         )}
                       </div>
-                      {egressStatus.last_error && (
-                        <p className="text-xs text-muted-foreground">
-                          {egressStatus.last_error}
-                          {egressStatus.remedy ? ` ${egressStatus.remedy}` : ""}
-                        </p>
-                      )}
+                      {/*
+                        The remedy is shown whenever the engine sends one —
+                        never withheld because the sentence before it happens
+                        to be absent — and a failing state reads as a failure,
+                        not as a grey hint nobody looks at.
+                      */}
+                      {(egressStatus.last_error || egressStatus.remedy) &&
+                        (egressStatus.state === "error" ||
+                        egressStatus.state === "not_installed" ? (
+                          <Alert variant="destructive">
+                            <AlertDescription className="text-xs">
+                              {[egressStatus.last_error, egressStatus.remedy]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </AlertDescription>
+                          </Alert>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            {[egressStatus.last_error, egressStatus.remedy]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </p>
+                        ))}
                     </>
                   )}
                 </div>

@@ -1,6 +1,8 @@
 //! The menu-bar / system-tray item — macOS and Windows only.
 //!
-//! Five lines, plain English, exactly the contract's menu:
+//! This module DRAWS; it decides nothing. What the menu says and what it offers is
+//! [`crate::menu::model`], which is plain data and is asserted in tests on every platform. So the
+//! ordinary menu looks like this:
 //!
 //! ```text
 //! AI Matrx Home Connection — Connected as Arman's MacBook Pro   (the title, not clickable)
@@ -12,6 +14,25 @@
 //! Quit
 //! ```
 //!
+//! …and one that has something to say carries it under the title, also not clickable:
+//!
+//! ```text
+//! AI Matrx Home Connection — Removed from your account
+//! This computer was removed from your account — run
+//! Connect again to add it back. Open AI Matrx on the web
+//! and connect this computer again.
+//! ─────────────────────────────────────────────────────────────
+//! Connect this computer again…
+//! Open in AI Matrx
+//! ─────────────────────────────────────────────────────────────
+//! Quit
+//! ```
+//!
+//! The whole menu is rebuilt whenever the status changes, rather than the items being edited in
+//! place: the SET of true actions changes with the state (a removed computer is offered neither
+//! Pause nor Resume), and a menu that could only edit its labels would have to keep an item that
+//! does nothing — which is the failure this exists to remove.
+//!
 //! **The event loop owns the main thread and tokio runs on a worker thread.** On macOS a tray item
 //! belongs to the `NSApplication`, which must be on the main thread, and the icon must be created
 //! *after* the loop has started (`StartCause::Init`) or it does not appear at all. On Linux there
@@ -19,13 +40,14 @@
 
 #![cfg(any(target_os = "macos", target_os = "windows"))]
 
-use crate::status::{State, StatusHandle};
-use crate::supervisor::{Command, Commands};
+use crate::menu::MenuModel;
+use crate::status::StatusHandle;
+use crate::supervisor::{Command, Commands, Terminal};
 use std::sync::Arc;
 use std::time::Duration;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
 /// How often the menu re-reads the status. Fast enough that a state change looks instant, slow
@@ -34,22 +56,37 @@ const REFRESH: Duration = Duration::from_millis(400);
 
 /// Run the tray. **Never returns** until the person chooses Quit, and must be called on the main
 /// thread.
-pub fn run(status: Arc<StatusHandle>, commands: Commands, is_paused: impl Fn() -> bool + 'static) {
+///
+/// `is_paused` and `terminal` are closures rather than values because the supervisor owns both and
+/// they move while the menu is up.
+pub fn run(
+    status: Arc<StatusHandle>,
+    commands: Commands,
+    is_paused: impl Fn() -> bool + 'static,
+    terminal: impl Fn() -> Option<Terminal> + 'static,
+) {
     let event_loop = EventLoopBuilder::new().build();
 
     // Built inside the loop's first iteration on macOS; declared here so it outlives the closure.
     let mut tray = None;
-    let mut items: Option<Items> = None;
+    // Which menu item id runs which command — rebuilt with the menu.
+    let mut bindings: Vec<(MenuId, Command)> = Vec::new();
+    let mut shown: Option<MenuModel> = None;
     let mut last_revision = u64::MAX;
 
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + REFRESH);
 
+        let revision = status.revision();
+        let model = crate::menu::model(&status.snapshot(), terminal(), is_paused());
+
         if let Event::NewEvents(StartCause::Init) = event {
-            match build(&status) {
+            match build(&model) {
                 Ok((icon, built)) => {
                     tray = Some(icon);
-                    items = Some(built);
+                    bindings = built;
+                    shown = Some(model.clone());
+                    last_revision = revision;
                 }
                 Err(e) => {
                     // Law 4: no silent absence. The helper keeps running — the relay does not need
@@ -63,39 +100,32 @@ pub fn run(status: Arc<StatusHandle>, commands: Commands, is_paused: impl Fn() -
             }
         }
 
-        // Redraw only when something actually changed.
-        let revision = status.revision();
-        if revision != last_revision {
-            last_revision = revision;
-            if let (Some(tray), Some(items)) = (tray.as_ref(), items.as_ref()) {
-                let snapshot = status.snapshot();
-                items.title.set_text(snapshot.title_line());
-                items
-                    .pause
-                    .set_text(if is_paused() || snapshot.state == State::Paused {
-                        "Resume"
-                    } else {
-                        "Pause"
-                    });
-                let _ = tray.set_tooltip(Some(snapshot.title_line()));
+        // Redraw only when something actually changed. The revision catches status changes; the
+        // model comparison catches Pause↔Resume and the terminal switch, which move without one.
+        if let Some(tray) = tray.as_ref() {
+            if revision != last_revision || shown.as_ref() != Some(&model) {
+                last_revision = revision;
+                match render(&model) {
+                    Ok((menu, built)) => {
+                        tray.set_menu(Some(Box::new(menu)));
+                        bindings = built;
+                        let _ = tray.set_tooltip(Some(tooltip(&model)));
+                        shown = Some(model.clone());
+                    }
+                    Err(e) => eprintln!(
+                        "[egress] the menu-bar item could not be updated ({e}), so it is showing \
+                         what it showed before. `matrx-egress status` has the current answer."
+                    ),
+                }
             }
         }
 
         while let Ok(menu_event) = MenuEvent::receiver().try_recv() {
-            let Some(items) = items.as_ref() else { continue };
-            let command = if menu_event.id == items.pause.id() {
-                if is_paused() {
-                    Command::Resume
-                } else {
-                    Command::Pause
-                }
-            } else if menu_event.id == items.open.id() {
-                Command::OpenComputersPage
-            } else if menu_event.id == items.remove.id() {
-                Command::ConfirmRemovalInBrowser
-            } else if menu_event.id == items.quit.id() {
-                Command::Quit
-            } else {
+            let Some(command) = bindings
+                .iter()
+                .find(|(id, _)| *id == menu_event.id)
+                .map(|(_, command)| *command)
+            else {
                 continue;
             };
             let quitting = command == Command::Quit;
@@ -117,42 +147,48 @@ pub fn run(status: Arc<StatusHandle>, commands: Commands, is_paused: impl Fn() -
     });
 }
 
-struct Items {
-    title: MenuItem,
-    pause: MenuItem,
-    open: MenuItem,
-    remove: MenuItem,
-    quit: MenuItem,
+/// The hover text: the title, plus the sentence when there is one, because a menu bar item's
+/// tooltip is the only part visible without clicking.
+fn tooltip(model: &MenuModel) -> String {
+    if model.details.is_empty() {
+        model.title.clone()
+    } else {
+        format!("{}\n{}", model.title, model.details.join(" "))
+    }
 }
 
-fn build(status: &Arc<StatusHandle>) -> Result<(tray_icon::TrayIcon, Items), String> {
-    let snapshot = status.snapshot();
+/// Build the menu for a model. Returns which item id carries which command.
+fn render(model: &MenuModel) -> Result<(Menu, Vec<(MenuId, Command)>), String> {
     let menu = Menu::new();
-    // The title line is an item that cannot be chosen — the same shape every menu-bar app uses to
-    // say what it is doing.
-    let title = MenuItem::new(snapshot.title_line(), false, None);
-    let pause = MenuItem::new(
-        if snapshot.state == State::Paused {
-            "Resume"
-        } else {
-            "Pause"
-        },
-        true,
-        None,
-    );
-    let open = MenuItem::new("Open in AI Matrx", true, None);
-    let remove = MenuItem::new("Turn off and remove this computer", true, None);
-    let quit = MenuItem::new("Quit", true, None);
 
+    let title = MenuItem::new(&model.title, false, None);
     menu.append(&title).map_err(|e| e.to_string())?;
+    for line in &model.details {
+        // Not clickable: these are the helper talking, not something to choose.
+        let detail = MenuItem::new(line, false, None);
+        menu.append(&detail).map_err(|e| e.to_string())?;
+    }
     menu.append(&PredefinedMenuItem::separator())
         .map_err(|e| e.to_string())?;
-    menu.append(&pause).map_err(|e| e.to_string())?;
-    menu.append(&open).map_err(|e| e.to_string())?;
-    menu.append(&remove).map_err(|e| e.to_string())?;
-    menu.append(&PredefinedMenuItem::separator())
-        .map_err(|e| e.to_string())?;
-    menu.append(&quit).map_err(|e| e.to_string())?;
+
+    let mut bindings = Vec::with_capacity(model.actions.len());
+    let last = model.actions.len().saturating_sub(1);
+    for (i, action) in model.actions.iter().enumerate() {
+        // Quit is always last and always sits under its own separator.
+        if i == last && action.command == Command::Quit && last > 0 {
+            menu.append(&PredefinedMenuItem::separator())
+                .map_err(|e| e.to_string())?;
+        }
+        let item = MenuItem::new(&action.label, true, None);
+        bindings.push((item.id().clone(), action.command));
+        menu.append(&item).map_err(|e| e.to_string())?;
+    }
+
+    Ok((menu, bindings))
+}
+
+fn build(model: &MenuModel) -> Result<(tray_icon::TrayIcon, Vec<(MenuId, Command)>), String> {
+    let (menu, bindings) = render(model)?;
 
     let image = crate::icon::tray_icon()?;
     let icon = tray_icon::Icon::from_rgba(image.bytes, image.width, image.height)
@@ -160,19 +196,10 @@ fn build(status: &Arc<StatusHandle>) -> Result<(tray_icon::TrayIcon, Items), Str
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip(snapshot.title_line())
+        .with_tooltip(tooltip(model))
         .with_icon(icon)
         .build()
         .map_err(|e| e.to_string())?;
 
-    Ok((
-        tray,
-        Items {
-            title,
-            pause,
-            open,
-            remove,
-            quit,
-        },
-    ))
+    Ok((tray, bindings))
 }

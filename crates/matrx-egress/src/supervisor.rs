@@ -45,6 +45,57 @@ enum Desired {
     Stopped,
 }
 
+/// A session outcome that will not come back by itself, however long the helper waits.
+///
+/// The loop does not exit on one of these — it parks. A process whose run loop has returned still
+/// has a menu bar item, a control socket and a CLI, and every one of them would go on offering
+/// Pause and Resume for a connection that no longer exists: `Resume` would write into a watch
+/// channel with no receiver, the status would still read "Connecting", and nothing would ever
+/// happen. That is precisely the silent no-op law 4 forbids, so instead the loop stays alive
+/// holding this, every surface can see it, and the controls it makes untrue are withdrawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminal {
+    /// `4401` — the account removed this computer.
+    Removed,
+    /// `4409` — another copy of the helper took this computer's connection.
+    Replaced,
+}
+
+impl Terminal {
+    /// The state this outcome leaves the helper in.
+    pub fn state(self) -> State {
+        match self {
+            // The account genuinely no longer has this computer.
+            Terminal::Removed => State::SignedOut,
+            // The account still lists it; this copy simply is not the one holding it.
+            Terminal::Replaced => State::Error,
+        }
+    }
+
+    /// What happened, in one sentence.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            Terminal::Removed => {
+                "This computer was removed from your account — run Connect again to add it back."
+            }
+            Terminal::Replaced => {
+                "Another copy of the Home Connection took over for this computer."
+            }
+        }
+    }
+
+    /// What to do about it.
+    pub fn remedy(self) -> &'static str {
+        match self {
+            Terminal::Removed => "Open AI Matrx on the web and connect this computer again.",
+            Terminal::Replaced => {
+                "Only one copy runs at a time. Quit this one, or quit the other and start this \
+                 one again."
+            }
+        }
+    }
+}
+
 /// The pages the tray opens. The list of computers is Settings → Devices & Sync at
 /// `/settings?tab=devices` (contract § The web app); removal is the Remove control on that
 /// list, which names its consequence before acting. The base is a flag and both paths live in
@@ -90,6 +141,9 @@ pub struct Supervisor {
     web: WebUrls,
     desired: watch::Sender<Desired>,
     hello: Hello,
+    /// Set once a session ended in a way that cannot be retried. Read by every surface so that
+    /// none of them offers a control that would silently do nothing.
+    terminal: std::sync::Mutex<Option<Terminal>>,
 }
 
 impl Supervisor {
@@ -113,6 +167,7 @@ impl Supervisor {
             web,
             desired,
             hello,
+            terminal: std::sync::Mutex::new(None),
         }))
     }
 
@@ -184,7 +239,25 @@ impl Supervisor {
                     // Removed or replaced: the status already says which, with its remedy. The
                     // token is deliberately NOT deleted — a refusal that turns out to be the
                     // server's mistake must not cost the user their pairing.
-                    return;
+                    //
+                    // The loop does NOT return. The process lives on (the tray owns the main
+                    // thread, and `main` deliberately keeps it there), so returning here would
+                    // leave a menu still offering Pause and Resume for a connection that no
+                    // longer exists — `Resume` writing into a watch channel nobody is reading and
+                    // a title stuck on "Connecting" forever. Instead the outcome is recorded, the
+                    // menu withdraws the controls it makes untrue, and this loop parks until the
+                    // helper is told to stop.
+                    if let Some(terminal) = end.terminal() {
+                        *self.terminal.lock().expect("terminal mutex") = Some(terminal);
+                    }
+                    loop {
+                        if *desired.borrow_and_update() == Desired::Stopped {
+                            return;
+                        }
+                        if desired.changed().await.is_err() {
+                            return;
+                        }
+                    }
                 }
                 AfterSession::RetryAfter(delay) => {
                     // The loop's own receiver, not a fresh one: a `Quit` that arrived while the
@@ -237,7 +310,23 @@ impl Supervisor {
         *self.desired.borrow() == Desired::Paused
     }
 
+    /// The ending this helper cannot come back from, once it has had one. `None` while the
+    /// connection is ordinary — connected, connecting, paused, or retrying.
+    pub fn terminal(&self) -> Option<Terminal> {
+        *self.terminal.lock().expect("terminal mutex")
+    }
+
     async fn set_enabled(&self, enabled: bool) {
+        // Pause and Resume mean nothing once this computer has been removed or taken over: there
+        // is no connection to switch off and resuming would dial with a token the server has
+        // already refused. The menu withdraws both items in that state, but the CLI and the
+        // control socket can still ask — and the answer is the truth, never silence.
+        if let Some(terminal) = self.terminal() {
+            self.status
+                .set_error(terminal.state(), terminal.sentence(), terminal.remedy());
+            return;
+        }
+
         // Local first, and immediately: the user asked THIS computer to stop lending its
         // connection, and that must not wait on a network call that might fail.
         // `send_replace`, never `send`: `send` fails when no receiver is subscribed, and the run
@@ -471,6 +560,115 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), Arc::clone(&supervisor).run())
             .await
             .expect("the run loop did not stop when it was told to");
+    }
+
+    /// A gateway that accepts the socket and immediately closes it with `code`. Returns the
+    /// `http://127.0.0.1:<port>` base the supervisor should be pointed at.
+    async fn gateway_that_closes_with(code: u16) -> String {
+        use futures_util::SinkExt as _;
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    let _ = socket
+                        .send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::from(code),
+                            reason: "".into(),
+                        })))
+                        .await;
+                    let _ = socket.close(None).await;
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// The defect this exists to stop: after a `4401` the run loop used to RETURN while `main`
+    /// kept the tray alive, so Resume wrote into a watch channel with no receiver and the menu
+    /// read "Connecting" forever. The loop must park instead, keep answering, and still quit.
+    #[tokio::test]
+    async fn a_removed_computer_parks_and_answers_resume_with_the_truth() {
+        let supervisor = supervisor(&gateway_that_closes_with(4401).await);
+        let running = tokio::spawn(Arc::clone(&supervisor).run());
+
+        // The loop reaches the terminal state…
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while supervisor.terminal().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the 4401 never became a terminal state"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(supervisor.terminal(), Some(Terminal::Removed));
+        assert_eq!(supervisor.status.snapshot().state, State::SignedOut);
+
+        // …and does NOT return, because the process (and its menu) is still alive.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!running.is_finished(), "the run loop abandoned the tray");
+
+        // Resume is not silence and is not a lie: the status keeps saying what happened.
+        supervisor.apply(Command::Resume).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let snapshot = supervisor.status.snapshot();
+        assert_eq!(
+            snapshot.state,
+            State::SignedOut,
+            "Resume moved a removed computer to {:?}",
+            snapshot.state
+        );
+        assert_eq!(snapshot.last_error.as_deref(), Some(Terminal::Removed.sentence()));
+        assert!(snapshot.remedy.is_some());
+
+        // And the menu the tray would draw offers no Pause and no Resume at all.
+        let model = crate::menu::model(&snapshot, supervisor.terminal(), supervisor.is_paused());
+        assert!(model
+            .actions
+            .iter()
+            .all(|a| a.command != Command::Pause && a.command != Command::Resume));
+
+        // Quit still ends it.
+        supervisor.apply(Command::Quit).await;
+        tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("a parked run loop ignored Quit")
+            .expect("the run loop panicked");
+    }
+
+    #[tokio::test]
+    async fn a_replaced_connection_parks_as_an_error_not_as_signed_out() {
+        let supervisor = supervisor(&gateway_that_closes_with(4409).await);
+        let running = tokio::spawn(Arc::clone(&supervisor).run());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while supervisor.terminal().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the 4409 never became a terminal state"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(supervisor.terminal(), Some(Terminal::Replaced));
+        // The account still lists this computer, so it is NOT "removed from your account".
+        assert_eq!(supervisor.status.snapshot().state, State::Error);
+        assert!(!running.is_finished());
+        supervisor.apply(Command::Quit).await;
+        tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("a parked run loop ignored Quit")
+            .expect("the run loop panicked");
     }
 
     #[tokio::test]

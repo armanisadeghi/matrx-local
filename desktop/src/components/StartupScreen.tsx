@@ -96,9 +96,9 @@ const ENGINE_PHASES: PhaseStep[] = [
     status: "pending",
   },
   {
-    id: "proxy",
-    label: "Starting HTTP proxy",
-    detail: "Binding local proxy...",
+    id: "egress",
+    label: "Starting home connection",
+    detail: "Connecting the helper...",
     status: "pending",
   },
   {
@@ -124,7 +124,7 @@ const PHASE_MAP: Record<string, string> = {
   ai: "ai",
   tools: "tools",
   scraper: "scraper",
-  proxy: "proxy",
+  egress: "egress",
   tunnel: "tunnel",
   ready: "ready",
 };

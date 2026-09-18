@@ -29,7 +29,7 @@ export type ConfigSection =
   | "tts"
   | "wakeWord"
   | "scraping"
-  | "proxy"
+  | "homeConnection"
   | "fileSync"
   | "notifications";
 
@@ -114,7 +114,7 @@ const SECTION_KEYS: Record<ConfigSection, (keyof AppSettings)[]> = {
     "scrapeConcurrency",
     "researchConcurrency",
   ],
-  proxy: ["proxyEnabled", "proxyPort", "tunnelEnabled"],
+  homeConnection: ["residentialEgressEnabled", "tunnelEnabled"],
   // File Sync's mode selector applies immediately (via useFileSync.setMode →
   // saveSetting) rather than through draft/save — the key lives here so the
   // dirty machinery and cloud merge know it belongs to this section.

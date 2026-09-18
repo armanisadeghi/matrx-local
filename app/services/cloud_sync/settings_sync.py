@@ -74,11 +74,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # on every call by app/services/scraper/engine.py — no engine restart.
     "scrape_concurrency": 5,
     "research_concurrency": 5,
-    # Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
-    # (MXL-D-043 dev/live isolation; same formula as proxy/server.py
-    # DEFAULT_PROXY_PORT and desktop settings.ts DEFAULTS.proxyPort).
-    "proxy_enabled": True,
-    "proxy_port": int(os.environ.get("MATRX_PORT_BASE", "22140")) + 40,
+    # Home Connection (residential egress) — lend this computer's internet
+    # connection to AI Matrx, used ONLY when a site blocks our datacenter
+    # address. Default OFF: the user is lending their own connection, so it is
+    # an explicit opt-in, never a default-on. (The old proxy_enabled=True did
+    # nothing — the loopback proxy it started was unreachable from anywhere —
+    # and is gone.) Contract:
+    # common-docs/systems/platform/residential-egress/FEATURE.md
+    "residential_egress_enabled": False,
     # Remote access
     "tunnel_enabled": False,
     # Instance
@@ -176,7 +179,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 RESET_SCOPES: dict[str, tuple[str, ...]] = {
     "application": ("launch_", "minimize_", "theme", "auto_check_", "update_check_", "sidebar_", "notification_"),
-    "network": ("headless_", "scrape_", "research_", "proxy_", "tunnel_", "file_sync_", "extension_"),
+    "network": (
+        "headless_",
+        "scrape_",
+        "research_",
+        "residential_egress_",
+        "tunnel_",
+        "file_sync_",
+        "extension_",
+    ),
     "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_", "cloud_tools"),
     "identity": ("instance_name",),
 }

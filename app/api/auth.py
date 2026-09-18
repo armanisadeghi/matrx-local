@@ -48,7 +48,6 @@ _PUBLIC_PATHS = frozenset(
         "/",
         "/tools/list",
         "/remote-scraper/status",
-        "/proxy/status",
         "/chat/tools",
         "/chat/tools/by-category",
         "/chat/tools/anthropic",

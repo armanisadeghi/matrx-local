@@ -4,6 +4,7 @@
   "bundle": {
     "externalBin": [
       "sidecar/matrx-syncd",
+      "sidecar/matrx-egress",
       "sidecar/cloudflared",
       "binaries/llama-server",
       "binaries/uv"

@@ -3135,55 +3135,45 @@ class EngineAPI {
     return this.baseUrl;
   }
 
-  // ---- Proxy API ----
+  // ---- Home Connection (residential egress) API ----
+  //
+  // The user lending THIS computer's internet connection to AI Matrx, used
+  // only when a site blocks our datacenter address. The engine owns the
+  // helper child; the UI only reads the status and flips the switch.
+  // Contract: common-docs/systems/platform/residential-egress/FEATURE.md
 
-  /** Get proxy server status. */
-  async proxyStatus(): Promise<ProxyStatus> {
+  /** What the home connection is doing right now. */
+  async egressStatus(): Promise<EgressStatus> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/proxy/status`, { headers });
-    if (!resp.ok) throw new Error(`Proxy status failed: ${resp.status}`);
+    const resp = await fetch(`${this.baseUrl}/egress/status`, { headers });
+    if (!resp.ok)
+      throw new Error(`Home connection status failed: ${resp.status}`);
     return resp.json();
   }
 
-  /** Start the proxy server. */
-  async proxyStart(port = 0): Promise<ProxyStatus> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/proxy/start`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ port }),
-    });
-    if (!resp.ok) throw new Error(`Proxy start failed: ${resp.status}`);
-    return resp.json();
+  /** Lend this computer's connection when AI Matrx gets blocked. */
+  async egressEnable(): Promise<EgressStatus> {
+    return this.egressSet("enable");
   }
 
-  /** Stop the proxy server. */
-  async proxyStop(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    await fetch(`${this.baseUrl}/proxy/stop`, { method: "POST", headers });
+  /** Stop lending this computer's connection. */
+  async egressDisable(): Promise<EgressStatus> {
+    return this.egressSet("disable");
   }
 
-  /** Test proxy connectivity. */
-  async proxyTest(): Promise<ProxyTestResult> {
+  private async egressSet(action: "enable" | "disable"): Promise<EgressStatus> {
     if (!this.baseUrl) throw new Error("Engine not discovered");
     const headers = {
       "Content-Type": "application/json",
       ...(await this.authHeaders()),
     };
-    const resp = await fetch(`${this.baseUrl}/proxy/test`, {
+    const resp = await fetch(`${this.baseUrl}/egress/${action}`, {
       method: "POST",
       headers,
     });
-    if (!resp.ok) throw new Error(`Proxy test failed: ${resp.status}`);
+    if (!resp.ok)
+      throw new Error(`Home connection ${action} failed: ${resp.status}`);
     return resp.json();
   }
 
@@ -5703,24 +5693,32 @@ export interface DocMappings {
   device_id: string;
 }
 
-// ---- Proxy types ----
+// ---- Home Connection (residential egress) types ----
 
-export interface ProxyStatus {
+/**
+ * Mirrors `EgressStatus` in app/api/egress_routes.py.
+ *
+ * `state` is one of the helper's own states (`connected`, `connecting`,
+ * `paused`, `signed_out`, `error`) or one of the engine's (`not_installed`,
+ * `disabled`, `stopped`). It is never absent, so the UI never has to invent a
+ * sentence for a state it did not get.
+ */
+export interface EgressStatus {
+  state: string;
+  installed: boolean;
+  enabled: boolean;
   running: boolean;
-  port: number;
-  proxy_url: string;
-  request_count: number;
-  bytes_forwarded: number;
-  active_connections: number;
+  remedy: string | null;
+  last_error: string | null;
+  device_id: string | null;
+  device_name: string | null;
+  server: string | null;
+  since: string | null;
+  helper_version: string | null;
+  streams_active: number;
+  streams_total: number;
+  bytes_relayed: number;
   uptime_seconds: number;
-}
-
-export interface ProxyTestResult {
-  success: boolean;
-  status_code?: number;
-  body?: string;
-  error?: string;
-  proxy_url: string;
 }
 
 // ---- Cloud Sync types ----

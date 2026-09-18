@@ -45,9 +45,9 @@ reserved for later.
   download manager. Those have their own docs.
 - Work that lives inside the matrx-extend repo. Use the extension's
   `connect-local` skill from over there instead.
-- Changes to the unrelated `app/api/proxy_routes.py` forward-proxy on
-  port 22180. That's a different surface (HTTP forward proxy for the
-  cloud backend, not the extension RPC).
+- Changes to the unrelated `app/api/egress_routes.py` home-connection
+  switch. That's a different surface (the user lending their own internet
+  connection to AI Matrx, not the extension RPC).
 
 ## Quick start: check live request metrics
 

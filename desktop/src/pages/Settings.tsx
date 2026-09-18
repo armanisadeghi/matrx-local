@@ -48,13 +48,14 @@ import {
   Network,
   Layers,
   MemoryStick,
+  House,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
 import { VersionFacts } from "@/components/settings/VersionFacts";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
+import { Avatar, AvatarFallback, Badge, Button, Checkbox, BasicInput as Input, Label, ScrollArea, Separator, Skeleton, Switch, BasicTextarea as Textarea } from "@ai-matrx/design-system";
 import { useVersionState } from "@/contexts/VersionStateContext";
 import {
   Select,
@@ -68,7 +69,7 @@ import type { EngineStatus } from "@/hooks/use-engine";
 import { engine } from "@/lib/api";
 import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 import type {
-  ProxyStatus,
+  EgressStatus,
   InstanceInfo,
   Capability,
   HardwareProfile,
@@ -119,6 +120,34 @@ import {
   formatFileSize,
 } from "@ai-matrx/kit/format";
 type AuthActions = ReturnType<typeof useAuth>;
+
+/**
+ * One plain-English sentence per state the engine can report. Every state the
+ * contract defines has a label here; an unrecognised one falls back to the
+ * engine's own error text rather than to silence or to "Unknown".
+ */
+function homeConnectionStateLabel(status: EgressStatus): string {
+  switch (status.state) {
+    case "connected":
+      return status.device_name ? `In use as ${status.device_name}` : "In use";
+    case "connecting":
+      return "Connecting";
+    case "paused":
+      return "Paused from the web";
+    case "signed_out":
+      return "Sign in to use it";
+    case "disabled":
+      return "Off";
+    case "stopped":
+      return "Not running";
+    case "not_installed":
+      return "Helper not installed";
+    case "error":
+      return "Not working";
+    default:
+      return status.last_error ?? status.state;
+  }
+}
 
 /** Tri-state, mirroring the engine's ApiKeyValidation. `unknown` means we could
  *  not reach the provider — it must never be rendered as "your key is bad". */
@@ -260,17 +289,16 @@ export function Settings({
     if (tab) setActiveTab(tab);
   }, [location.search]);
 
-  // Proxy state
-  const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
-  const [proxyTesting, setProxyTesting] = useState(false);
-  const [proxyTestResult, setProxyTestResult] = useState<string | null>(null);
+  // Home Connection (residential egress) state. `null` means "not read yet" —
+  // it is never conflated with "off", which is a state the engine names.
+  const [egressStatus, setEgressStatus] = useState<EgressStatus | null>(null);
+  const [egressBusy, setEgressBusy] = useState(false);
 
   // Cloud sync state
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [instanceInfo, setInstanceInfo] = useState<InstanceInfo | null>(null);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
-  const [copied, setCopied] = useState(false);
 
   // Capabilities state
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
@@ -422,7 +450,7 @@ export function Settings({
 
   useEffect(() => {
     if (engineStatus !== "connected") return;
-    loadProxyStatus();
+    loadEgressStatus();
     loadCapabilities();
     loadStoragePaths();
     loadTunnelStatus();
@@ -513,13 +541,30 @@ export function Settings({
     }
   }, [engineStatus]);
 
-  const loadProxyStatus = useCallback(async () => {
+  const loadEgressStatus = useCallback(async () => {
     if (engineStatus !== "connected") return;
     try {
-      const status = await engine.proxyStatus();
-      setProxyStatus(status);
-    } catch {
-      // Engine may not support proxy yet
+      setEgressStatus(await engine.egressStatus());
+    } catch (err) {
+      // An unreadable status is itself a state the screen must show — never a
+      // blank panel and never a stale "Connected".
+      setEgressStatus({
+        state: "error",
+        installed: false,
+        enabled: false,
+        running: false,
+        remedy: "Restart AI Matrx, then open this tab again.",
+        last_error: `The engine could not be asked about the home connection: ${err}`,
+        device_id: null,
+        device_name: null,
+        server: null,
+        since: null,
+        helper_version: null,
+        streams_active: 0,
+        streams_total: 0,
+        bytes_relayed: 0,
+        uptime_seconds: 0,
+      });
     }
   }, [engineStatus]);
 
@@ -1198,22 +1243,25 @@ export function Settings({
     }
   };
 
-  // Proxy handlers
-  const handleProxyTest = async () => {
-    setProxyTesting(true);
-    setProxyTestResult(null);
+  // Home Connection handler. The switch writes the setting through
+  // updateSetting (which calls /egress/enable|disable via the settings
+  // side-effect) and then re-reads the honest status the engine returns.
+  const handleEgressToggle = async (next: boolean) => {
+    setEgressBusy(true);
+    setSettings((prev) =>
+      prev ? { ...prev, residentialEgressEnabled: next } : prev,
+    );
     try {
-      const result = await engine.proxyTest();
-      if (result.success) {
-        setProxyTestResult(`Connected via ${result.proxy_url}`);
-      } else {
-        setProxyTestResult(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      setProxyTestResult(`Error: ${err}`);
+      // saveSetting runs the side effect that calls /egress/enable|disable.
+      // It is awaited here — unlike updateSetting's fire-and-forget — because
+      // the status we read next must reflect what the engine actually did.
+      await saveSetting("residentialEgressEnabled", next);
     } finally {
-      setProxyTesting(false);
-      loadProxyStatus();
+      await loadEgressStatus();
+      setEgressBusy(false);
+      syncAllSettings().catch((err) => {
+        console.warn("[Settings] Background sync failed after the home-connection switch:", err);
+      });
     }
   };
 
@@ -1281,14 +1329,6 @@ export function Settings({
     }
   };
 
-  const handleCopyProxyUrl = () => {
-    if (proxyStatus?.proxy_url) {
-      navigator.clipboard.writeText(proxyStatus.proxy_url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
   if (!settings) return null;
 
   const settingsTabs = [
@@ -1298,7 +1338,7 @@ export function Settings({
     { value: "api-keys", label: "API Keys" },
     { value: "vault", label: "Vault" },
     { value: "storage", label: "Storage" },
-    { value: "proxy", label: "Proxy" },
+    { value: "home-connection", label: "Home Connection" },
     { value: "remote", label: "Remote Access" },
     { value: "scraping", label: "Scraping" },
     { value: "capabilities", label: "Capabilities" },
@@ -3430,150 +3470,104 @@ export function Settings({
               );
             })()}
 
-          {/* ── Proxy Tab ────────────────────────────────────── */}
-          {activeTab === "proxy" && (
+          {/* ── Home Connection Tab ──────────────────────────── */}
+          {/*
+            The user lending THIS computer's internet connection to AI Matrx,
+            used only when a site blocks our datacenter address. Plain English
+            only — never "proxy", "egress", "residential", or "IP" in anything
+            a user reads (contract § Names). Every state names itself and
+            carries its remedy; there is no spinner standing in for an answer.
+          */}
+          {activeTab === "home-connection" && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Shield className="h-4 w-4 text-primary" /> Local Proxy
+                  <House className="h-4 w-4 text-primary" /> Home Connection
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-4">
                   <div>
-                    <Label htmlFor="proxy-enabled">Enable Proxy Server</Label>
+                    <Label htmlFor="home-connection-enabled">
+                      Use this computer's internet connection when AI Matrx gets
+                      blocked
+                    </Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Allow your computer to be used as an HTTP proxy for AI
-                      Matrx cloud services
+                      Some websites refuse our servers. When that happens, AI
+                      Matrx can load the page through this computer instead —
+                      only for your own work, and only for the page that was
+                      refused. Nothing on this computer is opened up to anyone.
                     </p>
                   </div>
                   <Switch
-                    id="proxy-enabled"
-                    checked={settings.proxyEnabled}
-                    onCheckedChange={(v) => updateSetting("proxyEnabled", v)}
+                    id="home-connection-enabled"
+                    checked={settings.residentialEgressEnabled}
+                    disabled={egressBusy}
+                    onCheckedChange={handleEgressToggle}
                   />
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  {egressStatus === null ? (
+                    <Skeleton className="h-5 w-56" />
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={
+                            egressStatus.state === "connected"
+                              ? "success"
+                              : egressStatus.state === "error" ||
+                                  egressStatus.state === "not_installed"
+                                ? "destructive"
+                                : "secondary"
+                          }
+                        >
+                          {homeConnectionStateLabel(egressStatus)}
+                        </Badge>
+                        {egressStatus.state === "connected" && (
+                          <span className="text-xs text-muted-foreground">
+                            {egressStatus.streams_total} page
+                            {egressStatus.streams_total === 1 ? "" : "s"} loaded
+                            this session
+                            {egressStatus.bytes_relayed > 0
+                              ? ` · ${formatFileSize(egressStatus.bytes_relayed)}`
+                              : ""}
+                          </span>
+                        )}
+                      </div>
+                      {egressStatus.last_error && (
+                        <p className="text-xs text-muted-foreground">
+                          {egressStatus.last_error}
+                          {egressStatus.remedy ? ` ${egressStatus.remedy}` : ""}
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 <Separator />
 
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label>Proxy Status</Label>
+                    <Label>Your computers</Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Current state of the local HTTP proxy
+                      See and remove every computer you have set up, from any
+                      device.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant={proxyStatus?.running ? "success" : "secondary"}
-                    >
-                      {proxyStatus?.running ? "Running" : "Stopped"}
-                    </Badge>
-                    {proxyStatus?.running && (
-                      <span className="text-xs font-mono text-muted-foreground">
-                        :{proxyStatus.port}
-                      </span>
-                    )}
-                  </div>
+                  <a
+                    href="https://aimatrx.com/settings?tab=devices"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-sm text-primary hover:underline"
+                  >
+                    Manage in AI Matrx <ExternalLink className="h-3 w-3" />
+                  </a>
                 </div>
-
-                {proxyStatus?.running && (
-                  <>
-                    <Separator />
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <Label>Proxy URL</Label>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Use this URL to route traffic through your machine
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <code className="rounded bg-muted px-2 py-1 text-xs font-mono">
-                          {proxyStatus.proxy_url}
-                        </code>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0"
-                          onClick={handleCopyProxyUrl}
-                        >
-                          {copied ? (
-                            <CheckCheck className="h-3.5 w-3.5 text-emerald-500" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3 text-center">
-                      <div className="rounded-lg bg-muted/50 p-2">
-                        <p className="text-lg font-semibold">
-                          {proxyStatus.request_count}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Requests
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-2">
-                        <p className="text-lg font-semibold">
-                          {formatFileSize(proxyStatus.bytes_forwarded)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Forwarded
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-2">
-                        <p className="text-lg font-semibold">
-                          {proxyStatus.active_connections}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Active</p>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={handleProxyTest}
-                    disabled={proxyTesting || !proxyStatus?.running}
-                  >
-                    {proxyTesting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Wifi className="h-4 w-4" />
-                    )}
-                    Test Connection
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={loadProxyStatus}
-                  >
-                    <RefreshCw className="h-4 w-4" /> Refresh Status
-                  </Button>
-                </div>
-
-                {proxyTestResult && (
-                  <div
-                    className={`rounded-lg border p-3 text-sm ${
-                      proxyTestResult.startsWith("Connected")
-                        ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
-                        : "border-red-500/30 bg-red-500/5 text-red-400"
-                    }`}
-                  >
-                    {proxyTestResult.startsWith("Connected") ? (
-                      <CheckCircle2 className="mr-1.5 inline h-4 w-4" />
-                    ) : (
-                      <AlertCircle className="mr-1.5 inline h-4 w-4" />
-                    )}
-                    {proxyTestResult}
-                  </div>
-                )}
               </CardContent>
             </Card>
           )}

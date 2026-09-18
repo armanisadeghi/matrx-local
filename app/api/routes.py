@@ -204,14 +204,8 @@ async def version():
 
 @router.get("/ports")
 async def ports(request: Request):
-    """Return the ports the engine and proxy are listening on."""
-    from app.services.proxy.server import get_proxy_server
-
-    proxy = get_proxy_server()
-    return {
-        "engine": request.url.port,
-        "proxy": proxy.port if proxy.running else None,
-    }
+    """Return the port the engine is listening on."""
+    return {"engine": request.url.port}
 
 
 # Trigger event

@@ -1556,41 +1556,22 @@ export function Configurations() {
               </CardContent>
             </Card>
 
-            {/* ── Proxy & Network ─────────────────────────────── */}
+            {/* ── Home Connection & Network ───────────────────── */}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Network className="h-4 w-4" />
-                  Proxy & Network
+                  Home Connection & Network
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
                 <SettingRow
-                  label="Local proxy enabled"
-                  description="HTTP proxy at 127.0.0.1"
+                  label="Home connection"
+                  description="Use this computer's internet connection when AI Matrx gets blocked"
                 >
                   <Switch
-                    checked={draft.proxyEnabled}
-                    onCheckedChange={(v) => set("proxyEnabled", v)}
-                  />
-                </SettingRow>
-                {/* The engine derives this from the port it actually bound
-                    while the value is left at the default, so a second engine
-                    on this machine gets its own proxy instead of failing to
-                    bind (derive_proxy_port in app/services/proxy/server.py).
-                    Saying so here keeps the screen honest when the running
-                    port is not the number in this box. */}
-                <SettingRow
-                  label="Proxy port"
-                  description="Left at the default, the proxy follows this engine's own port (engine port + 40), so a second engine on this machine gets its own proxy. Type a port to pin it."
-                >
-                  <NumberInput
-                    value={draft.proxyPort}
-                    onChange={(v) => set("proxyPort", v)}
-                    min={1024}
-                    max={65535}
-                    integer
-                    className="w-24 text-right"
+                    checked={draft.residentialEgressEnabled}
+                    onCheckedChange={(v) => set("residentialEgressEnabled", v)}
                   />
                 </SettingRow>
                 <Separator className="my-2" />
@@ -1604,8 +1585,8 @@ export function Configurations() {
                   />
                 </SettingRow>
                 <SectionActions
-                  section="proxy"
-                  dirty={sectionDirty.proxy}
+                  section="homeConnection"
+                  dirty={sectionDirty.homeConnection}
                   {...sectionActionProps}
                 />
               </CardContent>

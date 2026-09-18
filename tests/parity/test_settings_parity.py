@@ -55,7 +55,7 @@ def camel_to_snake(name: str) -> str:
     Examples:
       launchOnStartup -> launch_on_startup
       llmChatTopP     -> llm_chat_top_p
-      proxyEnabled    -> proxy_enabled
+      instanceName    -> instance_name
     """
     # Insert underscore before sequences of uppercase letters followed by lowercase
     s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)

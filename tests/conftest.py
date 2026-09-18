@@ -3,8 +3,7 @@ pytest configuration for the Matrx Local test suite.
 
 Engine fixture strategy:
   - Uses MATRX_PORT=22399 and MATRX_PORT_BASE=22399 — outside both the live
-    (22140-22159) and dev (22240-22259) worlds. The base override also moves
-    the test proxy to 22439 instead of the live proxy's 22180.
+    (22140-22159) and dev (22240-22259) worlds.
   - Sets MATRX_SKIP_ORPHAN_SCAN=1 so the spawned engine NEVER runs
     preflight.clean_orphans() — a test engine must never scan or kill other
     processes on the machine (clean_orphans pattern-matches ALL matrx engines
@@ -24,7 +23,7 @@ Engine fixture strategy:
 
 Auth strategy:
   - /health, /version, /tools/list, /settings, /platform/context, /hardware,
-    /devices/*, /proxy/status, /cloud/debug, /remote-scraper/status are all
+    /devices/*, /cloud/debug, /remote-scraper/status are all
     public per the AuthMiddleware _PUBLIC_PATHS definition, or are device/*
     paths which are unconditionally public. Tests use these public endpoints
     directly without a Bearer token.

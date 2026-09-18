@@ -1,7 +1,8 @@
 """app/launcher.py — Engine-side service registry, lifecycle, and diagnostics.
 
 Owns: every subprocess and long-running task the engine spawns
-      (cloudflared tunnel, scraper engine, HTTP proxy, scheduler,
+      (cloudflared tunnel, scraper engine, home-connection helper,
+       scheduler,
       file watchers, download manager, sync engine, etc.).
 
 Exposes:
@@ -23,7 +24,7 @@ Ownership principle (NON-NEGOTIABLE — see docs/official/lifecycle-ownership.md
 
 This file is the Python-side embodiment of that principle. Rust spawns the
 engine and signals the engine to start/stop. The engine then cascades to
-every child it owns (tunnel, proxy, scraper, etc.). Rust never reaches
+every child it owns (tunnel, home connection, scraper, etc.). Rust never reaches
 across to kill the engine's children directly — that races against the
 engine's own teardown and produces "ended unexpectedly" errors.
 
@@ -190,7 +191,7 @@ class ServiceRegistry:
         "sync_engine"      cloud-to-local sync
         "scraper"          Playwright scraper
         "scheduler"        scheduled tasks restorer
-        "proxy"            HTTP proxy server
+        "residential_egress"  matrx-egress home-connection helper
         "tunnel"           cloudflared tunnel
     """
 

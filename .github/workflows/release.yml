@@ -552,6 +552,22 @@ jobs:
             ./scripts/build-syncd.sh
           fi
 
+      # ---- Home-connection helper sidecar ----
+      # matrx-egress is declared in bundle.externalBin on every platform (and
+      # again in the macOS overlay, whose array REPLACES rather than merges),
+      # so the -$TARGET_TRIPLE binary must exist before tauri-action runs or
+      # the build fails. Same shape as matrx-syncd above, and for the same
+      # reason: cargo-built here so tauri's bundler signs it with the app.
+      - name: Build home-connection helper sidecar (matrx-egress)
+        shell: bash
+        run: |
+          chmod +x scripts/build-egress.sh
+          if [ -n "${{ matrix.syncd_target }}" ]; then
+            ./scripts/build-egress.sh --sidecar --target "${{ matrix.syncd_target }}"
+          else
+            ./scripts/build-egress.sh --sidecar
+          fi
+
       - name: Build and release
         uses: tauri-apps/tauri-action@action-v1.0.0
         env:

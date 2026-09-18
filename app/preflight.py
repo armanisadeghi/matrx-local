@@ -13,7 +13,8 @@ Adding a managed service now means editing one list (SERVICES) in this file.
 ⚠ OWNERSHIP BOUNDARY ⚠
 
 This module manages ONLY services owned by the Python engine (the engine
-itself + its child cloudflared tunnel). It does NOT manage llama-server
+itself + its child cloudflared tunnel + its child matrx-egress
+home-connection helper). It does NOT manage llama-server
 or any other Rust-owned subprocess.
 
 llama-server is owned by the Rust desktop shell:
@@ -314,6 +315,23 @@ SERVICES: tuple[ManagedService, ...] = (
         port=None,
         port_scan_count=0,
         discovery_key="tunnel",
+        spawned_by="python",
+        orphan_only=True,
+        require_discovery_identity=True,
+    ),
+    # The home-connection helper (matrx-egress) is an engine child exactly
+    # like cloudflared, and gets exactly the same discipline: reclaimed only
+    # when its owning engine is already dead AND the discovery record proves
+    # PID + creation time + executable. The same binary also runs standalone
+    # (its own tray app, its own keychain token, not our child) — the identity
+    # requirement is what keeps this sweep off that one.
+    ManagedService(
+        name="matrx_egress",
+        cmdline_patterns=(r"matrx-egress(?:\.exe)?\s+run\b",),
+        windows_images=("matrx-egress.exe",),
+        port=None,
+        port_scan_count=0,
+        discovery_key="residential_egress",
         spawned_by="python",
         orphan_only=True,
         require_discovery_identity=True,

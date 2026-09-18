@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm ensure:syncd && pnpm dev",
-    "beforeBuildCommand": "pnpm ensure:syncd && pnpm build",
+    "beforeDevCommand": "pnpm ensure:syncd && pnpm ensure:egress && pnpm dev",
+    "beforeBuildCommand": "pnpm ensure:syncd && pnpm ensure:egress && pnpm build",
     "beforeBundleCommand": "node scripts/build-native-vault-provider-hook.cjs"
   },
   "app": {
@@ -44,6 +44,7 @@
     "externalBin": [
       "sidecar/matrx-engine",
       "sidecar/matrx-syncd",
+      "sidecar/matrx-egress",
       "sidecar/cloudflared",
       "binaries/llama-server",
       "binaries/uv"

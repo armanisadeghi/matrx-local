@@ -41,9 +41,13 @@ export interface AppSettings {
   /** Pages fetched at the same time during a research run (1-20). */
   researchConcurrency: number;
 
-  // ── Proxy ───────────────────────────────────────────────────────────
-  proxyEnabled: boolean;
-  proxyPort: number;
+  // ── Home Connection (residential egress) ────────────────────────────
+  /**
+   * Lend this computer's internet connection to AI Matrx, used ONLY when a
+   * site blocks our datacenter address. Off by default: the user is lending
+   * their own connection, so it is an explicit opt-in.
+   */
+  residentialEgressEnabled: boolean;
 
   // ── Remote access ───────────────────────────────────────────────────
   tunnelEnabled: boolean;
@@ -176,11 +180,10 @@ const DEFAULTS: AppSettings = {
   // (app/services/scraper/engine.py MIN_CONCURRENCY / MAX_CONCURRENCY).
   scrapeConcurrency: DEFAULT_CONCURRENCY,
   researchConcurrency: DEFAULT_CONCURRENCY,
-  // Proxy — port-base offset +40: live 22140 → 22180, dev 22240 → 22280
-  // (MXL-D-043 dev/live isolation; same formula as the Python defaults in
-  // app/services/proxy/server.py and cloud_sync/settings_sync.py).
-  proxyEnabled: true,
-  proxyPort: import.meta.env.DEV ? 22280 : 22180,
+  // Home Connection — an explicit opt-in, mirroring
+  // DEFAULT_SETTINGS["residential_egress_enabled"] in
+  // app/services/cloud_sync/settings_sync.py.
+  residentialEgressEnabled: false,
   // Remote access
   tunnelEnabled: false,
   // Instance
@@ -319,21 +322,15 @@ async function syncSetting<K extends keyof AppSettings>(
         }
         break;
 
-      case "proxyEnabled":
+      case "residentialEgressEnabled":
+        // The engine owns the decision ("signed in AND enabled") and the
+        // helper child; these routes write the setting and reconcile once.
         if (engine.engineUrl) {
-          if (all.proxyEnabled) {
-            await engine.proxyStart(all.proxyPort);
+          if (all.residentialEgressEnabled) {
+            await engine.egressEnable();
           } else {
-            await engine.proxyStop();
+            await engine.egressDisable();
           }
-        }
-        break;
-
-      case "proxyPort":
-        // Port changes require restart of proxy
-        if (engine.engineUrl && all.proxyEnabled) {
-          await engine.proxyStop();
-          await engine.proxyStart(all.proxyPort);
         }
         break;
 
@@ -557,9 +554,12 @@ export function mergeCloudSettings(
       cloud.research_concurrency !== undefined
         ? clampConcurrency(cloud.research_concurrency, local.researchConcurrency)
         : local.researchConcurrency,
-    // Proxy
-    proxyEnabled: cloudBool(cloud, "proxy_enabled", local.proxyEnabled),
-    proxyPort: cloudNum(cloud, "proxy_port", local.proxyPort),
+    // Home Connection
+    residentialEgressEnabled: cloudBool(
+      cloud,
+      "residential_egress_enabled",
+      local.residentialEgressEnabled,
+    ),
     // Remote access
     tunnelEnabled: cloudBool(cloud, "tunnel_enabled", local.tunnelEnabled),
     // Instance
@@ -841,9 +841,8 @@ export function settingsToCloud(
     scrape_delay: parseFloat(settings.scrapeDelay) || 1.0,
     scrape_concurrency: clampConcurrency(settings.scrapeConcurrency),
     research_concurrency: clampConcurrency(settings.researchConcurrency),
-    // Proxy
-    proxy_enabled: settings.proxyEnabled,
-    proxy_port: settings.proxyPort,
+    // Home Connection
+    residential_egress_enabled: settings.residentialEgressEnabled,
     // Remote access
     tunnel_enabled: settings.tunnelEnabled,
     // Instance

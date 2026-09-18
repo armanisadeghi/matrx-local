@@ -21,7 +21,7 @@ from app.api.remote_scraper_routes import router as remote_scraper_router
 from app.api.settings_routes import router as settings_router
 from app.api.document_routes import router as document_router  # notes — local-first
 from app.api.access_routes import router as access_router  # filesystem access health
-from app.api.proxy_routes import router as proxy_router
+from app.api.egress_routes import router as egress_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
 from app.api.agent_catalog_routes import router as agent_catalog_router
 from app.api.chat_routes import router as chat_router
@@ -74,11 +74,9 @@ from fastapi.responses import JSONResponse as _JSONResponse
 from app.common.platform_ctx import refresh_capabilities
 from app.services.scraper.browser_runtime import BackgroundInstallOwner
 from app.services.scraper.engine import get_scraper_engine
-from app.services.proxy.server import (
-    DEFAULT_PROXY_PORT,
-    PROXY_PORT_OFFSET,
-    derive_proxy_port,
-    get_proxy_server,
+from app.services.residential_egress.supervisor import (
+    get_egress_supervisor,
+    reconcile_residential_egress,
 )
 from app.services.tunnel.manager import get_tunnel_manager
 from app.services.cloud_sync.settings_sync import get_settings_sync
@@ -1263,7 +1261,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     # Read the actual port Uvicorn is going to bind (written by run.py)
-    # We need this to ensure the proxy doesn't collide with it, and to point the tunnel at it.
+    # Used to point the tunnel at this engine.
     try:
         import json
         from app.config import MATRX_HOME_DIR
@@ -1273,82 +1271,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         main_server_port = 22140
 
-    # Phase 4: Start HTTP proxy if enabled in settings
+    # Phase 4: Start the Home Connection helper when the user has opted in.
+    #
+    # This replaces the old loopback HTTP proxy, which bound 127.0.0.1 and was
+    # therefore reachable from nowhere — it did nothing for anyone and was
+    # deleted. The helper instead dials OUT to the aidream gateway, so the
+    # user's computer can be the exit for their own blocked page fetches with
+    # no inbound port, no router change, no firewall prompt.
+    #
+    # The decision ("signed in AND enabled") lives in exactly ONE place:
+    # reconcile_residential_egress(). The daemon session reconciler calls the
+    # same function on every sign-in and sign-out, so there is no second
+    # opinion about whether the child should be alive.
+    settings_sync = get_settings_sync()
     try:
-        settings_sync = get_settings_sync()
-        proxy_enabled = settings_sync.get("proxy_enabled", True)
+        egress_enabled_setting = bool(
+            settings_sync.get("residential_egress_enabled", False)
+        )
     except Exception:
         logger.error(
-            "[app/main.py] Settings read FAILED — proxy defaults on", exc_info=True
+            "[app/main.py] Settings read FAILED — the home connection stays off",
+            exc_info=True,
         )
-        proxy_enabled = True
-    logger.info("[app/main.py] Phase 4: HTTP proxy enabled=%s", proxy_enabled)
-    if proxy_enabled:
-        print("[phase:proxy] Starting local HTTP proxy...", flush=True)
-        _registry.starting("proxy")
-        configured_proxy_port = settings_sync.get("proxy_port", DEFAULT_PROXY_PORT)
-        # The offset is taken off the port this engine actually bound, not off
-        # the static port base — a second dev engine lives on 22241 and needs
-        # 22281, or it boots with failed:["proxy"] (see derive_proxy_port).
-        proxy_port = derive_proxy_port(main_server_port, configured_proxy_port)
-        if proxy_port != configured_proxy_port:
-            logger.info(
-                "[app/main.py] Phase 4: proxy port %d derived from this engine's "
-                "own port %d (the shipped default %d belongs to the engine on "
-                "port %d) — nothing is misconfigured, this is how a second "
-                "engine in the same world gets its own proxy",
-                proxy_port, main_server_port, configured_proxy_port,
-                configured_proxy_port - PROXY_PORT_OFFSET,
-            )
+        egress_enabled_setting = False
+    logger.info(
+        "[app/main.py] Phase 4: Home connection enabled=%s", egress_enabled_setting
+    )
+    if egress_enabled_setting:
+        print("[phase:egress] Starting home-connection helper...", flush=True)
         try:
-            proxy = get_proxy_server()
-            # Guard against port collision with the main server
-            if proxy_port == main_server_port:
-                fallback_port = main_server_port + 40
-                logger.warning(
-                    "[app/main.py] Phase 4: Proxy port %d collides with main server port! "
-                    "Falling back to %d.",
-                    proxy_port,
-                    fallback_port,
-                )
-                proxy_port = fallback_port
-
-            logger.info(
-                "[app/main.py] Phase 4: Starting proxy on 127.0.0.1:%d...", proxy_port
-            )
-            # The port the proxy ACTUALLY bound — it retries forward when the
-            # requested one was taken, and everything downstream (registry,
-            # /admin/status, the console line) must name the real one, never
-            # the one we asked for.
-            bound_port = await proxy.start(port=proxy_port)
-            if bound_port != proxy_port:
-                logger.warning(
-                    "[app/main.py] Phase 4: HTTP proxy bound %d, not the %d it was "
-                    "asked for (that one was taken) — reporting the bound port",
-                    bound_port, proxy_port,
-                )
-            logger.info(
-                "[app/main.py] Phase 4: HTTP proxy started ✓ on port %d", bound_port
-            )
-            print(f"[phase:proxy] HTTP proxy ready on port {bound_port}", flush=True)
-            _registry.ready("proxy", port=bound_port)
-        except OSError as exc:
-            logger.error(
-                "[app/main.py] Phase 4: HTTP proxy FAILED to start — port %d is already in use. "
-                "Another process is holding this port. Kill it with: lsof -ti:%d | xargs kill -9  "
-                "Error: %s",
-                proxy_port,
-                proxy_port,
-                exc,
-            )
-            print("[phase:proxy] HTTP proxy FAILED (port in use)", flush=True)
-            _registry.failed("proxy", f"port {proxy_port} in use: {exc}")
+            await reconcile_residential_egress()
         except Exception as exc:
             logger.error(
-                "[app/main.py] Phase 4: HTTP proxy FAILED to start", exc_info=True
+                "[app/main.py] Phase 4: Home connection FAILED to start", exc_info=True
             )
-            print("[phase:proxy] HTTP proxy FAILED", flush=True)
-            _registry.failed("proxy", exc)
+            print("[phase:egress] Home connection FAILED", flush=True)
+            _registry.failed("residential_egress", exc)
+        else:
+            # Report the SUPERVISOR's state, not the registry slot: when we
+            # decline to start (signed out, helper missing) the slot may be
+            # empty, and "idle" would hide the reason the user needs.
+            egress_state = get_egress_supervisor().get_status(
+                enabled=egress_enabled_setting
+            )["state"]
+            logger.info("[app/main.py] Phase 4: Home connection is %s", egress_state)
+            print(f"[phase:egress] Home connection is {egress_state}", flush=True)
+    else:
+        _registry.register("residential_egress")
 
     # Phase 5: Start Cloudflare tunnel (quick tunnel for all users — no account needed).
     # Each instance gets a unique random URL from Cloudflare's trycloudflare.com pool.
@@ -1572,10 +1541,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     register_media_recovery_controllers()
     logger.info(
-        "[app/main.py] ── Startup complete in %.1fs — scraper=%s, proxy=%s ──────────────",
+        "[app/main.py] ── Startup complete in %.1fs — scraper=%s, home_connection=%s ──",
         elapsed,
         engine.is_ready,
-        get_proxy_server().running,
+        get_egress_supervisor().running,
     )
     print(f"[phase:ready] Engine ready in {elapsed:.1f}s", flush=True)
 
@@ -1962,33 +1931,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "[app/main.py] Document watcher did not stop cleanly: %s", exc
             )
 
-    # ── Phase S5: Stop network services (proxy, tunnel, scraper) ─────────
+    # ── Phase S5: Stop network services (home connection, tunnel, scraper) ──────
     # Each stop is wrapped in asyncio.wait_for with a hard timeout to prevent
     # a stuck service (hung TCP connection, blocked I/O, zombie Playwright
     # process) from blocking the entire teardown sequence.  Without these
     # timeouts, a single hung stop can exhaust the entire 25-second force-exit
     # budget and cause Python to be SIGKILL'd with ports still bound.
-    if _registry.current_state("proxy") in ("ready", "degraded", "starting"):
-        _registry.stopping("proxy")
+    if _registry.current_state("residential_egress") in (
+        "ready",
+        "degraded",
+        "starting",
+    ):
+        _registry.stopping("residential_egress")
         try:
-            proxy = get_proxy_server()
-            await asyncio.wait_for(proxy.stop(), timeout=5.0)
-            logger.info("[app/main.py] HTTP proxy stopped ✓")
-            _registry.stopped("proxy")
+            await asyncio.wait_for(get_egress_supervisor().stop(), timeout=10.0)
+            logger.info("[app/main.py] Home-connection helper stopped ✓")
+            _registry.stopped("residential_egress")
         except asyncio.TimeoutError:
             logger.warning(
-                "[app/main.py] HTTP proxy stop timed out after 5s — forcing teardown"
+                "[app/main.py] Home-connection helper stop timed out after 10s — "
+                "forcing teardown"
             )
-            _registry.failed("proxy", "stop timed out after 5s")
+            _registry.failed("residential_egress", "stop timed out after 10s")
         except Exception as exc:
             logger.error(
-                "[app/main.py] HTTP proxy failed to stop cleanly", exc_info=True
+                "[app/main.py] Home-connection helper failed to stop cleanly",
+                exc_info=True,
             )
-            _registry.failed("proxy", exc)
+            _registry.failed("residential_egress", exc)
     else:
         logger.debug(
-            "[app/main.py] S5: proxy state=%s — skipping stop",
-            _registry.current_state("proxy"),
+            "[app/main.py] S5: residential_egress state=%s — skipping stop",
+            _registry.current_state("residential_egress"),
         )
 
     if _registry.current_state("tunnel") not in ("ready", "degraded", "starting"):
@@ -2190,7 +2164,7 @@ app.include_router(remote_scraper_router)
 app.include_router(settings_router)
 app.include_router(document_router, prefix="/notes")
 app.include_router(access_router)
-app.include_router(proxy_router)
+app.include_router(egress_router)
 app.include_router(cloud_sync_router)
 app.include_router(chat_router)
 app.include_router(agent_catalog_router)
@@ -2295,7 +2269,7 @@ async def _log_requests_dispatch(request: Request, call_next):
             "/settings/paths",
             "/settings/forbidden-urls",
             # Status endpoints polled by Settings page
-            "/proxy/status",
+            "/egress/status",
             "/tunnel/status",
             "/cloud/instance",
             "/cloud/instances",

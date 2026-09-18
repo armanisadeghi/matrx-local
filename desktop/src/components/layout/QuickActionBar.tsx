@@ -279,7 +279,8 @@ export function QuickActionBar(props: QuickActionBarProps) {
           ? "red"
           : "gray";
 
-  const proxyRunning = serviceStatus.proxy?.running ?? false;
+  const egress = serviceStatus.egress;
+  const egressConnected = egress?.state === "connected";
   const tunnelRunning = serviceStatus.tunnel?.running ?? false;
 
   const hasUpdate =
@@ -293,9 +294,22 @@ export function QuickActionBar(props: QuickActionBarProps) {
     serviceStatus.cloudDebug?.last_error ?? null,
   );
 
-  const proxyTip = proxyRunning
-    ? `Proxy: Active on port ${serviceStatus.proxy?.port ?? "—"}`
-    : "Proxy: Not running";
+  // Every state says what it is; none of them is a blank or a spinner.
+  const egressTip = !egress
+    ? "Home connection: checking…"
+    : egress.state === "connected"
+      ? `Home connection: in use${egress.device_name ? ` as ${egress.device_name}` : ""}`
+      : egress.state === "connecting"
+        ? "Home connection: connecting"
+        : egress.state === "disabled"
+          ? "Home connection: off"
+          : egress.state === "not_installed"
+            ? "Home connection: the helper is not installed with this build"
+            : egress.state === "paused"
+              ? "Home connection: paused from the web"
+              : egress.state === "signed_out"
+                ? "Home connection: sign in to use it"
+                : `Home connection: ${egress.last_error ?? egress.state}`;
 
   const tunnelTip = tunnelRunning
     ? `Remote access: Active — ${serviceStatus.tunnel?.url ?? "connecting..."}`
@@ -405,8 +419,14 @@ export function QuickActionBar(props: QuickActionBarProps) {
         </BarButton>
 
         <BarButton
-          tooltip={proxyTip}
-          dotColor={proxyRunning ? "green" : "blue"}
+          tooltip={egressTip}
+          dotColor={
+            egressConnected
+              ? "green"
+              : egress?.state === "error"
+                ? "red"
+                : "blue"
+          }
         >
           <Shield className="h-4 w-4" />
         </BarButton>

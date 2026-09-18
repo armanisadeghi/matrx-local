@@ -7,16 +7,16 @@ def test_scoped_settings_reset_previews_then_backs_up(monkeypatch, tmp_path) -> 
     settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(module, "LOCAL_SETTINGS_FILE", settings_file)
     sync = module.SettingsSync()
-    sync.set_many({"theme": "light", "proxy_enabled": False})
+    sync.set_many({"theme": "light", "residential_egress_enabled": True})
 
     preview = sync.preview_reset("application")
     assert "theme" in preview["changes"]
-    assert "proxy_enabled" not in preview["keys"]
+    assert "residential_egress_enabled" not in preview["keys"]
     assert sync.get("theme") == "light"
 
     result = sync.apply_reset("application", confirmed=True)
     assert sync.get("theme") == module.DEFAULT_SETTINGS["theme"]
-    assert sync.get("proxy_enabled") is False
+    assert sync.get("residential_egress_enabled") is True
     assert result["backup_path"] is not None
 
 

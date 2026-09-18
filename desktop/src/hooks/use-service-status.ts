@@ -1,6 +1,6 @@
 /**
- * useServiceStatus — polls proxy, tunnel, and cloud sync status from the
- * Python engine.
+ * useServiceStatus — polls the home connection, tunnel, and cloud sync
+ * status from the Python engine.
  *
  * Only polls when the engine is connected. Interval: 15 seconds.
  * Provides cached status for the QuickActionBar indicators and a manual
@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { engine } from "@/lib/api";
-import type { ProxyStatus } from "@/lib/api";
+import type { EgressStatus } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
 
 export interface TunnelStatus {
@@ -43,7 +43,7 @@ export type CloudSyncStatus =
   | "unknown";
 
 export interface ServiceStatusState {
-  proxy: ProxyStatus | null;
+  egress: EgressStatus | null;
   tunnel: TunnelStatus | null;
   cloudDebug: CloudDebugState | null;
   cloudSyncStatus: CloudSyncStatus;
@@ -71,7 +71,7 @@ export function useServiceStatus(engineStatus: EngineStatus): [
   { triggerCloudSync: () => Promise<void>; refresh: () => void },
 ] {
   const [state, setState] = useState<ServiceStatusState>({
-    proxy: null,
+    egress: null,
     tunnel: null,
     cloudDebug: null,
     cloudSyncStatus: "unknown",
@@ -82,22 +82,22 @@ export function useServiceStatus(engineStatus: EngineStatus): [
   const poll = useCallback(async () => {
     if (!engine.engineUrl) return;
     try {
-      const [proxyRes, tunnelRes, cloudRes] = await Promise.allSettled([
-        engine.proxyStatus(),
+      const [egressRes, tunnelRes, cloudRes] = await Promise.allSettled([
+        engine.egressStatus(),
         engine.get("/tunnel/status") as Promise<TunnelStatus>,
         engine.get("/cloud/debug") as Promise<CloudDebugState>,
       ]);
       if (!mountedRef.current) return;
       setState((prev) => {
-        const newProxy =
-          proxyRes.status === "fulfilled" ? proxyRes.value : prev.proxy;
+        const newEgress =
+          egressRes.status === "fulfilled" ? egressRes.value : prev.egress;
         const newTunnel =
           tunnelRes.status === "fulfilled" ? tunnelRes.value : prev.tunnel;
         const newCloud =
           cloudRes.status === "fulfilled" ? cloudRes.value : prev.cloudDebug;
         return {
           ...prev,
-          proxy: newProxy,
+          egress: newEgress,
           tunnel: newTunnel,
           cloudDebug: newCloud,
           cloudSyncStatus: deriveCloudStatus(newCloud, prev.cloudSyncing),

@@ -13,6 +13,7 @@
     "sync-types:local": "node scripts/sync-types.mjs --local",
     "sync-types:fast": "node scripts/sync-types.mjs --fast",
     "ensure:syncd": "bash ../scripts/build-syncd.sh",
+    "ensure:egress": "bash ../scripts/build-egress.sh --sidecar",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "(pnpm check:mandate-references || true) && tauri build",

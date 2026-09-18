@@ -39,6 +39,7 @@ class DaemonSessionReconciler:
         clear_vault_keys()
         if self._user_id:
             await disconnect_broadcast(self._user_id)
+            await self._reconcile_home_connection()
         self._user_id = None
         self._completed = False
         self._task = self._adoption = None
@@ -89,6 +90,11 @@ class DaemonSessionReconciler:
 
                 await disconnect_broadcast(old)
             self._user_id = user_id
+            if not user_id:
+                # Signed out: the home connection is the signed-in user's own
+                # computer lent to their own work. It goes down with them, in
+                # the same place the broadcast does.
+                await self._reconcile_home_connection()
             if user_id:
                 self._adoption = asyncio.create_task(
                     self._adopt(user_id, self._revision), name="daemon-session-adoption"
@@ -151,10 +157,30 @@ class DaemonSessionReconciler:
                 if not await current():
                     await disconnect_broadcast(user_id)
                     return
+            await self._reconcile_home_connection()
             return True
         except Exception:
             logger.warning(
                 "Session services could not reconnect; will retry", exc_info=True
+            )
+
+    @staticmethod
+    async def _reconcile_home_connection() -> None:
+        """Start or stop the home-connection helper for the current session.
+
+        One decision point owns "signed in AND enabled"; this only tells it
+        that the session changed. A failure here never breaks session
+        reconciliation — but it is never silent either.
+        """
+        try:
+            from app.services.residential_egress.supervisor import (
+                reconcile_residential_egress,
+            )
+
+            await reconcile_residential_egress()
+        except Exception:
+            logger.warning(
+                "Home connection could not follow the session change", exc_info=True
             )
 
 

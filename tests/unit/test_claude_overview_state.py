@@ -1,4 +1,9 @@
-"""The Claude Code screen judges a session against the CLOUD, not this Mac."""
+"""The screen judges a session against the CLOUD, not this Mac.
+
+The judgement moved to ``cloud_state`` on 2026-09-17 when Codex, Cursor and
+VS Code sessions joined the same list: there is ONE ``_session_state`` for
+every provider, so these guards now bind all four.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.coding_sessions import claude_overview
-from app.services.coding_sessions.claude_overview import (
+from app.services.coding_sessions.cloud_state import (
     _CHANGED_GRACE_SECONDS,
     _session_state,
     raw_session_id,

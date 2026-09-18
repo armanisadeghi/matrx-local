@@ -1049,27 +1049,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("coding_session_local_runtime", exc)
 
-    # Phase 2h.2: warm Claude's sidebar index while nobody is waiting. The first
-    # open of the Coding Sessions screen otherwise pays the whole cold read
-    # (~47,000 index records, ~25s on this Mac) with a person watching a
-    # spinner. Fire-and-forget in a background task: it never blocks startup,
-    # and if it fails the only consequence is that the first open does the read
-    # itself, exactly as before.
-    async def _warm_claude_session_index() -> None:
-        try:
-            from app.services.coding_sessions.claude_overview import warm_index_cache
+    # Phase 2h.2: warm EVERY provider's session index while nobody is waiting.
+    # The first open of the Coding Sessions screen otherwise pays the whole
+    # cold read with a person watching a spinner — Claude Code's ~47,000 index
+    # records (~25 s here) and Codex's 5,041 rollouts across 30.33 GB (~46 s).
+    # Fire-and-forget in a background task: it never blocks startup, one
+    # provider's failure never stops another's, and the only consequence of a
+    # failure is that the first open reads that provider's index itself.
+    async def _warm_session_indexes() -> None:
+        from app.services.coding_sessions.claude_overview import warm_index_cache
+        from app.services.coding_sessions.codex_provider import get_codex_provider
+        from app.services.coding_sessions.editor_providers import get_cursor_provider
 
-            await warm_index_cache()
-            logger.info("[app/main.py] Phase 2h.2: Claude session index warmed ✓")
-        except Exception:
-            logger.warning(
-                "[app/main.py] Phase 2h.2: Claude session-index warm-up failed — "
-                "the first Coding Sessions open will do the full read itself",
-                exc_info=True,
-            )
+        warmers = (
+            ("Claude Code", warm_index_cache),
+            ("Codex", get_codex_provider().warm),
+            ("Cursor", get_cursor_provider().refresh),
+        )
+        for name, warm in warmers:
+            try:
+                await warm()
+                logger.info(
+                    "[app/main.py] Phase 2h.2: %s session index warmed ✓", name
+                )
+            except Exception:
+                logger.warning(
+                    "[app/main.py] Phase 2h.2: %s session-index warm-up failed — "
+                    "the first Coding Sessions open will do that provider's read "
+                    "itself",
+                    name,
+                    exc_info=True,
+                )
 
     # Keep a reference so the task is not garbage-collected mid-flight.
-    _claude_index_warm_task = asyncio.create_task(_warm_claude_session_index())
+    _claude_index_warm_task = asyncio.create_task(_warm_session_indexes())
     _claude_index_warm_task.add_done_callback(lambda _: None)
 
     # Phase 2i: capture reconciler. A failed Claude Code hook is NON-BLOCKING,
@@ -1099,21 +1112,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("claude_capture_reconciler", exc)
 
-    # Phase 2i2: coding-session artifacts. The bridge mirrors what a session
-    # SAID; this lane keeps what it BUILT — every deliverable in a Claude
-    # scratchpad is copied to a durable per-session folder (outside /tmp,
-    # visible after an account switch, readable by any session on this Mac)
-    # and published to AI Matrx files tagged with the session id.
+    # Phase 2i2: coding-session artifacts, ONE lane per provider. The bridge
+    # mirrors what a session SAID; these lanes keep what it BUILT — a session's
+    # deliverables are copied to a durable per-session folder (outside /tmp,
+    # visible after an account switch, readable by any session on this Mac) and
+    # published to AI Matrx files tagged with the session id. Each provider has
+    # its own durable root and its own source of "what this session wrote":
+    # Claude Code's per-session scratchpad, and Codex's apply_patch records.
     _registry.starting("coding_session_artifacts")
     try:
         from app.services.coding_sessions.artifacts import (
-            get_coding_session_artifacts_lane,
+            coding_session_artifact_lanes,
+            start_coding_session_artifact_lanes,
         )
 
-        await get_coding_session_artifacts_lane().start_background()
+        await start_coding_session_artifact_lanes()
         _registry.ready(
             "coding_session_artifacts",
-            source="claude_scratchpads",
+            source=",".join(
+                lane.provider for lane in coding_session_artifact_lanes()
+            ),
             upstream="/files/upload",
         )
         logger.info("[app/main.py] Phase 2i2: coding-session artifacts lane started ✓")
@@ -1888,15 +1906,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await asyncio.wait_for(_capture_reconciler.stop(), timeout=3.0)
             _registry.stopped("claude_capture_reconciler")
         from app.services.coding_sessions.artifacts import (
-            get_coding_session_artifacts_lane as _get_artifacts_lane,
+            coding_session_artifact_lanes as _artifact_lanes,
+            stop_coding_session_artifact_lanes as _stop_artifact_lanes,
         )
 
-        _artifacts_lane = _get_artifacts_lane()
-        if _artifacts_lane.active:
+        if any(lane.active for lane in _artifact_lanes()):
             _registry.stopping("coding_session_artifacts")
-            await asyncio.wait_for(_artifacts_lane.stop_background(), timeout=3.0)
+            await asyncio.wait_for(_stop_artifact_lanes(), timeout=3.0)
             _registry.stopped("coding_session_artifacts")
-            logger.info("[app/main.py] Claude capture reconciler stopped ✓")
+            logger.info("[app/main.py] coding-session artifact lanes stopped ✓")
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning(
             "[app/main.py] Claude capture reconciler did not stop cleanly: %s", exc

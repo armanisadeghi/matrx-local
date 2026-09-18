@@ -328,30 +328,71 @@ async def sync_claude_everything() -> dict[str, object]:
         ) from exc
 
 
-@router.get("/claude/overview")
-async def claude_overview() -> dict[str, object]:
-    """Everything the Claude Code screen shows: accounts, conversations, state.
+@router.get("/overview")
+async def coding_session_overview() -> dict[str, object]:
+    """Everything the Coding Sessions screen shows, for EVERY provider.
 
-    State is judged against the server's own inventory of bound sessions —
-    never only against what this engine uploaded — see claude_overview.py.
+    Accounts, every provider's conversations with `provider` on each row, and
+    each provider's own index and cloud freshness. State is judged against the
+    server's own inventory of bound sessions — never only against what this
+    engine uploaded — see coding_sessions/overview.py.
     """
-    from app.services.coding_sessions.claude_overview import overview
+    from app.services.coding_sessions.overview import overview
 
     return await overview()
 
 
-@router.get("/claude/sessions/{session_id}/diagnosis")
-async def claude_session_diagnosis(session_id: str) -> dict[str, object]:
-    """Every fact behind one conversation's status, from every system involved.
+@router.get("/claude/overview")
+async def claude_overview() -> dict[str, object]:
+    """The pre-2026-09-17 path for the same payload, for older desktops.
+
+    It is an ALIAS, not a Claude-only view: it returns the identical
+    provider-neutral payload, so a desktop on the old path gains the other
+    providers instead of silently seeing a shorter list than the engine has.
+    """
+    from app.services.coding_sessions.overview import overview
+
+    return await overview()
+
+
+@router.get("/sessions/{provider}/{session_id}/diagnosis")
+async def coding_session_diagnosis(provider: str, session_id: str) -> dict[str, object]:
+    """Every fact behind one conversation's status, whichever provider wrote it.
 
     The screen's rule: anything reported as a problem must open into the exact
-    evidence it was judged on — index record, transcript, server binding,
+    evidence it was judged on — the provider's own record, the server binding,
     queued/preserved envelopes with their errors, capture attempts, label
     ledgers — plus one plain verdict and its remedy.
     """
-    from app.services.coding_sessions.claude_overview import session_diagnosis
+    from app.services.coding_sessions.overview import session_diagnosis
+    from app.services.coding_sessions.session_providers import PROVIDERS
 
-    result = await session_diagnosis(session_id)
+    if provider not in PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"'{provider}' is not a coding-session provider this engine knows. "
+                f"Known providers: {', '.join(PROVIDERS)}."
+            ),
+        )
+    result = await session_diagnosis(session_id, provider)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No {provider} session with that id exists on this Mac and AI "
+                "Matrx does not hold one either."
+            ),
+        )
+    return result
+
+
+@router.get("/claude/sessions/{session_id}/diagnosis")
+async def claude_session_diagnosis(session_id: str) -> dict[str, object]:
+    """The pre-2026-09-17 path for a Claude Code session's diagnosis."""
+    from app.services.coding_sessions.overview import session_diagnosis
+
+    result = await session_diagnosis(session_id, "claude_code")
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -507,47 +548,133 @@ async def claude_capture_status() -> dict[str, object]:
     return await get_claude_capture_reconciler().status()
 
 
+def _artifact_lane(provider: str):
+    """One provider's artifacts lane, or a 404 that names the ones there are."""
+    from app.services.coding_sessions.artifacts import ARTIFACT_PROVIDERS
+
+    if provider not in ARTIFACT_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"'{provider}' has no artifacts lane on this engine. Lanes: "
+                f"{', '.join(ARTIFACT_PROVIDERS)}."
+            ),
+        )
+    return get_coding_session_artifacts_lane(provider)
+
+
 @router.get("/artifacts/status")
-async def coding_session_artifacts_status() -> dict[str, object]:
-    """The artifacts lane: sessions/files kept durably, uploaded, pending,
-    failed, plus its blocker and last tick — every number the screen shows."""
-    return get_coding_session_artifacts_lane().status()
+async def coding_session_artifacts_status(
+    provider: str | None = Query(
+        None,
+        description=(
+            "One provider's lane (claude_code | codex). Omitted = every lane, "
+            "keyed by provider, with the Claude Code lane's numbers also at the "
+            "top level for screens written before there was more than one."
+        ),
+    ),
+) -> dict[str, object]:
+    """The artifacts lanes: sessions/files kept durably, uploaded, pending,
+    failed, plus each lane's blocker, last tick and the gaps its source cannot
+    see — every number the screen shows."""
+    from app.services.coding_sessions.artifacts import (
+        DEFAULT_PROVIDER,
+        coding_session_artifact_lanes,
+    )
+
+    if provider is not None:
+        return _artifact_lane(provider).status()
+    lanes = {lane.provider: lane.status() for lane in coding_session_artifact_lanes()}
+    return {**lanes.get(DEFAULT_PROVIDER, {}), "providers": lanes}
 
 
 @router.get("/artifacts/sessions")
-async def coding_session_artifacts_sessions() -> dict[str, object]:
-    """Per-session artifact counts (durable folder, files, uploaded, pending)."""
-    lane = get_coding_session_artifacts_lane()
-    return {"sessions": lane.session_summaries()}
+async def coding_session_artifacts_sessions(
+    provider: str | None = Query(
+        None, description="One provider's sessions; omitted = every lane's."
+    ),
+) -> dict[str, object]:
+    """Per-session artifact counts (durable folder, files, uploaded, pending).
+
+    Every row carries its own ``provider``, so one list can hold them all.
+    """
+    from app.services.coding_sessions.artifacts import coding_session_artifact_lanes
+
+    lanes = (
+        [_artifact_lane(provider)] if provider is not None
+        else coding_session_artifact_lanes()
+    )
+    sessions: list[dict[str, object]] = []
+    for lane in lanes:
+        sessions.extend(lane.session_summaries())
+    return {"sessions": sessions}
 
 
 @router.get("/artifacts/sessions/{cli_session_id}")
-async def coding_session_artifacts_session(cli_session_id: str) -> dict[str, object]:
+async def coding_session_artifacts_session(
+    cli_session_id: str,
+    provider: str | None = Query(
+        None, description="Which provider's session; omitted = search every lane."
+    ),
+) -> dict[str, object]:
     """Every captured file of one session with its upload state."""
-    detail = get_coding_session_artifacts_lane().session_detail(cli_session_id)
-    if detail is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "artifacts_session_unknown", "cli_session_id": cli_session_id},
-        )
-    return detail
+    from app.services.coding_sessions.artifacts import coding_session_artifact_lanes
+
+    lanes = (
+        [_artifact_lane(provider)] if provider is not None
+        else coding_session_artifact_lanes()
+    )
+    for lane in lanes:
+        detail = lane.session_detail(cli_session_id)
+        if detail is not None:
+            return detail
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "artifacts_session_unknown", "cli_session_id": cli_session_id},
+    )
 
 
 @router.post("/artifacts/sync", status_code=status.HTTP_202_ACCEPTED)
-async def sync_coding_session_artifacts() -> dict[str, object]:
+async def sync_coding_session_artifacts(
+    provider: str | None = Query(
+        None, description="One provider's lane; omitted = a tick on every lane."
+    ),
+) -> dict[str, object]:
     """Run one capture + publish tick now instead of waiting for the timer."""
-    return await get_coding_session_artifacts_lane().run_once()
+    from app.services.coding_sessions.artifacts import coding_session_artifact_lanes
+
+    if provider is not None:
+        return await _artifact_lane(provider).run_once()
+    return {
+        "providers": {
+            lane.provider: await lane.run_once()
+            for lane in coding_session_artifact_lanes()
+        }
+    }
 
 
 @router.post("/artifacts/verify", status_code=status.HTTP_202_ACCEPTED)
-async def verify_coding_session_artifacts() -> dict[str, object]:
+async def verify_coding_session_artifacts(
+    provider: str | None = Query(
+        None, description="One provider's lane; omitted = verify every lane."
+    ),
+) -> dict[str, object]:
     """Read recorded artifact file ids back from AI Matrx and repair the gaps.
 
     Confirms a bounded slice of entries the lane has not read back yet; any id
     AI Matrx no longer serves is cleared and its durable copy re-uploaded in the
     same call, so the counts on the screen mean what they say.
     """
-    return await get_coding_session_artifacts_lane().verify_now()
+    from app.services.coding_sessions.artifacts import coding_session_artifact_lanes
+
+    if provider is not None:
+        return await _artifact_lane(provider).verify_now()
+    return {
+        "providers": {
+            lane.provider: await lane.verify_now()
+            for lane in coding_session_artifact_lanes()
+        }
+    }
 
 
 @router.post("/claude/capture/reconcile", status_code=status.HTTP_202_ACCEPTED)

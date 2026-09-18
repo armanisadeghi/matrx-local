@@ -29,7 +29,10 @@ from pathlib import Path
 
 import pytest
 
+from app.services.coding_sessions import overview as overview_module
+from app.services.coding_sessions import session_providers
 from app.services.coding_sessions.claude_index_store import ClaudeIndexStore
+from app.services.coding_sessions.claude_provider import ClaudeCodeSessionProvider
 
 
 @pytest.fixture
@@ -60,7 +63,7 @@ def _write_records(root: Path, count: int) -> None:
 
 @pytest.fixture
 def isolated_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     store = ClaudeIndexStore(tmp_path / "store" / "index.sqlite3")
     claude_overview._reset_index_state_for_tests(store)
@@ -81,7 +84,7 @@ async def test_the_event_loop_keeps_answering_while_a_full_walk_runs(
     park the loop, which the explicit in-flight handshake below detects even
     when a fast machine finishes the complete fixture in under 210 ms.
     """
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     root = tmp_path / "claude-code-sessions"
     _write_records(root, 4000)
@@ -162,7 +165,7 @@ async def test_a_slow_server_never_delays_the_screen(
     tmp_path: Path, isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The cloud inventory is cached and refreshed behind the response."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -180,18 +183,18 @@ async def test_a_slow_server_never_delays_the_screen(
             "sessions": 1,
             "checked_at": "2026-09-15T00:00:00+00:00",
         }
-        claude_overview._CLOUD_CACHE = (time.monotonic(), {"abc": {}}, meta)
+        cloud_state._CLOUD_CACHE["claude_code"] = (time.monotonic(), {"abc": {}}, meta)
         return {"abc": {}}, meta
 
-    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _slow_fetch)
-    monkeypatch.setattr(claude_overview, "_CLOUD_COLD_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _slow_fetch)
+    monkeypatch.setattr(cloud_state, "_CLOUD_COLD_WAIT_SECONDS", 0.05)
 
     # Nothing cached yet: the first read waits only its cold budget and then
     # says out loud that the check is in flight.
     asked = time.perf_counter()
-    rows, meta = await claude_overview.cloud_inventory()
+    rows, meta = await cloud_state.cloud_inventory()
     elapsed = time.perf_counter() - asked
     assert elapsed < 1.0, f"the first cloud read blocked for {elapsed:.2f}s"
     assert rows == {}
@@ -202,12 +205,12 @@ async def test_a_slow_server_never_delays_the_screen(
 
     # A second read while it is still in flight does not start a second one.
     await started.wait()
-    await claude_overview.cloud_inventory()
+    await cloud_state.cloud_inventory()
     assert calls == 1, "a second request started a second server read"
 
     release.set()
-    await claude_overview._CLOUD_TASK
-    rows, meta = await claude_overview.cloud_inventory()
+    await cloud_state._CLOUD_TASK["claude_code"]
+    rows, meta = await cloud_state.cloud_inventory()
     assert meta["checked"] is True
     assert rows == {"abc": {}}
     assert meta["age_seconds"] is not None
@@ -218,7 +221,7 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
     isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Past the TTL the screen still gets the last answer — and its age."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     old_meta = {
         "checked": True,
@@ -228,12 +231,12 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
         "checked_at": "2026-09-15T00:00:00+00:00",
     }
     monkeypatch.setattr(
-        claude_overview,
+        cloud_state,
         "_CLOUD_CACHE",
-        (time.monotonic() - 600, {"abc": {}}, old_meta),
+        {"claude_code": (time.monotonic() - 600, {"abc": {}}, old_meta)},
         raising=False,
     )
-    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
+    monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
 
     refreshes = 0
 
@@ -242,10 +245,10 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
         refreshes += 1
         return {}, dict(old_meta)
 
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _fetch)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _fetch)
 
     asked = time.perf_counter()
-    rows, meta = await claude_overview.cloud_inventory()
+    rows, meta = await cloud_state.cloud_inventory()
     assert time.perf_counter() - asked < 0.2
     assert rows == {"abc": {}}
     assert meta["checked"] is True
@@ -253,7 +256,7 @@ async def test_a_stale_cloud_answer_is_served_with_its_age_not_withheld(
     assert meta["age_seconds"] >= 600
     assert meta["refreshing"] is True
 
-    task = claude_overview._CLOUD_TASK
+    task = cloud_state._CLOUD_TASK.get("claude_code")
     assert task is not None
     await task
     assert refreshes == 1, "a stale answer must still trigger exactly one refresh"
@@ -265,7 +268,7 @@ async def test_failed_cold_inventory_is_terminal_not_in_flight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unexpected first-read failure must stop polling rather than spin."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     private_error = "jwt-and-personal-data-must-not-escape"
 
@@ -277,14 +280,14 @@ async def test_failed_cold_inventory_is_terminal_not_in_flight(
     def _record_error(_message: object, *args: object) -> None:
         logged.append((_message, *args))
 
-    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _failed_fetch)
-    monkeypatch.setattr(claude_overview.logger, "error", _record_error)
+    monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _failed_fetch)
+    monkeypatch.setattr(cloud_state.logger, "error", _record_error)
 
-    await claude_overview._refresh_cloud_inventory()
+    await cloud_state._refresh_cloud_inventory()
 
-    rows, meta = await claude_overview.cloud_inventory()
+    rows, meta = await cloud_state.cloud_inventory()
     assert rows == {}
     assert meta["checked"] is False
     assert meta["reason"] == "cloud_inventory_refresh_failed"
@@ -303,7 +306,7 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
     isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed refresh preserves its last success as stale evidence only."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     checked_at = "2026-09-15T00:00:00+00:00"
     old_rows = {"bound-session": {"provider_session_id": "bound-session"}}
@@ -315,20 +318,20 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
         "checked_at": checked_at,
     }
     monkeypatch.setattr(
-        claude_overview,
+        cloud_state,
         "_CLOUD_CACHE",
-        (time.monotonic() - 600, old_rows, old_meta),
+        {"claude_code": (time.monotonic() - 600, old_rows, old_meta)},
         raising=False,
     )
-    monkeypatch.setattr(claude_overview, "_CLOUD_TASK", None, raising=False)
+    monkeypatch.setattr(cloud_state, "_CLOUD_TASK", {}, raising=False)
 
     async def _failed_fetch():
         raise OSError("transport unavailable")
 
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _failed_fetch)
-    await claude_overview._refresh_cloud_inventory()
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _failed_fetch)
+    await cloud_state._refresh_cloud_inventory()
 
-    retained_rows, retained_meta = await claude_overview.cloud_inventory()
+    retained_rows, retained_meta = await cloud_state.cloud_inventory()
     assert retained_rows == old_rows
     assert retained_meta["checked"] is False
     assert retained_meta["reason"] == "cloud_inventory_refresh_failed"
@@ -336,7 +339,7 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
     assert retained_meta["age_seconds"] >= 600
     assert retained_meta["refreshing"] is False
     assert (
-        claude_overview._session_state(
+        cloud_state._session_state(
             cloud_checked=False,
             binding=old_rows["bound-session"],
             activity_ns=0,
@@ -354,12 +357,12 @@ async def test_failed_warm_inventory_retains_rows_as_stale_then_success_clears_f
             "sessions": 1,
             "checked_at": "2026-09-16T00:00:00+00:00",
         }
-        claude_overview._CLOUD_CACHE = (time.monotonic(), fresh_rows, fresh_meta)
+        cloud_state._CLOUD_CACHE["claude_code"] = (time.monotonic(), fresh_rows, fresh_meta)
         return fresh_rows, fresh_meta
 
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _successful_fetch)
-    await claude_overview._refresh_cloud_inventory()
-    _, fresh_meta = await claude_overview.cloud_inventory()
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _successful_fetch)
+    await cloud_state._refresh_cloud_inventory()
+    _, fresh_meta = await cloud_state.cloud_inventory()
     assert fresh_meta["checked"] is True
     assert fresh_meta["reason"] is None
     assert fresh_meta["age_seconds"] is not None
@@ -370,16 +373,16 @@ async def test_inventory_refresh_cancellation_propagates(
     isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cancellation is control flow, not a terminal cloud failure."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     async def _cancelled_fetch():
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _cancelled_fetch)
+    monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _cancelled_fetch)
     with pytest.raises(asyncio.CancelledError):
-        await claude_overview._refresh_cloud_inventory()
-    assert claude_overview._CLOUD_CACHE is None
+        await cloud_state._refresh_cloud_inventory()
+    assert cloud_state._CLOUD_CACHE == {}
 
 
 @pytest.mark.anyio
@@ -387,7 +390,7 @@ async def test_expected_inventory_block_is_not_reclassified_as_refresh_failure(
     isolated_index: ClaudeIndexStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A known identity block remains its own checked-false answer."""
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     blocked_meta = {
         "checked": False,
@@ -398,13 +401,13 @@ async def test_expected_inventory_block_is_not_reclassified_as_refresh_failure(
     }
 
     async def _known_block():
-        claude_overview._CLOUD_CACHE = (time.monotonic(), {}, blocked_meta)
+        cloud_state._CLOUD_CACHE["claude_code"] = (time.monotonic(), {}, blocked_meta)
         return {}, blocked_meta
 
-    monkeypatch.setattr(claude_overview, "_CLOUD_CACHE", None, raising=False)
-    monkeypatch.setattr(claude_overview, "_fetch_cloud_inventory", _known_block)
-    await claude_overview._refresh_cloud_inventory()
-    _, meta = await claude_overview.cloud_inventory()
+    monkeypatch.setattr(cloud_state, "_CLOUD_CACHE", {}, raising=False)
+    monkeypatch.setattr(cloud_state, "_fetch_cloud_inventory", _known_block)
+    await cloud_state._refresh_cloud_inventory()
+    _, meta = await cloud_state.cloud_inventory()
     assert meta["checked"] is False
     assert meta["reason"] == "identity_inventory_unavailable"
     assert meta["checked_at"] == blocked_meta["checked_at"]
@@ -419,7 +422,7 @@ async def test_the_whole_response_is_built_without_touching_the_disk(
     2,000 conversations here — roughly the real 1,934 — and a bound of one
     second against the measured 31.76 s / 58.96 s / 1,209 s.
     """
-    from app.services.coding_sessions import claude_overview
+    from app.services.coding_sessions import claude_overview, cloud_state
 
     root = tmp_path / "claude-code-sessions"
     _write_records(root, 2000)
@@ -432,19 +435,23 @@ async def test_the_whole_response_is_built_without_touching_the_disk(
     monkeypatch.setattr(claude_overview, "_refresh_transcripts", _no_transcripts)
     await claude_overview.warm_index_cache(root)
 
-    async def _cloud():
+    async def _cloud(_provider="claude_code"):
         return {}, {"checked": True, "reason": None, "detail": None, "sessions": 0,
                     "checked_at": "2026-09-15T00:00:00+00:00"}
 
-    async def _no_queue():
+    async def _no_queue(_provider="claude_code"):
         return {}, {"checked": True, "reason": None, "detail": None}
 
     async def _no_totals():
         return (0, 0), {"checked": True, "reason": None, "detail": None}
 
-    monkeypatch.setattr(claude_overview, "cloud_inventory", _cloud)
-    monkeypatch.setattr(claude_overview, "_queue_by_session", _no_queue)
-    monkeypatch.setattr(claude_overview, "_queue_totals", _no_totals)
+    monkeypatch.setattr(overview_module, "cloud_inventory", _cloud)
+    monkeypatch.setattr(overview_module, "_queue_by_session", _no_queue)
+    # Only Claude Code is registered here: this test measures the Claude
+    # index's cost, and letting the other three adapters read Arman's real
+    # ~/.codex and Cursor stores would make the bound meaningless.
+    session_providers._reset_registry_for_tests([ClaudeCodeSessionProvider()])
+    monkeypatch.setattr(overview_module, "_queue_totals", _no_totals)
     # No refresh may be what answers: the helper cannot be spawned and the
     # in-engine path is booby-trapped.
     monkeypatch.setattr(
@@ -459,10 +466,12 @@ async def test_the_whole_response_is_built_without_touching_the_disk(
     monkeypatch.setattr(claude_overview, "_refresh_in_threads", _must_not_refresh)
 
     asked = time.perf_counter()
-    out = await claude_overview.overview()
+    out = await overview_module.overview()
     elapsed = time.perf_counter() - asked
 
     assert out["totals"]["conversations"] == 2000
-    assert out["schema_version"] == 2
+    assert out["schema_version"] == 3
+    assert out["listed_providers"] == ["claude_code"]
+    assert {row["provider"] for row in out["conversations"]} == {"claude_code"}
     assert out["index"]["files_read"] == 2000
     assert elapsed < 1.0, f"the overview took {elapsed:.2f}s to answer from rows"

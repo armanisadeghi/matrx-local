@@ -1450,6 +1450,18 @@ _V35_FILE_SYNC_PLACEMENT_ATTEMPTS = """
 ALTER TABLE file_sync_state ADD COLUMN placement_attempts INTEGER NOT NULL DEFAULT 0;
 """
 
+# A pass that is BLOCKED before it probes (no signed-in user, AI Matrx
+# unreachable) journalled index_writable = 0, and the status endpoint read the
+# newest row and reported "not writable" — while every record file on the
+# machine was in fact writable. The column is NOT NULL, so "never probed" was
+# not representable and a default stood in for a measurement. This flag makes
+# it representable: it is 1 only when the probe actually ran.
+_V36_SYNC_OPERATION_WRITABLE_PROBED = """
+ALTER TABLE coding_session_metadata_sync_operations
+  ADD COLUMN index_writable_probed INTEGER NOT NULL DEFAULT 0;
+"""
+
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1486,4 +1498,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (33, _V33_CATALOG_SUPERSET_AND_EXECUTION_DETAIL),
     (34, _V34_DROP_AUTH_TOKENS),
     (35, _V35_FILE_SYNC_PLACEMENT_ATTEMPTS),
+    (36, _V36_SYNC_OPERATION_WRITABLE_PROBED),
 ]

@@ -580,6 +580,7 @@ export interface ClaudeLabelSyncStatus {
    * with its age, rather than re-running it on every status poll. */
   index_writable: boolean | null;
   index_writable_measured_at: string | null;
+  index_writable_reason: string | null;
   pushed_sessions: number;
   index_files: number;
   index_records: number;

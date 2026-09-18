@@ -32,6 +32,33 @@ _Last hygiene pass: 2026-07-12 — 13 entries deleted as duplicates of open
 
 ## Test harness
 
+### MXL-D-094 — `./scripts/smoke.sh` web mode fails for two reasons that have nothing to do with the change under test
+- **Symptom:** `e2e/boot.spec.ts:122 › authenticated shell boots` fails on every web smoke run,
+  which makes the smoke gate unusable as evidence — an agent finishing unrelated work cannot tell
+  whether it broke startup. Seen on `df74308ad` and `94f1c4b4f5` (2026-09-18) and on an unrelated
+  commit on 2026-09-15 (`.smoke/runs/20260915-103644-55028`).
+- **Two distinct causes, proven by running the spec both ways on 2026-09-18:**
+  1. **No live harness session.** `scripts/smoke.sh` never runs
+     `desktop/e2e/setup/harness-session.mjs`; it uses whatever `desktop/.harness-home` points at.
+     That script itself warns: *"this computer's credential store would not keep the refresh
+     token, so the session ends when the daemon stops."* With a dead session the page shows
+     "Sign in again to continue" and `signInViaHarness` (helpers.ts:149) times out after 120 s.
+     `harnessIdentity()` does not catch this, so the test runs instead of skipping.
+  2. **With the session live, a different, unrelated failure appears.** Running the spec straight
+     after `node desktop/e2e/setup/harness-session.mjs`, the sign-in step passes and the test
+     fails on a console error from the offline agent catalog instead:
+     `agx_resolve_agent_address: "agx_resolve_agent_address" is not served by the offline agent
+     catalog … (matrx_local_rpc_not_mirrored) {mandateKey: local.cloud_chat}`.
+     Test 3 ("app boots to the Login page") then fails too, because the app is correctly signed in.
+     So the suite cannot pass in either session state.
+- **Evidence:** `.smoke/runs/20260918-154344-17739/summary.md`,
+  `.smoke/runs/20260918-154612-35543/summary.md`, and a direct
+  `pnpm exec playwright test boot.spec.ts` run with a fresh harness session (2 failed, 2 passed).
+- **Status:** open. **Analyzed 2026-09-18 — verified by running the spec in both session states.**
+- **Owner hint:** test harness. Likely wants smoke.sh to run the harness sign-in itself (and skip
+  loudly when it cannot), tests 3 and 4 to declare which session state they need, and the
+  agent-catalog console error either fixed or classified as non-fatal for boot.
+
 ### MXL-D-091 — CS-19 removed the browser-mode login the whole E2E suite depends on — FIXED 2026-09-15
 - **What it was:** the custody cutover removed the email/password screen (correctly — the daemon
   is the device's only session holder, D17), and with it the only door the browser-mode harness

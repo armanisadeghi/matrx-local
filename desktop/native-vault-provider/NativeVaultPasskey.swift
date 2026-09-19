@@ -12,23 +12,27 @@ protocol NativeVaultPasskeyTransporting: AnyObject {
 
 final class NativeVaultPasskeyTransport: NativeVaultPasskeyTransporting {
     private let lock = NSLock()
-    private var active: BoundedTransport?
+    private var active: (id: UUID, transport: BoundedTransport)?
+    private let makeTransport: (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport
+    init(makeTransport: @escaping (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport = { BoundedTransport(limit: nativePasskeyResponseLimit, $0) }) {
+        self.makeTransport = makeTransport
+    }
     func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
-        var transport: BoundedTransport!
-        transport = BoundedTransport(limit: nativePasskeyResponseLimit) { [weak self] result in
+        let id = UUID()
+        let transport = makeTransport { [weak self] result in
             guard let self else { completion(result); return }
             self.lock.lock()
-            if self.active === transport { self.active = nil }
+            if self.active?.id == id { self.active = nil }
             self.lock.unlock()
             completion(result)
         }
-        lock.lock(); let previous = active; active = transport; lock.unlock()
-        previous?.cancel()
+        lock.lock(); let previous = active; active = (id, transport); lock.unlock()
+        previous?.transport.cancel()
         transport.start(request)
     }
     func cancel() {
         lock.lock(); let pending = active; active = nil; lock.unlock()
-        pending?.cancel()
+        pending?.transport.cancel()
     }
 }
 
@@ -193,14 +197,15 @@ final class NativeVaultPasskeyCoordinator {
         let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 340, height: 28))
         for index in matches.indices {
             let match = matches[index]
-            let label = match.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-                ?? match.username?.trimmingCharacters(in: .whitespacesAndNewlines)
-            picker.addItem(withTitle: (label?.isEmpty == false ? label! : "Passkey \(index + 1)"))
+            picker.addItem(withTitle: Self.accountLabel(match, index: index))
         }
         alert.accessoryView = picker; alert.addButton(withTitle: "Use passkey"); alert.addButton(withTitle: "Cancel")
         defer { if operation.modal === alert { operation.modal = nil } }
         guard alert.runModal() == .alertFirstButtonReturn, current(operation), matches.indices.contains(picker.indexOfSelectedItem) else { throw EnrollmentError.message("Passkey selection was cancelled.") }
         return matches[picker.indexOfSelectedItem]
+    }
+    static func accountLabel(_ match: NativePasskeyMatch, index: Int) -> String {
+        [match.displayName, match.username].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? "Passkey \(index + 1)"
     }
     private func linearized(_ operation: NativePasskeyOperation, grant: NativeVaultSessionAccess.Grant, deliver: @escaping () -> Void) async throws {
         let lock = injectedCompletionLock; let state = injectedState
@@ -261,6 +266,7 @@ final class NativeVaultPasskeyCoordinator {
     }
     func assert(_ request: ASPasskeyCredentialRequest?, parameters: ASPasskeyCredentialRequestParameters? = nil) {
         let identity = request?.credentialIdentity as? ASPasskeyCredentialIdentity
+        if let identity, !(1...64).contains(identity.userHandle.count) { cancel("This passkey request is not supported."); return }
         let rp = parameters?.relyingPartyIdentifier ?? identity?.relyingPartyIdentifier
         guard let hash = parameters?.clientDataHash ?? request?.clientDataHash else { cancel("This passkey request is not supported."); return }
         let allowed = parameters?.allowedCredentials ?? (identity.map { [$0.credentialID] } ?? [])

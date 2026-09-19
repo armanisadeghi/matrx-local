@@ -25,7 +25,15 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/api", () => ({ engine: mocks.engine }));
-vi.mock("@/lib/custodian", () => ({ getAuthedSession: mocks.getAuthedSession }));
+vi.mock("@/lib/local-browser-context", () => ({
+  startLocalBrowserContextSynchronization: vi.fn(),
+  synchronizeLocalBrowserContext: vi.fn(),
+}));
+vi.mock("@/lib/custodian", () => ({
+  getAuthedSession: mocks.getAuthedSession,
+  getToken: async () => mocks.session.access_token,
+  subscribeSession: () => () => undefined,
+}));
 vi.mock("@/lib/native-vault-auth", () => ({
   resolveNativeVaultEngineAccessToken: vi.fn(async () => "daemon-access"),
   isNativeVaultHostRevisionCurrent: vi.fn(() => true),

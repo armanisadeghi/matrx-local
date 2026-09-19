@@ -24,10 +24,12 @@ final class NativeVaultPasskeyTransport: NativeVaultPasskeyTransporting {
 @MainActor
 final class NativePasskeyOperation {
     let id = UUID(); let requestGeneration: UInt64
+    let expiresAt = Date().addingTimeInterval(300)
     var terminal = false
     var bridgeOperation: NativeOperation?
     var task: Task<Void, Never>?
     var context: LAContext?
+    var grant: NativeVaultSessionAccess.Grant?
     init(generation: UInt64) { requestGeneration = generation }
     func cancel() { terminal = true; context?.invalidate(); bridgeOperation?.cancel(); task?.cancel() }
 }
@@ -45,22 +47,30 @@ final class NativeVaultPasskeyCoordinator {
     private let cancel: (String) -> Void
     private let completeRegistration: (ASPasskeyRegistrationCredential) -> Void
     private let completeAssertion: (ASPasskeyAssertionCredential) -> Void
+    private let isExternalCurrent: () -> Bool
 
-    init(sessionAccess: NativeVaultSessionAccess, transport: NativeVaultPasskeyTransporting = NativeVaultPasskeyTransport(), key: @escaping () -> String?, cancel: @escaping (String) -> Void, completeRegistration: @escaping (ASPasskeyRegistrationCredential) -> Void, completeAssertion: @escaping (ASPasskeyAssertionCredential) -> Void) {
+    init(sessionAccess: NativeVaultSessionAccess, transport: NativeVaultPasskeyTransporting = NativeVaultPasskeyTransport(), key: @escaping () -> String?, cancel: @escaping (String) -> Void, completeRegistration: @escaping (ASPasskeyRegistrationCredential) -> Void, completeAssertion: @escaping (ASPasskeyAssertionCredential) -> Void, isExternalCurrent: @escaping () -> Bool = { true }) {
         self.sessionAccess = sessionAccess; self.transport = transport; self.key = key; self.cancel = cancel
-        self.completeRegistration = completeRegistration; self.completeAssertion = completeAssertion
+        self.completeRegistration = completeRegistration; self.completeAssertion = completeAssertion; self.isExternalCurrent = isExternalCurrent
     }
     private func begin() -> NativePasskeyOperation {
         active?.cancel(); transport.cancel(); generation &+= 1
         let next = NativePasskeyOperation(generation: generation); active = next; return next
     }
-    private func current(_ operation: NativePasskeyOperation) -> Bool { active === operation && !operation.terminal && operation.requestGeneration == generation }
+    private func current(_ operation: NativePasskeyOperation) -> Bool { active === operation && !operation.terminal && operation.requestGeneration == generation && Date() < operation.expiresAt && isExternalCurrent() }
+    func cancelCurrent() { active?.cancel(); active = nil; transport.cancel(); generation &+= 1 }
     private func stop(_ operation: NativePasskeyOperation, _ message: String) { guard current(operation) else { return }; operation.cancel(); active = nil; cancel(message) }
-    private func request(_ path: String, method: String = "GET", body: Data? = nil, grant: NativeVaultSessionAccess.Grant, organization: NativeOrganization) async throws -> (Data, HTTPURLResponse) {
+    private func request(_ path: String, method: String = "GET", body: Data? = nil, grant: NativeVaultSessionAccess.Grant, organization: NativeOrganization? = nil) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent(path)); request.httpMethod = method; request.timeoutInterval = 10; request.httpBody = body
-        request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id")
+        request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); if let organization { request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id") }
         request.setValue("application/json", forHTTPHeaderField: "Accept"); if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return try await withCheckedThrowingContinuation { continuation in transport.send(request) { continuation.resume(with: $0) } }
+    }
+    private func checkedRequest(_ path: String, method: String = "GET", body: Data? = nil, grant: NativeVaultSessionAccess.Grant, organization: NativeOrganization? = nil, operation: NativePasskeyOperation) async throws -> (Data, HTTPURLResponse) {
+        guard await grantIsStillCurrent(grant, operation: operation) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
+        let result = try await request(path, method: method, body: body, grant: grant, organization: organization)
+        guard await grantIsStillCurrent(grant, operation: operation) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
+        return result
     }
     private func acquire(_ operation: NativePasskeyOperation) async throws -> NativeVaultSessionAccess.Grant {
         guard let key = key(), key.validToken else { throw EnrollmentError.message("This build has no public Vault configuration. Install an updated AI Matrx build.") }
@@ -68,10 +78,11 @@ final class NativeVaultPasskeyCoordinator {
         operation.context = context
         let allowed: Bool = await withCheckedContinuation { continuation in context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock AI Matrx Vault to use a passkey") { allowed, _ in continuation.resume(returning: allowed) } }
         guard allowed, current(operation) else { throw EnrollmentError.message("Unlock Vault protection to continue.") }
-        return try await withCheckedThrowingContinuation { continuation in sessionAccess.acquire(key: key, context: context) { continuation.resume(with: $0) } }
+        let grant: NativeVaultSessionAccess.Grant = try await withCheckedThrowingContinuation { continuation in sessionAccess.acquire(key: key, context: context) { continuation.resume(with: $0) } }
+        operation.grant = grant; return grant
     }
     private func organization(_ grant: NativeVaultSessionAccess.Grant, operation: NativePasskeyOperation, label: String?) async throws -> NativeOrganization {
-        let (data, response) = try await request("api/auth/organizations", grant: grant, organization: NativeOrganization(id: "00000000-0000-4000-8000-000000000000", name: "", isPersonal: true))
+        let (data, response) = try await checkedRequest("api/auth/organizations", grant: grant, operation: operation)
         guard response.statusCode == 200 else { throw EnrollmentError.message("Vault organizations are unavailable. Try again.") }
         let values = try NativePasswordCodec.organizations(data, subject: grant.subject).organizations
         guard current(operation), !values.isEmpty else { throw EnrollmentError.message("Your account has no available organization.") }
@@ -86,16 +97,49 @@ final class NativeVaultPasskeyCoordinator {
         return values[picker.indexOfSelectedItem]
     }
     private var operationLabel: [UUID: String] = [:]
-    private func capabilities(_ grant: NativeVaultSessionAccess.Grant, _ org: NativeOrganization) async throws -> NativePasskeyCapabilities {
-        let (data, response) = try await request("api/vault/native/passkeys/capabilities", grant: grant, organization: org)
+    private func capabilities(_ grant: NativeVaultSessionAccess.Grant, _ org: NativeOrganization, operation: NativePasskeyOperation) async throws -> NativePasskeyCapabilities {
+        let (data, response) = try await checkedRequest("api/vault/native/passkeys/capabilities", grant: grant, organization: org, operation: operation)
         guard response.statusCode == 200 else { throw EnrollmentError.message("Passkeys are temporarily unavailable. Try again.") }; return try NativeVaultPasskeyCodec.capabilities(data)
+    }
+    private func grantIsStillCurrent(_ grant: NativeVaultSessionAccess.Grant, operation: NativePasskeyOperation) async -> Bool {
+        guard current(operation) else { return false }
+        let valid = await Task.detached(priority: .userInitiated) {
+            (try? ProviderStore(mode: .providerAccess).locked { state in state.generation == grant.generation && state.provider_subject == grant.subject }) ?? false
+        }.value
+        return valid && current(operation)
     }
     private func exactBody(mutation: String, source: Data, label: String, principal: String, excluded: [Data]) throws -> Data {
         let object: [String: Any] = ["mutation_id": mutation, "source": NativeVaultPasskeyCodec.base64url(source), "label": label, "principal_type": principal, "excluded_credential_ids": excluded.map(NativeVaultPasskeyCodec.base64url)]
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
+    private func supportedUV(_ preference: ASAuthorizationPublicKeyCredentialUserVerificationPreference) -> Bool {
+        preference == .required || preference == .preferred || preference == .discouraged
+    }
+    @available(macOS 15.0, *) private func supportedRegistrationExtensions(_ request: ASPasskeyCredentialRequest) -> Bool {
+        switch request.extensionInput { case .none: return true; case let .registration(input): return input.largeBlob == nil && input.prf == nil; default: return false }
+    }
+    @available(macOS 15.0, *) private func supportedAssertionExtensions(_ request: ASPasskeyCredentialRequest?, _ parameters: ASPasskeyCredentialRequestParameters?) -> Bool {
+        if let request { switch request.extensionInput { case .none: break; case let .assertion(input): if input.largeBlob != nil || input.prf != nil { return false }; default: return false } }
+        if let input = parameters?.extensionInput, input.largeBlob != nil || input.prf != nil { return false }
+        return true
+    }
+    private func chooseMatch(_ matches: [NativePasskeyMatch], operation: NativePasskeyOperation, direct: ASPasskeyCredentialIdentity?) throws -> NativePasskeyMatch {
+        if let direct {
+            guard let exact = matches.first(where: { $0.credentialID == direct.credentialID && $0.userHandle == direct.userHandle }) else { throw EnrollmentError.message("The requested passkey is no longer available.") }
+            return exact
+        }
+        guard !matches.isEmpty else { throw EnrollmentError.message("No saved passkey matches this website.") }
+        let alert = NSAlert(); alert.messageText = "Choose a passkey"; alert.informativeText = "Choose a passkey for this website."
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 340, height: 28))
+        // Server metadata may not be displayed here: it is only an opaque
+        // binding used to materialize the selected private source.
+        for index in matches.indices { picker.addItem(withTitle: "Passkey \(index + 1)") }
+        alert.accessoryView = picker; alert.addButton(withTitle: "Use passkey"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn, current(operation), matches.indices.contains(picker.indexOfSelectedItem) else { throw EnrollmentError.message("Passkey selection was cancelled.") }
+        return matches[picker.indexOfSelectedItem]
+    }
     func register(_ raw: any ASCredentialRequest) {
-        guard let request = raw as? ASPasskeyCredentialRequest, let identity = request.credentialIdentity as? ASPasskeyCredentialIdentity, request.supportedAlgorithms.contains(where: { $0.rawValue == -7 }), request.clientDataHash.count == 32 else { cancel("This passkey request is not supported."); return }
+        guard let request = raw as? ASPasskeyCredentialRequest, let identity = request.credentialIdentity as? ASPasskeyCredentialIdentity, request.supportedAlgorithms.contains(where: { $0.rawValue == -7 }), request.clientDataHash.count == 32, !identity.relyingPartyIdentifier.isEmpty, (1...64).contains(identity.userHandle.count), identity.userName.utf8.count <= 1024, supportedUV(request.userVerificationPreference), #available(macOS 15.0, *), supportedRegistrationExtensions(request) else { cancel("This passkey request is not supported."); return }
         let operation = begin()
         operation.task = Task { [weak self] in
             guard let self else { return }
@@ -103,16 +147,21 @@ final class NativeVaultPasskeyCoordinator {
                 let grant = try await self.acquire(operation); guard self.current(operation) else { return }
                 let defaultLabel = identity.userName.isEmpty ? identity.relyingPartyIdentifier : identity.userName
                 let org = try await self.organization(grant, operation: operation, label: defaultLabel)
-                let caps = try await self.capabilities(grant, org); guard self.current(operation), caps.maxSourceBytes > 0 else { return }
+                let caps = try await self.capabilities(grant, org, operation: operation); guard self.current(operation), caps.maxSourceBytes > 0 else { return }
                 let excluded = request.excludedCredentials?.map(\.credentialID) ?? []
                 guard excluded.count <= caps.maxCredentialIDs else { throw EnrollmentError.message("This passkey request has too many excluded credentials.") }
+                if !excluded.isEmpty {
+                    let exclusionBody = try JSONSerialization.data(withJSONObject: ["rp_id": identity.relyingPartyIdentifier, "allowed_credential_ids": excluded.map(NativeVaultPasskeyCodec.base64url)], options: [.sortedKeys])
+                    let (preflightData, preflightHTTP) = try await self.checkedRequest("api/vault/native/passkeys/matches", method: "POST", body: exclusionBody, grant: grant, organization: org, operation: operation)
+                    guard preflightHTTP.statusCode == 200, try NativeVaultPasskeyCodec.matches(preflightData).matches.isEmpty, self.current(operation) else { throw EnrollmentError.message("A matching passkey already exists for this website.") }
+                }
                 let label = self.operationLabel.removeValue(forKey: operation.id) ?? defaultLabel
                 let mutation = UUID().uuidString.lowercased(); let empty = try self.exactBody(mutation: mutation, source: Data([0]), label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded)
                 let usable = min(caps.maxSourceBytes, 3 * max(0, (caps.maxRequestBodyBytes - empty.count) / 4)); guard usable > 0 else { throw EnrollmentError.message("Passkey storage limit is unavailable. Try again.") }
                 let bridge = NativeOperation(); operation.bridgeOperation = bridge
                 let ceremony = NativeVaultAppleCeremony(operation: operation, coordinator: self, grant: grant, organization: org, mutation: mutation, label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded, maximum: usable, bodyLimit: caps.maxRequestBodyBytes)
                 let result = try await bridge.register(input: NativeRegistrationInput(rpId: identity.relyingPartyIdentifier, userHandle: identity.userHandle, username: identity.userName, displayName: nil, clientDataHash: request.clientDataHash, supportedAlgorithms: [-7], excludedCredentialIds: excluded), existingSources: [], maxSourceBytes: UInt32(usable), ceremony: ceremony)
-                guard self.current(operation) else { return }; operation.terminal = true
+                guard await self.grantIsStillCurrent(grant, operation: operation) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }; operation.terminal = true
                 self.completeRegistration(ASPasskeyRegistrationCredential(relyingParty: identity.relyingPartyIdentifier, clientDataHash: request.clientDataHash, credentialID: result.credentialId, attestationObject: result.attestationObject, extensionOutput: nil))
             } catch { self.stop(operation, "Passkey registration could not be completed. Try again.") }
         }
@@ -125,22 +174,23 @@ final class NativeVaultPasskeyCoordinator {
         let rp = parameters?.relyingPartyIdentifier ?? identity?.relyingPartyIdentifier
         guard let hash = parameters?.clientDataHash ?? request?.clientDataHash else { cancel("This passkey request is not supported."); return }
         let allowed = parameters?.allowedCredentials ?? (identity.map { [$0.credentialID] } ?? [])
-        guard let rp, hash.count == 32, !allowed.contains(where: { $0.count < 16 || $0.count > 1023 }) else { cancel("This passkey request is not supported."); return }
+        let uv = parameters?.userVerificationPreference ?? request?.userVerificationPreference
+        guard let rp, hash.count == 32, rp.utf8.count <= 253, !allowed.contains(where: { $0.count < 16 || $0.count > 1023 }), let uv, supportedUV(uv), #available(macOS 15.0, *), supportedAssertionExtensions(request, parameters) else { cancel("This passkey request is not supported."); return }
         let operation = begin(); operation.task = Task { [weak self] in guard let self else { return }; do {
-            let grant = try await self.acquire(operation); let org = try await self.organization(grant, operation: operation, label: nil); let caps = try await self.capabilities(grant, org)
+            let grant = try await self.acquire(operation); let org = try await self.organization(grant, operation: operation, label: nil); let caps = try await self.capabilities(grant, org, operation: operation)
             let body = try JSONSerialization.data(withJSONObject: ["rp_id": rp, "allowed_credential_ids": allowed.map(NativeVaultPasskeyCodec.base64url)], options: [.sortedKeys])
-            let (matchesData, matchesHTTP) = try await self.request("api/vault/native/passkeys/matches", method: "POST", body: body, grant: grant, organization: org); guard matchesHTTP.statusCode == 200 else { throw EnrollmentError.message("No saved passkey matches this website.") }
-            let matches = try NativeVaultPasskeyCodec.matches(matchesData).matches; guard let selected = matches.first, self.current(operation) else { throw EnrollmentError.message("No saved passkey matches this website.") }
+            let (matchesData, matchesHTTP) = try await self.checkedRequest("api/vault/native/passkeys/matches", method: "POST", body: body, grant: grant, organization: org, operation: operation); guard matchesHTTP.statusCode == 200 else { throw EnrollmentError.message("No saved passkey matches this website.") }
+            let matches = try NativeVaultPasskeyCodec.matches(matchesData).matches; guard self.current(operation) else { return }; let selected = try self.chooseMatch(matches, operation: operation, direct: identity)
             if let identity, (selected.credentialID != identity.credentialID || selected.userHandle != identity.userHandle || identity.relyingPartyIdentifier != rp) { throw EnrollmentError.message("The selected passkey no longer matches this request.") }
-            let (sourceData, sourceHTTP) = try await self.request("api/vault/native/passkeys/\(selected.itemID)/materialize", method: "POST", body: body, grant: grant, organization: org); guard sourceHTTP.statusCode == 200 else { throw EnrollmentError.message("The selected passkey is no longer available.") }
+            let (sourceData, sourceHTTP) = try await self.checkedRequest("api/vault/native/passkeys/\(selected.itemID)/materialize", method: "POST", body: body, grant: grant, organization: org, operation: operation); guard sourceHTTP.statusCode == 200 else { throw EnrollmentError.message("The selected passkey is no longer available.") }
             let source = try NativeVaultPasskeyCodec.materialize(sourceData, maxSourceBytes: caps.maxSourceBytes); let bridge = NativeOperation(); operation.bridgeOperation = bridge
             let result = try await bridge.authenticate(input: NativeAssertionInput(rpId: rp, clientDataHash: hash, allowedCredentialIds: allowed), canonicalSource: source, maxSourceBytes: UInt32(caps.maxSourceBytes), ceremony: NativeVaultAppleCeremony(operation: operation, coordinator: self, grant: grant, organization: org, mutation: "", label: "", principal: "user", excluded: [], maximum: caps.maxSourceBytes, bodyLimit: caps.maxRequestBodyBytes))
-            guard self.current(operation), result.credentialId == selected.credentialID, result.userHandle == selected.userHandle else { throw EnrollmentError.message("The selected passkey no longer matches this request.") }; operation.terminal = true
+            guard await self.grantIsStillCurrent(grant, operation: operation), result.credentialId == selected.credentialID, result.userHandle == selected.userHandle else { throw EnrollmentError.message("The selected passkey no longer matches this request.") }; operation.terminal = true
             self.completeAssertion(ASPasskeyAssertionCredential(userHandle: result.userHandle, relyingParty: rp, signature: result.signature, clientDataHash: hash, authenticatorData: result.authenticatorData, credentialID: result.credentialId, extensionOutput: nil))
         } catch { self.stop(operation, "Passkey authentication could not be completed. Try again.") } }
     }
     fileprivate func verify(_ operation: NativePasskeyOperation) async throws {
-        guard current(operation), let context = operation.context else { throw VerificationCallbackError.Denied }
+        guard let grant = operation.grant, current(operation), await grantIsStillCurrent(grant, operation: operation), let context = operation.context else { throw VerificationCallbackError.Denied }
         let allowed: Bool = await withCheckedContinuation { continuation in context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Verify your identity to use this passkey") { allowed, _ in continuation.resume(returning: allowed) } }
         guard allowed, current(operation) else { throw VerificationCallbackError.Denied }
     }
@@ -149,17 +199,18 @@ final class NativeVaultPasskeyCoordinator {
         let body = try exactBody(mutation: mutation, source: source, label: label, principal: principal, excluded: excluded); guard body.count <= bodyLimit else { throw PersistenceCallbackError.Refused }
         func valid(_ result: (Data, HTTPURLResponse)) -> Bool { result.1.statusCode == 200 && (try? NativeVaultPasskeyCodec.receipt(result.0, mutationID: mutation, source: source)) != nil }
         func receipt() async -> Bool {
-            guard let result = try? await request("api/vault/native/passkeys/receipts/\(mutation)", grant: grant, organization: organization) else { return false }
+            guard current(operation), let result = try? await checkedRequest("api/vault/native/passkeys/receipts/\(mutation)", grant: grant, organization: organization, operation: operation) else { return false }
             return valid(result)
         }
-        let first = try? await request("api/vault/native/passkeys", method: "POST", body: body, grant: grant, organization: organization)
+        let first = try? await checkedRequest("api/vault/native/passkeys", method: "POST", body: body, grant: grant, organization: organization, operation: operation)
         if let first, valid(first), current(operation) { return }
         // Only a transport error or 5xx is ambiguous. A receipt lookup binds a
         // possible committed write to this exact mutation and source before any
         // byte-identical replay; definitive client failures never replay.
         guard first == nil || (first?.1.statusCode ?? 0) >= 500 else { throw PersistenceCallbackError.Refused }
         if await receipt(), current(operation) { return }
-        let replay = try? await request("api/vault/native/passkeys", method: "POST", body: body, grant: grant, organization: organization)
+        guard current(operation) else { throw PersistenceCallbackError.Refused }
+        let replay = try? await checkedRequest("api/vault/native/passkeys", method: "POST", body: body, grant: grant, organization: organization, operation: operation)
         if let replay, valid(replay), current(operation) { return }
         guard replay == nil || (replay?.1.statusCode ?? 0) >= 500 else { throw PersistenceCallbackError.Refused }
         if await receipt(), current(operation) { return }

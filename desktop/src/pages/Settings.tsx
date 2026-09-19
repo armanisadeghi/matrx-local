@@ -85,6 +85,7 @@ import {
   type NativeVaultProviderAction,
   type NativeVaultProviderStatus,
 } from "@/lib/sidecar";
+import { createNativeVaultActionCoordinator } from "@/lib/native-vault-action-coordinator";
 import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import type {
   AutoUpdateState,
@@ -412,8 +413,10 @@ export function Settings({
   const [nativeVaultSettingsPending, setNativeVaultSettingsPending] = useState(false);
   const [nativeVaultAction, setNativeVaultAction] = useState<NativeVaultProviderAction | null>(null);
   const nativeVaultRequest = useRef(0);
-  const nativeVaultActionRequest = useRef(0);
+  const nativeVaultActionCoordinator = useRef(createNativeVaultActionCoordinator());
   const nativeVaultSettingsRequest = useRef(0);
+  const nativeVaultEnableInFlight = useRef(false);
+  const nativeVaultSettingsInFlight = useRef(false);
   const nativeVaultMounted = useRef(true);
 
   // Hardware profile state
@@ -501,7 +504,7 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, engineStatus]);
 
-  const loadNativeVaultProvider = useCallback(async () => {
+  const loadNativeVaultProvider = useCallback(async (presentation?: number) => {
     const request = ++nativeVaultRequest.current;
     if (nativeVaultMounted.current) setNativeVaultChecking(true);
     try {
@@ -509,7 +512,8 @@ export function Settings({
       if (nativeVaultMounted.current && request === nativeVaultRequest.current) setNativeVaultProvider(status);
       return status;
     } catch {
-      if (nativeVaultMounted.current && request === nativeVaultRequest.current) {
+      if (nativeVaultMounted.current && request === nativeVaultRequest.current &&
+          (presentation === undefined || nativeVaultActionCoordinator.current.isCurrent(presentation))) {
         setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not read the native provider status. Try Refresh." });
       }
       return null;
@@ -519,16 +523,17 @@ export function Settings({
   }, []);
 
   const enableNativeVaultProvider = useCallback(async () => {
-    if (nativeVaultActionPending) return;
-    const request = ++nativeVaultActionRequest.current;
+    if (nativeVaultEnableInFlight.current) return;
+    nativeVaultEnableInFlight.current = true;
+    const presentation = nativeVaultActionCoordinator.current.start();
     setNativeVaultAction(null);
     setNativeVaultActionPending(true);
     try {
       const action = await requestNativeVaultProviderEnable();
       // Apple's callback only reports the request result. Measure the current
       // identity-store state before presenting a successful enablement claim.
-      const status = await loadNativeVaultProvider();
-      if (!nativeVaultMounted.current || request !== nativeVaultActionRequest.current) return;
+      const status = await loadNativeVaultProvider(presentation);
+      if (!nativeVaultMounted.current || !nativeVaultActionCoordinator.current.isCurrent(presentation)) return;
       if (action?.outcome === "enabled" && status?.os_enablement === "enabled") {
         setNativeVaultAction({ outcome: "enabled", message: "macOS now reports AutoFill enabled for this provider." });
       } else if (action?.outcome === "enabled") {
@@ -537,29 +542,33 @@ export function Settings({
         setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
       }
     } catch {
-      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+      if (nativeVaultMounted.current && nativeVaultActionCoordinator.current.isCurrent(presentation)) {
         setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not request AutoFill. Try Refresh or open macOS settings." });
       }
     } finally {
-      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) setNativeVaultActionPending(false);
+      nativeVaultEnableInFlight.current = false;
+      if (nativeVaultMounted.current) setNativeVaultActionPending(false);
     }
   }, [loadNativeVaultProvider, nativeVaultActionPending]);
 
   const openNativeVaultSettings = useCallback(async () => {
-    if (nativeVaultSettingsPending) return;
+    if (nativeVaultSettingsInFlight.current) return;
+    nativeVaultSettingsInFlight.current = true;
     const request = ++nativeVaultSettingsRequest.current;
+    const presentation = nativeVaultActionCoordinator.current.start();
     setNativeVaultAction(null);
     setNativeVaultSettingsPending(true);
     try {
       const action = await openNativeVaultProviderSettings();
-      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) {
+      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current && nativeVaultActionCoordinator.current.isCurrent(presentation)) {
         setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
       }
     } catch {
-      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) {
+      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current && nativeVaultActionCoordinator.current.isCurrent(presentation)) {
         setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not open macOS AutoFill settings." });
       }
     } finally {
+      nativeVaultSettingsInFlight.current = false;
       if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) setNativeVaultSettingsPending(false);
     }
   }, [nativeVaultSettingsPending]);
@@ -582,7 +591,7 @@ export function Settings({
   useEffect(() => () => {
     nativeVaultMounted.current = false;
     nativeVaultRequest.current += 1;
-    nativeVaultActionRequest.current += 1;
+    nativeVaultActionCoordinator.current.invalidate();
     nativeVaultSettingsRequest.current += 1;
   }, []);
 

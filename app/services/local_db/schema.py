@@ -1461,6 +1461,42 @@ ALTER TABLE coding_session_metadata_sync_operations
   ADD COLUMN index_writable_probed INTEGER NOT NULL DEFAULT 0;
 """
 
+# ── V37: the custom record store's mirror ────────────────────────────────────
+#
+# The desktop mirrors ONE custom Table's records so they are readable and
+# editable with the platform unreachable.  Rows are read back out of this table
+# and diffed against `custom.read_records` — the mirror is the client's own
+# copy, never a rendering of a cloud response.
+#
+# `client_key` is the offline contract (DOOR-21): the device mints it BEFORE
+# the first attempt, so a replayed deferred write returns the SAME record id
+# and increments `custom.anon_replay.replays` instead of writing a duplicate.
+# `record_id` is NULL until the store has accepted the row; `local_id` is the
+# stable local identity that the outbox references either way.
+_V37_CUSTOM_RECORD_MIRROR = """
+CREATE TABLE IF NOT EXISTS custom_record_mirror (
+    local_id        TEXT PRIMARY KEY,
+    record_id       TEXT UNIQUE,
+    client_key      TEXT UNIQUE,
+    organization_id TEXT NOT NULL,
+    table_id        TEXT NOT NULL,
+    document        TEXT NOT NULL DEFAULT '{}',
+    version         INTEGER,
+    level           TEXT,
+    origin          TEXT NOT NULL DEFAULT 'cloud',
+    state           TEXT NOT NULL DEFAULT 'synced',
+    store_document  TEXT,
+    captured_at     TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_record_mirror_table
+  ON custom_record_mirror(organization_id, table_id, state);
+
+CREATE INDEX IF NOT EXISTS idx_custom_record_mirror_state
+  ON custom_record_mirror(state)
+"""
+
 
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
@@ -1499,4 +1535,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (34, _V34_DROP_AUTH_TOKENS),
     (35, _V35_FILE_SYNC_PLACEMENT_ATTEMPTS),
     (36, _V36_SYNC_OPERATION_WRITABLE_PROBED),
+    (37, _V37_CUSTOM_RECORD_MIRROR),
 ]

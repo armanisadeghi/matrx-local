@@ -46,6 +46,7 @@ from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
 from app.api.media_vault_routes import router as media_vault_router
 from app.api.file_sync_routes import router as file_sync_router
+from app.api.records_routes import router as records_router
 from app.api.tts_routes import router as tts_router
 from app.api.ner_routes import router as ner_router
 from app.api.openai_compat_routes import router as openai_compat_router
@@ -2187,6 +2188,7 @@ app.include_router(video_gen_router)
 app.include_router(media_library_router)
 app.include_router(media_vault_router)
 app.include_router(file_sync_router)
+app.include_router(records_router)
 app.include_router(tts_router)
 app.include_router(ner_router)
 app.include_router(openai_compat_router)

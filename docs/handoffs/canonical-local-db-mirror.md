@@ -101,6 +101,35 @@ UI, reconcile backstop) folded in from a since-deleted snapshot handoff — some
   `chat.message` with source='user' and roles intact; outbox empty. Pinned
   by 2 tests in `tests/characterization/test_chat_mirror_characterization.py`.
 
+## Records mirror — the custom record store on the desktop (2026-09-18, W6-LOCAL)
+
+A SECOND mirror lane now exists beside the chat one, for the platform's custom
+record store (schema `custom` on the one database).
+`app/services/records_sync/` (+ `FEATURE.md`) syncs ONE custom Table's records
+both ways through the store's own doors — `custom.read_records` down,
+`custom.anon_capture` (client-minted key, idempotent) and
+`custom.record_update` up — into `custom_record_mirror` (local migration V37),
+with the existing `sync_queue` outbox and `sync_meta` checkpoints. Surface:
+`GET /records/mirror/status`, `POST /records/mirror/sync`.
+
+Two things to know before touching it:
+
+- **The switch gates the whole path.** `custom.store_is_open` is not
+  EXECUTE-granted to `authenticated`, so the client reads the same knob the
+  door reads (`platform.knob_resolve('custom','system_enabled', org)`) and
+  treats an unreadable switch as CLOSED. Closed, offline and
+  doors-not-on-the-wire are three distinct loud states with remedies, never a
+  quiet empty sync.
+- **The HTTP wire is not open yet.** PostgREST does not expose the `custom`
+  schema (`pgrst.db_schemas`, measured 2026-09-18) — the unified-data
+  campaign's deliberate OFF state. The shipped PostgREST transport therefore
+  answers PGRST106 today and the engine reports the feature as absent. The
+  live proof (`tests/parity/test_records_mirror_live.py`, `MATRX_LIVE_CHECKS=1`
+  + `MATRX_STORE_DSN_FILE`) drives the real engine through a transport that
+  calls the same doors in the same `authenticated` session PostgREST builds.
+  When the campaign exposes the schema, delete nothing — the shipped transport
+  simply starts working.
+
 ## Remaining work (ordered)
 
 1. **Per-user mirror partitioning (Arman-approved: "per user! yes")** —

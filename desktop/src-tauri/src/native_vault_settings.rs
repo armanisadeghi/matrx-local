@@ -35,7 +35,7 @@ mod platform {
     use objc2_authentication_services::{
         ASCredentialIdentityStore, ASCredentialIdentityStoreState, ASSettingsHelper,
     };
-    use objc2_foundation::{NSBundle, NSError, NSString};
+    use objc2_foundation::{NSBundle, NSError, NSOperatingSystemVersion, NSProcessInfo, NSString};
     use std::{
         ffi::c_void,
         path::PathBuf,
@@ -93,10 +93,35 @@ mod platform {
         pub(super) fn complete(&mut self) {
             self.pending = false;
         }
+        pub(super) fn dispatch_failed(&mut self) {
+            // A claim is made before queueing to prevent duplicate prompts. Only
+            // a queueing failure may release it; once invoked, its callback owns
+            // release even if the command caller has timed out or disconnected.
+            if self.invoked_at.is_none() {
+                self.pending = false;
+            }
+        }
     }
-    static ENABLE_OPERATION: OnceLock<Mutex<EnableOperation>> = OnceLock::new();
-    fn enable_operation() -> &'static Mutex<EnableOperation> {
-        ENABLE_OPERATION.get_or_init(|| Mutex::new(EnableOperation::default()))
+
+    pub(super) struct EnableCompletion {
+        operation: Arc<Mutex<EnableOperation>>,
+        sender: Mutex<Option<oneshot::Sender<bool>>>,
+    }
+    impl EnableCompletion {
+        pub(super) fn new(operation: Arc<Mutex<EnableOperation>>, sender: oneshot::Sender<bool>) -> Self {
+            Self { operation, sender: Mutex::new(Some(sender)) }
+        }
+        pub(super) fn complete(&self, enabled: bool) {
+            self.operation.lock().expect("enable operation lock").complete();
+            if let Some(sender) = self.sender.lock().ok().and_then(|mut guard| guard.take()) {
+                // The receiver is allowed to be gone after a command timeout.
+                let _ = sender.send(enabled);
+            }
+        }
+    }
+    static ENABLE_OPERATION: OnceLock<Arc<Mutex<EnableOperation>>> = OnceLock::new();
+    fn enable_operation() -> &'static Arc<Mutex<EnableOperation>> {
+        ENABLE_OPERATION.get_or_init(|| Arc::new(Mutex::new(EnableOperation::default())))
     }
 
     fn string(value: &NSString) -> String {
@@ -175,6 +200,19 @@ mod platform {
         Ok(provider)
     }
 
+    fn bundled_provider_present() -> bool {
+        let root = PathBuf::from(string(&NSBundle::mainBundle().bundlePath()));
+        root.join("Contents").join("PlugIns").join(PROVIDER_NAME).is_dir()
+    }
+
+    fn supports_provider_os() -> bool {
+        NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+            majorVersion: 15,
+            minorVersion: 0,
+            patchVersion: 0,
+        })
+    }
+
     fn selector_available(selector: objc2::runtime::Sel) -> bool {
         AnyClass::get(c"ASSettingsHelper").is_some_and(|class| class.responds_to(selector))
     }
@@ -191,6 +229,14 @@ mod platform {
 
     fn base_status() -> Status {
         let historical = crate::native_vault::status();
+        let artifact = if bundled_provider_present() { "built" } else { "not_built" };
+        if !supports_provider_os() {
+            return unavailable_status(
+                historical,
+                artifact,
+                "Native Vault AutoFill requires macOS 15 or later.",
+            );
+        }
         match host_artifact() {
             Ok(_) if identity_store_available() => Status {
                 supported: true, artifact: "built", os_enablement: "unavailable",
@@ -200,17 +246,18 @@ mod platform {
                 enable_action: if enable_available() { "available" } else { "not_supported" },
                 settings_action: if settings_available() { "available" } else { "not_supported" },
             },
-            Ok(_) => unavailable_status(historical, "This macOS version cannot read credential-provider enablement."),
-            Err(reason) => unavailable_status(historical, reason),
+            Ok(_) => unavailable_status(historical, artifact, "This macOS version cannot read credential-provider enablement."),
+            Err(reason) => unavailable_status(historical, artifact, reason),
         }
     }
     fn unavailable_status(
         historical: crate::native_vault::HistoricalStatus,
+        artifact: &'static str,
         reason: &str,
     ) -> Status {
         Status {
             supported: false,
-            artifact: "not_built",
+            artifact,
             os_enablement: "unavailable",
             enrollment: historical.state,
             signing_profile: "not_verified",
@@ -339,7 +386,7 @@ mod platform {
             }
         }
         let (tx, rx) = oneshot::channel::<bool>();
-        let completion = Arc::new(Mutex::new(Some(tx)));
+        let completion = Arc::new(EnableCompletion::new(Arc::clone(enable_operation()), tx));
         let dispatch = app.run_on_main_thread(move || {
             enable_operation()
                 .lock()
@@ -347,15 +394,7 @@ mod platform {
                 .invoked(Instant::now());
             let callback_completion = completion.clone();
             let callback = RcBlock::new(move |enabled: objc2::runtime::Bool| {
-                let mut state = enable_operation().lock().expect("enable operation lock");
-                state.complete();
-                if let Some(tx) = callback_completion
-                    .lock()
-                    .ok()
-                    .and_then(|mut guard| guard.take())
-                {
-                    let _ = tx.send(enabled.as_bool());
-                }
+                callback_completion.complete(enabled.as_bool());
             });
             unsafe {
                 ASSettingsHelper::requestToTurnOnCredentialProviderExtensionWithCompletionHandler(
@@ -367,7 +406,7 @@ mod platform {
             enable_operation()
                 .lock()
                 .expect("enable operation lock")
-                .pending = false;
+                .dispatch_failed();
             return ActionResult {
                 outcome: "unavailable",
                 message: "AI Matrx Desktop could not reach macOS’s main thread.".into(),
@@ -383,8 +422,9 @@ mod platform {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::platform::{EnableOperation, ENABLE_COOLDOWN};
-    use std::time::{Duration, Instant};
+    use super::platform::{EnableCompletion, EnableOperation, ENABLE_COOLDOWN};
+    use std::{sync::{Arc, Mutex}, time::{Duration, Instant}};
+    use tokio::sync::oneshot;
 
     #[test]
     fn enable_admission_is_single_owner_and_cooldown_starts_on_invocation() {
@@ -412,6 +452,37 @@ mod tests {
         assert_eq!(state.claim(now + Duration::from_secs(121)), Err("pending")); // waiter timed out, no callback
         state.complete(); // late callback is the only completion owner
         assert_eq!(state.claim(now + Duration::from_secs(121)), Ok(()));
+    }
+
+    #[test]
+    fn queue_failure_releases_a_scheduled_request_without_starting_cooldown() {
+        let now = Instant::now();
+        let mut state = EnableOperation::default();
+        assert_eq!(state.claim(now), Ok(()));
+        state.dispatch_failed();
+        assert_eq!(state.claim(now), Ok(()));
+    }
+
+    #[test]
+    fn dispatch_failure_cannot_release_an_invoked_request() {
+        let now = Instant::now();
+        let mut state = EnableOperation::default();
+        assert_eq!(state.claim(now), Ok(()));
+        state.invoked(now);
+        state.dispatch_failed();
+        assert_eq!(state.claim(now + Duration::from_secs(121)), Err("pending"));
+    }
+
+    #[test]
+    fn owned_callback_clears_state_after_caller_cancellation() {
+        let now = Instant::now();
+        let operation = Arc::new(Mutex::new(EnableOperation::default()));
+        operation.lock().unwrap().claim(now).unwrap();
+        operation.lock().unwrap().invoked(now);
+        let (sender, receiver) = oneshot::channel();
+        drop(receiver); // The command caller went away before macOS replied.
+        EnableCompletion::new(Arc::clone(&operation), sender).complete(true);
+        assert_eq!(operation.lock().unwrap().claim(now + ENABLE_COOLDOWN), Ok(()));
     }
 }
 

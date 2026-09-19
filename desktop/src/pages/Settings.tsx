@@ -408,8 +408,11 @@ export function Settings({
   const [nativeVaultProvider, setNativeVaultProvider] =
     useState<NativeVaultProviderStatus | null>(null);
   const [nativeVaultChecking, setNativeVaultChecking] = useState(false);
+  const [nativeVaultActionPending, setNativeVaultActionPending] = useState(false);
   const [nativeVaultAction, setNativeVaultAction] = useState<NativeVaultProviderAction | null>(null);
   const nativeVaultRequest = useRef(0);
+  const nativeVaultActionRequest = useRef(0);
+  const nativeVaultMounted = useRef(true);
 
   // Hardware profile state
   const [hardwareProfile, setHardwareProfile] =
@@ -498,35 +501,87 @@ export function Settings({
 
   const loadNativeVaultProvider = useCallback(async () => {
     const request = ++nativeVaultRequest.current;
-    setNativeVaultChecking(true);
+    if (nativeVaultMounted.current) setNativeVaultChecking(true);
     try {
       const status = await getNativeVaultProviderStatus();
-      if (request === nativeVaultRequest.current) setNativeVaultProvider(status);
+      if (nativeVaultMounted.current && request === nativeVaultRequest.current) setNativeVaultProvider(status);
+      return status;
     } catch {
-      if (request === nativeVaultRequest.current) setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not read the native provider status. Try Refresh." });
+      if (nativeVaultMounted.current && request === nativeVaultRequest.current) {
+        setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not read the native provider status. Try Refresh." });
+      }
+      return null;
     } finally {
-      if (request === nativeVaultRequest.current) setNativeVaultChecking(false);
+      if (nativeVaultMounted.current && request === nativeVaultRequest.current) setNativeVaultChecking(false);
     }
   }, []);
 
   const enableNativeVaultProvider = useCallback(async () => {
+    if (nativeVaultActionPending) return;
+    const request = ++nativeVaultActionRequest.current;
     setNativeVaultAction(null);
-    const action = await requestNativeVaultProviderEnable();
-    setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
-    if (action?.outcome === "enabled" || action?.outcome === "disabled") void loadNativeVaultProvider();
-  }, [loadNativeVaultProvider]);
+    setNativeVaultActionPending(true);
+    try {
+      const action = await requestNativeVaultProviderEnable();
+      // Apple's callback only reports the request result. Measure the current
+      // identity-store state before presenting a successful enablement claim.
+      const status = await loadNativeVaultProvider();
+      if (!nativeVaultMounted.current || request !== nativeVaultActionRequest.current) return;
+      if (action?.outcome === "enabled" && status?.os_enablement === "enabled") {
+        setNativeVaultAction({ outcome: "enabled", message: "macOS now reports AutoFill enabled for this provider." });
+      } else if (action?.outcome === "enabled") {
+        setNativeVaultAction({ outcome: "unavailable", message: "macOS accepted the request, but its current AutoFill state could not be confirmed. Try Refresh or open macOS settings." });
+      } else {
+        setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
+      }
+    } catch {
+      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+        setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not request AutoFill. Try Refresh or open macOS settings." });
+      }
+    } finally {
+      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) setNativeVaultActionPending(false);
+    }
+  }, [loadNativeVaultProvider, nativeVaultActionPending]);
 
   const openNativeVaultSettings = useCallback(async () => {
+    if (nativeVaultActionPending) return;
+    const request = ++nativeVaultActionRequest.current;
     setNativeVaultAction(null);
-    const action = await openNativeVaultProviderSettings();
-    setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
-  }, []);
+    setNativeVaultActionPending(true);
+    try {
+      const action = await openNativeVaultProviderSettings();
+      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+        setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
+      }
+    } catch {
+      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+        setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not open macOS AutoFill settings." });
+      }
+    } finally {
+      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) setNativeVaultActionPending(false);
+    }
+  }, [nativeVaultActionPending]);
 
   useEffect(() => {
     if (activeTab === "vault" && isTauri()) {
       void loadNativeVaultProvider();
     }
   }, [activeTab, loadNativeVaultProvider]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const refreshAfterSettings = () => {
+      if (activeTab === "vault") void loadNativeVaultProvider();
+    };
+    window.addEventListener("focus", refreshAfterSettings);
+    return () => window.removeEventListener("focus", refreshAfterSettings);
+  }, [activeTab, loadNativeVaultProvider]);
+
+  useEffect(() => () => {
+    nativeVaultMounted.current = false;
+    nativeVaultRequest.current += 1;
+    nativeVaultActionRequest.current += 1;
+  }, []);
 
   // Load hardware profile when the system tab becomes active.
   useEffect(() => {
@@ -3142,7 +3197,7 @@ export function Settings({
                     size="sm"
                     variant="outline"
                     className="h-7 px-2 text-xs shrink-0"
-                    disabled={nativeVaultChecking || !isTauri()}
+                    disabled={nativeVaultChecking || nativeVaultActionPending || !isTauri()}
                     onClick={() => void loadNativeVaultProvider()}
                   >
                     {nativeVaultChecking ? (
@@ -3163,17 +3218,23 @@ export function Settings({
                     Open AI Matrx Desktop on macOS to inspect the native provider.
                   </div>
                 ) : nativeVaultProvider === null ? (
+                  nativeVaultAction ? (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                      {nativeVaultAction.message}
+                    </div>
+                  ) : (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Checking the native provider…
                   </div>
+                  )
                 ) : (
                   <>
                     <div className="grid gap-2 text-xs sm:grid-cols-3">
                       <div className="rounded-lg border border-border px-3 py-2">
                         <p className="font-medium">Provider build</p>
                         <p className="mt-0.5 text-muted-foreground">
-                          {nativeVaultProvider.artifact === "built" ? "Built into this app" : "Not built into this app"}
+                          {nativeVaultProvider.artifact === "built" ? "Built into this app" : nativeVaultProvider.artifact === "not_supported" ? "Not supported on this platform" : "Not built into this app"}
                         </p>
                       </div>
                       <div className="rounded-lg border border-border px-3 py-2">
@@ -3184,15 +3245,21 @@ export function Settings({
                       </div>
                       <div className="rounded-lg border border-border px-3 py-2">
                         <p className="font-medium">Previous connection state</p>
-                        <p className="mt-0.5 text-muted-foreground">{nativeVaultProvider.enrollment === "configured" ? "Previously configured; rechecked when filling" : "No prior provider connection"}</p>
+                        <p className="mt-0.5 text-muted-foreground">
+                          {nativeVaultProvider.enrollment === "configured" ? "Previously configured; rechecked when filling" :
+                            nativeVaultProvider.enrollment === "invalidated" ? "Previous connection was invalidated" :
+                              nativeVaultProvider.enrollment === "state_corrupt" ? "Previous connection state is unreadable" :
+                                nativeVaultProvider.enrollment === "busy" ? "Previous connection state is busy" :
+                                  nativeVaultProvider.enrollment === "state_unavailable" ? "Previous connection state is unavailable" : "No previous provider connection"}
+                        </p>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {nativeVaultProvider.enable_action === "available" && nativeVaultProvider.os_enablement !== "enabled" && (
-                        <Button size="sm" onClick={() => void enableNativeVaultProvider()} disabled={nativeVaultChecking}>Enable AutoFill</Button>
+                        <Button size="sm" onClick={() => void enableNativeVaultProvider()} disabled={nativeVaultChecking || nativeVaultActionPending}>Enable AutoFill</Button>
                       )}
                       {nativeVaultProvider.settings_action === "available" && (
-                        <Button size="sm" variant="outline" onClick={() => void openNativeVaultSettings()} disabled={nativeVaultChecking}>Open macOS settings</Button>
+                        <Button size="sm" variant="outline" onClick={() => void openNativeVaultSettings()} disabled={nativeVaultChecking || nativeVaultActionPending}>Open macOS settings</Button>
                       )}
                     </div>
                     {nativeVaultAction && (

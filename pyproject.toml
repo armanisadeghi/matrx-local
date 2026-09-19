@@ -103,7 +103,7 @@ dependencies = [
     # this HTTP-only Vault client must resolve the verified package rather than
     # an older ORM that predates that server-side refusal boundary.
     # Do not lower this.
-    "matrx-orm>=3.1.141",
+    "matrx-orm>=3.1.168",
     "matrx-ai>=0.5.319",
     "matrx-connect>=0.1.25",
     "matrx-graph>=0.1.5",

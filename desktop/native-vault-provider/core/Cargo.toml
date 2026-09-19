@@ -29,6 +29,7 @@ static_assertions = "1"
 [features]
 default = []
 protocol-test-harness = []
+source-export-test-harness = []
 native-bridge = ["dep:uniffi"]
 
 [[bin]]
@@ -44,6 +45,7 @@ required-features = ["native-bridge"]
 [[bin]]
 name = "source-export-harness"
 path = "src/bin/source-export-harness.rs"
+required-features = ["source-export-test-harness"]
 
 [patch.crates-io]
 passkey-authenticator = { path = "vendor/passkey-authenticator" }

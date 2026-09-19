@@ -47,6 +47,7 @@ def paths(value, where=''):
 allowed_paths = [
     ('bin.path', 'src/bin/protocol-harness.rs'),
     ('bin.path', 'src/bin/native-vault-bindgen.rs'),
+    ('bin.path', 'src/bin/source-export-harness.rs'),
     ('patch.crates-io.passkey-authenticator.path', 'vendor/passkey-authenticator'),
 ]
 if sorted(paths(manifest)) != sorted(allowed_paths):

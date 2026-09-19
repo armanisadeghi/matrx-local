@@ -103,7 +103,7 @@ PY
     rm -rf "$copy/vendor/passkey-authenticator"
     cp -a "$work/upstream/." "$copy/vendor/passkey-authenticator/"
     set +e
-    cargo test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --test semantic_adapter > "$work/pristine.log" 2>&1
+    cargo +1.93.1 test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --test semantic_adapter > "$work/pristine.log" 2>&1
     status=$?
     set -e
     test "$status" -ne 0
@@ -122,11 +122,11 @@ PY
       exit 1
     fi
   else
-    cargo test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
+    cargo +1.93.1 test --locked --target-dir "$copy/target" --manifest-path "$copy/Cargo.toml" --features patched-adapter --test semantic_adapter
   fi
 done
 
 cd "$CORE"
-cargo test --locked --features protocol-test-harness
-cargo build --locked --features protocol-test-harness --bin protocol-harness
+cargo +1.93.1 test --locked --features protocol-test-harness
+cargo +1.93.1 build --locked --features protocol-test-harness --bin protocol-harness
 uv run --no-project --with 'fido2==2.2.1' python "$PROVENANCE/fido2_verifier.py" target/debug/protocol-harness

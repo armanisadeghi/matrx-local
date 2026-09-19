@@ -1,8 +1,11 @@
 import base64
+import copy
 import hashlib
 import json
 import subprocess
 import sys
+
+from cryptography.exceptions import InvalidSignature
 
 from fido2.cose import ES256
 from fido2.server import Fido2Server
@@ -44,4 +47,21 @@ except ValueError:
     pass
 else:
     raise AssertionError("RP-ID-hash tampering must be rejected by python-fido2")
+def assert_rejected(candidate, reason):
+    try:
+        server.authenticate_complete(authentication_state, [auth_data.credential_data], candidate)
+    except (ValueError, InvalidSignature):
+        return
+    raise AssertionError(reason)
+
+wrong_challenge = copy.deepcopy(assertion)
+wrong_challenge["response"]["clientDataJSON"] = b64(client_data("webauthn.get", b"wrong-challenge"))
+assert_rejected(wrong_challenge, "wrong challenge must be rejected")
+
+# Equivalent parsed fields with different bytes retain the expected challenge
+# but change clientDataHash: the original signature must no longer verify.
+wrong_hash = copy.deepcopy(assertion)
+original_client_data = client_data("webauthn.get", request.public_key.challenge)
+wrong_hash["response"]["clientDataJSON"] = b64(original_client_data + b" ")
+assert_rejected(wrong_hash, "client-data hash tampering must be rejected")
 print("PASS Swift UniFFI bridge registration/assertion accepted by python-fido2=2.2.1")

@@ -244,8 +244,8 @@ impl NativeOperation {
         }
         let existing_sources: Vec<Zeroizing<Vec<u8>>> =
             existing_sources.into_iter().map(Zeroizing::new).collect();
-        self.verify(&ceremony).await?;
         validate_registration(&input)?;
+        self.verify(&ceremony).await?;
         let refs: Vec<&[u8]> = existing_sources.iter().map(|source| &source[..]).collect();
         let request = make_request(&input)?;
         let prepared = prepare_registration_with_display_name(
@@ -290,8 +290,8 @@ impl NativeOperation {
     ) -> Result<NativeAssertionResult, BridgeError> {
         let max = Self::source_limit(max)?;
         let canonical_source = Zeroizing::new(canonical_source);
-        self.verify(&ceremony).await?;
         validate_assertion(&input)?;
+        self.verify(&ceremony).await?;
         let request = assertion_request(&input)?;
         let response = authenticate(&canonical_source, request, VerifiedUser, max)
             .await
@@ -574,6 +574,7 @@ mod tests {
                 .await,
             Err(BridgeError::InvalidRequest)
         ));
+        let checks = Arc::new(AtomicUsize::new(0));
         let mut request = registration();
         request.supported_algorithms = vec![-8];
         assert!(matches!(
@@ -584,12 +585,32 @@ mod tests {
                     4096,
                     Box::new(Accept {
                         source: Arc::new(std::sync::Mutex::new(None)),
-                        checks: Arc::new(AtomicUsize::new(0))
+                        checks: checks.clone()
                     })
                 )
                 .await,
             Err(BridgeError::InvalidRequest)
         ));
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            NativeOperation::new()
+                .authenticate(
+                    NativeAssertionInput {
+                        rp_id: "https://example.com".into(),
+                        client_data_hash: vec![9; 32],
+                        allowed_credential_ids: vec![],
+                    },
+                    vec![],
+                    4096,
+                    Box::new(Accept {
+                        source: Arc::new(std::sync::Mutex::new(None)),
+                        checks: checks.clone(),
+                    }),
+                )
+                .await,
+            Err(BridgeError::InvalidRequest)
+        ));
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
     }
     #[tokio::test]
     async fn bridge_cancellation_wins_after_persistence_dispatch_without_lost_wakeup() {

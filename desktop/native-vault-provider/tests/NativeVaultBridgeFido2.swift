@@ -94,6 +94,10 @@ struct NativeVaultBridgeFido2 {
         let emptyState = await emptyCeremony.displayStates()
         guard !emptyState.0 && emptyState.1 else { throw Unexpected.callback }
 
+        // Invalid requests must refuse before touching the verification callback.
+        try await expect(.InvalidRequest) { _ = try await NativeOperation().register(input: registrationInput(rpId: "INVALID/RP"), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .denied)); return }
+        try await expect(.InvalidRequest) { _ = try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId, rpId: "INVALID/RP"), canonicalSource: nilSource, maxSourceBytes: 65_536, ceremony: Ceremony(verification: .denied)); return }
+
         // Actual generated callbacks cover declared denied/failed/unexpected outcomes.
         try await expect(.VerificationDenied) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .denied)); return }
         try await expect(.OperationFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .failed)); return }

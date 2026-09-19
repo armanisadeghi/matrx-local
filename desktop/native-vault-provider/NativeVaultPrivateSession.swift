@@ -9,6 +9,27 @@ private let privateSessionGroup = "JH83UH9P4D.com.aimatrx.desktop.vault-provider
 
 typealias KeychainQuery = [String: Any]
 
+enum NativeVaultSessionFailure: LocalizedError {
+    case localSessionCorrupt
+    case localSessionCleanupFailed
+    case corruptCleanupBound(generation: String, subject: String?)
+    case refreshPending
+    case corruptBound(generation: String, subject: String?)
+    case providerDisconnected(generation: String, subject: String?)
+    case refreshRevoked(generation: String, subject: String?)
+    var terminalBinding: (generation: String, subject: String?)? {
+        switch self { case .localSessionCorrupt, .localSessionCleanupFailed, .refreshPending: return nil; case let .corruptBound(generation, subject), let .corruptCleanupBound(generation, subject), let .refreshRevoked(generation, subject), let .providerDisconnected(generation, subject): return (generation, subject) }
+    }
+    var errorDescription: String? {
+        switch self {
+        case .localSessionCorrupt, .corruptBound: return "Vault session is corrupt. Reconnect the provider."
+        case .localSessionCleanupFailed, .corruptCleanupBound: return "Vault session is corrupt and its private copy could not be cleared. Reconnect the provider to retry cleanup."
+        case .refreshPending: return "Vault connection refresh is still pending. Reconnect the provider."
+        case .refreshRevoked, .providerDisconnected: return "Vault connection needs reconnect."
+        }
+    }
+}
+
 /// Injectable boundary around Security.framework. Production calls the real
 /// Keychain; the corpus records queries and results without claiming a test
 /// Keychain group proves entitlement access.
@@ -81,7 +102,7 @@ final class NativeVaultPrivateSession {
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw unavailable() }
         guard let data = result as? Data else {
-            try delete(context: context)
+            try discardCorrupt(context: context)
             throw corrupt()
         }
         let session: PrivateSession
@@ -90,13 +111,17 @@ final class NativeVaultPrivateSession {
         } catch {
             // An authorized read is the only point allowed to remove malformed,
             // pending, or stale private bytes. Missing items never initialize.
-            try delete(context: context)
+            try discardCorrupt(context: context)
             throw corrupt()
         }
-        guard session.phase == "active", session.subject == state.provider_subject, session.generation == state.generation else {
-            try delete(context: context)
+        // A refresh token was consumed before its request left this provider.
+        // Its pending marker is ambiguous: preserve public suggestions and do
+        // not delete/replay it merely because a later callback observes it.
+        guard session.subject == state.provider_subject, session.generation == state.generation else {
+            try discardCorrupt(context: context)
             throw corrupt()
         }
+        if session.phase == "refresh_pending" { throw NativeVaultSessionFailure.refreshPending }
         return session
     }
 
@@ -149,6 +174,11 @@ final class NativeVaultPrivateSession {
         }
     }
 
+    private func discardCorrupt(context: LAContext) throws {
+        do { try delete(context: context) }
+        catch { throw NativeVaultSessionFailure.localSessionCleanupFailed }
+    }
+
     private func baseQuery() -> KeychainQuery {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -166,6 +196,6 @@ final class NativeVaultPrivateSession {
     private func deleteQuery(context: LAContext) -> KeychainQuery {
         var query = baseQuery(); query[kSecUseAuthenticationContext as String] = context; return query
     }
-    private func corrupt() -> Error { EnrollmentError.message("Vault session is corrupt. Reconnect the provider.") }
+    private func corrupt() -> Error { NativeVaultSessionFailure.localSessionCorrupt }
     private func unavailable() -> Error { EnrollmentError.message("Vault session is unavailable. Reconnect the provider.") }
 }

@@ -72,7 +72,10 @@ struct NativeVaultPrivateSessionCorpus {
     }
 
     static func pendingAndStaleRefuseAndDeleteExactItem() throws {
-        for data in [try envelope(phase: "refresh_pending"), try envelope(generation: otherGeneration), Data("{bad".utf8)] {
+        let (pending, pendingRecorder) = fake(copy: { output in output?.pointee = try! envelope(phase: "refresh_pending") as CFData; return errSecSuccess })
+        do { _ = try pending.readActive(context: context(), matching: state()); throw Failure.bad }
+        catch let error as NativeVaultSessionFailure { guard case .refreshPending = error, pendingRecorder.deleteQueries.isEmpty else { throw Failure.bad } }
+        for data in [try envelope(generation: otherGeneration), Data("{bad".utf8)] {
             let (adapter, recorder) = fake(copy: { output in output?.pointee = data as CFData; return errSecSuccess })
             do { _ = try adapter.readActive(context: context(), matching: state()); throw Failure.bad }
             catch let error as LocalizedError {

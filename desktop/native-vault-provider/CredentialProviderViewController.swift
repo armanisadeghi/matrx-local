@@ -106,7 +106,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var activeOperation: NativeVaultEnrollmentOperation?
     private var startingConnect = false
     private let connectionAdmission = NativeVaultCurrentConnectionAdmission()
-    let sessionAccess = NativeVaultSessionAccess()
+    var sessionAccess = NativeVaultSessionAccess()
     var nativePasswordTransport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()
     let nativePasswordCoordinator = NativePasswordOperationCoordinator()
     // Test seam for the actual provider callbacks. Production leaves these nil
@@ -120,18 +120,27 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     var nativePasswordMatchChoice: (([NativePasswordMatch]) -> Int?)?
     var nativePasswordCancelSink: ((NSError) -> Void)?
     var nativePasswordCompleteSink: (((String, String), @escaping () -> Void) -> Void)?
+    var nativePasswordSelectedBinding: (item: String, organization: String, service: ASCredentialServiceIdentifier, digest: String)?
+    // Narrow test boundary for actual selected-credential callbacks. Production
+    // always parses the signed record under the ProviderStore lock.
+    var nativeIdentityBindingOverride: ((String) -> NativeVaultIdentityBinding?)?
+    let nativeIdentitySynchronizer = NativeVaultIdentitySynchronizer()
     lazy var nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
         sessionAccess: sessionAccess,
         key: { [weak self] in self?.nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) },
         cancel: { [weak self] message in self?.cancelPasskey(message) },
         completeRegistration: { [weak self] credential in self?.extensionContext.completeRegistrationRequest(using: credential, completionHandler: nil) },
-        completeAssertion: { [weak self] credential in self?.extensionContext.completeAssertionRequest(using: credential, completionHandler: nil) }
+        completeAssertion: { [weak self] credential in self?.extensionContext.completeAssertionRequest(using: credential, completionHandler: nil) },
+        isExternalCurrent: { [weak self] in self?.nativeRequest.isCurrent ?? false },
+        requestLifetime: { [weak self] in self?.nativeRequest ?? NativeVaultRequestLifetime() }
     )
-    private(set) var nativeRequest = NativeVaultRequestLifetime()
+    fileprivate(set) var nativeRequest = NativeVaultRequestLifetime()
     func replaceNativeRequest() {
         nativeRequest.cancel()
         nativeRequest = NativeVaultRequestLifetime()
         nativePasskeyCoordinator.cancelCurrent()
+        nativeIdentitySynchronizer.cancel()
+        nativePasswordSelectedBinding = nil
         if let old = nativePasswordCoordinator.active { _ = nativePasswordCoordinator.cancel(old) }
         nativePasswordTransport.cancel()
         sessionAccess.cancel()
@@ -169,7 +178,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     override func prepareInterfaceToProvideCredential(for credentialRequest: any ASCredentialRequest) {
         replaceNativeRequest()
-        if let request = credentialRequest as? ASPasskeyCredentialRequest { nativePasskeyCoordinator.assert(request) }
+        if let request = credentialRequest as? ASPasskeyCredentialRequest { beginSelectedPasskey(request) }
+        else if let request = credentialRequest as? ASPasswordCredentialRequest, let identity = request.credentialIdentity as? ASPasswordCredentialIdentity { beginSelectedPassword(identity) }
         else { super.prepareInterfaceToProvideCredential(for: credentialRequest) }
     }
 
@@ -200,8 +210,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let title = NSTextField(labelWithString: "Connect AI Matrx Vault"); title.font = .systemFont(ofSize: 18, weight: .semibold)
         let text = NSTextField(wrappingLabelWithString: "Connect your AI Matrx account to configure this credential provider. This does not enable credential filling yet."); text.textColor = .secondaryLabelColor
         let status = NSTextField(wrappingLabelWithString: "Checking the current provider connection…"); status.textColor = .secondaryLabelColor
-        let connect = NSButton(title: "Connect account", target: self, action: #selector(begin)); let retry = NSButton(title: "Retry", target: self, action: #selector(retryCurrentConnection)); let disconnect = NSButton(title: "Disconnect", target: self, action: #selector(disconnect)); let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        let stack = NSStackView(views: [title, text, status, connect, retry, disconnect, cancelButton]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
+        let connect = NSButton(title: "Connect account", target: self, action: #selector(begin)); let scope = NSButton(title: "Show suggestions from…", target: self, action: #selector(selectSuggestionScope)); let retry = NSButton(title: "Refresh suggestions", target: self, action: #selector(refreshSuggestions)); let disconnect = NSButton(title: "Disconnect", target: self, action: #selector(disconnect)); let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        let stack = NSStackView(views: [title, text, status, connect, scope, retry, disconnect, cancelButton]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView(); content.addSubview(stack); window.contentView = content
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.centerYAnchor.constraint(equalTo: content.centerYAnchor)])
         self.window = window; self.connectionStatus = status; self.connectButton = connect; self.retryButton = retry; window.makeKeyAndOrderFront(nil)
@@ -308,11 +318,11 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 let committed = try store.locked { old in
                     try operation.commitGuard.commit {
                         guard old.generation == operation.generation else { throw EnrollmentError.message("A host account change cancelled Vault connection. Start again.") }
-                        let next = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
+                        let next = PublicState(version: 2, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
                         let expiry = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000
                         try store.write(next)
                         try NativeVaultPrivateSession().save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: next.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expiry), context: context)
-                        try store.write(PublicState(version: 1, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub))
+                        try store.write(PublicState(version: 2, generation: next.generation, host_subject: next.host_subject, provider_subject: identity.sub))
                     }
                 }
                 DispatchQueue.main.async {
@@ -348,11 +358,11 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             guard allowed else { Task { @MainActor in guard lifetime.isCurrent else { return }; self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
             Task { @MainActor [weak self] in
                 guard let self, lifetime.isCurrent else { return }
-                self.sessionAccess.acquire(key: key, context: context) { result in
+                self.sessionAccess.acquire(key: key, context: context, lifetime: lifetime) { result in
                     Task { @MainActor in
                     guard lifetime.isCurrent else { return }
                     switch result {
-                    case let .success(grant): self.setConnectionStatus("Connected account: \(grant.subject)")
+                    case let .success(grant): self.nativeIdentitySynchronizer.migrateV1(subject: grant.subject, generation: grant.generation) { migration in switch migration { case .success: self.showSuggestionStatus(subject: grant.subject); case .failure: self.setConnectionStatus("Vault suggestions need refresh.") } }
                     case let .failure(error): self.setConnectionFailure(error)
                     }
                     self.finishConnectionOperation()
@@ -382,6 +392,84 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         connectButton?.isEnabled = !busy
         retryButton?.isEnabled = !busy
     }
+    @objc private func selectSuggestionScope() {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else { setConnectionStatus("This build has no public Vault configuration. Install an updated AI Matrx build."); return }
+        let context: LAContext; do { context = try NativeVaultPrivateSession().authenticatedContext(reason: "Choose AI Matrx Vault suggestions") } catch { setConnectionStatus("Vault protection is unavailable on this Mac."); return }
+        ownNativeContext(context); let lifetime = nativeRequest
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Choose AI Matrx Vault suggestions") { [weak self] allowed, _ in guard allowed, lifetime.isCurrent else { return }; self?.sessionAccess.acquire(key: key, context: context, lifetime: lifetime) { result in Task { @MainActor in
+            guard let self, lifetime.isCurrent, case let .success(grant) = result else { self?.setConnectionStatus("Vault connection needs reconnect."); return }
+            // A legacy public-state envelope is migrated before its scope can
+            // be selected, so no picker result can be committed to v1 state.
+            self.nativeIdentitySynchronizer.migrateV1(subject: grant.subject, generation: grant.generation) { migration in
+                guard lifetime.isCurrent else { return }
+                guard case .success = migration else { self.setConnectionStatus("Vault suggestions need refresh."); return }
+                self.presentSuggestionScopePicker(grant: grant, lifetime: lifetime)
+            }
+        } } }
+    }
+
+    func presentSuggestionScopePicker(grant: NativeVaultSessionAccess.Grant, lifetime: NativeVaultRequestLifetime) {
+        let access = sessionAccess
+        var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/auth/organizations")); request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        nativePasswordTransport.send(request) { [weak self] raw in
+            access.reconcileResponse(raw, grant: grant, lifetime: lifetime) { response in Task { @MainActor in
+            guard let self, lifetime.isCurrent else { return }
+            do {
+                let (data, http) = try response.get()
+                guard http.statusCode == 200 else { throw EnrollmentError.message("Vault organizations are unavailable. Try again.") }
+                let values = try NativePasswordCodec.organizations(data, subject: grant.subject).organizations
+                guard !values.isEmpty else { throw EnrollmentError.message("Your account has no available organization.") }
+                let alert = NSAlert(); alert.messageText = "Show suggestions from"; alert.informativeText = "Device suggestions expose websites and usernames to Apple's local suggestion service."
+                let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 340, height: 28)); values.forEach { picker.addItem(withTitle: $0.name) }
+                alert.accessoryView = picker; alert.addButton(withTitle: "Use organization"); alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                let selected = values[picker.indexOfSelectedItem]
+                self.setConnectionStatus("Refreshing suggestions…")
+                self.nativeIdentitySynchronizer.refresh(accessToken: grant.accessToken, subject: grant.subject, generation: grant.generation, organization: selected.id, send: self.nativePasswordTransport.send, isCurrent: { lifetime.isCurrent }) { result in
+                    switch result {
+                    case let .success(state): self.setConnectionStatus("Suggestions updated: \(state.suggestions.count) installed, \(state.suggestions.unsupported_count) unavailable.")
+                    case .failure: self.setConnectionStatus("Suggestion scope could not be changed. Try again.")
+                    }
+                }
+            } catch { self.setConnectionStatus("Vault organizations are unavailable. Try again.") }
+        } }
+        }
+    }
+
+    /// A credential-list callback never waits for refresh. It opportunistically
+    /// updates the selected scope only when a current v2 scope already exists.
+    func refreshSuggestionsForCredentialList(grant: NativeVaultSessionAccess.Grant, lifetime: NativeVaultRequestLifetime) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let organization = try? ProviderStore(mode: .providerAccess).locked { state -> String? in
+                guard lifetime.isCurrent, state.version == 2, state.generation == grant.generation, state.provider_subject == grant.subject else { return nil }
+                return state.suggestions.organization_id
+            }
+            DispatchQueue.main.async {
+                guard let self, lifetime.isCurrent, let organization else { return }
+                self.nativeIdentitySynchronizer.refresh(accessToken: grant.accessToken, subject: grant.subject, generation: grant.generation, organization: organization, send: self.nativePasswordTransport.send, isCurrent: { lifetime.isCurrent }) { _ in }
+            }
+        }
+    }
+
+    @objc private func refreshSuggestions() {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String, key.validToken else { setConnectionStatus("This build has no public Vault configuration. Install an updated AI Matrx build."); return }
+        let context: LAContext
+        do { context = try NativeVaultPrivateSession().authenticatedContext(reason: "Refresh AI Matrx Vault suggestions") } catch { setConnectionStatus("Vault protection is unavailable on this Mac."); return }
+        ownNativeContext(context); let lifetime = nativeRequest
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Refresh AI Matrx Vault suggestions") { [weak self] allowed, _ in
+            guard allowed, lifetime.isCurrent else { return }
+            self?.sessionAccess.acquire(key: key, context: context, lifetime: lifetime) { result in Task { @MainActor in
+                guard let self, lifetime.isCurrent else { return }; guard case let .success(grant) = result else { self.setConnectionStatus("Vault connection needs reconnect."); return }
+                let choose: (String?) = (try? ProviderStore(mode: .providerAccess).locked { $0.suggestions.organization_id }) ?? nil
+                guard let organization = choose else { self.setConnectionStatus("Choose an organization before refreshing suggestions."); return }
+                self.setConnectionStatus("Refreshing suggestions…")
+                self.nativeIdentitySynchronizer.refresh(accessToken: grant.accessToken, subject: grant.subject, generation: grant.generation, organization: organization, send: self.nativePasswordTransport.send, isCurrent: { lifetime.isCurrent }) { result in
+                    switch result { case let .success(state): self.setConnectionStatus("Suggestions updated: \(state.suggestions.count) installed, \(state.suggestions.unsupported_count) unavailable."); case .failure: self.setConnectionStatus("Suggestions could not be refreshed. Try again.") }
+                }
+            } }
+        }
+    }
+
     @objc private func retryCurrentConnection() {
         guard activeOperation == nil, !startingConnect else {
             setConnectionStatus("An account connection is already in progress.")
@@ -396,6 +484,19 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private func setConnectionFailure(_ error: Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? "Vault connection is temporarily unavailable. Try again."
         setConnectionStatus(message)
+    }
+    private func showSuggestionStatus(subject: String) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let state = try? ProviderStore(mode: .providerAccess).locked { $0 }
+            DispatchQueue.main.async { guard let self, state?.provider_subject == subject else { return }
+                guard let suggestions = state?.suggestions, state?.version == 2 else { self.setConnectionStatus("Connected account: \(subject). Suggestions need refresh."); return }
+                let lastRefresh: String
+                if let refreshedAt = suggestions.refreshed_at_ms, refreshedAt > 0 {
+                    lastRefresh = DateFormatter.localizedString(from: Date(timeIntervalSince1970: TimeInterval(refreshedAt) / 1000), dateStyle: .short, timeStyle: .short)
+                } else { lastRefresh = "not yet refreshed" }
+                self.setConnectionStatus("Connected account: \(subject). Suggestions: \(suggestions.status), \(suggestions.count) installed, \(suggestions.unsupported_count) unavailable. Last refreshed: \(lastRefresh).")
+            }
+        }
     }
     private func showError(_ error: Error) {
         let lifetime = nativeRequest
@@ -419,7 +520,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                     try store.locked { old in
                         // Public invalidation fences stale bytes before the exact,
                         // authenticated Keychain deletion; no network logout here.
-                        let cleared = PublicState(version: 1, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
+                        let cleared = PublicState(version: 2, generation: UUID().canonical, host_subject: old.host_subject, provider_subject: nil)
                         try store.write(cleared)
                         do { try privateSession.delete(context: context) }
                         catch { deletionFailure = error }
@@ -432,6 +533,15 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             }
         }
     }
+    private func beginSelectedPasskey(_ request: ASPasskeyCredentialRequest) {
+        let lifetime = nativeRequest; let record = (request.credentialIdentity as? ASPasskeyCredentialIdentity)?.recordIdentifier ?? ""
+        let bindingOverride = nativeIdentityBindingOverride
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let binding = bindingOverride?(record) ?? ((try? ProviderStore(mode: .providerAccess).locked { NativeVaultIdentityRecord.parse(record, state: $0) }) ?? nil)
+            DispatchQueue.main.async { guard let self, lifetime.isCurrent, let binding, binding.kind == .passkey, let passkey = binding.passkey else { self?.cancelPasskey("The selected passkey is no longer available."); return }; self.nativePasskeyCoordinator.assert(request, expectedBinding: (binding.item, passkey)) }
+        }
+    }
+
     @objc private func cancel() {
         let result = finishOperation()
         replaceNativeRequest()

@@ -106,20 +106,35 @@ mod platform {
         }
     }
 
+    pub(super) struct CompletionOnce<T> {
+        sender: Mutex<Option<oneshot::Sender<T>>>,
+    }
+    impl<T> CompletionOnce<T> {
+        pub(super) fn new(sender: oneshot::Sender<T>) -> Self {
+            Self { sender: Mutex::new(Some(sender)) }
+        }
+        pub(super) fn complete(&self, value: T) {
+            if let Some(sender) = self.sender.lock().ok().and_then(|mut guard| guard.take()) {
+                // A command may have timed out or its IPC caller may have left.
+                let _ = sender.send(value);
+            }
+        }
+    }
+    pub(super) async fn await_completion<T>(receiver: oneshot::Receiver<T>, wait: Duration) -> Option<T> {
+        tokio::time::timeout(wait, receiver).await.ok().and_then(Result::ok)
+    }
+
     pub(super) struct EnableCompletion {
         operation: Arc<Mutex<EnableOperation>>,
-        sender: Mutex<Option<oneshot::Sender<bool>>>,
+        result: CompletionOnce<bool>,
     }
     impl EnableCompletion {
         pub(super) fn new(operation: Arc<Mutex<EnableOperation>>, sender: oneshot::Sender<bool>) -> Self {
-            Self { operation, sender: Mutex::new(Some(sender)) }
+            Self { operation, result: CompletionOnce::new(sender) }
         }
         pub(super) fn complete(&self, enabled: bool) {
             self.operation.lock().expect("enable operation lock").complete();
-            if let Some(sender) = self.sender.lock().ok().and_then(|mut guard| guard.take()) {
-                // The receiver is allowed to be gone after a command timeout.
-                let _ = sender.send(enabled);
-            }
+            self.result.complete(enabled);
         }
     }
     static ENABLE_OPERATION: OnceLock<Arc<Mutex<EnableOperation>>> = OnceLock::new();
@@ -278,19 +293,13 @@ mod platform {
             return Err("not_supported");
         }
         let (tx, rx) = oneshot::channel::<bool>();
-        let completion = Arc::new(Mutex::new(Some(tx)));
+        let completion = Arc::new(CompletionOnce::new(tx));
         app.run_on_main_thread(move || {
             let store = unsafe { ASCredentialIdentityStore::sharedStore() };
             let callback_completion = completion.clone();
             let callback = RcBlock::new(
                 move |state: std::ptr::NonNull<ASCredentialIdentityStoreState>| {
-                    if let Some(tx) = callback_completion
-                        .lock()
-                        .ok()
-                        .and_then(|mut guard| guard.take())
-                    {
-                        let _ = tx.send(unsafe { state.as_ref().isEnabled() });
-                    }
+                    callback_completion.complete(unsafe { state.as_ref().isEnabled() });
                 },
             );
             unsafe {
@@ -298,10 +307,7 @@ mod platform {
             }
         })
         .map_err(|_| "unavailable")?;
-        match tokio::time::timeout(READ_WAIT, rx).await {
-            Ok(Ok(enabled)) => Ok(enabled),
-            _ => Err("unavailable"),
-        }
+        await_completion(rx, READ_WAIT).await.ok_or("unavailable")
     }
 
     pub async fn status(app: tauri::AppHandle) -> Status {
@@ -339,18 +345,12 @@ mod platform {
             };
         }
         let (tx, rx) = oneshot::channel::<bool>();
-        let completion = Arc::new(Mutex::new(Some(tx)));
+        let completion = Arc::new(CompletionOnce::new(tx));
         if app
             .run_on_main_thread(move || {
                 let callback_completion = completion.clone();
                 let callback = RcBlock::new(move |error: *mut NSError| {
-                    if let Some(tx) = callback_completion
-                        .lock()
-                        .ok()
-                        .and_then(|mut guard| guard.take())
-                    {
-                        let _ = tx.send(error.is_null());
-                    }
+                    callback_completion.complete(error.is_null());
                 });
                 unsafe {
                     ASSettingsHelper::openCredentialProviderAppSettingsWithCompletionHandler(Some(
@@ -365,10 +365,10 @@ mod platform {
                 message: "AI Matrx Desktop could not reach macOS’s main thread.".into(),
             };
         }
-        match tokio::time::timeout(READ_WAIT, rx).await {
-            Ok(Ok(true)) => ActionResult { outcome: "opened", message: "macOS AutoFill settings opened. Opening Settings does not confirm that AutoFill is enabled.".into() },
-            Ok(Ok(false)) => ActionResult { outcome: "failed", message: "macOS could not open AutoFill settings.".into() },
-            _ => ActionResult { outcome: "pending", message: "macOS has not confirmed Settings navigation yet.".into() },
+        match await_completion(rx, READ_WAIT).await {
+            Some(true) => ActionResult { outcome: "opened", message: "macOS AutoFill settings opened. Opening Settings does not confirm that AutoFill is enabled.".into() },
+            Some(false) => ActionResult { outcome: "failed", message: "macOS could not open AutoFill settings.".into() },
+            None => ActionResult { outcome: "pending", message: "macOS has not confirmed Settings navigation yet.".into() },
         }
     }
 
@@ -415,17 +415,17 @@ mod platform {
                 message: "AI Matrx Desktop could not reach macOS’s main thread.".into(),
             };
         }
-        match tokio::time::timeout(PROMPT_WAIT, rx).await {
-            Ok(Ok(true)) => ActionResult { outcome: "enabled", message: "macOS enabled AutoFill. Refreshing status will confirm the current state.".into() },
-            Ok(Ok(false)) => ActionResult { outcome: "disabled", message: "AutoFill is still off in macOS.".into() },
-            _ => ActionResult { outcome: "pending", message: "macOS has not completed the AutoFill request. You can open Settings while it is pending.".into() },
+        match await_completion(rx, PROMPT_WAIT).await {
+            Some(true) => ActionResult { outcome: "enabled", message: "macOS enabled AutoFill. Refreshing status will confirm the current state.".into() },
+            Some(false) => ActionResult { outcome: "disabled", message: "AutoFill is still off in macOS.".into() },
+            None => ActionResult { outcome: "pending", message: "macOS has not completed the AutoFill request. You can open Settings while it is pending.".into() },
         }
     }
 }
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::platform::{EnableCompletion, EnableOperation, ENABLE_COOLDOWN};
+    use super::platform::{await_completion, CompletionOnce, EnableCompletion, EnableOperation, ENABLE_COOLDOWN};
     use std::{sync::{Arc, Mutex}, time::{Duration, Instant}};
     use tokio::sync::oneshot;
 
@@ -499,6 +499,42 @@ mod tests {
         drop(receiver); // The command caller went away before macOS replied.
         EnableCompletion::new(Arc::clone(&operation), sender).complete(true);
         assert_eq!(operation.lock().unwrap().claim(now + ENABLE_COOLDOWN), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn enable_timeout_then_late_callback_uses_the_production_receiver_seam() {
+        let now = Instant::now();
+        let operation = Arc::new(Mutex::new(EnableOperation::default()));
+        operation.lock().unwrap().claim(now).unwrap();
+        operation.lock().unwrap().invoked(now);
+        let (sender, receiver) = oneshot::channel();
+        let callback = EnableCompletion::new(Arc::clone(&operation), sender);
+        assert_eq!(await_completion(receiver, Duration::ZERO).await, None);
+        callback.complete(true); // macOS replies after the command has returned pending.
+        assert_eq!(operation.lock().unwrap().claim(now + ENABLE_COOLDOWN), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn identity_and_settings_callbacks_are_once_only_after_timeout_or_drop() {
+        // Identity-store reads and Settings navigation both use CompletionOnce in
+        // production, so this checks their shared late/double-callback boundary.
+        let (sender, receiver) = oneshot::channel();
+        let callback = CompletionOnce::new(sender);
+        assert_eq!(await_completion(receiver, Duration::ZERO).await, None);
+        callback.complete(true); // late identity-store callback is harmless
+        callback.complete(false); // duplicate native callback is ignored
+
+        let (sender, receiver) = oneshot::channel();
+        let callback = CompletionOnce::new(sender);
+        callback.complete(true);
+        callback.complete(false);
+        assert_eq!(await_completion(receiver, Duration::from_secs(1)).await, Some(true));
+
+        let (sender, receiver) = oneshot::channel::<bool>();
+        let callback = CompletionOnce::new(sender);
+        drop(receiver); // Settings caller disconnected before its callback.
+        callback.complete(true);
+        callback.complete(false);
     }
 }
 

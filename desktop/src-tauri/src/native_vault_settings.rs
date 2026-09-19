@@ -84,6 +84,9 @@ mod platform {
             {
                 return Err("cooldown");
             }
+            // A completed prior request may leave an old invocation time behind.
+            // This claim is only scheduled; it becomes invoked on the main thread.
+            self.invoked_at = None;
             self.pending = true;
             Ok(())
         }
@@ -461,6 +464,19 @@ mod tests {
         assert_eq!(state.claim(now), Ok(()));
         state.dispatch_failed();
         assert_eq!(state.claim(now), Ok(()));
+    }
+
+    #[test]
+    fn a_new_claim_after_cooldown_can_be_released_if_queueing_fails() {
+        let now = Instant::now();
+        let mut state = EnableOperation::default();
+        state.claim(now).unwrap();
+        state.invoked(now);
+        state.complete();
+        let later = now + ENABLE_COOLDOWN;
+        state.claim(later).unwrap();
+        state.dispatch_failed();
+        assert_eq!(state.claim(later), Ok(()));
     }
 
     #[test]

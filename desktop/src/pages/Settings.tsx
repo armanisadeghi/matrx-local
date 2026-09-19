@@ -409,9 +409,11 @@ export function Settings({
     useState<NativeVaultProviderStatus | null>(null);
   const [nativeVaultChecking, setNativeVaultChecking] = useState(false);
   const [nativeVaultActionPending, setNativeVaultActionPending] = useState(false);
+  const [nativeVaultSettingsPending, setNativeVaultSettingsPending] = useState(false);
   const [nativeVaultAction, setNativeVaultAction] = useState<NativeVaultProviderAction | null>(null);
   const nativeVaultRequest = useRef(0);
   const nativeVaultActionRequest = useRef(0);
+  const nativeVaultSettingsRequest = useRef(0);
   const nativeVaultMounted = useRef(true);
 
   // Hardware profile state
@@ -544,23 +546,23 @@ export function Settings({
   }, [loadNativeVaultProvider, nativeVaultActionPending]);
 
   const openNativeVaultSettings = useCallback(async () => {
-    if (nativeVaultActionPending) return;
-    const request = ++nativeVaultActionRequest.current;
+    if (nativeVaultSettingsPending) return;
+    const request = ++nativeVaultSettingsRequest.current;
     setNativeVaultAction(null);
-    setNativeVaultActionPending(true);
+    setNativeVaultSettingsPending(true);
     try {
       const action = await openNativeVaultProviderSettings();
-      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) {
         setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
       }
     } catch {
-      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) {
+      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) {
         setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not open macOS AutoFill settings." });
       }
     } finally {
-      if (nativeVaultMounted.current && request === nativeVaultActionRequest.current) setNativeVaultActionPending(false);
+      if (nativeVaultMounted.current && request === nativeVaultSettingsRequest.current) setNativeVaultSettingsPending(false);
     }
-  }, [nativeVaultActionPending]);
+  }, [nativeVaultSettingsPending]);
 
   useEffect(() => {
     if (activeTab === "vault" && isTauri()) {
@@ -581,6 +583,7 @@ export function Settings({
     nativeVaultMounted.current = false;
     nativeVaultRequest.current += 1;
     nativeVaultActionRequest.current += 1;
+    nativeVaultSettingsRequest.current += 1;
   }, []);
 
   // Load hardware profile when the system tab becomes active.
@@ -3197,7 +3200,7 @@ export function Settings({
                     size="sm"
                     variant="outline"
                     className="h-7 px-2 text-xs shrink-0"
-                    disabled={nativeVaultChecking || nativeVaultActionPending || !isTauri()}
+                    disabled={nativeVaultChecking || !isTauri()}
                     onClick={() => void loadNativeVaultProvider()}
                   >
                     {nativeVaultChecking ? (
@@ -3259,7 +3262,7 @@ export function Settings({
                         <Button size="sm" onClick={() => void enableNativeVaultProvider()} disabled={nativeVaultChecking || nativeVaultActionPending}>Enable AutoFill</Button>
                       )}
                       {nativeVaultProvider.settings_action === "available" && (
-                        <Button size="sm" variant="outline" onClick={() => void openNativeVaultSettings()} disabled={nativeVaultChecking || nativeVaultActionPending}>Open macOS settings</Button>
+                        <Button size="sm" variant="outline" onClick={() => void openNativeVaultSettings()} disabled={nativeVaultChecking || nativeVaultSettingsPending}>Open macOS settings</Button>
                       )}
                     </div>
                     {nativeVaultAction && (

@@ -103,6 +103,19 @@ async def test_server_callback_uses_actual_closed_contract_and_streams_limit(mon
     with pytest.raises(transport.TransportRefusal):
         await transport._verify(fresh, "00000000-0000-0000-0000-000000000002", registration, {"grant": "opaque", "operation": "admit"})
 
+    with pytest.raises(transport.TransportRefusal):
+        transport._strict_response_json(b'{"status":"accepted","status":"accepted"}')
+    with pytest.raises(transport.TransportRefusal):
+        transport._strict_response_json(b'{"value":NaN}')
+    with pytest.raises(transport.TransportRefusal):
+        transport._strict_response_json(b'{"value":"\\ud800"}')
+
+    payload["expires_at_ms"] = 4_000_000_000_000
+    Response.headers = {"cache-control": "no-store", "content-encoding": "gzip"}
+    with pytest.raises(transport.TransportRefusal):
+        await transport._verify(fresh, "00000000-0000-0000-0000-000000000002", registration, {"grant": "opaque", "operation": "admit"})
+    Response.headers = {"cache-control": "no-store"}
+
     class TooLarge(Response):
         async def aiter_bytes(self):
             yield b"x" * (4 * 1024 + 1)
@@ -156,7 +169,7 @@ async def test_execute_rechecks_context_and_device_after_server_await(monkeypatc
     monkeypatch.setattr(transport, "get_instance_manager", lambda: Instance())
     monkeypatch.setattr(transport, "ensure_context_subscription", lambda: None)
     monkeypatch.setattr(transport, "current_local_browser_registration", lambda **_kw: object())
-    async def verify(*_args): return {"status": "acknowledged"}
+    async def verify(*_args): return {"status": "accepted", "jti": "00000000-0000-0000-0000-000000000001", "expires_at_ms": 4_000_000_000_000, "controller_revision": 1}
     monkeypatch.setattr(transport, "_verify", verify)
     with pytest.raises(transport.TransportRefusal) as refused:
         await transport.execute_lifecycle({"grant": "x", "operation": "discover"})
@@ -207,6 +220,68 @@ async def test_replay_joins_exact_bytes_and_identity_but_refuses_conflicts():
     assert conflicting_bytes.value.reason == "retry_conflict"
     with pytest.raises(transport.TransportRefusal):
         await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b'{"grant":"a"}', identity=transport._ReplayIdentity(("u", "s"), "boot", 2, "org", "device", "gen", "conn", 1), expires_at_ms=4_000_000_000_000)
+
+
+@pytest.mark.anyio
+async def test_cancelled_creator_settles_duplicate_waiter(monkeypatch):
+    table = transport._ReplayTable()
+    identity = transport._ReplayIdentity(("u", "s"), "boot", 1, "org", "device", "gen", "conn", 1)
+    entry, _ = await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b"bytes", identity=identity, expires_at_ms=4_000_000_000_000)
+    monkeypatch.setattr(transport, "_assert_current", lambda *_: asyncio.sleep(0))
+    duplicate = asyncio.create_task(transport._join_replay(entry, FreshContext(BrowserContext("boot", 1, "org"), ("u", "s"), "jwt"), "device", object()))
+    await asyncio.sleep(0)
+    transport._settle_failure(entry)
+    with pytest.raises(transport.TransportRefusal):
+        await duplicate
+
+
+@pytest.mark.anyio
+async def test_expiry_before_send_refuses_without_dispatch(monkeypatch):
+    sent = False
+    async def send(*_):
+        nonlocal sent
+        sent = True
+        return True
+    monkeypatch.setattr(transport, "send_local_browser_execute", send)
+    entry = transport._ReplayEntry(b"digest", transport._ReplayIdentity(("u", "s"), "b", 1, "o", "d", "g", "c", 1), 1, asyncio.get_running_loop().create_future())
+    with pytest.raises(transport.TransportRefusal):
+        await transport._dispatch(object(), {"grant": "opaque", "operation": "cleanup"}, entry)
+    assert not sent
+
+
+@pytest.mark.anyio
+async def test_revocation_after_receipt_refuses_before_return(monkeypatch):
+    fresh = FreshContext(BrowserContext("boot", 1, "org"), ("user", "session"), "jwt")
+    class Context:
+        async def refresh(self): return None
+    class Instance:
+        async def registered_device_identity(self): return None
+    monkeypatch.setattr(transport, "get_local_browser_context", lambda: Context())
+    monkeypatch.setattr(transport, "get_instance_manager", lambda: Instance())
+    with pytest.raises(transport.TransportRefusal) as refused:
+        await transport._assert_current(fresh, "device", object(), 4_000_000_000_000)
+    assert refused.value.reason == "binding_changed"
+
+
+@pytest.mark.anyio
+async def test_identity_readiness_notifies_existing_socket_without_polling(monkeypatch):
+    fresh = FreshContext(BrowserContext("boot", 4, "org"), ("user", "session"), "jwt")
+    class Context:
+        async def refresh(self): return fresh
+    class Registry:
+        session_ids = ["ready-socket"]
+    delivered = []
+    async def send(session_id, frame):
+        delivered.append((session_id, frame))
+        return True
+    identity = type("Device", (), {"app_instance_id": "device"})()
+    monkeypatch.setattr(transport, "get_local_browser_context", lambda: Context())
+    monkeypatch.setattr(transport, "get_registry", lambda: Registry())
+    monkeypatch.setattr(transport, "send_to_extension_session", send)
+    monkeypatch.setattr(transport, "_observed_device_identity", None)
+    transport._on_device_identity_change(identity)
+    await asyncio.sleep(0)
+    assert delivered == [("ready-socket", {"type": "local_browser.register_required", "version": 1, "engine_boot_id": "boot", "revision": 4})]
 
 
 @pytest.mark.anyio

@@ -1,6 +1,7 @@
 //! Provider-private passkey operations and registration persistence gate.
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ciborium::value::Value;
 use coset::{CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate, iana};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::EncodePrivateKey;
@@ -19,7 +20,7 @@ use passkey_types::{
 use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "native-bridge")]
 mod native_bridge;
@@ -73,7 +74,7 @@ struct SourceV1 {
     username: Option<String>,
     #[serde(deserialize_with = "required_option")]
     display_name: Option<String>,
-    private_cose_key: String,
+    private_cose_key: Zeroizing<String>,
     counter: Option<u32>,
     extensions: serde_json::Map<String, serde_json::Value>,
     backup_eligible: bool,
@@ -149,23 +150,53 @@ pub fn export_source_v1_pkcs8(
     source: &[u8],
     max_source_bytes: usize,
 ) -> Result<SourceV1Pkcs8Export, FixedError> {
+    const MAX_SOURCE_BYTES: usize = 65_536;
+    const MAX_NAME_BYTES: usize = 256;
+    const MAX_DER_BYTES: usize = 4_096;
+    if max_source_bytes == 0 || max_source_bytes > MAX_SOURCE_BYTES {
+        return Err(FixedError::InvalidSource);
+    }
     let canonical = canonical_source(source, max_source_bytes)?;
     let record: SourceV1 =
         serde_json::from_slice(&canonical).map_err(|_| FixedError::InvalidSource)?;
-    let cose = CoseKey::from_slice(&decode(&record.private_cose_key)?)
-        .map_err(|_| FixedError::InvalidSource)?;
+    if record
+        .username
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_NAME_BYTES)
+        || record
+            .display_name
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_NAME_BYTES)
+    {
+        return Err(FixedError::InvalidSource);
+    }
+    let private_cose = Zeroizing::new(decode(&record.private_cose_key)?);
+    let mut cose = CoseKey::from_slice(&private_cose).map_err(|_| FixedError::InvalidSource)?;
     let private = passkey_authenticator::private_key_from_cose_key(&cose)
         .map_err(|_| FixedError::InvalidSource)?;
+    // `CoseKey` owns an additional scalar copy. The RustCrypto key owns and
+    // zeroizes its scalar, then the COSE copy is explicitly wiped here.
+    for (label, value) in &mut cose.params {
+        if *label == Label::Int(-4) {
+            if let Value::Bytes(bytes) = value {
+                bytes.zeroize();
+            }
+        }
+    }
     let der = private
         .to_pkcs8_der()
         .map_err(|_| FixedError::InvalidSource)?;
+    let pkcs8_der = Zeroizing::new(der.as_bytes().to_vec());
+    if pkcs8_der.is_empty() || pkcs8_der.len() > MAX_DER_BYTES {
+        return Err(FixedError::InvalidSource);
+    }
     Ok(SourceV1Pkcs8Export {
-        pkcs8_der: Zeroizing::new(der.as_bytes().to_vec()),
+        pkcs8_der,
         rp_id: record.rp_id,
         credential_id: decode(&record.credential_id)?,
         user_handle: decode(&record.user_handle)?,
-        username: record.username,
-        display_name: record.display_name,
+        username: record.username.as_ref().map(ToString::to_string),
+        display_name: record.display_name.as_ref().map(ToString::to_string),
     })
 }
 fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
@@ -325,13 +356,15 @@ impl StoredCredential {
             ),
             username: self.passkey.username.clone(),
             display_name: self.passkey.user_display_name.clone(),
-            private_cose_key: URL_SAFE_NO_PAD.encode(
-                self.passkey
-                    .key
-                    .clone()
-                    .to_vec()
-                    .map_err(|_| FixedError::InvalidSource)?,
-            ),
+            private_cose_key: URL_SAFE_NO_PAD
+                .encode(
+                    self.passkey
+                        .key
+                        .clone()
+                        .to_vec()
+                        .map_err(|_| FixedError::InvalidSource)?,
+                )
+                .into(),
             counter: None,
             extensions: Default::default(),
             backup_eligible: true,
@@ -772,7 +805,7 @@ mod tests {
             user_handle: URL_SAFE_NO_PAD.encode(b"user"),
             username: None,
             display_name: None,
-            private_cose_key: URL_SAFE_NO_PAD.encode(key),
+            private_cose_key: URL_SAFE_NO_PAD.encode(key).into(),
             counter: None,
             extensions: Default::default(),
             backup_eligible: true,
@@ -844,15 +877,31 @@ mod tests {
     }
 
     #[test]
-    fn source_export_type_has_no_debug_or_serde_derives() {
-        // Keep accidental telemetry traits out of the private return type.
-        let source = include_str!("lib.rs");
-        let declaration = source
-            .split("pub struct SourceV1Pkcs8Export")
-            .next()
-            .expect("export declaration");
-        assert!(!declaration.ends_with("#[derive(Debug)]\n"));
-        assert!(!declaration.ends_with("#[derive(Serialize)]\n"));
+    fn source_export_enforces_frozen_exchange_bounds() {
+        let source = valid_source();
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, 0),
+            Err(FixedError::InvalidSource)
+        ));
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, 65_537),
+            Err(FixedError::InvalidSource)
+        ));
+        let mut record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        record.username = Some("x".repeat(257));
+        let too_long_name = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&too_long_name, 65_536),
+            Err(FixedError::InvalidSource)
+        ));
+        record.username = Some("x".repeat(256));
+        let boundary_name = serde_json::to_vec(&record).expect("json");
+        assert!(export_source_v1_pkcs8(&boundary_name, 65_536).is_ok());
+    }
+
+    #[test]
+    fn source_export_type_has_no_debug_or_serde_traits() {
+        static_assertions::assert_not_impl_any!(SourceV1Pkcs8Export: std::fmt::Debug, serde::Serialize);
     }
     #[tokio::test]
     async fn maintained_make_and_get_emit_required_flags_and_discoverable_paths() {

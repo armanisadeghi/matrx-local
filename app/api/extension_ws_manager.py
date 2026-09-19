@@ -146,6 +146,11 @@ class ExtensionSessionRegistry:
         # back to the right session even when the caller doesn't carry
         # session context (e.g. broadcast result fan-in).
         self._call_to_session: Dict[str, str] = {}
+        # Local-browser lifecycle is deliberately attached to the existing
+        # socket registry.  A registration is a selector for a live socket,
+        # never an identity or an alternate connection registry.
+        self._local_registration: dict[str, LocalBrowserRegistration] = {}
+        self._local_results: dict[str, LocalBrowserWaiter] = {}
 
     @property
     def active_count(self) -> int:
@@ -184,6 +189,7 @@ class ExtensionSessionRegistry:
         for call_id, sid in list(self._call_to_session.items()):
             if sid == session_id:
                 self._call_to_session.pop(call_id, None)
+        self._invalidate_local_for_session(session_id, "connection_lost")
         cancelled = session.cancel_pending(
             f"extension session {session_id} disconnected"
         )
@@ -209,6 +215,115 @@ class ExtensionSessionRegistry:
 
     def drop_call(self, call_id: str) -> None:
         self._call_to_session.pop(call_id, None)
+
+    def register_local_browser(
+        self,
+        session_id: str,
+        *,
+        engine_boot_id: str,
+        revision: int,
+        owner: tuple[str, str],
+        organization_id: str,
+        device_id: str,
+        extension_generation: str,
+        connection_id: str,
+    ) -> bool:
+        session = self._sessions.get(session_id)
+        if session is None or socket_is_disconnected(session.websocket):
+            return False
+        candidate = LocalBrowserRegistration(
+            session_id=session_id, websocket=session.websocket,
+            engine_boot_id=engine_boot_id, revision=revision, owner=owner,
+            organization_id=organization_id, device_id=device_id,
+            extension_generation=extension_generation, connection_id=connection_id,
+        )
+        current = self._local_registration.get(session_id)
+        if current is not None:
+            return current == candidate
+        # One socket can only ever own one immutable registration. Multiple
+        # sockets are retained so selection can refuse ambiguity.
+        self._local_registration[session_id] = candidate
+        return True
+
+    def current_local_browser(
+        self, *, engine_boot_id: str, revision: int, owner: tuple[str, str],
+        organization_id: str, device_id: str,
+    ) -> LocalBrowserRegistration | None:
+        candidates = [
+            registration for registration in self._local_registration.values()
+            if registration.engine_boot_id == engine_boot_id
+            and registration.revision == revision
+            and registration.owner == owner
+            and registration.organization_id == organization_id
+            and registration.device_id == device_id
+            and self._sessions.get(registration.session_id) is not None
+            and self._sessions[registration.session_id].websocket is registration.websocket
+            and not socket_is_disconnected(registration.websocket)
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def invalidate_local_browser(self, reason: str) -> list[LocalBrowserRegistration]:
+        registrations = list(self._local_registration.values())
+        self._local_registration.clear()
+        for waiter in list(self._local_results.values()):
+            if not waiter.future.done():
+                waiter.future.set_exception(ConnectionError(reason))
+        self._local_results.clear()
+        return registrations
+
+    def _invalidate_local_for_session(self, session_id: str, reason: str) -> None:
+        self._local_registration.pop(session_id, None)
+        for call_id, waiter in list(self._local_results.items()):
+            if waiter.session_id == session_id:
+                if not waiter.future.done():
+                    waiter.future.set_exception(ConnectionError(reason))
+                self._local_results.pop(call_id, None)
+
+    def create_local_result(self, registration: "LocalBrowserRegistration", call_id: str) -> asyncio.Future | None:
+        if call_id in self._local_results:
+            return None
+        # Recheck exact socket object at correlation creation.
+        live = self._sessions.get(registration.session_id)
+        if live is None or live.websocket is not registration.websocket:
+            return None
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._local_results[call_id] = LocalBrowserWaiter(
+            session_id=registration.session_id, websocket=registration.websocket, future=future,
+        )
+        return future
+
+    def resolve_local_result(self, session_id: str, websocket: WebSocket, call_id: str, payload: Dict[str, Any]) -> bool:
+        waiter = self._local_results.get(call_id)
+        if waiter is None or waiter.session_id != session_id or waiter.websocket is not websocket or waiter.future.done():
+            return False
+        self._local_results.pop(call_id, None)
+        waiter.future.set_result(payload)
+        return True
+
+    def drop_local_result(self, call_id: str) -> None:
+        waiter = self._local_results.pop(call_id, None)
+        if waiter is not None and not waiter.future.done():
+            waiter.future.cancel()
+
+
+@dataclass(frozen=True)
+class LocalBrowserRegistration:
+    session_id: str
+    websocket: WebSocket
+    engine_boot_id: str
+    revision: int
+    owner: tuple[str, str]
+    organization_id: str
+    device_id: str
+    extension_generation: str
+    connection_id: str
+
+
+@dataclass
+class LocalBrowserWaiter:
+    session_id: str
+    websocket: WebSocket
+    future: asyncio.Future
 
 
 # Process-singleton — module-level so every importer shares the same registry.
@@ -260,6 +375,56 @@ async def send_to_extension_session(
         # reverse-invocation waiters without waiting for the route receive loop.
         unregister_session(session_id)
     return sent
+
+
+async def send_local_browser_execute(
+    registration: LocalBrowserRegistration, payload: Dict[str, Any],
+) -> bool:
+    """Send only when the immutable registration still names this socket.
+
+    The second check occurs under the session send lock to close the race
+    between callback verification and a reconnect/context invalidation.
+    """
+    session = _REGISTRY.get(registration.session_id)
+    if session is None or session.websocket is not registration.websocket:
+        return False
+    async with session._send_lock:  # noqa: SLF001 - registry-owned lock
+        current = _REGISTRY._local_registration.get(registration.session_id)  # noqa: SLF001
+        if current != registration or socket_is_disconnected(session.websocket):
+            return False
+        try:
+            await session.websocket.send_text(json.dumps(payload))
+            return True
+        except (WebSocketDisconnect, RuntimeError):
+            session._closed = True
+            _REGISTRY.unregister(registration.session_id)
+            return False
+
+
+def register_local_browser_session(
+    session_id: str, **kwargs: Any,
+) -> bool:
+    return _REGISTRY.register_local_browser(session_id, **kwargs)
+
+
+def current_local_browser_registration(**kwargs: Any) -> LocalBrowserRegistration | None:
+    return _REGISTRY.current_local_browser(**kwargs)
+
+
+def create_local_browser_future(registration: LocalBrowserRegistration, call_id: str) -> asyncio.Future | None:
+    return _REGISTRY.create_local_result(registration, call_id)
+
+
+def resolve_local_browser_result(session_id: str, websocket: WebSocket, call_id: str, payload: Dict[str, Any]) -> bool:
+    return _REGISTRY.resolve_local_result(session_id, websocket, call_id, payload)
+
+
+def drop_local_browser_future(call_id: str) -> None:
+    _REGISTRY.drop_local_result(call_id)
+
+
+def invalidate_local_browser_registrations(reason: str) -> list[LocalBrowserRegistration]:
+    return _REGISTRY.invalidate_local_browser(reason)
 
 
 def create_pending_future(

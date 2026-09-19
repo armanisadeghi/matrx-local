@@ -24,12 +24,18 @@ from app.api.access_routes import router as access_router  # filesystem access h
 from app.api.egress_routes import router as egress_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
 from app.api.local_browser_context import router as local_browser_context_router
+from app.api.local_browser_transport import router as local_browser_transport_router
 from app.api.agent_catalog_routes import router as agent_catalog_router
 from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
 from app.api.auth import AuthMiddleware
+from app.services.local_browser_transport import (
+    install_transport_subscriptions,
+    protected_private_path,
+    uninstall_transport_subscriptions,
+)
 from app.launcher import get_registry as _get_launcher_registry
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
 from app.api.tunnel_routes import router as tunnel_router
@@ -367,7 +373,7 @@ def _request_body_for_log(path: str, body):
 
 def _has_private_request_body(path: str) -> bool:
     """Whether this route's complete request body is private by contract."""
-    return path == "/v1" or path.startswith("/v1/")
+    return protected_private_path(path) or path == "/v1" or path.startswith("/v1/")
 
 
 def _format_request_details(request: Request, body=None) -> str:
@@ -1580,9 +1586,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _event_loop_liveness_loop(), name="event-loop-liveness"
     )
 
+    # This fence must exist before a WebSocket can report ready/register.
+    # It is removed in the same lifespan that installed it.
+    await install_transport_subscriptions()
+
     try:
         yield
     finally:
+        uninstall_transport_subscriptions()
         # Cancel before disarming without an await between them: a task already
         # scheduled to pulse cannot re-arm capture during a long teardown.
         event_loop_liveness_task.cancel()
@@ -2169,6 +2180,7 @@ app.include_router(access_router)
 app.include_router(egress_router)
 app.include_router(cloud_sync_router)
 app.include_router(local_browser_context_router)
+app.include_router(local_browser_transport_router)
 app.include_router(chat_router)
 app.include_router(agent_catalog_router)
 app.include_router(data_router)
@@ -2234,6 +2246,20 @@ app.include_router(downloads_router)
 async def _log_requests_dispatch(request: Request, call_next):
     import json as _json
     import time as _time
+
+    # This grant envelope is opaque private authority. Do not read, format,
+    # sanitize, record, or diagnose any part of the request or response.
+    if protected_private_path(request.url.path):
+        try:
+            response = await call_next(request)
+        except Exception:
+            return _JSONResponse(
+                status_code=503,
+                content={"status": "refused", "operation": "unknown", "reason": "transport_unavailable"},
+                headers={"Cache-Control": "no-store"},
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     t0 = _time.monotonic()
     path = request.url.path

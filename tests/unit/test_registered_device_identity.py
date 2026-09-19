@@ -97,6 +97,21 @@ def test_persisted_binding_requires_exact_canonical_row_owner_and_instance(manag
         assert "registered_device" not in manager._instance_record()
 
 
+def test_identity_listeners_only_observe_real_ready_and_revocation_transitions(manager):
+    observed = []
+    manager.subscribe_registered_device_identity(observed.append)
+    assert manager.accept_registration_identity(
+        _row(), expected_origin=ORIGIN, expected_user_id=USER
+    )
+    # Repeated heartbeat/registration of the same durable binding is quiet.
+    assert manager.accept_registration_identity(
+        _row(), expected_origin=ORIGIN, expected_user_id=USER
+    )
+    manager.clear_registered_device_identity()
+    manager.clear_registered_device_identity()
+    assert [None if value is None else value.app_instance_id for value in observed] == [ROW, None]
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "response_row",

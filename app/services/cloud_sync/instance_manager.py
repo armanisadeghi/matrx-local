@@ -13,7 +13,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from app.common.platform_ctx import PLATFORM
 
@@ -282,6 +282,8 @@ class InstanceManager:
     def __init__(self) -> None:
         self._instance_id: Optional[str] = None
         self._registered_device_identity_fenced = False
+        self._registered_device_identity: RegisteredDeviceIdentity | None = None
+        self._identity_listeners: set[Callable[[RegisteredDeviceIdentity | None], None]] = set()
         self._system_info: Optional[dict] = None
         # Load persisted instance_name from settings.json so the name
         # survives engine restarts without requiring re-registration.
@@ -316,6 +318,27 @@ class InstanceManager:
     @instance_name.setter
     def instance_name(self, value: str) -> None:
         self._instance_name = value
+
+    def subscribe_registered_device_identity(
+        self, listener: Callable[[RegisteredDeviceIdentity | None], None],
+    ) -> Callable[[], None]:
+        """Subscribe to identity transitions; listeners must not await."""
+        self._identity_listeners.add(listener)
+
+        def unsubscribe() -> None:
+            self._identity_listeners.discard(listener)
+
+        return unsubscribe
+
+    def _set_registered_device_identity(self, identity: RegisteredDeviceIdentity | None) -> None:
+        if self._registered_device_identity == identity:
+            return
+        self._registered_device_identity = identity
+        for listener in tuple(self._identity_listeners):
+            try:
+                listener(identity)
+            except Exception:
+                continue
 
     def get_registration_payload(self) -> dict:
         """Get the full payload for registering this instance with the cloud.
@@ -386,6 +409,7 @@ class InstanceManager:
     def clear_registered_device_identity(self) -> bool:
         """Fence actor-derived row identity, then best-effort remove it from disk."""
         self._registered_device_identity_fenced = True
+        self._set_registered_device_identity(None)
         value = self._instance_record()
         if value.pop("registered_device", None) is None:
             return True
@@ -460,6 +484,9 @@ class InstanceManager:
             logger.warning("Registered device identity could not be persisted")
             return False
         self._registered_device_identity_fenced = False
+        self._set_registered_device_identity(
+            RegisteredDeviceIdentity(canonical_id, expected_user_id, self.instance_id)
+        )
         return True
 
     async def registered_device_identity(self) -> RegisteredDeviceIdentity | None:
@@ -492,6 +519,7 @@ class InstanceManager:
         if identity is None or identity.instance_id != self.instance_id:
             self.clear_registered_device_identity()
             return None
+        self._set_registered_device_identity(identity)
         return identity
 
     async def update_tunnel_url(

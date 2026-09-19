@@ -12,6 +12,7 @@ from app.api.routes import _ENGINE_BOOT_ID
 
 Grant = tuple[str, str] | None
 GrantReader = Callable[[], Awaitable[Grant]]
+ContextChangeListener = Callable[["BrowserContext"], None]
 
 
 def grant_claims(token: str) -> tuple[str, str]:
@@ -47,6 +48,30 @@ class LocalBrowserContext:
         self._organization_id: str | None = None
         self._owner: tuple[str, str] | None = None
         self._lock = asyncio.Lock()
+        self._listeners: set[ContextChangeListener] = set()
+
+    def subscribe(self, listener: ContextChangeListener) -> Callable[[], None]:
+        """Register a synchronous invalidation listener.
+
+        Listeners run while the context lock is held, so they must only fence
+        local state.  Network sends belong in work scheduled *after* that
+        synchronous fence.
+        """
+        self._listeners.add(listener)
+
+        def unsubscribe() -> None:
+            self._listeners.discard(listener)
+
+        return unsubscribe
+
+    def _changed(self) -> None:
+        snapshot = self._snapshot()
+        for listener in tuple(self._listeners):
+            try:
+                listener(snapshot)
+            except Exception:
+                # A notification consumer is never authority over this fence.
+                continue
 
     async def _grant(self) -> Grant:
         if self._grant_reader:
@@ -71,6 +96,7 @@ class LocalBrowserContext:
             return
         self._owner, self._organization_id = owner, None
         self._revision += 1
+        self._changed()
 
     def _snapshot(self) -> BrowserContext:
         return BrowserContext(self._boot_id, self._revision, self._organization_id)
@@ -96,6 +122,7 @@ class LocalBrowserContext:
                 return None
             self._organization_id = organization_id
             self._revision += 1
+            self._changed()
             return self._snapshot()
 
 

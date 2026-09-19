@@ -70,10 +70,7 @@ class DaemonSessionReconciler:
             # an old owner visible while another service is still reconciling.
             from app.services.local_browser_context import get_local_browser_context
 
-            grant_reader = getattr(get_sync_client(), "access_grant", None)
-            await get_local_browser_context().observe_daemon_grant(
-                await grant_reader() if callable(grant_reader) else None
-            )
+            await get_local_browser_context().refresh()
             user_id = snapshot.user_id if snapshot.signed_in else None
             in_progress = self._adoption is not None and not self._adoption.done()
             first_observation = not self._session_observed

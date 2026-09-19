@@ -15,6 +15,7 @@ type Context = {
   revision: number;
   organization_id: string | null;
 };
+type ContextResponse = { status: number; context: Context | null };
 
 let engineUrl: string | null = null;
 let generation = 0;
@@ -31,13 +32,13 @@ async function request(
   token: string,
   signal: AbortSignal,
   init?: RequestInit,
-): Promise<Response | null> {
+): Promise<ContextResponse | null> {
   const timeout = new AbortController();
   const timer = globalThis.setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
   const relay = () => timeout.abort();
   signal.addEventListener("abort", relay, { once: true });
   try {
-    return await fetch(`${url}/local-browser/context`, {
+    const response = await fetch(`${url}/local-browser/context`, {
       ...init,
       signal: timeout.signal,
       headers: {
@@ -46,6 +47,12 @@ async function request(
         ...(init?.headers ?? {}),
       },
     });
+    const text = await response.text();
+    let context: Context | null = null;
+    if (text) {
+      try { context = JSON.parse(text) as Context; } catch { /* status still decides */ }
+    }
+    return { status: response.status, context };
   } catch {
     return null;
   } finally {
@@ -74,8 +81,8 @@ async function synchronize(ticket: number): Promise<void> {
   // later selection/auth/engine transition has already advanced generation.
   for (let attempt = 0; attempt < 2 && current(ticket) && url === engineUrl; attempt += 1) {
     const read = await request(url, fresh.access_token, transport.signal);
-    if (!read || !read.ok || !current(ticket) || url !== engineUrl) return;
-    const context = (await read.json()) as Context;
+    if (!read || read.status < 200 || read.status >= 300 || !read.context || !current(ticket) || url !== engineUrl) return;
+    const context = read.context;
     const latestSession = await getAuthedSession();
     const latestOrganizationId = await getActiveOrganizationId();
     if (
@@ -94,7 +101,7 @@ async function synchronize(ticket: number): Promise<void> {
         organization_id: latestOrganizationId,
       }),
     });
-    if (!write || write.ok || write.status !== 409) return;
+    if (!write || (write.status >= 200 && write.status < 300) || write.status !== 409) return;
   }
 }
 

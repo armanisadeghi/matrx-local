@@ -297,4 +297,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Store token on request state for downstream forwarding.
         request.state.user_token = token
 
-        return await call_next(request)
+        response = await call_next(request)
+        if path == "/local-browser/context":
+            response.headers["Cache-Control"] = "no-store"
+        return response

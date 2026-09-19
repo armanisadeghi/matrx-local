@@ -1,9 +1,4 @@
-"""Engine-owned selected-organization state for the direct local browser bridge.
-
-The state has no credentials. Its owner is derived afresh from the sync
-daemon's atomic grant, and the daemon lifecycle retires it before dependent
-services can adopt a changed account or session.
-"""
+"""Serialized daemon-owned context fence for the local browser transport."""
 from __future__ import annotations
 
 import asyncio
@@ -11,20 +6,22 @@ import base64
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from app.api.routes import _ENGINE_BOOT_ID
+
+Grant = tuple[str, str] | None
+GrantReader = Callable[[], Awaitable[Grant]]
 
 
 def grant_claims(token: str) -> tuple[str, str]:
     try:
         part = token.split(".")[1]
-        padded = part + "=" * (-len(part) % 4)
-        data = json.loads(base64.urlsafe_b64decode(padded.encode()))
-        sub, session_id = data["sub"], data["session_id"]
-        canonical_session_id = str(uuid.UUID(session_id))
-        if not isinstance(sub, str) or canonical_session_id != session_id:
+        data = json.loads(base64.urlsafe_b64decode((part + "=" * (-len(part) % 4)).encode()))
+        user_id, session_id = data["sub"], data["session_id"]
+        if not isinstance(user_id, str) or str(uuid.UUID(session_id)) != session_id:
             raise ValueError
-        return sub, session_id
+        return user_id, session_id
     except Exception as exc:
         raise ValueError("malformed daemon grant") from exc
 
@@ -36,68 +33,74 @@ class BrowserContext:
     organization_id: str | None
 
 
-class LocalBrowserContext:
-    """Process singleton. Callers use methods, never a raw app.state field."""
+@dataclass(frozen=True)
+class FreshContext:
+    context: BrowserContext
+    owner: tuple[str, str]
+    daemon_jwt: str
 
-    def __init__(self, boot_id: str = _ENGINE_BOOT_ID) -> None:
-        self._boot_id = boot_id
+
+class LocalBrowserContext:
+    def __init__(self, boot_id: str = _ENGINE_BOOT_ID, grant_reader: GrantReader | None = None) -> None:
+        self._boot_id, self._grant_reader = boot_id, grant_reader
         self._revision = 0
         self._organization_id: str | None = None
         self._owner: tuple[str, str] | None = None
         self._lock = asyncio.Lock()
 
+    async def _grant(self) -> Grant:
+        if self._grant_reader:
+            return await self._grant_reader()
+        from app.services.sync_client import get_sync_client
+        reader = getattr(get_sync_client(), "access_grant", None)
+        return await reader() if callable(reader) else None
+
     @staticmethod
-    def _owner_for(grant: tuple[str, str] | None) -> tuple[str, str] | None:
+    def _parse(grant: Grant) -> tuple[tuple[str, str], str] | None:
         if grant is None:
             return None
-        token, claimed_user_id = grant
+        jwt, claimed_user = grant
         try:
-            user_id, session_id = grant_claims(token)
+            user, session = grant_claims(jwt)
         except ValueError:
             return None
-        return (user_id, session_id) if claimed_user_id == user_id else None
+        return ((user, session), jwt) if user == claimed_user else None
 
-    def _retire_unlocked(self, owner: tuple[str, str] | None) -> None:
+    def _retire(self, owner: tuple[str, str] | None) -> None:
         if self._owner == owner and (owner is not None or self._organization_id is None):
             return
-        self._owner = owner
-        self._organization_id = None
+        self._owner, self._organization_id = owner, None
         self._revision += 1
 
-    async def observe_daemon_grant(self, grant: tuple[str, str] | None) -> tuple[str, str] | None:
-        """Immediately retire state for a daemon loss/account/session change."""
-        owner = self._owner_for(grant)
-        async with self._lock:
-            self._retire_unlocked(owner)
-        return owner
+    def _snapshot(self) -> BrowserContext:
+        return BrowserContext(self._boot_id, self._revision, self._organization_id)
 
-    async def fresh_for_daemon_grant(self, grant: tuple[str, str] | None) -> tuple[BrowserContext, tuple[str, str]] | None:
-        owner = self._owner_for(grant)
+    async def refresh(self) -> FreshContext | None:
+        """Lock before reading the daemon; no stale caller snapshot is authority."""
         async with self._lock:
-            self._retire_unlocked(owner)
-            if owner is None:
+            parsed = self._parse(await self._grant())
+            self._retire(parsed[0] if parsed else None)
+            if parsed is None:
                 return None
-            return self._snapshot_unlocked(), owner
+            owner, jwt = parsed
+            return FreshContext(self._snapshot(), owner, jwt)
 
-    async def compare_and_set(self, *, owner: tuple[str, str], engine_boot_id: str, expected_revision: int, organization_id: str | None) -> BrowserContext | None:
+    async def compare_and_set(self, *, owner: tuple[str, str], daemon_jwt: str, engine_boot_id: str, expected_revision: int, organization_id: str | None) -> BrowserContext | None:
+        """Final daemon read and CAS share one lock; no await follows the check."""
         async with self._lock:
-            if self._owner != owner or engine_boot_id != self._boot_id or expected_revision != self._revision:
+            parsed = self._parse(await self._grant())
+            self._retire(parsed[0] if parsed else None)
+            if parsed is None or parsed != (owner, daemon_jwt):
+                return None
+            if engine_boot_id != self._boot_id or expected_revision != self._revision:
                 return None
             self._organization_id = organization_id
             self._revision += 1
-            return self._snapshot_unlocked()
-
-    def _snapshot_unlocked(self) -> BrowserContext:
-        return BrowserContext(self._boot_id, self._revision, self._organization_id)
+            return self._snapshot()
 
 
 _CONTEXT = LocalBrowserContext()
-
-
-def get_local_browser_context() -> LocalBrowserContext:
-    return _CONTEXT
-
-
+def get_local_browser_context() -> LocalBrowserContext: return _CONTEXT
 def set_local_browser_context_for_test(context: LocalBrowserContext) -> None:
     global _CONTEXT
     _CONTEXT = context

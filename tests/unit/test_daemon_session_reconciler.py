@@ -195,7 +195,10 @@ async def test_broadcast_recovers_without_another_session_event(monkeypatch, fai
     await r.reconcile()
     await asyncio.wait_for(r._adoption, timeout=5)
     assert r._completed
-    assert attempts["grant"] == 2
+    # The browser-context lifecycle fence reads the current daemon grant once
+    # per reconcile. A first missing grant is a retirement, not an adoption
+    # failure; the subscription retry still needs its own fresh grant.
+    assert attempts["grant"] == (2 if failure == "grant" else 3)
     assert "A" in eb._channels
     realtime.set_auth.assert_called_with("current-access")
     if failure == "subscribe":

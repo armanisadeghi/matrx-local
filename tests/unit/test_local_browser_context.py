@@ -36,14 +36,16 @@ def route(monkeypatch):
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.include_router(subject.router)
-    state = {"grant": (token(), USER), "memberships": [{"container_id": ORG_A}], "context": LocalBrowserContext("engine-a")}
+    state = {"grant": (token(), USER), "memberships": [{"container_id": ORG_A}]}
+
+    async def grant():
+        return state["grant"]
+
+    state["context"] = LocalBrowserContext("engine-a", grant)
 
     async def verified(value: str):
         claims = subject._claim(value)
         return VerifiedUser(user_id=claims[0], email=None, is_anon=False)
-
-    class Sync:
-        async def access_grant(self): return state["grant"]
 
     async def memberships(_jwt: str):
         value = state["memberships"]
@@ -52,7 +54,6 @@ def route(monkeypatch):
         return value
 
     monkeypatch.setattr(subject, "verify_supabase_token", verified)
-    monkeypatch.setattr(subject, "get_sync_client", lambda: Sync())
     monkeypatch.setattr(subject, "get_local_browser_context", lambda: state["context"])
     monkeypatch.setattr(subject, "_active_memberships", memberships)
     return app, state
@@ -98,7 +99,7 @@ async def test_daemon_loss_account_and_same_user_relogin_retire_before_authentic
         assert (await http.post("/local-browser/context", json=write_body(initial, ORG_A))).status_code == 200
         state["grant"] = None
         assert (await http.get("/local-browser/context")).status_code == 401
-        assert (await state["context"].fresh_for_daemon_grant(None)) is None
+        assert (await state["context"].refresh()) is None
         state["grant"] = (token(user=OTHER), OTHER)
         assert (await http.get("/local-browser/context", headers={"Authorization": f"Bearer {token(user=OTHER)}"})).json()["organization_id"] is None
         state["grant"] = (token(), USER)
@@ -126,7 +127,9 @@ async def test_membership_cas_null_clear_and_boot_restart(route):
         state["memberships"] = RuntimeError("offline")
         assert (await http.post("/local-browser/context", json=write_body(cleared.json(), ORG_A))).status_code == 403
         old_body = write_body(cleared.json(), None)
-        state["context"] = LocalBrowserContext("engine-b")
+        async def current_grant():
+            return state["grant"]
+        state["context"] = LocalBrowserContext("engine-b", current_grant)
         assert (await http.post("/local-browser/context", json=old_body)).status_code == 409
 
 

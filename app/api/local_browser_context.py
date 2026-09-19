@@ -9,8 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.remote_auth import headers_indicate_tunnel, verify_supabase_token
 from app.services.aidream.organization import _active_memberships
-from app.services.local_browser_context import BrowserContext, get_local_browser_context, grant_claims
-from app.services.sync_client import get_sync_client
+from app.services.local_browser_context import BrowserContext, FreshContext, get_local_browser_context, grant_claims
 
 router = APIRouter(prefix="/local-browser", tags=["local-browser"])
 _REFUSED = "local_browser_context_refused"
@@ -34,17 +33,14 @@ def _response(context: BrowserContext) -> dict[str, str | int | None]:
     return {"engine_boot_id": context.engine_boot_id, "revision": context.revision, "organization_id": context.organization_id}
 
 
-async def _trusted_daemon_context() -> tuple[tuple[str, str, str], BrowserContext]:
-    """Retire from a fresh daemon grant before inspecting any caller credential."""
-    grant = await get_sync_client().access_grant()
-    fresh = await get_local_browser_context().fresh_for_daemon_grant(grant)
-    if fresh is None or grant is None:
+async def _trusted_daemon_context() -> FreshContext:
+    fresh = await get_local_browser_context().refresh()
+    if fresh is None:
         raise _refuse(401)
-    context, owner = fresh
-    return (owner[0], owner[1], grant[0]), context
+    return fresh
 
 
-async def _owner(request: Request) -> tuple[str, str, str, BrowserContext]:
+async def _owner(request: Request) -> FreshContext:
     try:
         direct_loopback = not headers_indicate_tunnel(request.headers) and request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
@@ -54,7 +50,8 @@ async def _owner(request: Request) -> tuple[str, str, str, BrowserContext]:
 
     # A forged caller cannot clear valid context: retirement derives only from
     # the daemon grant, before untrusted bearer validation.
-    (user_id, session_id, daemon_jwt), context = await _trusted_daemon_context()
+    fresh = await _trusted_daemon_context()
+    user_id, session_id = fresh.owner
     authorization = request.headers.get("authorization", "")
     if not authorization.lower().startswith("bearer "):
         raise _refuse(401)
@@ -66,19 +63,24 @@ async def _owner(request: Request) -> tuple[str, str, str, BrowserContext]:
         raise _refuse(401) from exc
     if desktop is None or desktop.user_id != user_id or inbound_user_id != user_id or inbound_session_id != session_id:
         raise _refuse(401)
-    return user_id, session_id, daemon_jwt, context
+    return fresh
 
 
 @router.get("/context")
 async def get_context(request: Request, response: Response) -> dict[str, str | int | None]:
-    _user_id, _session_id, _jwt, context = await _owner(request)
+    verified = await _owner(request)
+    final = await get_local_browser_context().refresh()
+    if final is None or final.owner != verified.owner or final.daemon_jwt != verified.daemon_jwt:
+        raise _refuse(401)
     response.headers.update(_NO_STORE)
-    return _response(context)
+    return _response(final.context)
 
 
 @router.post("/context")
 async def set_context(body: ContextBody, request: Request, response: Response) -> dict[str, str | int | None]:
-    user_id, session_id, daemon_jwt, _context = await _owner(request)
+    verified = await _owner(request)
+    user_id, session_id = verified.owner
+    daemon_jwt = verified.daemon_jwt
     if body.organization_id is not None:
         try:
             uuid.UUID(body.organization_id)
@@ -92,13 +94,8 @@ async def set_context(body: ContextBody, request: Request, response: Response) -
         if body.organization_id not in member_ids:
             raise _refuse(403)
 
-    # Membership awaits. Re-read and retire from the current daemon grant
-    # before the engine-owned CAS so an old request cannot restore state.
-    current_user_id, current_session_id, current_jwt, _current = await _owner(request)
-    if (current_user_id, current_session_id, current_jwt) != (user_id, session_id, daemon_jwt):
-        raise _refuse(409, _CONFLICT)
     result = await get_local_browser_context().compare_and_set(
-        owner=(user_id, session_id), engine_boot_id=body.engine_boot_id,
+        owner=(user_id, session_id), daemon_jwt=daemon_jwt, engine_boot_id=body.engine_boot_id,
         expected_revision=body.expected_revision, organization_id=body.organization_id,
     )
     if result is None:

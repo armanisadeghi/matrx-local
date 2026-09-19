@@ -151,6 +151,22 @@ async fn spawn_and_wait_healthy(
         let binaries_dir = resource_dir.join("binaries");
         let binaries_dir_str = binaries_dir.to_string_lossy().to_string();
 
+        // macOS ships llama-server as a bundle-owned file in Contents/MacOS
+        // (never `externalBin` — see crate::bundled_helper_path), so the
+        // sidecar() name lookup does not apply there.
+        #[cfg(target_os = "macos")]
+        let mut sidecar_cmd = match crate::bundled_helper_path("llama-server") {
+            Some(path) => app.shell().command(path),
+            None => {
+                return Err(
+                    "The local model server (llama-server) is not present in this build. \
+                     Remedy: reinstall or update AI Matrx Desktop; in a source checkout run \
+                     scripts/download-llama-server.sh then scripts/stage-macos-helpers.sh."
+                        .to_string(),
+                )
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
         let mut sidecar_cmd = app
             .shell()
             .sidecar("llama-server")

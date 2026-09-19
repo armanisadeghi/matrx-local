@@ -33,7 +33,7 @@ from urllib.request import urlretrieve
 
 import psutil
 
-from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.common.platform_ctx import CAPABILITIES, PLATFORM, host_bundle_macos_dir
 from app.config import MATRX_HOME_DIR
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,12 @@ def _find_preinstalled_cloudflared() -> Path | None:
         # land at Contents/Resources/ — one level up from the executable parent.
         Path(sys.executable).parent.parent / "Resources" / "cloudflared",
     ]
+    # macOS: the engine runs from the NESTED Matrx Engine.app while the bundled
+    # cloudflared sits beside the HOST executable. Without this candidate the
+    # shipped binary is never found and the engine downloads its own copy.
+    host_macos = host_bundle_macos_dir()
+    if host_macos is not None:
+        resource_candidates.append(host_macos / "cloudflared")
     for p in resource_candidates:
         if p.exists() and p.is_file():
             logger.info("Found bundled cloudflared at %s", p)

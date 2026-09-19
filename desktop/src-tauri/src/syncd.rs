@@ -511,7 +511,11 @@ fn daemon_binary() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let name = "matrx-syncd";
 
-    // Packaged: the Tauri `externalBin` sidecar sits next to the main executable. (SPEC-ENGINE
+    // Packaged: the daemon sits next to the main executable in Contents/MacOS. On macOS it gets
+    // there as a `bundle.macOS.files` entry pre-signed with the sidecar entitlements, NOT as an
+    // `externalBin` (see crate::bundled_helper_path — externalBin inherits the host's
+    // profile-backed entitlements and AMFI SIGKILLs the helper at exec). Windows and Linux still
+    // use `externalBin`; either way the binary lands beside the host executable. (SPEC-ENGINE
     // §0.1 moves this to `Contents/Frameworks/Matrx Sync.app` on macOS so the daemon can carry its
     // own TCC usage strings; that packaging change is FS-L2a's, and this lookup already prefers
     // the bundle when it exists.)

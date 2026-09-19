@@ -97,6 +97,30 @@ def _pkg_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def host_bundle_macos_dir() -> Path | None:
+    """The HOST app bundle's ``Contents/MacOS`` when this engine runs nested in it.
+
+    On macOS the engine ships as ``Matrx Engine.app`` inside the host's
+    ``Contents/Frameworks``. Every other bundled helper — matrx-syncd,
+    matrx-egress, cloudflared, llama-server, uv — lives beside the HOST
+    executable, which is three directories above ``sys.executable``'s parent,
+    NOT beside the engine. Returns ``None`` off macOS, in a source run, or when
+    the layout is anything other than the nested-helper-app shape.
+    """
+    if _sys_platform != "darwin":
+        return None
+    exe_dir = Path(sys.executable).resolve(strict=False).parent
+    parents = exe_dir.parents
+    if len(parents) < 4 or exe_dir.name != "MacOS":
+        return None
+    if parents[0].name != "Contents" or not parents[1].name.endswith(".app"):
+        return None
+    if parents[2].name != "Frameworks":
+        return None
+    candidate = parents[3] / "MacOS"
+    return candidate if candidate.is_dir() else None
+
+
 def _binary_available(name: str) -> bool:
     return shutil.which(name) is not None
 

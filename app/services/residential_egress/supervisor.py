@@ -56,7 +56,7 @@ from typing import Any, Optional
 
 import psutil
 
-from app.common.platform_ctx import PLATFORM
+from app.common.platform_ctx import PLATFORM, host_bundle_macos_dir
 from app.config import MATRX_HOME_DIR
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,11 @@ def find_binary() -> Path | None:
         exe_dir / _BINARY_NAME,
         exe_dir.parent / "Resources" / _BINARY_NAME,
     ]
+    # macOS: the engine runs from the NESTED Matrx Engine.app, so the helper that
+    # ships beside the HOST executable is three directories up, not beside us.
+    host_macos = host_bundle_macos_dir()
+    if host_macos is not None:
+        bundled.append(host_macos / _BINARY_NAME)
     for candidate in bundled:
         if candidate.exists() and candidate.is_file():
             return candidate

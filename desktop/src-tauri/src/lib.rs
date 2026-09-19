@@ -676,6 +676,45 @@ fn macos_helper_engine_path() -> Option<std::path::PathBuf> {
     }
 }
 
+/// Absolute path to a bundle-owned macOS helper executable, or `None`.
+///
+/// macOS helpers (`matrx-syncd`, `matrx-egress`, `cloudflared`,
+/// `llama-server`, `uv`) are deliberately NOT `bundle.externalBin` entries.
+/// tauri-bundler signs every `externalBin` with the ONE
+/// `bundle.macOS.entitlements` file chosen for the HOST app, so once the
+/// release started signing the host with `Entitlements.vault.plist` every
+/// helper inherited profile-backed keys it cannot carry without a
+/// provisioning profile — AMFI then SIGKILLed each one at exec (exit 137,
+/// v1.4.137 through v1.4.170). They now ship as `bundle.macOS.files`
+/// ("MacOS/<name>"), pre-signed with `sidecar/sidecar.entitlements.plist` by
+/// `scripts/stage-macos-helpers.sh`, exactly like the nested Matrx Engine.app
+/// that kept working throughout the outage. Windows and Linux keep
+/// `externalBin` and the `sidecar()` API.
+#[cfg(target_os = "macos")]
+pub(crate) fn bundled_helper_path(name: &str) -> Option<std::path::PathBuf> {
+    // Packaged: Contents/MacOS/<name>, beside the host executable.
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+    {
+        let beside = dir.join(name);
+        if beside.is_file() {
+            return Some(beside);
+        }
+    }
+    // A source run: scripts/stage-macos-helpers.sh puts the same names here.
+    #[cfg(debug_assertions)]
+    {
+        let staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("macos-helpers")
+            .join(name);
+        if staged.is_file() {
+            return Some(staged);
+        }
+    }
+    None
+}
+
 /// Start the Python/FastAPI engine sidecar.
 ///
 /// In production, this spawns the bundled PyInstaller binary.

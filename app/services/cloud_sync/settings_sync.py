@@ -204,6 +204,7 @@ class SettingsSync:
         self._expected_user_id: Optional[str] = None
         self._instance_id: Optional[str] = None
         self._configured = False
+        self._configuration_generation = 0
 
         # Visibility state — surfaces to /cloud/debug endpoint
         self._is_orphan: bool = False
@@ -239,24 +240,34 @@ class SettingsSync:
         Access tokens and owners are supplied by ``matrx-syncd`` at every
         outgoing request; this engine never accepts or retains a JWT.
         """
-        self._supabase_url = supabase_url.rstrip("/")
+        normalized_origin = supabase_url.rstrip("/")
+        self._configuration_generation += 1
+        self._supabase_url = normalized_origin
         self._supabase_key = supabase_key
         self._expected_user_id = user_id
         self._instance_id = instance_id
-        self._configured = bool(supabase_url and supabase_key and user_id and instance_id)
+        self._configured = bool(normalized_origin and supabase_key and user_id and instance_id)
         self._configure_called_at = datetime.now(timezone.utc).isoformat()
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+
         if self._configured:
+            get_instance_manager().retain_registered_device_identity(
+                expected_origin=normalized_origin,
+                expected_user_id=user_id,
+                expected_instance_id=instance_id,
+            )
             logger.info(
                 "Cloud sync configured: user_id=%s instance_id=%s url=%s",
                 user_id,
                 instance_id,
-                supabase_url,
+                normalized_origin,
             )
         else:
+            get_instance_manager().clear_registered_device_identity()
             logger.warning(
                 "Cloud sync configure() called but missing required fields: "
                 "url=%r key=%r user_id=%r instance_id=%r",
-                bool(supabase_url),
+                bool(normalized_origin),
                 bool(supabase_key),
                 bool(user_id),
                 bool(instance_id),
@@ -264,6 +275,9 @@ class SettingsSync:
 
     def clear_credentials(self) -> None:
         """Synchronously fence actor-derived cloud state without erasing settings."""
+        self._configuration_generation += 1
+        self._supabase_url = ""
+        self._supabase_key = ""
         self._expected_user_id = None
         self._instance_id = None
         self._configured = False
@@ -276,10 +290,35 @@ class SettingsSync:
         self._last_registration_result = None
         self._heartbeat_failures = 0
         self._configure_called_at = None
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+
+        get_instance_manager().clear_registered_device_identity()
 
     @property
     def is_configured(self) -> bool:
         return self._configured
+
+    @property
+    def expected_user_id(self) -> str | None:
+        return self._expected_user_id
+
+    @property
+    def expected_instance_id(self) -> str | None:
+        return self._instance_id
+
+    @property
+    def registration_origin(self) -> str | None:
+        return self._supabase_url if self._configured else None
+
+    def _registration_snapshot(self) -> tuple[int, str, str, str] | None:
+        if not self._configured or not self._expected_user_id or not self._instance_id:
+            return None
+        return (
+            self._configuration_generation,
+            self._supabase_url,
+            self._expected_user_id,
+            self._instance_id,
+        )
 
     @property
     def is_orphan(self) -> bool:
@@ -638,6 +677,12 @@ class SettingsSync:
         import httpx
 
         owner: str | None = None
+        registration_snapshot = self._registration_snapshot()
+        if (
+            registration_snapshot is None
+            or registration.get("instance_id") != registration_snapshot[3]
+        ):
+            return None
         try:
             user_id, headers = await self._request_context()
             owner = user_id
@@ -659,6 +704,8 @@ class SettingsSync:
                 # A daemon account switch during the HTTP request must not
                 # change this engine's A-owned registration state.
                 await self._request_context(expected_owner=owner)
+                if registration_snapshot != self._registration_snapshot():
+                    return None
                 if not resp.is_success:
                     err = self._log_http_error("register_instance", resp)
                     self._last_registration_result = f"error:{err}"
@@ -674,6 +721,15 @@ class SettingsSync:
                 rows = resp.json()
                 row = rows[0] if rows else None
                 if row:
+                    from app.services.cloud_sync.instance_manager import get_instance_manager
+                    if not get_instance_manager().accept_registration_identity(
+                        row,
+                        expected_origin=registration_snapshot[1],
+                        expected_user_id=owner,
+                    ):
+                        self._last_registration_result = "error:identity_mismatch"
+                        self._is_orphan = True
+                        return None
                     self._last_registration_at = datetime.now(timezone.utc).isoformat()
                     self._is_orphan = False
                     self._last_registration_result = "ok"

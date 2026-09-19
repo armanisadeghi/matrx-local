@@ -28,6 +28,8 @@ from app.services.cloud_sync.instance_manager import (
 )
 from app.services.cloud_sync.settings_sync import SettingsSync
 
+APP_INSTANCE_ID = "44444444-4444-4444-8444-444444444444"
+
 
 # ---------------------------------------------------------------------------
 # httpx stub — captures the request bodies the engine would send
@@ -90,6 +92,16 @@ class _DaemonClient:
         return "daemon-access-token", "user-1"
 
 
+@pytest.fixture(autouse=True)
+def isolated_instance_manager(monkeypatch, tmp_path):
+    import app.services.cloud_sync.instance_manager as instances
+
+    monkeypatch.setattr(instances, "INSTANCE_FILE", tmp_path / "instance.json")
+    manager = InstanceManager()
+    manager._instance_id = "inst_test"
+    monkeypatch.setattr(instances, "_instance_manager", manager)
+
+
 @pytest.fixture
 def http(monkeypatch):
     """Install a fake `httpx` module; yields the request recorder."""
@@ -133,7 +145,7 @@ def test_current_app_version_is_the_one_resolver():
 
 
 def test_register_instance_sends_app_version(http):
-    http.set_response(_Resp(200, [{"instance_id": "inst_test", "metadata": {}}]))
+    http.set_response(_Resp(200, [{"id": APP_INSTANCE_ID, "user_id": "user-1", "instance_id": "inst_test", "metadata": {}}]))
     sync = _configured_sync()
 
     asyncio.run(
@@ -148,7 +160,7 @@ def test_register_instance_sends_app_version(http):
 
 def test_registration_discards_response_when_daemon_owner_changes_in_flight(http, monkeypatch):
     """An A response cannot mutate registration state after daemon switches to B."""
-    http.set_response(_Resp(200, [{"instance_id": "inst_test", "metadata": {"a": 1}}]))
+    http.set_response(_Resp(200, [{"id": APP_INSTANCE_ID, "user_id": "user-1", "instance_id": "inst_test", "metadata": {"a": 1}}]))
     sync = _configured_sync()
     calls = 0
 
@@ -242,7 +254,7 @@ def test_build_config_provenance_never_raises(monkeypatch):
 def test_heartbeat_merges_provenance_without_clobbering(http):
     """Keys written by other writers survive; ours are added alongside."""
     http.set_response(
-        _Resp(200, [{"instance_id": "inst_test", "metadata": {"owned_by_web": "keep"}}])
+        _Resp(200, [{"id": APP_INSTANCE_ID, "user_id": "user-1", "instance_id": "inst_test", "metadata": {"owned_by_web": "keep"}}])
     )
     sync = _configured_sync()
     asyncio.run(sync.register_instance({"instance_id": "inst_test"}))
@@ -260,7 +272,7 @@ def test_heartbeat_merges_provenance_without_clobbering(http):
 
 def test_heartbeat_does_not_rewrite_unchanged_provenance(http):
     """No write amplification: the second heartbeat carries no metadata."""
-    http.set_response(_Resp(200, [{"instance_id": "inst_test", "metadata": {}}]))
+    http.set_response(_Resp(200, [{"id": APP_INSTANCE_ID, "user_id": "user-1", "instance_id": "inst_test", "metadata": {}}]))
     sync = _configured_sync()
     asyncio.run(sync.register_instance({"instance_id": "inst_test"}))
 
@@ -276,7 +288,7 @@ def test_heartbeat_does_not_rewrite_unchanged_provenance(http):
 
 def test_failed_heartbeat_retries_provenance(http):
     """A non-2xx must not mark the provenance write as landed."""
-    http.set_response(_Resp(200, [{"instance_id": "inst_test", "metadata": {}}]))
+    http.set_response(_Resp(200, [{"id": APP_INSTANCE_ID, "user_id": "user-1", "instance_id": "inst_test", "metadata": {}}]))
     sync = _configured_sync()
     asyncio.run(sync.register_instance({"instance_id": "inst_test"}))
 

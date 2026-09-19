@@ -15,6 +15,7 @@ class DaemonSessionReconciler:
         self._user_id: str | None = None
         self._revision = 0
         self._completed = False
+        self._session_observed = False
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -65,20 +66,29 @@ class DaemonSessionReconciler:
             snapshot = await get_sync_client().session()
             user_id = snapshot.user_id if snapshot.signed_in else None
             in_progress = self._adoption is not None and not self._adoption.done()
+            first_observation = not self._session_observed
             if (
                 user_id == self._user_id
                 and not rotated
-                and (self._completed or in_progress or not user_id)
+                and (self._completed or in_progress or (not user_id and not first_observation))
             ):
                 return
             old = self._user_id
+            self._session_observed = True
             self._revision += 1
             self._completed = False
-            # Clear synchronously before awaiting cancellation or network cleanup.
-            if old != user_id:
+            # An already-signed-in daemon at startup may retain only a later exact
+            # configure-time binding. Every observed sign-out or account transition
+            # fences actor-derived state before work can continue.
+            if (
+                (first_observation and user_id is None)
+                or (not first_observation and old != user_id)
+            ):
                 from app.services.ai.key_manager import clear_vault_keys
+                from app.services.cloud_sync.settings_sync import get_settings_sync
 
                 clear_vault_keys()
+                get_settings_sync().clear_credentials()
             if in_progress:
                 self._adoption.cancel()
                 try:

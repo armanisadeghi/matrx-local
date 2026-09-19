@@ -1,4 +1,6 @@
 from __future__ import annotations
+from types import SimpleNamespace
+
 import pytest
 from app.services.daemon_session_reconciler import DaemonSessionReconciler
 from app.services.sync_client.client import SessionSnapshot
@@ -22,6 +24,7 @@ async def test_transitions_and_retry(monkeypatch):
     import app.services.ai.key_manager as km
     import app.services.ai.engine as ae
     import app.api.extension_broadcast as eb
+    import app.services.cloud_sync.settings_sync as settings_sync
 
     state = {"user": None, "fail": False}
     calls = []
@@ -64,12 +67,17 @@ async def test_transitions_and_retry(monkeypatch):
     monkeypatch.setattr(eb, "connect_broadcast", connect)
     monkeypatch.setattr(eb, "disconnect_broadcast", disconnect)
     monkeypatch.setattr(km, "clear_vault_keys", lambda: calls.append(("clear", None)))
+    monkeypatch.setattr(
+        settings_sync,
+        "get_settings_sync",
+        lambda: SimpleNamespace(clear_credentials=lambda: calls.append(("clear_cloud_identity", None))),
+    )
     import app.config
 
     monkeypatch.setattr(app.config, "CLOUD_PARTICIPATION_ENABLED", True)
     r = DaemonSessionReconciler()
     await r.reconcile()
-    assert calls == []
+    assert calls == [("clear", None), ("clear_cloud_identity", None)]
     state["user"] = "A"
     await r.reconcile()
     await r._adoption
@@ -85,6 +93,7 @@ async def test_transitions_and_retry(monkeypatch):
     await r._adoption
     assert (
         ("clear", None) in calls
+        and ("clear_cloud_identity", None) in calls
         and ("disconnect", "A") in calls
         and ("connect", "B") in calls
     )

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 from app.config import MATRX_HOME_DIR
 INSTANCE_FILE = MATRX_HOME_DIR / "instance.json"
+
+
+@dataclass(frozen=True)
+class RegisteredDeviceIdentity:
+    """Current cloud row identity; this is discovery data, not transport authority."""
+    app_instance_id: str
+    user_id: str
+    instance_id: str
 
 
 def current_app_version() -> str:
@@ -272,6 +281,7 @@ class InstanceManager:
 
     def __init__(self) -> None:
         self._instance_id: Optional[str] = None
+        self._registered_device_identity_fenced = False
         self._system_info: Optional[dict] = None
         # Load persisted instance_name from settings.json so the name
         # survives engine restarts without requiring re-registration.
@@ -335,6 +345,154 @@ class InstanceManager:
             "serial_number": info.get("serial_number"),
             "board_id": info.get("board_id"),
         }
+
+    def _instance_record(self) -> dict:
+        try:
+            value = json.loads(INSTANCE_FILE.read_text())
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_instance_record(self, value: dict) -> None:
+        INSTANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = INSTANCE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True))
+        temporary.replace(INSTANCE_FILE)
+
+    @staticmethod
+    def _valid_registered_device(
+        value: object,
+        *,
+        expected_origin: str,
+        expected_user_id: str,
+        expected_instance_id: str,
+    ) -> RegisteredDeviceIdentity | None:
+        if not isinstance(value, dict):
+            return None
+        row_id = value.get("app_instance_id")
+        try:
+            canonical_id = str(uuid.UUID(str(row_id)))
+        except (TypeError, ValueError):
+            return None
+        if (
+            str(row_id) != canonical_id
+            or value.get("registration_origin") != expected_origin
+            or value.get("user_id") != expected_user_id
+            or value.get("instance_id") != expected_instance_id
+        ):
+            return None
+        return RegisteredDeviceIdentity(canonical_id, expected_user_id, expected_instance_id)
+
+    def clear_registered_device_identity(self) -> bool:
+        """Fence actor-derived row identity, then best-effort remove it from disk."""
+        self._registered_device_identity_fenced = True
+        value = self._instance_record()
+        if value.pop("registered_device", None) is None:
+            return True
+        try:
+            self._save_instance_record(value)
+        except OSError:
+            logger.warning("Registered device identity cleanup could not complete")
+            return False
+        return True
+
+    def retain_registered_device_identity(
+        self,
+        *,
+        expected_origin: str,
+        expected_user_id: str,
+        expected_instance_id: str,
+    ) -> bool:
+        """Retain only an exact persisted binding during first configuration."""
+        if (
+            self._registered_device_identity_fenced
+            or expected_instance_id != self.instance_id
+        ):
+            self.clear_registered_device_identity()
+            return False
+        identity = self._valid_registered_device(
+            self._instance_record().get("registered_device"),
+            expected_origin=expected_origin,
+            expected_user_id=expected_user_id,
+            expected_instance_id=expected_instance_id,
+        )
+        if identity is None:
+            self.clear_registered_device_identity()
+            return False
+        return True
+
+    def accept_registration_identity(
+        self,
+        row: object,
+        *,
+        expected_origin: str,
+        expected_user_id: str,
+    ) -> bool:
+        """Persist only the exact app_instances row created for the daemon owner."""
+        if not isinstance(row, dict):
+            self.clear_registered_device_identity()
+            return False
+        row_id, user_id, instance_id = row.get("id"), row.get("user_id"), row.get("instance_id")
+        try:
+            canonical_id = str(uuid.UUID(str(row_id)))
+        except (TypeError, ValueError):
+            self.clear_registered_device_identity()
+            return False
+        if (
+            str(row_id) != canonical_id
+            or user_id != expected_user_id
+            or instance_id != self.instance_id
+        ):
+            self.clear_registered_device_identity()
+            return False
+        value = self._instance_record()
+        value["instance_id"] = self.instance_id
+        value["registered_device"] = {
+            "app_instance_id": canonical_id,
+            "registration_origin": expected_origin,
+            "user_id": expected_user_id,
+            "instance_id": self.instance_id,
+        }
+        try:
+            self._save_instance_record(value)
+        except OSError:
+            self._registered_device_identity_fenced = True
+            logger.warning("Registered device identity could not be persisted")
+            return False
+        self._registered_device_identity_fenced = False
+        return True
+
+    async def registered_device_identity(self) -> RegisteredDeviceIdentity | None:
+        """Read the binding fresh and re-check current configuration and daemon owner."""
+        from app.services.sync_client import get_sync_client
+        from app.services.cloud_sync.settings_sync import get_settings_sync
+
+        settings = get_settings_sync()
+        grant = await get_sync_client().access_grant()
+        expected_origin = settings.registration_origin
+        expected_user_id = settings.expected_user_id
+        expected_instance_id = settings.expected_instance_id
+        if (
+            self._registered_device_identity_fenced
+            or not settings.is_configured
+            or grant is None
+            or expected_origin is None
+            or expected_user_id is None
+            or expected_instance_id is None
+            or grant[1] != expected_user_id
+        ):
+            self.clear_registered_device_identity()
+            return None
+        identity = self._valid_registered_device(
+            self._instance_record().get("registered_device"),
+            expected_origin=expected_origin,
+            expected_user_id=expected_user_id,
+            expected_instance_id=expected_instance_id,
+        )
+        if identity is None or identity.instance_id != self.instance_id:
+            self.clear_registered_device_identity()
+            return None
+        return identity
 
     async def update_tunnel_url(
         self,

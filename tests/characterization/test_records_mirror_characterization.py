@@ -33,8 +33,9 @@ USER = "87a6e699-3622-4869-8843-d0867456c0dd"
 class FakeStore:
     """The doors, in memory, with the two behaviours that matter."""
 
-    def __init__(self, *, switch_on: bool = True) -> None:
+    def __init__(self, *, switch_on: bool = True, switch_door_granted: bool = True) -> None:
         self.switch_on = switch_on
+        self.switch_door_granted = switch_door_granted
         self.records: dict[str, dict[str, Any]] = {}
         self.replays: dict[str, dict[str, Any]] = {}
         self.offline = False
@@ -48,6 +49,13 @@ class FakeStore:
         return handler(args)
 
     # -- doors ---------------------------------------------------------
+
+    def _store_is_open(self, args: dict[str, Any]) -> Any:
+        if not self.switch_door_granted:
+            raise RecordsStoreError(
+                "store_is_open", 403, "permission denied for function store_is_open", code="42501"
+            )
+        return self.switch_on
 
     def _knob_resolve(self, args: dict[str, Any]) -> Any:
         return self.switch_on
@@ -131,11 +139,23 @@ def test_switch_off_makes_the_feature_absent_and_loud(tmp_path: Path) -> None:
         assert "switched off" in caught.value.reason
         assert "system_enabled" in caught.value.remedy
         # Nothing was read or written behind the closed switch.
-        assert store.calls == ["platform.knob_resolve"]
+        assert store.calls == ["custom.store_is_open"]
         status = await engine.get_status()
         assert status["switch"]["open"] is False
 
     _run(tmp_path, scenario, switch_on=False)
+
+
+def test_an_ungranted_switch_door_falls_back_to_the_knob_it_reads(tmp_path: Path) -> None:
+    """A database that has not taken the grant still gets an honest answer."""
+
+    async def scenario(db: LocalDatabase, store: FakeStore, engine: RecordsSyncEngine) -> None:
+        store.switch_door_granted = False
+        await engine.sync_cycle()
+        assert store.calls[:2] == ["custom.store_is_open", "platform.knob_resolve"]
+        assert (await engine.get_status())["switch"]["open"] is True
+
+    _run(tmp_path, scenario)
 
 
 def test_pull_writes_the_store_rows_into_the_desktop_sqlite(tmp_path: Path) -> None:

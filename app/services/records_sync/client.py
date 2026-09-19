@@ -91,6 +91,11 @@ class RecordsStoreError(RuntimeError):
         return self.code == "PGRST106"
 
     @property
+    def is_door_refused(self) -> bool:
+        """This role may not call that function here (grant missing, or unknown)."""
+        return self.code in ("42501", "PGRST202") or self.status_code in (403, 404)
+
+    @property
     def is_permanent(self) -> bool:
         return (
             400 <= self.status_code < 500
@@ -189,22 +194,37 @@ class CustomStoreClient:
     async def store_is_open(self, organization_id: str) -> bool:
         """Is the record store switched on for this organization?
 
-        ``custom.store_is_open(org)`` is the store's own door, but it is NOT
-        EXECUTE-granted to ``authenticated`` (measured on the live database
-        2026-09-18) — a client cannot call it.  Its whole body is
-        ``platform.knob_resolve('custom','system_enabled', org)`` with
-        false-on-error, and ``knob_resolve`` IS granted to ``authenticated``,
-        so this asks the same knob the store door asks and answers the same
-        thing.  A switch this client cannot read is CLOSED, never open.
+        ``custom.store_is_open(org)`` is the store's own switch door and is what
+        this asks (it is EXECUTE-granted to ``authenticated`` and declared in
+        ``platform.client_callable_door`` since 2026-09-18).
+
+        If a database has not taken that grant yet the door answers 42501, and
+        this falls back — LOUDLY, never silently — to the knob the door itself
+        reads, ``platform.knob_resolve('custom','system_enabled', org)``, which
+        is the whole body of ``store_is_open``. A switch this client cannot read
+        at all is CLOSED, never open.
         """
         try:
             value = await self._transport.call(
+                "custom", "store_is_open", {"p_organization_id": organization_id}
+            )
+        except RecordsStoreError as exc:
+            if not exc.is_door_refused:
+                raise
+            logger.error(
+                "[records_sync] custom.store_is_open is not callable here (%s) — reading the "
+                "knob it reads instead: platform.knob_resolve('custom','system_enabled')",
+                exc.code or exc.status_code,
+            )
+            value = await self._transport.call(
                 "platform",
                 "knob_resolve",
-                {"p_feature": "custom", "p_key": "system_enabled", "p_organization_id": organization_id},
+                {
+                    "p_feature": "custom",
+                    "p_key": "system_enabled",
+                    "p_organization_id": organization_id,
+                },
             )
-        except RecordsStoreError:
-            raise
         if isinstance(value, bool):
             return value
         if isinstance(value, str):

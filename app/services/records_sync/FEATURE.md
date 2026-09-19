@@ -51,12 +51,20 @@ server-side principal, and a desktop holds no database credentials (and this
 repo's `pyproject.toml` forbids a path dependency on a sibling repo). The
 transport is a seam so the wire can change without the engine knowing.
 
-## Wire status (2026-09-18)
+## Wire status (2026-09-18, proven over HTTP)
 
-The doors are reachable for `authenticated`, but PostgREST does not yet expose
-the `custom` schema (`pgrst.db_schemas` lists 57 schemas without it — the
-campaign's deliberate OFF state). Until it does, the shipped HTTP transport
-answers `PGRST106` and the engine reports the feature as absent with that
-remedy. The live proof in `tests/live/` drives the same engine through a
-transport that speaks the same doors in the same `authenticated` session
-PostgREST builds.
+`custom` is exposed to PostgREST on the main database and `custom.store_is_open`
+is EXECUTE-granted to `authenticated` (landed by the W6-EXT lane), so the
+SHIPPED transport works end to end: the live proof in
+`tests/parity/test_records_mirror_live.py` drives this engine over HTTPS with
+the admin account's JWT and `Content-Profile: custom`, and every door it calls
+answers. The only non-HTTP step in that test is reading the `custom.anon_replay`
+ledger for its assertion — no client may read that table, by design — and it is
+optional.
+
+## The switch door
+
+The gate asks `custom.store_is_open(org)`. If a database has not taken that
+grant, the client falls back — with an ERROR log naming the refusal — to the
+knob that door reads, `platform.knob_resolve('custom','system_enabled', org)`,
+which is `store_is_open`'s whole body. A switch it cannot read at all is CLOSED.

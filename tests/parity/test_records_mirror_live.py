@@ -21,12 +21,14 @@ What it proves, on the one database (`db.matrxserver.com`), as
 Everything it creates (home, table, fields, records) is disposable and is
 deleted at the end.
 
-THE WIRE.  The shipped transport is PostgREST, but the database does not yet
-expose the `custom` schema to PostgREST (the campaign's own OFF state), so this
-test injects a transport that calls the SAME doors in the SAME session
-PostgREST builds for this user: `set local role authenticated` plus
-`request.jwt.claims` carrying the user's `sub`. The engine, the mirror, the
-outbox, the doors and RLS are all the real ones.
+THE WIRE IS THE REAL ONE.  Every door call in this test goes through the
+SHIPPED transport — PostgREST over HTTPS, publishable key + the user's JWT,
+`Content-Profile: custom` — because `custom` is exposed to PostgREST on the
+main database since 2026-09-18. The only thing this test does outside that wire
+is READ the idempotency ledger `custom.anon_replay` for its assertion, which no
+client may read (no table grant); that verification read uses a DSN and is not
+part of the client path. Run it without a DSN and the ledger assertion is
+skipped with a printed note — the no-duplicate proof does not depend on it.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import subprocess
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -43,11 +45,13 @@ from typing import Any
 import pytest
 
 from app.services.local_db import database as database_module
+from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
 from app.services.local_db.database import LocalDatabase
 from app.services.records_sync.client import (
     FIELD_KERNEL_ID,
     HOME_KERNEL_ID,
     CustomStoreClient,
+    PostgrestDoorTransport,
     RecordsStoreError,
 )
 from app.services.records_sync.engine import RecordsSyncEngine
@@ -56,7 +60,7 @@ pytestmark = [
     pytest.mark.network,
     pytest.mark.skipif(
         os.getenv("MATRX_LIVE_CHECKS") != "1",
-        reason="live store proof — set MATRX_LIVE_CHECKS=1 and MATRX_STORE_DSN(_FILE) to run",
+        reason="live store proof — set MATRX_LIVE_CHECKS=1 (plus admin credentials) to run",
     ),
 ]
 
@@ -64,14 +68,50 @@ ORG = os.getenv("MATRX_STORE_ORG", "884d1ce8-7b49-4fba-a2f3-0f7dd7c83d4f")
 ADMIN_UID = os.getenv("MATRX_STORE_USER", "87a6e699-3622-4869-8843-d0867456c0dd")
 
 
-def _dsn() -> str:
+def _dsn() -> str | None:
+    """Verification-only Postgres access (the anon_replay ledger). Optional."""
     path = os.getenv("MATRX_STORE_DSN_FILE")
     if path:
         return Path(path).read_text().strip()
-    dsn = os.getenv("MATRX_STORE_DSN")
-    if not dsn:
-        pytest.skip("no MATRX_STORE_DSN / MATRX_STORE_DSN_FILE")
-    return dsn
+    return os.getenv("MATRX_STORE_DSN")
+
+
+def _admin_jwt() -> str:
+    """Sign in as the shared admin test account, exactly as the desktop does."""
+    token = os.getenv("MATRX_STORE_JWT")
+    if token:
+        return token.strip()
+    email = os.getenv("AI_ADMIN_USERNAME")
+    password = os.getenv("AI_ADMIN_PASSWORD")
+    if not email or not password:
+        pytest.skip("set MATRX_STORE_JWT, or AI_ADMIN_USERNAME + AI_ADMIN_PASSWORD")
+    request = urllib.request.Request(
+        f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+        data=json.dumps({"email": email, "password": password}).encode(),
+        headers={"apikey": SUPABASE_PUBLISHABLE_KEY, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)["access_token"]
+
+
+class FlakyWire:
+    """The SHIPPED PostgREST transport, with a switch that unplugs the network.
+
+    Every call it forwards is a real HTTPS RPC to the real doors. `offline`
+    exists because a device on a plane is the thing being proved, and pulling a
+    laptop's wifi from a test is not otherwise expressible.
+    """
+
+    def __init__(self, inner: PostgrestDoorTransport) -> None:
+        self._inner = inner
+        self.offline = False
+        self.calls: list[str] = []
+
+    async def call(self, schema: str, function: str, args: dict[str, Any]) -> Any:
+        if self.offline:
+            raise RecordsStoreError(function, 0, "transport failure (no HTTP response)")
+        self.calls.append(f"{schema}.{function}")
+        return await self._inner.call(schema, function, args)
 
 
 def _psql_bin() -> str:
@@ -81,79 +121,15 @@ def _psql_bin() -> str:
     return f"{prefix}/bin/psql"
 
 
-def _sql_literal(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, (dict, list)):
-        value = json.dumps(value)
-    return "$lit$" + str(value) + "$lit$"
-
-
-class AuthenticatedDoorTransport:
-    """The doors, in the exact session PostgREST builds for this user."""
-
-    SET_RETURNING = {"read_records"}
-
-    def __init__(self, dsn: str, user_id: str) -> None:
-        self._dsn = dsn
-        self._user = user_id
-        self._psql = _psql_bin()
-        self.offline = False
-
-    async def call(self, schema: str, function: str, args: dict[str, Any]) -> Any:
-        if self.offline:
-            raise RecordsStoreError(function, 0, "transport failure (no HTTP response)")
-        named = ", ".join(f"{k} => {_sql_literal(v)}" for k, v in args.items())
-        sql = (
-            "begin;\n"
-            "set local role authenticated;\n"
-            f"select set_config('request.jwt.claims', '{{\"sub\":\"{self._user}\","
-            '"role":"authenticated"}\', true);\n'
-            f"select coalesce(json_agg(to_json(x)), '[]'::json) from {schema}.{function}({named}) x;\n"
-            "commit;\n"
-        )
-        return await asyncio.get_running_loop().run_in_executor(
-            None, self._run, sql, function
-        )
-
-    def _run(self, sql: str, function: str) -> Any:
-        proc = subprocess.run(
-            [self._psql, self._dsn, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose"],
-            input=sql,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            code = None
-            details: Any = None
-            match = re.search(r"ERROR:\s+([0-9A-Z]{5}):", proc.stderr)
-            if match:
-                code = match.group(1)
-            detail = re.search(r"DETAIL:\s+(\{.*?\})\s*$", proc.stderr, re.M | re.S)
-            if detail:
-                try:
-                    details = json.loads(detail.group(1))
-                except json.JSONDecodeError:
-                    details = None
-            raise RecordsStoreError(function, 400, proc.stderr.strip(), code=code, details=details)
-        payload = [line for line in proc.stdout.splitlines() if line.strip().startswith("[")]
-        rows = json.loads(payload[-1]) if payload else []
-        if function in self.SET_RETURNING:
-            return rows
-        return rows[0] if rows else None
-
-
 @pytest.mark.timeout(240)
 def test_records_mirror_round_trips_against_the_live_store(tmp_path: Path) -> None:
     asyncio.run(_scenario(tmp_path))
 
 
 async def _scenario(tmp_path: Path) -> None:
-    transport = AuthenticatedDoorTransport(_dsn(), ADMIN_UID)
+    http = PostgrestDoorTransport()
+    http.set_jwt(_admin_jwt())
+    transport = FlakyWire(http)
     client = CustomStoreClient(transport=transport)
     engine = RecordsSyncEngine(client)
 
@@ -223,6 +199,7 @@ async def _scenario(tmp_path: Path) -> None:
         created_records.append(seeded)
         await engine.sync_cycle()
 
+        print(f"\nWIRE: {len(transport.calls)} PostgREST RPC calls so far, e.g. {transport.calls[:3]}")
         door_rows = {r["id"]: r["document"] for r in await client.read_records(ORG, table_id)}
         sqlite_rows = {
             r["record_id"]: json.loads(r["document"])
@@ -275,11 +252,13 @@ async def _scenario(tmp_path: Path) -> None:
         print(f"AFTER REPLAY: {len(after_replay)} records in the store "
               f"(was {len(after_first)} before the replay)")
         assert len(after_replay) == len(after_first), "a replay wrote a duplicate record"
-        replays = await _replay_ledger(transport, row["client_key"])
-        print(f"REPLAY LEDGER: replays={replays['replays']} record_id={replays['record_id']}")
-        assert replays["record_id"] == captured_id
-        assert replays["replays"] >= 1
-
+        replays = await _replay_ledger(row["client_key"])
+        if replays is None:
+            print("REPLAY LEDGER: not checked (no DSN for the verification read)")
+        else:
+            print(f"REPLAY LEDGER: replays={replays['replays']} record_id={replays['record_id']}")
+            assert replays["record_id"] == captured_id
+            assert replays["replays"] >= 1
         # The record the desktop authored is really in the store, with both fields.
         captured_doc = await client.read_record(ORG, captured_id)
         assert captured_doc["title"] == f"offline row {tag}"
@@ -294,16 +273,23 @@ async def _scenario(tmp_path: Path) -> None:
         await db.close()
 
 
-async def _replay_ledger(transport: AuthenticatedDoorTransport, client_key: str) -> dict[str, Any]:
-    """Read the idempotency ledger. Verification only — the client never does this."""
-    psql = _psql_bin()
+async def _replay_ledger(client_key: str) -> dict[str, Any] | None:
+    """Read the idempotency ledger. VERIFICATION ONLY — no client may read it.
+
+    `custom.anon_replay` carries no grant for `authenticated`, by design: the
+    door writes it and nothing else reads it. Without a DSN this returns None
+    and the caller prints that the counter was not checked.
+    """
+    dsn = _dsn()
+    if not dsn:
+        return None
     sql = (
         "select coalesce(json_agg(to_json(x)), '[]'::json) from ("
         "select record_id::text, replays from custom.anon_replay "
         f"where organization_id = '{ORG}' and client_key = $lit${client_key}$lit$) x;"
     )
     proc = subprocess.run(
-        [psql, _dsn(), "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1"],
+        [_psql_bin(), dsn, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1"],
         input=sql, capture_output=True, text=True, check=True,
     )
     rows = json.loads(proc.stdout.strip().splitlines()[-1])

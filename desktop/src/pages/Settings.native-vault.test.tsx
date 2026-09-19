@@ -1,0 +1,36 @@
+/** @vitest-environment jsdom */
+import { act, StrictMode, type ComponentProps } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, expect, it, vi } from "vitest";
+const boundary = vi.hoisted(() => ({ status: vi.fn() }));
+vi.mock("@/lib/sidecar", () => ({ isTauri: () => true, getNativeVaultProviderStatus: boundary.status, openNativeVaultProviderSettings: vi.fn(), requestNativeVaultProviderEnable: vi.fn() }));
+vi.mock("@/contexts/VersionStateContext", () => ({ useVersionState: () => ({}) }));
+vi.mock("@/contexts/AccessHealthContext", () => ({ useAccessHealthContext: () => ({ actions: { refresh: vi.fn() } }) }));
+vi.mock("@/lib/api", () => ({ engine: { get: vi.fn(async () => ({ urls: [] })) } }));
+vi.mock("@/lib/settings", () => ({ loadSettings: async () => ({}), saveSetting: vi.fn(), saveSettings: vi.fn(), syncAllSettings: vi.fn(), broadcastSettingsChanged: vi.fn(), settingsToCloud: vi.fn(), mergeCloudSettings: vi.fn(), clampConcurrency: vi.fn(), MIN_CONCURRENCY: 1, MAX_CONCURRENCY: 10 }));
+vi.mock("@/components/settings/CloudAgentToolsCard", () => ({ CloudAgentToolsCard: () => null }));
+vi.mock("@/features/filesystem/FilesystemIndexSettings", () => ({ FilesystemIndexSettings: () => null }));
+import { Settings } from "./Settings";
+let root: Root | undefined;
+let container: HTMLDivElement;
+afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); vi.clearAllMocks(); });
+it("renders a fresh native status after StrictMode cleanup and setup replay", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  const pending: Array<(value: unknown) => void> = [];
+  boundary.status.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  const props = { engineStatus: "disconnected", engineUrl: null, onRefresh: vi.fn(), auth: { isAuthenticated: false, user: null }, theme: "dark", setTheme: vi.fn() } as unknown as ComponentProps<typeof Settings>;
+  await act(async () => root?.render(<StrictMode><MemoryRouter initialEntries={["/settings?tab=vault"]}><Settings {...props} /></MemoryRouter></StrictMode>));
+  expect(pending.length).toBe(2);
+  const [stale, fresh] = pending;
+  if (!stale || !fresh) throw new Error("StrictMode did not replay the status effect");
+  expect(container.textContent).toContain("Checking the native provider");
+  await act(async () => fresh({ artifact: "built", os_enablement: "disabled", enrollment: "invalidated", enable_action: "available", settings_action: "available", ready: false, message: "Fresh provider status after effect replay" }));
+  expect(container.textContent).toContain("Fresh provider status after effect replay");
+  expect(container.textContent).not.toContain("Checking the native provider");
+  await act(async () => stale({ artifact: "not_built", os_enablement: "unknown", enrollment: "none", message: "Stale pre-cleanup response" }));
+  expect(container.textContent).not.toContain("Stale pre-cleanup response");
+  expect(container.textContent).toContain("Fresh provider status after effect replay");
+});

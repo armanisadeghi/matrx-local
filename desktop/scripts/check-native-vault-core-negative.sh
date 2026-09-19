@@ -82,7 +82,7 @@ import sys
 p = Path(sys.argv[1])
 s = p.read_text()
 start = s.index('    for line in \\\n      \'test device_bound_backup_flags_are_absent_on_make_and_get ... FAILED\'')
-end = s.index('\n  else\n    cargo test --locked', start)
+end = s.index('\n  else\n    cargo +1.93.1 test --locked', start)
 weak = '''    grep -F 'device_bound_backup_flags_are_absent_on_make_and_get' "$work/pristine.log" >/dev/null
     grep -F 'eligible_not_backed_up_has_only_be_on_make_and_get' "$work/pristine.log" >/dev/null
     grep -F 'cross_user_handle_exclusion_requires_credential_excluded' "$work/pristine.log" >/dev/null

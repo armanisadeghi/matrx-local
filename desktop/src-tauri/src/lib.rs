@@ -2622,6 +2622,8 @@ pub fn run() {
             dm_list,
             dm_get,
             syncd::syncd_client_config,
+            syncd::syncd_daemon_state,
+            syncd::syncd_start,
             syncd::syncd_sign_in,
             syncd::syncd_sign_in_callback,
             syncd::syncd_sign_out,

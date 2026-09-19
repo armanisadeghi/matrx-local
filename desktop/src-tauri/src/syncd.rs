@@ -22,10 +22,18 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
 const APP_PROTOCOL_VERSION: u64 = 1;
-static STARTUP_RECONCILE: OnceCell<Result<(), String>> = OnceCell::const_new();
+/// The memoised outcome of startup reconciliation. A `Mutex` rather than a `OnceCell` because
+/// **Start sync must be able to run it again** — a once-cell turned the first failure into the
+/// permanent answer, which is how a Mac whose helper cannot exec had no way back short of a
+/// relaunch.
+static RECONCILE_OUTCOME: Mutex<Option<Result<(), DaemonDown>>> = Mutex::const_new(None);
+/// The last daemon-down reason written to lifecycle.log. Only a CHANGE is written: the same
+/// reconciliation failure was logged 4,400+ times on one machine in three days, which buries the
+/// one line that matters under its own repeats.
+static LAST_LOGGED_REASON: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 const PAYLOAD_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const VERIFY_REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -57,6 +65,156 @@ fn syncd_world() -> &'static str {
     syncd_world_for(crate::isolated_test_run())
 }
 
+/// Why the sync daemon is not usable, as ONE honest snapshot (law 4).
+///
+/// The daemon's own `state`/`state_reason` enum (`crates/matrx-sync/contracts/honest_states.json`)
+/// describes a *session*, and a daemon that never started has no session to describe — so these
+/// are app-side codes, carried to the webview through the same `state_reason` contract plus a
+/// `remedy` a non-technical person can act on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DaemonDown {
+    /// A stable app-side classification: `helper_missing`, `helper_cannot_execute`,
+    /// `never_became_ready`, `unreachable`, `incompatible`, `upgrade_blocked`.
+    pub code: &'static str,
+    /// What happened, in words a person can read.
+    pub state_reason: String,
+    /// What that person can do about it.
+    pub remedy: &'static str,
+    /// The engineering half — exit status, signal, transport error. Shown inside `state_reason`
+    /// and repeated here so a Support report does not need the sentence parsed.
+    pub detail: String,
+}
+
+const REMEDY_UPDATE: &str =
+    "Update AI Matrx to the latest version. If this keeps happening after updating, report it \
+from Settings → Support.";
+const REMEDY_REINSTALL: &str =
+    "Reinstall AI Matrx. If this keeps happening after reinstalling, report it from \
+Settings → Support.";
+const REMEDY_START_SYNC: &str =
+    "Choose Start sync to try again. If it keeps failing, restart your computer and report it \
+from Settings → Support.";
+const REMEDY_RESTART: &str =
+    "Quit AI Matrx, restart your computer, then open AI Matrx again. If it keeps happening, \
+report it from Settings → Support.";
+
+impl DaemonDown {
+    fn helper_missing() -> Self {
+        Self {
+            code: "helper_missing",
+            state_reason: "AI Matrx Sync is missing from this copy of AI Matrx, so this computer \
+cannot sign in or sync."
+                .to_string(),
+            remedy: REMEDY_REINSTALL,
+            detail: "no matrx-syncd binary beside this build".to_string(),
+        }
+    }
+
+    fn cannot_execute(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            code: "helper_cannot_execute",
+            state_reason: format!(
+                "This build's sync helper cannot start on this computer ({detail}), so this \
+computer cannot sign in or sync."
+            ),
+            remedy: REMEDY_UPDATE,
+            detail,
+        }
+    }
+
+    fn never_became_ready(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            code: "never_became_ready",
+            state_reason: format!(
+                "AI Matrx Sync started but never became ready ({detail}), so this computer cannot \
+sign in or sync."
+            ),
+            remedy: REMEDY_START_SYNC,
+            detail,
+        }
+    }
+
+    fn unreachable(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            code: "unreachable",
+            state_reason: format!(
+                "AI Matrx Sync is running on this computer but is not answering ({detail}), so \
+this computer cannot sign in or sync."
+            ),
+            remedy: REMEDY_START_SYNC,
+            detail,
+        }
+    }
+
+    fn incompatible(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            code: "incompatible",
+            state_reason: format!(
+                "AI Matrx Sync on this computer does not match this version of AI Matrx \
+({detail}), so this computer cannot sign in or sync."
+            ),
+            remedy: REMEDY_UPDATE,
+            detail,
+        }
+    }
+
+    fn upgrade_blocked(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            code: "upgrade_blocked",
+            state_reason: format!(
+                "AI Matrx Sync is running an older version and would not step aside for this \
+update ({detail}), so this computer cannot sign in or sync."
+            ),
+            remedy: REMEDY_RESTART,
+            detail,
+        }
+    }
+}
+
+/// The ONE snapshot every surface renders for the daemon process itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DaemonState {
+    /// True only when an authenticated, compatible daemon answered just now.
+    pub running: bool,
+    /// `running`, or the `DaemonDown` code.
+    pub code: &'static str,
+    /// Empty when running; otherwise the honest sentence.
+    pub state_reason: String,
+    /// `None` when running.
+    pub remedy: Option<&'static str>,
+    /// The engineering half, or empty.
+    pub detail: String,
+}
+
+impl DaemonState {
+    fn running() -> Self {
+        Self {
+            running: true,
+            code: "running",
+            state_reason: String::new(),
+            remedy: None,
+            detail: String::new(),
+        }
+    }
+}
+
+impl From<DaemonDown> for DaemonState {
+    fn from(down: DaemonDown) -> Self {
+        Self {
+            running: false,
+            code: down.code,
+            state_reason: down.state_reason,
+            remedy: Some(down.remedy),
+            detail: down.detail,
+        }
+    }
+}
+
 /// What the webview needs to talk to the daemon itself: the loopback base URL and the **read**
 /// token. Deliberately no control token, and no socket path — a browser context can use neither.
 #[derive(Debug, Clone, Serialize)]
@@ -83,9 +241,31 @@ fn matrx_home() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(crate::DEFAULT_MATRX_HOME_DIRNAME))
 }
 
-fn discovery() -> Option<serde_json::Value> {
+/// The discovery file exactly as it is on disk — alive or not. Only the reconciliation ladder,
+/// which exists to notice a corpse's file, reads it.
+fn discovery_file() -> Option<serde_json::Value> {
     let path = matrx_home()?.join("syncd.json");
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// The stale-pid rule, as a pure function so it can be proven.
+///
+/// **A discovery file whose `pid` is not alive is ABSENT.** Reading a dead daemon's port out of it
+/// is what sent `POST http://127.0.0.1:22162/v1/sign-in` at nothing for three days and showed the
+/// person a transport error instead of a state. A file with no `pid` proves no liveness either, so
+/// it is absent too — the daemon's own writer always writes one.
+fn live_discovery(file: Option<serde_json::Value>, alive: impl Fn(u32) -> bool) -> Option<serde_json::Value> {
+    let value = file?;
+    let pid = value
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())?;
+    alive(pid).then_some(value)
+}
+
+/// The discovery file, for every consumer that wants to TALK to the daemon.
+fn discovery() -> Option<serde_json::Value> {
+    live_discovery(discovery_file(), process_is_alive)
 }
 
 /// The two scoped tokens, as the single two-line file holds them (C5, S17).
@@ -171,28 +351,51 @@ async fn call(
 /// What the webview needs to read its own session and token. Called at window setup.
 #[tauri::command]
 pub async fn syncd_client_config() -> Result<SyncdClientConfig, String> {
-    if let Err(error) = startup_reconcile().await {
-        crate::lifecycle_log::log(&format!(
-            "[syncd] startup reconciliation was not ready; checking current daemon state: {error}"
+    let state = daemon_state_from(startup_reconcile().await).await;
+    if !state.running {
+        // ONE vocabulary: the rejection carries the same sentence `syncd_daemon_state` gives the
+        // screen, and the lifecycle line is written once per distinct reason, not per call.
+        log_reason_once(&format!(
+            "[syncd] sync is not available: {} ({})",
+            state.state_reason, state.detail
+        ));
+        return Err(state.state_reason);
+    }
+    Ok(SyncdClientConfig {
+        base_url: base_url(),
+        read_token: tokens().map(|(_control, read)| read),
+        world: syncd_world(),
+    })
+}
+
+/// The daemon-process state, for every surface that renders it. Never throws: a daemon that is
+/// not running is an answer, not a failure.
+#[tauri::command]
+pub async fn syncd_daemon_state() -> DaemonState {
+    let state = daemon_state_from(startup_reconcile().await).await;
+    if !state.running {
+        log_reason_once(&format!(
+            "[syncd] sync is not available: {} ({})",
+            state.state_reason, state.detail
         ));
     }
-    let version = authenticated_version().await?;
-    if version.world != syncd_world()
-        || version.min_protocol_version > APP_PROTOCOL_VERSION
-        || version.protocol_version < APP_PROTOCOL_VERSION
-    {
-        return Err("AI Matrx Sync is running with an incompatible world or protocol.".to_string());
-    }
-    let read_token = tokens().map(|(_control, read)| read);
-    let config = SyncdClientConfig {
-        base_url: base_url(),
-        read_token,
-        world: syncd_world(),
-    };
-    if config.base_url.is_none() || config.read_token.is_none() {
-        return Err("AI Matrx Sync did not become ready after startup reconciliation.".to_string());
-    }
-    Ok(config)
+    state
+}
+
+/// **Start sync.** Runs startup reconciliation again and answers with the outcome — so a control
+/// that fails updates the reason instead of doing nothing.
+#[tauri::command]
+pub async fn syncd_start() -> DaemonState {
+    let state = daemon_state_from(retry_reconcile().await).await;
+    log_reason_once(&format!(
+        "[syncd] Start sync: {}",
+        if state.running {
+            "sync is running".to_string()
+        } else {
+            format!("{} ({})", state.state_reason, state.detail)
+        }
+    ));
+    state
 }
 
 /// Start a sign-in. The daemon generates the verifier and returns the URL to open.
@@ -432,6 +635,22 @@ fn version_from_value(value: serde_json::Value) -> Result<DaemonVersion, String>
     })
 }
 
+/// The exit status of a helper that did not succeed, in the terms a Support report needs: on
+/// Unix a signal (SIGKILL = 9, which is what Gatekeeper does to an unsigned helper) beats a code.
+fn exit_detail(status: &std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("was killed by signal {signal}");
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exited with status {code}"),
+        None => "exited for an unknown reason".to_string(),
+    }
+}
+
 async fn payload_version(binary: &Path) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
 
@@ -455,7 +674,12 @@ async fn payload_version(binary: &Path) -> Result<String, String> {
         }
     };
     if !status.success() {
-        return Err("bundled matrx-syncd --version failed".to_string());
+        // "failed" alone is what made the macOS SIGKILL-at-exec regression invisible: every
+        // sealed release since v1.4.137 logged the same five words and never the signal.
+        return Err(format!(
+            "bundled matrx-syncd --version {}",
+            exit_detail(&status)
+        ));
     }
     let mut output = String::new();
     if let Some(mut stdout) = child.stdout.take() {
@@ -483,7 +707,7 @@ async fn authenticated_version() -> Result<DaemonVersion, String> {
 }
 
 fn discovery_pid() -> Option<u32> {
-    discovery()?
+    discovery_file()?
         .get("pid")?
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
@@ -622,12 +846,17 @@ impl ReconcileOps for RuntimeOps {
     async fn verify(&self, expected_version: &str, world: &str) -> bool { verify_replacement(expected_version, world).await }
 }
 
-async fn reconcile_with(ops: &impl ReconcileOps, binary: &Path, world: &str) -> Result<(), String> {
+async fn reconcile_with(
+    ops: &impl ReconcileOps,
+    binary: &Path,
+    world: &str,
+) -> Result<(), DaemonDown> {
     let expected_version = match ops.payload_version(binary).await {
         Ok(version) => version,
-        Err(error) => {
-            return Err(format!("upgrade reconciliation unavailable: {error}"));
-        }
+        // The helper could not be run at all — spawn refused, the exec was killed, the process
+        // hung. This is the class macOS puts every sealed release in when the helper's signature
+        // is not acceptable, and it is the reason a person must be told.
+        Err(error) => return Err(DaemonDown::cannot_execute(error)),
     };
     let observed = match ops.version().await {
         Ok(version) => Some(version),
@@ -639,35 +868,31 @@ async fn reconcile_with(ops: &impl ReconcileOps, binary: &Path, world: &str) -> 
         {
             None
         }
-        Err(error) => {
-            return Err(format!(
-                "upgrade reconciliation stopped: authenticated daemon is unreachable: {error}"
-            ));
-        }
+        Err(error) => return Err(DaemonDown::unreachable(error)),
     };
     match decide_reconciliation(&expected_version, &world, observed.as_ref()) {
         ReconcileDecision::StartAbsent => {
-            ops.spawn(binary, world)?;
+            ops.spawn(binary, world).map_err(DaemonDown::cannot_execute)?;
             if ops.verify(&expected_version, world).await {
                 Ok(())
             } else {
-                Err("new daemon did not become ready with the expected version".to_string())
+                Err(DaemonDown::never_became_ready(
+                    "the new daemon did not report the expected version in time",
+                ))
             }
         }
         ReconcileDecision::Adopt => Ok(()),
-        ReconcileDecision::Refuse(reason) => {
-            Err(format!("upgrade reconciliation stopped: {reason}"))
-        }
+        ReconcileDecision::Refuse(reason) => Err(DaemonDown::incompatible(reason)),
         ReconcileDecision::Upgrade => {
             let Some(original_pid) = ops.discovery_pid() else {
-                return Err(
-                    "upgrade reconciliation stopped: live daemon had no discovery pid".to_string(),
-                );
+                return Err(DaemonDown::upgrade_blocked("the live daemon had no discovery pid"));
             };
             let shutdown = match ops.shutdown().await {
                 Ok(value) => value,
                 Err(error) => {
-                    return Err(format!("upgrade shutdown refused: {error}"));
+                    return Err(DaemonDown::upgrade_blocked(format!(
+                        "it refused the shutdown request: {error}"
+                    )))
                 }
             };
             let budget = shutdown.get("budget_s").and_then(serde_json::Value::as_u64);
@@ -677,7 +902,9 @@ async fn reconcile_with(ops: &impl ReconcileOps, binary: &Path, world: &str) -> 
                 != Some(true)
                 || !matches!(budget, Some(5..=120))
             {
-                return Err("upgrade shutdown refused an invalid acknowledgement".to_string());
+                return Err(DaemonDown::upgrade_blocked(
+                    "it answered the shutdown request with an invalid acknowledgement",
+                ));
             }
             let budget = budget.expect("validated above");
             if !may_spawn_replacement(
@@ -685,41 +912,106 @@ async fn reconcile_with(ops: &impl ReconcileOps, binary: &Path, world: &str) -> 
                 ops.wait_for_shutdown(original_pid, budget).await,
                 !ops.discovery_present(),
             ) {
-                return Err(
-                    "shutdown_stalled during daemon upgrade; no replacement spawned".to_string(),
-                );
+                return Err(DaemonDown::upgrade_blocked(
+                    "it accepted the shutdown request and then did not stop",
+                ));
             }
-            ops.spawn(binary, world)?;
+            ops.spawn(binary, world).map_err(DaemonDown::cannot_execute)?;
             if ops.verify(&expected_version, world).await {
                 Ok(())
             } else {
-                Err("upgrade replacement did not report the expected version".to_string())
+                Err(DaemonDown::never_became_ready(
+                    "the replacement daemon did not report the expected version in time",
+                ))
             }
         }
     }
 }
 
-async fn reconcile(binary: PathBuf, world: String) -> Result<(), String> {
+async fn reconcile(binary: PathBuf, world: String) -> Result<(), DaemonDown> {
     reconcile_with(&RuntimeOps, &binary, &world).await
 }
 
-async fn startup_reconcile() -> Result<(), String> {
-    STARTUP_RECONCILE
-        .get_or_init(|| async {
-            let binary = daemon_binary()
-                .ok_or_else(|| "no matrx-syncd binary beside this build".to_string())?;
-            let world = syncd_world().to_string();
-            reconcile(binary, world).await
-        })
+async fn run_reconcile() -> Result<(), DaemonDown> {
+    let Some(binary) = daemon_binary() else {
+        return Err(DaemonDown::helper_missing());
+    };
+    let world = syncd_world().to_string();
+    reconcile(binary, world).await
+}
+
+/// Reconcile once and remember the outcome.
+async fn startup_reconcile() -> Result<(), DaemonDown> {
+    let mut outcome = RECONCILE_OUTCOME.lock().await;
+    if let Some(remembered) = outcome.as_ref() {
+        return remembered.clone();
+    }
+    let fresh = run_reconcile().await;
+    *outcome = Some(fresh.clone());
+    fresh
+}
+
+/// Run reconciliation AGAIN — what the Start sync control performs.
+async fn retry_reconcile() -> Result<(), DaemonDown> {
+    let mut outcome = RECONCILE_OUTCOME.lock().await;
+    let fresh = run_reconcile().await;
+    *outcome = Some(fresh.clone());
+    fresh
+}
+
+/// Write one lifecycle line per DISTINCT reason. Repeats are dropped.
+fn log_reason_once(reason: &str) {
+    let Ok(mut last) = LAST_LOGGED_REASON.lock() else { return };
+    if last.as_deref() == Some(reason) {
+        return;
+    }
+    *last = Some(reason.to_string());
+    crate::lifecycle_log::log(reason);
+}
+
+/// Is an authenticated daemon answering right now, and is it one this app can use?
+async fn observe_daemon() -> Result<(), DaemonDown> {
+    let version = authenticated_version()
         .await
-        .clone()
+        .map_err(DaemonDown::unreachable)?;
+    if version.world != syncd_world()
+        || version.min_protocol_version > APP_PROTOCOL_VERSION
+        || version.protocol_version < APP_PROTOCOL_VERSION
+    {
+        return Err(DaemonDown::incompatible(format!(
+            "it reports world {} and protocol {}",
+            version.world, version.protocol_version
+        )));
+    }
+    if base_url().is_none() || tokens().is_none() {
+        return Err(DaemonDown::never_became_ready(
+            "it published no endpoint or access token",
+        ));
+    }
+    Ok(())
+}
+
+/// The ONE snapshot: what reconciliation concluded, corrected by what the daemon says now.
+async fn daemon_state_from(reconciled: Result<(), DaemonDown>) -> DaemonState {
+    match observe_daemon().await {
+        Ok(()) => DaemonState::running(),
+        // A daemon that is not answering NOW is explained by why it never started, when that is
+        // what happened — never by the transport error that is only the symptom.
+        Err(live) => match reconciled {
+            Err(startup) => startup.into(),
+            Ok(()) => live.into(),
+        },
+    }
 }
 
 /// Queue one serialized, non-blocking startup reconciliation.
 pub fn ensure_running() {
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = startup_reconcile().await {
-            crate::lifecycle_log::log(&format!("[syncd] startup reconciliation failed: {error}"));
+        if let Err(down) = startup_reconcile().await {
+            log_reason_once(&format!(
+                "[syncd] sync is not available: {} ({})",
+                down.state_reason, down.detail
+            ));
         }
     });
 }
@@ -953,6 +1245,120 @@ mod tests {
         assert!(start_absent_allowed(false));
         assert!(stale_discovery_allows_recovery(true, true));
         assert!(!stale_discovery_allows_recovery(true, false));
+    }
+
+    #[test]
+    fn a_discovery_file_whose_pid_is_dead_is_absent_for_every_consumer() {
+        // The three-day defect: pid 52323 had been gone since the reboot, the file still named
+        // port 22162, and "Sign in with AI Matrx" POSTed at nothing. Proven failing before the
+        // rule: `live_discovery` did not exist and `base_url()` read the port regardless.
+        let file = serde_json::json!({ "pid": 52323, "tcp_port": 22162 });
+        assert!(live_discovery(Some(file.clone()), |_| false).is_none());
+        assert_eq!(live_discovery(Some(file), |pid| pid == 52323), Some(serde_json::json!({ "pid": 52323, "tcp_port": 22162 })));
+        // No file, and a file that proves no liveness, are the same answer.
+        assert!(live_discovery(None, |_| true).is_none());
+        assert!(live_discovery(Some(serde_json::json!({ "tcp_port": 22162 })), |_| true).is_none());
+    }
+
+    #[tokio::test]
+    async fn every_way_the_daemon_can_be_down_has_its_own_reason_and_remedy() {
+        struct Unrunnable;
+        impl ReconcileOps for Unrunnable {
+            async fn payload_version(&self, _: &Path) -> Result<String, String> {
+                Err("bundled matrx-syncd --version was killed by signal 9".to_string())
+            }
+            async fn version(&self) -> Result<DaemonVersion, String> { unreachable!() }
+            fn discovery_pid(&self) -> Option<u32> { None }
+            fn discovery_present(&self) -> bool { false }
+            fn process_alive(&self, _: u32) -> bool { false }
+            async fn shutdown(&self) -> Result<serde_json::Value, String> { unreachable!() }
+            async fn wait_for_shutdown(&self, _: u32, _: u64) -> bool { unreachable!() }
+            fn spawn(&self, _: &Path, _: &str) -> Result<(), String> { unreachable!() }
+            async fn verify(&self, _: &str, _: &str) -> bool { unreachable!() }
+        }
+        // (b) it cannot execute — the live macOS regression, carrying the signal.
+        let cannot_execute = reconcile_with(&Unrunnable, Path::new("payload"), "dev")
+            .await
+            .expect_err("an unrunnable helper is not a success");
+        assert_eq!(cannot_execute.code, "helper_cannot_execute");
+        assert!(cannot_execute.state_reason.contains("killed by signal 9"));
+        assert!(cannot_execute.remedy.contains("Update AI Matrx"));
+
+        // (c) it started but never became ready.
+        let mut never_ready = FakeOps::ready(Err("connection refused".to_string()));
+        never_ready.verified = false;
+        never_ready.discovery_present.set(false);
+        let never_ready = reconcile_with(&never_ready, Path::new("payload"), "dev")
+            .await
+            .expect_err("an unverified spawn is not a success");
+        assert_eq!(never_ready.code, "never_became_ready");
+        assert!(never_ready.remedy.contains("Start sync"));
+
+        // (d) it is running but unreachable — a live discovery file and no answer.
+        let unreachable = FakeOps::ready(Err("connection refused".to_string()));
+        let unreachable = reconcile_with(&unreachable, Path::new("payload"), "dev")
+            .await
+            .expect_err("an unreachable live daemon is not a success");
+        assert_eq!(unreachable.code, "unreachable");
+        assert!(unreachable.state_reason.contains("connection refused"));
+
+        // An incompatible daemon is its own reason, never "unreachable".
+        let mut wrong_world = FakeOps::ready(Ok(daemon("0.1.0")));
+        wrong_world.version = Ok(DaemonVersion { world: "live".to_string(), ..daemon("0.1.0") });
+        let incompatible = reconcile_with(&wrong_world, Path::new("payload"), "dev")
+            .await
+            .expect_err("a world mismatch is not a success");
+        assert_eq!(incompatible.code, "incompatible");
+
+        // An older daemon that will not step aside is not the same thing as one that never ran.
+        let mut stalled = FakeOps::ready(Ok(daemon("0.1.0")));
+        stalled.stopped = false;
+        let blocked = reconcile_with(&stalled, Path::new("payload"), "dev")
+            .await
+            .expect_err("a stalled shutdown is not a success");
+        assert_eq!(blocked.code, "upgrade_blocked");
+
+        // (a) the helper is missing beside the build.
+        assert_eq!(DaemonDown::helper_missing().code, "helper_missing");
+        assert!(DaemonDown::helper_missing().remedy.contains("Reinstall"));
+
+        // Every reason a person reads carries a remedy they can act on.
+        for down in [cannot_execute, never_ready, unreachable, incompatible, blocked, DaemonDown::helper_missing()] {
+            assert!(!down.state_reason.is_empty() && !down.remedy.is_empty());
+            assert!(down.remedy.contains("Support"), "{} has no way to report it", down.code);
+        }
+    }
+
+    #[test]
+    fn a_killed_helper_says_which_signal_killed_it() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(
+                exit_detail(&std::process::ExitStatus::from_raw(9)),
+                "was killed by signal 9"
+            );
+            assert_eq!(
+                exit_detail(&std::process::ExitStatus::from_raw(1 << 8)),
+                "exited with status 1"
+            );
+        }
+    }
+
+    #[test]
+    fn one_lifecycle_line_per_distinct_reason() {
+        // 4,400 identical lines in three days is the defect; the reason changing is the signal.
+        *LAST_LOGGED_REASON.lock().expect("lock") = None;
+        let seen = |reason: &str| {
+            let mut last = LAST_LOGGED_REASON.lock().expect("lock");
+            let repeat = last.as_deref() == Some(reason);
+            *last = Some(reason.to_string());
+            !repeat
+        };
+        assert!(seen("reason a"));
+        assert!(!seen("reason a"));
+        assert!(seen("reason b"));
+        assert!(seen("reason a"));
     }
 
     #[test]

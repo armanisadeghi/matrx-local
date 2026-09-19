@@ -4,8 +4,9 @@ import Foundation
 
 private final class Transport: NativeVaultPasskeyTransporting {
     var requests: [URLRequest] = []
+    var cancellations = 0
     var failCreate = false
-    func cancel() {}
+    func cancel() { cancellations += 1 }
     func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
         requests.append(request)
         let path = request.url!.path
@@ -32,16 +33,32 @@ private final class Transport: NativeVaultPasskeyTransporting {
         let identity = ASPasskeyCredentialIdentity(relyingPartyIdentifier: "example.com", userName: "user", credentialID: Data(repeating: 7, count: 16), userHandle: Data("handle".utf8), recordIdentifier: nil)
         return ASPasskeyCredentialRequest(credentialIdentity: identity, clientDataHash: Data(repeating: 9, count: 32), userVerificationPreference: .preferred, supportedAlgorithms: [ASCOSEAlgorithmIdentifier(rawValue: -7)])
     }
+    static func malformedRequest() -> ASPasskeyCredentialRequest {
+        let identity = ASPasskeyCredentialIdentity(relyingPartyIdentifier: "", userName: "user", credentialID: Data(repeating: 7, count: 16), userHandle: Data("handle".utf8), recordIdentifier: nil)
+        return ASPasskeyCredentialRequest(credentialIdentity: identity, clientDataHash: Data(repeating: 9, count: 32), userVerificationPreference: .preferred, supportedAlgorithms: [ASCOSEAlgorithmIdentifier(rawValue: -7)])
+    }
     static func main() async {
         let transport = Transport(); var completed = false; var cancelled = false
         let grant = NativeVaultSessionAccess.Grant(accessToken: "token", subject: "subject", generation: "generation")
-        let coordinator = await MainActor.run { NativeVaultPasskeyCoordinator(sessionAccess: NativeVaultSessionAccess(), transport: transport, key: { "key" }, cancel: { _ in cancelled = true }, completeRegistration: { _ in completed = true }, completeAssertion: { _ in }, acquire: { $0(.success(grant)) }, currentState: { NativePasswordCurrentState(generation: "generation", subject: "subject") }, completionLock: { try $0(NativePasswordCurrentState(generation: "generation", subject: "subject")) }, organizationChoice: { _ in 0 }, matchChoice: { _ in 0 }, label: { $0 }, verifyUser: {}) }
+        var evaluatedContexts: [ObjectIdentifier] = []
+        let coordinator = await MainActor.run { NativeVaultPasskeyCoordinator(sessionAccess: NativeVaultSessionAccess(), transport: transport, key: { "key" }, cancel: { _ in cancelled = true }, completeRegistration: { _ in completed = true }, completeAssertion: { _ in }, acquire: { $0(.success(grant)) }, currentState: { NativePasswordCurrentState(generation: "generation", subject: "subject") }, completionLock: { try $0(NativePasswordCurrentState(generation: "generation", subject: "subject")) }, organizationChoice: { _ in 0 }, matchChoice: { _ in 0 }, label: { $0 }, evaluator: { context, _, completion in evaluatedContexts.append(ObjectIdentifier(context)); completion(true) }) }
         let controller = await MainActor.run { CredentialProviderViewController() }
         await MainActor.run { controller.nativePasskeyCoordinator = coordinator; controller.prepareInterface(forPasskeyRegistration: request()) }
-        await wait { completed || cancelled }; precondition(completed, "registration cancelled after \(transport.requests.map { $0.url!.path })"); precondition(!cancelled); precondition(transport.requests.contains { $0.url!.path.hasSuffix("/passkeys") })
+        await wait { completed || cancelled }; precondition(completed, "registration cancelled after \(transport.requests.map { $0.url!.path })"); precondition(!cancelled); precondition(evaluatedContexts.count == 2 && evaluatedContexts[0] == evaluatedContexts[1]); precondition(transport.requests.contains { $0.url!.path.hasSuffix("/passkeys") })
         cancelled = false
         let hanging = await MainActor.run { NativeVaultPasskeyCoordinator(sessionAccess: NativeVaultSessionAccess(), transport: transport, key: { "key" }, cancel: { _ in cancelled = true }, completeRegistration: { _ in }, completeAssertion: { _ in }, acquire: { callback in DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { callback(.success(grant)) } }, operationTimeout: 0.02) }
         await MainActor.run { controller.nativePasskeyCoordinator = hanging; controller.prepareInterface(forPasskeyRegistration: request()) }; await wait { cancelled }
+        precondition(transport.cancellations > 0, "timeout did not cancel the active transport")
+
+        var denied = false; var acquired = 0
+        let denial = await MainActor.run { NativeVaultPasskeyCoordinator(sessionAccess: NativeVaultSessionAccess(), transport: transport, key: { "key" }, cancel: { _ in denied = true }, completeRegistration: { _ in preconditionFailure("denied request completed") }, completeAssertion: { _ in }, acquire: { callback in acquired += 1; callback(.success(grant)) }, currentState: { NativePasswordCurrentState(generation: "generation", subject: "subject") }, completionLock: { try $0(NativePasswordCurrentState(generation: "generation", subject: "subject")) }, organizationChoice: { _ in 0 }, evaluator: { _, _, completion in completion(false) }) }
+        await MainActor.run { controller.nativePasskeyCoordinator = denial; controller.prepareInterface(forPasskeyRegistration: request()) }
+        await wait { denied }; precondition(acquired == 0, "denied local authentication reached session acquisition")
+
+        var malformedCancelled = false; var malformedAcquire = 0
+        let malformed = await MainActor.run { NativeVaultPasskeyCoordinator(sessionAccess: NativeVaultSessionAccess(), transport: transport, key: { "key" }, cancel: { _ in malformedCancelled = true }, completeRegistration: { _ in preconditionFailure("malformed request completed") }, completeAssertion: { _ in }, acquire: { callback in malformedAcquire += 1; callback(.success(grant)) }) }
+        await MainActor.run { controller.nativePasskeyCoordinator = malformed; controller.prepareInterface(forPasskeyRegistration: malformedRequest()) }
+        await wait { malformedCancelled }; precondition(malformedAcquire == 0, "malformed request reached local authentication")
         print("PASS native passkey actual callback coordinator corpus")
     }
 }

@@ -162,7 +162,7 @@ async def test_execute_rechecks_context_and_device_after_server_await(monkeypatc
 
     class Limits:
         async def acquire(self, _address):
-            return asyncio.Semaphore(1), asyncio.Semaphore(1)
+            return transport.CapacityLease(asyncio.Semaphore(1), asyncio.Semaphore(1))
 
     monkeypatch.setattr(transport, "_LIMITS", Limits())
     monkeypatch.setattr(transport, "get_local_browser_context", lambda: Context())
@@ -282,6 +282,136 @@ async def test_identity_readiness_notifies_existing_socket_without_polling(monke
     transport._on_device_identity_change(identity)
     await asyncio.sleep(0)
     assert delivered == [("ready-socket", {"type": "local_browser.register_required", "version": 1, "engine_boot_id": "boot", "revision": 4})]
+
+
+@pytest.mark.anyio
+async def test_startup_installs_and_shutdown_removes_identity_subscription(monkeypatch):
+    class Context:
+        def subscribe(self, listener):
+            self.listener = listener
+            return lambda: setattr(self, "removed", True)
+    class Manager:
+        def subscribe_registered_device_identity(self, listener):
+            self.listener = listener
+            return lambda: setattr(self, "removed", True)
+        async def registered_device_identity(self): return None
+    context, manager = Context(), Manager()
+    monkeypatch.setattr(transport, "get_local_browser_context", lambda: context)
+    monkeypatch.setattr(transport, "get_instance_manager", lambda: manager)
+    transport.uninstall_transport_subscriptions()
+    await transport.install_transport_subscriptions()
+    assert callable(context.listener) and callable(manager.listener)
+    transport.uninstall_transport_subscriptions()
+    assert context.removed and manager.removed
+
+
+@pytest.mark.anyio
+async def test_detached_replay_retains_global_capacity_after_creator_cancels(monkeypatch):
+    limits = transport.CallbackLimits()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    peak = 0
+    async def blocked_dispatch(*_args):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        started.set()
+        await release.wait()
+        active -= 1
+        return {"status": "acknowledged", "operation": "discover", "receipt": "accepted"}
+    async def current(*_args): return None
+    monkeypatch.setattr(transport, "_dispatch", blocked_dispatch)
+    monkeypatch.setattr(transport, "_assert_current", current)
+    entries = []
+    tasks = []
+    identity = transport._ReplayIdentity(("u", "s"), "boot", 1, "org", "device", "gen", "conn", 1)
+    fresh = FreshContext(BrowserContext("boot", 1, "org"), ("u", "s"), "jwt")
+    for index in range(4):
+        capacity = await limits.acquire(f"127.0.0.{index + 1}")
+        entry = transport._ReplayEntry(b"digest", identity, 4_000_000_000_000, asyncio.get_running_loop().create_future())
+        entries.append(entry)
+        tasks.append(asyncio.create_task(transport._run_replay(entry, object(), {"grant": "x", "operation": "discover"}, fresh, "device", capacity)))
+    await started.wait()
+    while active < 4:
+        await asyncio.sleep(0)
+    with pytest.raises(transport.TransportRefusal) as limited:
+        await limits.acquire("127.0.0.9")
+    assert limited.value.reason == "rate_limited"
+    assert peak <= 4 and limits.global_gate._value == 0  # noqa: SLF001
+    release.set()
+    await asyncio.gather(*tasks)
+    assert limits.global_gate._value == 4  # noqa: SLF001
+
+
+@pytest.mark.anyio
+async def test_cancelled_creator_leaves_its_capacity_with_detached_replay(monkeypatch):
+    """Cancelling HTTP cannot make an in-flight socket relay exceed its cap."""
+    fresh = FreshContext(BrowserContext("boot", 3, "org"), ("user", "session"), "jwt")
+    device = type("Device", (), {"app_instance_id": "device", "user_id": "user"})()
+    registration = type("Registration", (), {
+        "extension_generation": "11111111-1111-4111-8111-111111111111",
+        "connection_id": "22222222-2222-4222-8222-222222222222",
+    })()
+    class Context:
+        async def refresh(self): return fresh
+    class Instance:
+        async def registered_device_identity(self): return device
+    dispatched = asyncio.Event()
+    release = asyncio.Event()
+    async def blocked_dispatch(*_args):
+        dispatched.set()
+        await release.wait()
+        return {"status": "acknowledged", "operation": "discover", "receipt": "accepted"}
+    async def accepted(*_args):
+        return {"status": "accepted", "jti": "00000000-0000-0000-0000-000000000006", "expires_at_ms": 4_000_000_000_000, "controller_revision": 1}
+    async def current(*_args): return None
+    limits = transport.CallbackLimits()
+    monkeypatch.setattr(transport, "_LIMITS", limits)
+    monkeypatch.setattr(transport, "_REPLAYS", transport._ReplayTable())
+    monkeypatch.setattr(transport, "ensure_context_subscription", lambda: None)
+    monkeypatch.setattr(transport, "get_local_browser_context", lambda: Context())
+    monkeypatch.setattr(transport, "get_instance_manager", lambda: Instance())
+    monkeypatch.setattr(transport, "current_local_browser_registration", lambda **_kw: registration)
+    monkeypatch.setattr(transport, "_verify", accepted)
+    monkeypatch.setattr(transport, "_assert_current", current)
+    monkeypatch.setattr(transport, "_dispatch", blocked_dispatch)
+    creator = asyncio.create_task(transport.execute_lifecycle({"grant": "x", "operation": "discover"}, address="127.0.0.1", raw_bytes=b"x"))
+    await dispatched.wait()
+    creator.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await creator
+    assert limits.global_gate._value == 3  # noqa: SLF001
+    release.set()
+    await asyncio.sleep(0)
+    assert limits.global_gate._value == 4  # noqa: SLF001
+
+
+@pytest.mark.anyio
+async def test_composed_app_never_redirects_or_logs_private_callback_variants(monkeypatch):
+    from app import main
+    import app.api.local_browser_transport as api
+
+    seen = []
+    for name in ("debug", "info", "warning", "error"):
+        monkeypatch.setattr(main.logger, name, lambda *args, **kwargs: seen.append((args, kwargs)))
+
+    async def exploded(*_args, **_kwargs):
+        raise RuntimeError("must stay private")
+    monkeypatch.setattr(api, "execute_lifecycle", exploded)
+    sentinel = "COMPOSED_PRIVATE_GRANT_SENTINEL"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app, client=("127.0.0.1", 22242)),
+        base_url="http://engine.test",
+    ) as client:
+        exact = await client.post("/local-browser/execute?opaque=COMPOSED_PRIVATE_GRANT_SENTINEL", content=json.dumps({"grant": sentinel, "operation": "discover"}).encode())
+        slash = await client.post("/local-browser/execute/", content=json.dumps({"grant": sentinel, "operation": "discover"}).encode())
+        malformed = await client.post("/local-browser/execute", content=b'{"grant":')
+        overflow = await client.post("/local-browser/execute", content=b"x" * (32 * 1024 + 1))
+    assert exact.status_code == 503 and slash.status_code == 404
+    assert slash.headers.get("location") is None
+    assert all(response.headers["cache-control"] == "no-store" for response in (exact, slash, malformed, overflow))
+    assert all(sentinel not in repr(item) for item in seen)
 
 
 @pytest.mark.anyio

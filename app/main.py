@@ -31,6 +31,11 @@ from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
 from app.api.auth import AuthMiddleware
+from app.services.local_browser_transport import (
+    install_transport_subscriptions,
+    protected_private_path,
+    uninstall_transport_subscriptions,
+)
 from app.launcher import get_registry as _get_launcher_registry
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
 from app.api.tunnel_routes import router as tunnel_router
@@ -368,7 +373,7 @@ def _request_body_for_log(path: str, body):
 
 def _has_private_request_body(path: str) -> bool:
     """Whether this route's complete request body is private by contract."""
-    return path == "/local-browser/execute" or path == "/v1" or path.startswith("/v1/")
+    return protected_private_path(path) or path == "/v1" or path.startswith("/v1/")
 
 
 def _format_request_details(request: Request, body=None) -> str:
@@ -1581,9 +1586,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _event_loop_liveness_loop(), name="event-loop-liveness"
     )
 
+    # This fence must exist before a WebSocket can report ready/register.
+    # It is removed in the same lifespan that installed it.
+    await install_transport_subscriptions()
+
     try:
         yield
     finally:
+        uninstall_transport_subscriptions()
         # Cancel before disarming without an await between them: a task already
         # scheduled to pulse cannot re-arm capture during a long teardown.
         event_loop_liveness_task.cancel()
@@ -2239,7 +2249,7 @@ async def _log_requests_dispatch(request: Request, call_next):
 
     # This grant envelope is opaque private authority. Do not read, format,
     # sanitize, record, or diagnose any part of the request or response.
-    if request.url.path == "/local-browser/execute":
+    if protected_private_path(request.url.path):
         try:
             response = await call_next(request)
         except Exception:

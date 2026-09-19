@@ -25,6 +25,7 @@ from app.api.remote_auth import (
 )
 from app.services.pairing import matches_pair_token
 from app.services.catalogs.models import KNOWN_KINDS as _CATALOG_KINDS
+from app.services.local_browser_transport import private_path, protected_private_path
 
 logger = get_logger()
 
@@ -189,11 +190,20 @@ def _auth_error_response(
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path.rstrip("/") or "/"
+        raw_path = request.url.path
+        # A slash variant must never fall through to FastAPI's redirect after
+        # body-logging middleware has seen an opaque grant.
+        if protected_private_path(raw_path) and not private_path(raw_path):
+            return JSONResponse(
+                status_code=404,
+                content={"status": "refused", "operation": "unknown", "reason": "invalid_request"},
+                headers={"Cache-Control": "no-store"},
+            )
+        path = raw_path.rstrip("/") or "/"
 
         # The local-browser callback owns grant verification itself.  It must
         # not be interpreted as a normal desktop bearer or pairing token.
-        if path == "/local-browser/execute":
+        if private_path(raw_path):
             response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             return response

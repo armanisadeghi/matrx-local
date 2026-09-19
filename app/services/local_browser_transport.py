@@ -47,6 +47,11 @@ def private_path(path: str) -> bool:
     return path == "/local-browser/execute"
 
 
+def protected_private_path(path: str) -> bool:
+    """Both spellings must be private; only the canonical one is executable."""
+    return path in {"/local-browser/execute", "/local-browser/execute/"}
+
+
 def _bounded_json(raw: bytes) -> dict[str, str]:
     if len(raw) > _MAX_BODY:
         raise TransportRefusal("invalid_request", 413)
@@ -117,7 +122,7 @@ class CallbackLimits:
     async def __aenter__(self) -> "CallbackLimits":
         raise RuntimeError("use acquire")
 
-    async def acquire(self, address: str) -> tuple[asyncio.Semaphore, asyncio.Semaphore]:
+    async def acquire(self, address: str) -> "CapacityLease":
         key = address if address and len(address) <= 128 else "unknown"
         bucket = self._buckets.setdefault(key, _Bucket(4.0, 0.5)) if len(self._buckets) < 65 or key == "unknown" else self._buckets["unknown"]
         now = time.monotonic()
@@ -132,7 +137,20 @@ class CallbackLimits:
         except BaseException:
             self.global_gate.release()
             raise
-        return self.global_gate, address_gate
+        return CapacityLease(self.global_gate, address_gate)
+
+
+@dataclass
+class CapacityLease:
+    global_gate: asyncio.Semaphore
+    address_gate: asyncio.Semaphore
+    released: bool = False
+
+    def release(self) -> None:
+        if not self.released:
+            self.released = True
+            self.address_gate.release()
+            self.global_gate.release()
 
 
 _LIMITS = CallbackLimits()
@@ -207,6 +225,28 @@ def ensure_context_subscription(context: LocalBrowserContext | None = None) -> N
             _unsubscribe_identity()
         _subscription_manager = manager
         _unsubscribe_identity = manager.subscribe_registered_device_identity(_on_device_identity_change)
+
+
+async def install_transport_subscriptions() -> None:
+    """Install before the app serves sockets; seed identity without polling."""
+    ensure_context_subscription()
+    try:
+        await get_instance_manager().registered_device_identity()
+    except Exception:
+        return
+
+
+def uninstall_transport_subscriptions() -> None:
+    global _subscription_context, _unsubscribe, _subscription_manager, _unsubscribe_identity, _observed_device_identity
+    if _unsubscribe is not None:
+        _unsubscribe()
+    if _unsubscribe_identity is not None:
+        _unsubscribe_identity()
+    _subscription_context = None
+    _unsubscribe = None
+    _subscription_manager = None
+    _unsubscribe_identity = None
+    _observed_device_identity = None
 
 
 async def read_execute_body(request: Any) -> dict[str, str]:
@@ -435,7 +475,7 @@ def _settle_failure(entry: _ReplayEntry, reason: str = "transport_unavailable") 
 
 async def _run_replay(
     entry: _ReplayEntry, registration: Any, request: dict[str, str],
-    fresh: FreshContext, device_id: str,
+    fresh: FreshContext, device_id: str, capacity: CapacityLease,
 ) -> None:
     """Keep the one socket dispatch alive if its initiating HTTP call leaves."""
     try:
@@ -452,11 +492,14 @@ async def _run_replay(
             entry.future.exception()
     except BaseException:
         _settle_failure(entry)
+    finally:
+        capacity.release()
 
 
 async def execute_lifecycle(request: dict[str, str], *, address: str = "unknown", raw_bytes: bytes | None = None) -> dict[str, str]:
     ensure_context_subscription()
-    global_gate, address_gate = await _LIMITS.acquire(address)
+    capacity = await _LIMITS.acquire(address)
+    handed_to_replay = False
     try:
         context = get_local_browser_context()
         fresh = await context.refresh()
@@ -473,16 +516,18 @@ async def execute_lifecycle(request: dict[str, str], *, address: str = "unknown"
             identity=_identity(fresh, device.app_instance_id, registration, accepted["controller_revision"]), expires_at_ms=accepted["expires_at_ms"],
         )
         if not creator:
+            capacity.release()
             return await _join_replay(entry, fresh, device.app_instance_id, registration)
         try:
             asyncio.create_task(
-                _run_replay(entry, registration, request, fresh, device.app_instance_id),
+                _run_replay(entry, registration, request, fresh, device.app_instance_id, capacity),
                 name="local-browser-lifecycle-replay",
             )
+            handed_to_replay = True
         except BaseException:
             _settle_failure(entry)
             raise
         return await _join_replay(entry, fresh, device.app_instance_id, registration)
     finally:
-        address_gate.release()
-        global_gate.release()
+        if not handed_to_replay:
+            capacity.release()

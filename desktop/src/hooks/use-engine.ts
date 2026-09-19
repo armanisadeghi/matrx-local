@@ -19,6 +19,10 @@ import {
   isNativeVaultHostRevisionCurrent,
   subscribeNativeVaultHostEvents,
 } from "@/lib/native-vault-auth";
+import {
+  startLocalBrowserContextSynchronization,
+  synchronizeLocalBrowserContext,
+} from "@/lib/local-browser-context";
 
 export type EngineStatus = "discovering" | "starting" | "connected" | "disconnected" | "error";
 
@@ -255,6 +259,8 @@ export function useEngine() {
       emitClientLog("success", `Engine discovered at ${url}`, "engine");
       connectedAtRef.current = Date.now();
       update({ url, status: "connected", error: null });
+      startLocalBrowserContextSynchronization();
+      synchronizeLocalBrowserContext(url);
 
       // Populate the frontend platform context from the engine
       try {
@@ -406,6 +412,7 @@ export function useEngine() {
         // null-locked engine URL after a flap, WITHOUT a manual restart.
         connectedAtRef.current = Date.now();
         update({ status: "connected", url: engine.engineUrl, error: null });
+        synchronizeLocalBrowserContext(engine.engineUrl);
       }
     }, 10000);
 

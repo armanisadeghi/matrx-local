@@ -191,6 +191,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path.rstrip("/") or "/"
 
+        # The local-browser callback owns grant verification itself.  It must
+        # not be interpreted as a normal desktop bearer or pairing token.
+        if path == "/local-browser/execute":
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
         # CORS preflights carry no credentials and must pass through.
         if request.method == "OPTIONS":
             return await call_next(request)

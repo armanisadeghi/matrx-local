@@ -28,6 +28,7 @@ pub enum VerificationCallbackError {
 }
 #[derive(uniffi::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistenceCallbackError {
+    CredentialExcluded,
     Refused,
     Failed,
 }
@@ -358,6 +359,9 @@ impl RegistrationPersister for CallbackPersister<'_> {
                 .operation
                 .cancellation()
                 .map_err(|_| FixedError::Cancelled),
+            Err(PersistenceCallbackError::CredentialExcluded) => {
+                Err(FixedError::CredentialExcluded)
+            }
             Err(PersistenceCallbackError::Refused) => Err(FixedError::PersistenceFailed),
             Err(PersistenceCallbackError::Failed) => Err(FixedError::OperationFailed),
         }
@@ -493,6 +497,46 @@ mod tests {
         }
         async fn persist_registration(&self, _: Vec<u8>) -> Result<(), PersistenceCallbackError> {
             Ok(())
+        }
+    }
+    struct PersistenceFailure(PersistenceCallbackError);
+    #[async_trait]
+    impl NativeCeremony for PersistenceFailure {
+        async fn verify_user(&self) -> Result<(), VerificationCallbackError> {
+            Ok(())
+        }
+        async fn persist_registration(&self, _: Vec<u8>) -> Result<(), PersistenceCallbackError> {
+            Err(self.0)
+        }
+    }
+    #[tokio::test]
+    async fn bridge_preserves_atomic_server_exclusion_without_returning_a_credential() {
+        for (failure, expected) in [
+            (
+                PersistenceCallbackError::CredentialExcluded,
+                BridgeError::CredentialExcluded,
+            ),
+            (
+                PersistenceCallbackError::Refused,
+                BridgeError::PersistenceFailed,
+            ),
+            (
+                PersistenceCallbackError::Failed,
+                BridgeError::OperationFailed,
+            ),
+        ] {
+            let result = NativeOperation::new()
+                .register(
+                    registration(),
+                    vec![],
+                    4096,
+                    Box::new(PersistenceFailure(failure)),
+                )
+                .await;
+            match result {
+                Err(actual) => assert_eq!(actual, expected),
+                Ok(_) => panic!("failed persistence must not produce a credential"),
+            }
         }
     }
     struct Pending {

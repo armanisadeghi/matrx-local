@@ -38,14 +38,6 @@ import { DEFAULT_CHAT_MANDATE_KEY, DEFAULT_CHAT_MANDATE_REF } from "@/lib/mandat
 import { cn } from "@/lib/utils";
 import type { PromptVariable } from "@/types/agents";
 
-function defaultVariableValues(variables: PromptVariable[]): Record<string, string> {
-  const defaults: Record<string, string> = {};
-  for (const variable of variables) {
-    if (variable.defaultValue) defaults[variable.name] = variable.defaultValue;
-  }
-  return defaults;
-}
-
 function CloudEmptyState({ agentName }: { agentName: string | null }) {
   return (
     <div className="flex h-full items-center justify-center px-4">
@@ -199,7 +191,11 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
     void ensureExecution(selectedAgentId).then((payload) => {
       if (cancelled) return;
       setActiveVariables(payload.variables);
-      setVariableValues(defaultVariableValues(payload.variables));
+      // Saved defaults are NEVER copied into the sent values: the server applies
+      // them as the floor under explicit AND scope-bound values. A seeded default
+      // looked like a typed value and beat a scope binding (2026-09-18). The inputs
+      // already display `values[name] ?? defaultValue`.
+      setVariableValues({});
       if (payload.modelId) setModel(payload.modelId);
     });
 

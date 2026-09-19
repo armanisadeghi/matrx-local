@@ -30,6 +30,7 @@ mod appkit_terminate;
 mod syncd;
 mod error_outbox;
 mod native_vault;
+mod native_vault_settings;
 mod tcc;
 
 mod transcription;
@@ -119,69 +120,19 @@ struct FetchResponse {
     final_url: String,
 }
 
-/// Measured host-side facts only. This command does not inspect Keychain,
-/// communicate with the provider, or infer OS enablement.
-#[derive(Serialize)]
-struct NativeVaultProviderStatus {
-    supported: bool,
-    artifact: &'static str,
-    os_enablement: &'static str,
-    enrollment: &'static str,
-    signing_profile: &'static str,
-    ready: bool,
-    message: String,
-    state: &'static str,
-    last_configured_subject: Option<String>,
-}
-
-#[cfg(target_os = "macos")]
-fn native_vault_provider_appex_path() -> Option<std::path::PathBuf> {
-    let executable = std::env::current_exe().ok()?;
-    let contents = executable.parent()?.parent()?;
-    Some(
-        contents
-            .join("PlugIns")
-            .join("AI Matrx Vault Provider.appex"),
-    )
+#[tauri::command]
+async fn native_vault_provider_status(app: tauri::AppHandle) -> native_vault_settings::Status {
+    native_vault_settings::status(app).await
 }
 
 #[tauri::command]
-fn native_vault_provider_status() -> NativeVaultProviderStatus {
-    #[cfg(target_os = "macos")]
-    {
-        let built = native_vault_provider_appex_path().is_some_and(|path| path.is_dir());
-        let historical = native_vault::status();
-        return NativeVaultProviderStatus {
-            supported: true,
-            artifact: if built { "built" } else { "not_built" },
-            // There is no host-only proof of macOS enablement for this shell.
-            // Reporting ready here would turn a source build into a false
-            // installed-provider claim.
-            os_enablement: "unverified",
-            enrollment: historical.state,
-            signing_profile: "not_verified",
-            ready: false,
-            message: if built {
-                "The native provider is packaged, but macOS enablement, signed-profile verification, and enrollment have not been proven. It is not ready to fill credentials.".into()
-            } else {
-                "This build does not include the native Vault provider. A packaged macOS build is required before enablement can be checked.".into()
-            },
-            state: historical.state,
-            last_configured_subject: historical.last_configured_subject,
-        };
-    }
-    #[cfg(not(target_os = "macos"))]
-    NativeVaultProviderStatus {
-        supported: false,
-        artifact: "not_supported",
-        os_enablement: "not_supported",
-        enrollment: "not_supported",
-        signing_profile: "not_supported",
-        ready: false,
-        message: "Native Vault AutoFill is currently a macOS-only provider shell.".into(),
-        state: "unsupported_platform",
-        last_configured_subject: None,
-    }
+async fn request_native_vault_provider_enable(app: tauri::AppHandle) -> native_vault_settings::ActionResult {
+    native_vault_settings::request_enable(app).await
+}
+
+#[tauri::command]
+async fn open_native_vault_provider_settings(app: tauri::AppHandle) -> native_vault_settings::ActionResult {
+    native_vault_settings::open_settings(app).await
 }
 
 #[tauri::command]
@@ -2601,6 +2552,8 @@ pub fn run() {
             installed_app_version,
             running_app_version,
             native_vault_provider_status,
+            request_native_vault_provider_enable,
+            open_native_vault_provider_settings,
             invalidate_native_vault_host_actor,
             reconcile_native_vault_host_actor,
             set_compact_mode,

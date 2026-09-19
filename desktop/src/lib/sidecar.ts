@@ -53,19 +53,38 @@ export function isTauri(): boolean {
 export interface NativeVaultProviderStatus {
   supported: boolean;
   artifact: "built" | "not_built" | "not_supported";
-  os_enablement: "unverified" | "not_supported";
+  os_enablement: "enabled" | "disabled" | "unavailable" | "not_supported";
   enrollment: "uninitialized" | "configured" | "invalidated" | "state_corrupt" | "busy" | "state_unavailable" | "unsupported_platform";
   signing_profile: "not_verified" | "not_supported";
   ready: false;
   message: string;
   state: string;
   last_configured_subject: string | null;
+  enable_action: "available" | "not_supported" | "unavailable";
+  settings_action: "available" | "not_supported" | "unavailable";
+}
+
+export interface NativeVaultProviderAction {
+  outcome: "enabled" | "disabled" | "opened" | "failed" | "pending" | "cooldown" | "unavailable";
+  message: string;
 }
 
 export async function getNativeVaultProviderStatus(): Promise<NativeVaultProviderStatus | null> {
   const inv = await loadTauriInvoke();
   if (!inv) return null;
   return inv<NativeVaultProviderStatus>("native_vault_provider_status");
+}
+
+export async function requestNativeVaultProviderEnable(): Promise<NativeVaultProviderAction | null> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return null;
+  return inv<NativeVaultProviderAction>("request_native_vault_provider_enable");
+}
+
+export async function openNativeVaultProviderSettings(): Promise<NativeVaultProviderAction | null> {
+  const inv = await loadTauriInvoke();
+  if (!inv) return null;
+  return inv<NativeVaultProviderAction>("open_native_vault_provider_settings");
 }
 
 export type NativeVaultTransition = "applied" | "unchanged" | "state_unavailable" | "state_corrupt" | "busy" | "unsupported_platform";

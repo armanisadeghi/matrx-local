@@ -1,0 +1,453 @@
+//! Host-only, non-secret setup for the bundled AutoFill provider.
+//!
+//! This module deliberately reads only the credential-identity store's enabled
+//! bit. It never asks the provider for identities, credentials, tokens, or
+//! private-session state.
+
+use serde::Serialize;
+
+#[derive(Clone, Serialize)]
+pub struct Status {
+    pub supported: bool,
+    pub artifact: &'static str,
+    pub os_enablement: &'static str,
+    pub enrollment: &'static str,
+    pub signing_profile: &'static str,
+    pub ready: bool,
+    pub message: String,
+    pub state: &'static str,
+    pub last_configured_subject: Option<String>,
+    pub enable_action: &'static str,
+    pub settings_action: &'static str,
+}
+
+#[derive(Serialize)]
+pub struct ActionResult {
+    pub outcome: &'static str,
+    pub message: String,
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::*;
+    use block2::RcBlock;
+    use objc2::{rc::autoreleasepool, runtime::AnyClass, sel};
+    use objc2_authentication_services::{
+        ASCredentialIdentityStore, ASCredentialIdentityStoreState, ASSettingsHelper,
+    };
+    use objc2_foundation::{NSBundle, NSError, NSString};
+    use std::{
+        ffi::c_void,
+        path::PathBuf,
+        sync::{Arc, Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
+    use tokio::sync::oneshot;
+
+    const HOST_ID: &str = "com.aimatrx.desktop";
+    const PROVIDER_ID: &str = "com.aimatrx.desktop.vault-provider";
+    const PROVIDER_NAME: &str = "AI Matrx Vault Provider.appex";
+    pub(super) const ENABLE_COOLDOWN: Duration = Duration::from_secs(10);
+    const READ_WAIT: Duration = Duration::from_secs(8);
+    const PROMPT_WAIT: Duration = Duration::from_secs(120);
+
+    // Security.framework does not yet expose SecTask in the maintained objc2
+    // crate. Keep this narrow C boundary here instead of placing selectors or
+    // entitlement plumbing in lib.rs.
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn SecTaskCreateFromSelf(allocator: *const c_void) -> *const c_void;
+        fn SecTaskCopyValueForEntitlement(
+            task: *const c_void,
+            entitlement: *const c_void,
+            error: *mut *const c_void,
+        ) -> *const c_void;
+        fn CFBooleanGetValue(value: *const c_void) -> bool;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFGetTypeID(value: *const c_void) -> usize;
+        fn CFRelease(value: *const c_void);
+    }
+
+    #[derive(Default)]
+    pub(super) struct EnableOperation {
+        pending: bool,
+        invoked_at: Option<Instant>,
+    }
+    impl EnableOperation {
+        pub(super) fn claim(&mut self, now: Instant) -> Result<(), &'static str> {
+            if self.pending {
+                return Err("pending");
+            }
+            if self
+                .invoked_at
+                .is_some_and(|started| now.duration_since(started) < ENABLE_COOLDOWN)
+            {
+                return Err("cooldown");
+            }
+            self.pending = true;
+            Ok(())
+        }
+        pub(super) fn invoked(&mut self, now: Instant) {
+            self.invoked_at = Some(now);
+        }
+        pub(super) fn complete(&mut self) {
+            self.pending = false;
+        }
+    }
+    static ENABLE_OPERATION: OnceLock<Mutex<EnableOperation>> = OnceLock::new();
+    fn enable_operation() -> &'static Mutex<EnableOperation> {
+        ENABLE_OPERATION.get_or_init(|| Mutex::new(EnableOperation::default()))
+    }
+
+    fn string(value: &NSString) -> String {
+        autoreleasepool(|pool| unsafe { value.to_str(pool) }.to_owned())
+    }
+
+    fn has_autofill_entitlement() -> bool {
+        let name = NSString::from_str(
+            "com.apple.developer.authentication-services.autofill-credential-provider",
+        );
+        unsafe {
+            let task = SecTaskCreateFromSelf(std::ptr::null());
+            if task.is_null() {
+                return false;
+            }
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                objc2::rc::Retained::as_ptr(&name).cast(),
+                std::ptr::null_mut(),
+            );
+            CFRelease(task);
+            if value.is_null() {
+                return false;
+            }
+            let enabled = CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+            CFRelease(value);
+            enabled
+        }
+    }
+
+    fn host_artifact() -> Result<PathBuf, &'static str> {
+        let bundle = NSBundle::mainBundle();
+        let id = bundle.bundleIdentifier().map(|value| string(&value));
+        if id.as_deref() != Some(HOST_ID) {
+            return Err("This running executable is not the AI Matrx Desktop app bundle.");
+        }
+        let root = PathBuf::from(string(&bundle.bundlePath()));
+        let executable = bundle
+            .executablePath()
+            .map(|value| PathBuf::from(string(&value)));
+        let expected_executable_parent = root.join("Contents").join("MacOS");
+        if !root.extension().is_some_and(|extension| extension == "app")
+            || !executable
+                .as_ref()
+                .is_some_and(|path| path.starts_with(&expected_executable_parent))
+        {
+            return Err("This build is not running from its own packaged app bundle.");
+        }
+        let running = std::env::current_exe()
+            .ok()
+            .and_then(|path| std::fs::canonicalize(path).ok());
+        let bundled = executable.and_then(|path| std::fs::canonicalize(path).ok());
+        if running.is_none() || running != bundled {
+            return Err("The running executable does not match this app bundle’s executable.");
+        }
+        let provider = root.join("Contents").join("PlugIns").join(PROVIDER_NAME);
+        if !provider.is_dir() {
+            return Err("This app bundle does not contain the AI Matrx Vault provider.");
+        }
+        let info = provider.join("Contents").join("Info.plist");
+        let provider_id = plist::Value::from_file(&info).ok().and_then(|value| {
+            value
+                .as_dictionary()
+                .and_then(|dictionary| dictionary.get("CFBundleIdentifier"))
+                .and_then(plist::Value::as_string)
+                .map(str::to_owned)
+        });
+        if provider_id.as_deref() != Some(PROVIDER_ID) {
+            return Err("The bundled provider identifier does not match this desktop app.");
+        }
+        if !has_autofill_entitlement() {
+            return Err(
+                "This desktop app is missing the AutoFill credential-provider entitlement.",
+            );
+        }
+        Ok(provider)
+    }
+
+    fn selector_available(selector: objc2::runtime::Sel) -> bool {
+        AnyClass::get(c"ASSettingsHelper").is_some_and(|class| class.responds_to(selector))
+    }
+    fn identity_store_available() -> bool {
+        AnyClass::get(c"ASCredentialIdentityStore")
+            .is_some_and(|class| class.responds_to(sel!(sharedStore)))
+    }
+    fn settings_available() -> bool {
+        selector_available(sel!(openCredentialProviderAppSettingsWithCompletionHandler:))
+    }
+    fn enable_available() -> bool {
+        selector_available(sel!(requestToTurnOnCredentialProviderExtensionWithCompletionHandler:))
+    }
+
+    fn base_status() -> Status {
+        let historical = crate::native_vault::status();
+        match host_artifact() {
+            Ok(_) if identity_store_available() => Status {
+                supported: true, artifact: "built", os_enablement: "unavailable",
+                enrollment: historical.state, signing_profile: "not_verified", ready: false,
+                message: "Checking this app’s current macOS AutoFill state. A configured Vault record does not establish a live session or filling authority.".into(),
+                state: historical.state, last_configured_subject: historical.last_configured_subject,
+                enable_action: if enable_available() { "available" } else { "not_supported" },
+                settings_action: if settings_available() { "available" } else { "not_supported" },
+            },
+            Ok(_) => unavailable_status(historical, "This macOS version cannot read credential-provider enablement."),
+            Err(reason) => unavailable_status(historical, reason),
+        }
+    }
+    fn unavailable_status(
+        historical: crate::native_vault::HistoricalStatus,
+        reason: &str,
+    ) -> Status {
+        Status {
+            supported: false,
+            artifact: "not_built",
+            os_enablement: "unavailable",
+            enrollment: historical.state,
+            signing_profile: "not_verified",
+            ready: false,
+            message: reason.into(),
+            state: historical.state,
+            last_configured_subject: historical.last_configured_subject,
+            enable_action: "unavailable",
+            settings_action: "unavailable",
+        }
+    }
+
+    async fn read_enabled(app: &tauri::AppHandle) -> Result<bool, &'static str> {
+        if !identity_store_available() {
+            return Err("not_supported");
+        }
+        let (tx, rx) = oneshot::channel::<bool>();
+        let completion = Arc::new(Mutex::new(Some(tx)));
+        app.run_on_main_thread(move || {
+            let store = unsafe { ASCredentialIdentityStore::sharedStore() };
+            let callback_completion = completion.clone();
+            let callback = RcBlock::new(
+                move |state: std::ptr::NonNull<ASCredentialIdentityStoreState>| {
+                    if let Some(tx) = callback_completion
+                        .lock()
+                        .ok()
+                        .and_then(|mut guard| guard.take())
+                    {
+                        let _ = tx.send(unsafe { state.as_ref().isEnabled() });
+                    }
+                },
+            );
+            unsafe {
+                store.getCredentialIdentityStoreStateWithCompletion(&callback);
+            }
+        })
+        .map_err(|_| "unavailable")?;
+        match tokio::time::timeout(READ_WAIT, rx).await {
+            Ok(Ok(enabled)) => Ok(enabled),
+            _ => Err("unavailable"),
+        }
+    }
+
+    pub async fn status(app: tauri::AppHandle) -> Status {
+        let mut status = base_status();
+        if !status.supported {
+            return status;
+        }
+        match read_enabled(&app).await {
+            Ok(true) => {
+                status.os_enablement = "enabled";
+                status.message = "macOS has enabled AutoFill for this packaged provider. This does not verify a live Vault session or credential filling.".into();
+            }
+            Ok(false) => {
+                status.os_enablement = "disabled";
+                status.message = "macOS AutoFill is off for this packaged provider. Enable it or open macOS settings.".into();
+            }
+            Err("not_supported") => {
+                status.os_enablement = "not_supported";
+                status.message = "This macOS version cannot read AutoFill provider state.".into();
+            }
+            Err(_) => {
+                status.os_enablement = "unavailable";
+                status.message = "macOS did not return the current AutoFill state. Try Refresh; Settings remains available when supported.".into();
+            }
+        }
+        status
+    }
+
+    pub async fn open_settings(app: tauri::AppHandle) -> ActionResult {
+        let status = base_status();
+        if !status.supported || !settings_available() {
+            return ActionResult {
+                outcome: "unavailable",
+                message: status.message,
+            };
+        }
+        let (tx, rx) = oneshot::channel::<bool>();
+        let completion = Arc::new(Mutex::new(Some(tx)));
+        if app
+            .run_on_main_thread(move || {
+                let callback_completion = completion.clone();
+                let callback = RcBlock::new(move |error: *mut NSError| {
+                    if let Some(tx) = callback_completion
+                        .lock()
+                        .ok()
+                        .and_then(|mut guard| guard.take())
+                    {
+                        let _ = tx.send(error.is_null());
+                    }
+                });
+                unsafe {
+                    ASSettingsHelper::openCredentialProviderAppSettingsWithCompletionHandler(Some(
+                        &callback,
+                    ));
+                }
+            })
+            .is_err()
+        {
+            return ActionResult {
+                outcome: "unavailable",
+                message: "AI Matrx Desktop could not reach macOS’s main thread.".into(),
+            };
+        }
+        match tokio::time::timeout(READ_WAIT, rx).await {
+            Ok(Ok(true)) => ActionResult { outcome: "opened", message: "macOS AutoFill settings opened. Opening Settings does not confirm that AutoFill is enabled.".into() },
+            Ok(Ok(false)) => ActionResult { outcome: "failed", message: "macOS could not open AutoFill settings.".into() },
+            _ => ActionResult { outcome: "pending", message: "macOS has not confirmed Settings navigation yet.".into() },
+        }
+    }
+
+    pub async fn request_enable(app: tauri::AppHandle) -> ActionResult {
+        let status = base_status();
+        if !status.supported || !enable_available() {
+            return ActionResult {
+                outcome: "unavailable",
+                message: status.message,
+            };
+        }
+        {
+            let mut operation = enable_operation().lock().expect("enable operation lock");
+            match operation.claim(Instant::now()) {
+                Err("pending") => return ActionResult { outcome: "pending", message: "macOS is still handling the earlier AutoFill request. You can open Settings while it is pending.".into() },
+                Err(_) => return ActionResult { outcome: "cooldown", message: "macOS requires ten seconds between AutoFill enable requests.".into() },
+                Ok(()) => {}
+            }
+        }
+        let (tx, rx) = oneshot::channel::<bool>();
+        let completion = Arc::new(Mutex::new(Some(tx)));
+        let dispatch = app.run_on_main_thread(move || {
+            enable_operation()
+                .lock()
+                .expect("enable operation lock")
+                .invoked(Instant::now());
+            let callback_completion = completion.clone();
+            let callback = RcBlock::new(move |enabled: objc2::runtime::Bool| {
+                let mut state = enable_operation().lock().expect("enable operation lock");
+                state.complete();
+                if let Some(tx) = callback_completion
+                    .lock()
+                    .ok()
+                    .and_then(|mut guard| guard.take())
+                {
+                    let _ = tx.send(enabled.as_bool());
+                }
+            });
+            unsafe {
+                ASSettingsHelper::requestToTurnOnCredentialProviderExtensionWithCompletionHandler(
+                    &callback,
+                );
+            }
+        });
+        if dispatch.is_err() {
+            enable_operation()
+                .lock()
+                .expect("enable operation lock")
+                .pending = false;
+            return ActionResult {
+                outcome: "unavailable",
+                message: "AI Matrx Desktop could not reach macOS’s main thread.".into(),
+            };
+        }
+        match tokio::time::timeout(PROMPT_WAIT, rx).await {
+            Ok(Ok(true)) => ActionResult { outcome: "enabled", message: "macOS enabled AutoFill. Refreshing status will confirm the current state.".into() },
+            Ok(Ok(false)) => ActionResult { outcome: "disabled", message: "AutoFill is still off in macOS.".into() },
+            _ => ActionResult { outcome: "pending", message: "macOS has not completed the AutoFill request. You can open Settings while it is pending.".into() },
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::platform::{EnableOperation, ENABLE_COOLDOWN};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn enable_admission_is_single_owner_and_cooldown_starts_on_invocation() {
+        let now = Instant::now();
+        let mut state = EnableOperation::default();
+        assert_eq!(state.claim(now), Ok(()));
+        assert_eq!(state.claim(now), Err("pending")); // simultaneous request
+        state.invoked(now + Duration::from_secs(1));
+        state.complete(); // callback after a caller timeout/cancellation
+        assert_eq!(
+            state.claim(now + Duration::from_secs(1) + ENABLE_COOLDOWN - Duration::from_millis(1)),
+            Err("cooldown")
+        );
+        assert_eq!(
+            state.claim(now + Duration::from_secs(1) + ENABLE_COOLDOWN),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn scheduled_request_survives_a_missing_callback_until_a_callback_completes_it() {
+        let now = Instant::now();
+        let mut state = EnableOperation::default();
+        assert_eq!(state.claim(now), Ok(())); // enqueue succeeded
+        assert_eq!(state.claim(now + Duration::from_secs(121)), Err("pending")); // waiter timed out, no callback
+        state.complete(); // late callback is the only completion owner
+        assert_eq!(state.claim(now + Duration::from_secs(121)), Ok(()));
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use platform::{open_settings, request_enable, status};
+
+#[cfg(not(target_os = "macos"))]
+pub async fn status(_: tauri::AppHandle) -> Status {
+    Status {
+        supported: false,
+        artifact: "not_supported",
+        os_enablement: "not_supported",
+        enrollment: "not_supported",
+        signing_profile: "not_supported",
+        ready: false,
+        message: "Native Vault AutoFill is currently available only in AI Matrx Desktop on macOS."
+            .into(),
+        state: "unsupported_platform",
+        last_configured_subject: None,
+        enable_action: "unavailable",
+        settings_action: "unavailable",
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub async fn open_settings(_: tauri::AppHandle) -> ActionResult {
+    ActionResult {
+        outcome: "unavailable",
+        message: "Native Vault AutoFill is currently available only in AI Matrx Desktop on macOS."
+            .into(),
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub async fn request_enable(_: tauri::AppHandle) -> ActionResult {
+    ActionResult {
+        outcome: "unavailable",
+        message: "Native Vault AutoFill is currently available only in AI Matrx Desktop on macOS."
+            .into(),
+    }
+}

@@ -4,7 +4,9 @@ import {
   invalidateNativeVaultHostActor,
   invokeTauri,
   isTauri,
+  openNativeVaultProviderSettings,
   reconcileNativeVaultHostActor,
+  requestNativeVaultProviderEnable,
   waitForOwnedEngineProbe,
 } from "./sidecar";
 
@@ -26,6 +28,8 @@ describe("Tauri runtime boundary", () => {
     expect(isTauri()).toBe(false);
     await expect(invalidateNativeVaultHostActor()).resolves.toBe("unsupported_platform");
     await expect(reconcileNativeVaultHostActor("actor-a")).resolves.toBe("unsupported_platform");
+    await expect(requestNativeVaultProviderEnable()).resolves.toBeNull();
+    await expect(openNativeVaultProviderSettings()).resolves.toBeNull();
   });
 });
 

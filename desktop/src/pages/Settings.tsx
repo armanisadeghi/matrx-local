@@ -80,6 +80,9 @@ import type { Theme } from "@/hooks/use-theme";
 import {
   getNativeVaultProviderStatus,
   isTauri,
+  openNativeVaultProviderSettings,
+  requestNativeVaultProviderEnable,
+  type NativeVaultProviderAction,
   type NativeVaultProviderStatus,
 } from "@/lib/sidecar";
 import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
@@ -405,6 +408,8 @@ export function Settings({
   const [nativeVaultProvider, setNativeVaultProvider] =
     useState<NativeVaultProviderStatus | null>(null);
   const [nativeVaultChecking, setNativeVaultChecking] = useState(false);
+  const [nativeVaultAction, setNativeVaultAction] = useState<NativeVaultProviderAction | null>(null);
+  const nativeVaultRequest = useRef(0);
 
   // Hardware profile state
   const [hardwareProfile, setHardwareProfile] =
@@ -492,12 +497,29 @@ export function Settings({
   }, [activeTab, engineStatus]);
 
   const loadNativeVaultProvider = useCallback(async () => {
+    const request = ++nativeVaultRequest.current;
     setNativeVaultChecking(true);
     try {
-      setNativeVaultProvider(await getNativeVaultProviderStatus());
+      const status = await getNativeVaultProviderStatus();
+      if (request === nativeVaultRequest.current) setNativeVaultProvider(status);
+    } catch {
+      if (request === nativeVaultRequest.current) setNativeVaultAction({ outcome: "unavailable", message: "The desktop app could not read the native provider status. Try Refresh." });
     } finally {
-      setNativeVaultChecking(false);
+      if (request === nativeVaultRequest.current) setNativeVaultChecking(false);
     }
+  }, []);
+
+  const enableNativeVaultProvider = useCallback(async () => {
+    setNativeVaultAction(null);
+    const action = await requestNativeVaultProviderEnable();
+    setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
+    if (action?.outcome === "enabled" || action?.outcome === "disabled") void loadNativeVaultProvider();
+  }, [loadNativeVaultProvider]);
+
+  const openNativeVaultSettings = useCallback(async () => {
+    setNativeVaultAction(null);
+    const action = await openNativeVaultProviderSettings();
+    setNativeVaultAction(action ?? { outcome: "unavailable", message: "This action requires AI Matrx Desktop on macOS." });
   }, []);
 
   useEffect(() => {
@@ -3132,8 +3154,7 @@ export function Settings({
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Password and passkey filling will use a native macOS provider.
-                  This shell does not create, reveal, or connect any Vault credentials.
+                  This provider can support password AutoFill. Its enabled state does not verify a live Vault session or credential filling.
                 </p>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -3148,7 +3169,7 @@ export function Settings({
                   </div>
                 ) : (
                   <>
-                    <div className="grid gap-2 text-xs sm:grid-cols-2">
+                    <div className="grid gap-2 text-xs sm:grid-cols-3">
                       <div className="rounded-lg border border-border px-3 py-2">
                         <p className="font-medium">Provider build</p>
                         <p className="mt-0.5 text-muted-foreground">
@@ -3157,17 +3178,26 @@ export function Settings({
                       </div>
                       <div className="rounded-lg border border-border px-3 py-2">
                         <p className="font-medium">macOS enablement</p>
-                        <p className="mt-0.5 text-muted-foreground">Not yet verified</p>
+                        <p className="mt-0.5 text-muted-foreground">
+                          {nativeVaultProvider.os_enablement === "enabled" ? "Enabled" : nativeVaultProvider.os_enablement === "disabled" ? "Off" : nativeVaultProvider.os_enablement === "not_supported" ? "Not supported by this macOS version" : "Unavailable"}
+                        </p>
                       </div>
                       <div className="rounded-lg border border-border px-3 py-2">
-                        <p className="font-medium">Vault connection</p>
-                        <p className="mt-0.5 text-muted-foreground">Not connected</p>
-                      </div>
-                      <div className="rounded-lg border border-border px-3 py-2">
-                        <p className="font-medium">Signed provider profile</p>
-                        <p className="mt-0.5 text-muted-foreground">Not yet verified</p>
+                        <p className="font-medium">Previous connection state</p>
+                        <p className="mt-0.5 text-muted-foreground">{nativeVaultProvider.enrollment === "configured" ? "Previously configured; rechecked when filling" : "No prior provider connection"}</p>
                       </div>
                     </div>
+                    <div className="flex flex-wrap gap-2">
+                      {nativeVaultProvider.enable_action === "available" && nativeVaultProvider.os_enablement !== "enabled" && (
+                        <Button size="sm" onClick={() => void enableNativeVaultProvider()} disabled={nativeVaultChecking}>Enable AutoFill</Button>
+                      )}
+                      {nativeVaultProvider.settings_action === "available" && (
+                        <Button size="sm" variant="outline" onClick={() => void openNativeVaultSettings()} disabled={nativeVaultChecking}>Open macOS settings</Button>
+                      )}
+                    </div>
+                    {nativeVaultAction && (
+                      <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{nativeVaultAction.message}</div>
+                    )}
                     <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                       <span>{nativeVaultProvider.message}</span>

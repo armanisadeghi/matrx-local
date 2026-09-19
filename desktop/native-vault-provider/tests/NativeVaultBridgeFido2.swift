@@ -15,7 +15,10 @@ private func clientData(_ type: String, _ challenge: Data) -> Data {
     Data("{\"type\":\"\(type)\",\"challenge\":\"\(base64url(challenge))\",\"origin\":\"https://example.com\",\"crossOrigin\":false}".utf8)
 }
 private enum CallbackMode { case accept, denied, failed, unexpected, refusedPersistence, failedPersistence, unexpectedPersistence }
-private enum Unexpected: Error { case callback }
+private enum Unexpected: Error, CustomStringConvertible {
+    case callback
+    var description: String { "NATIVE_TEST_PRIVATE_CALLBACK_SENTINEL" }
+}
 
 private actor Ceremony: NativeCeremony {
     private let verification: CallbackMode
@@ -29,7 +32,7 @@ private actor Ceremony: NativeCeremony {
         case .accept: return
         case .denied: throw VerificationCallbackError.Denied
         case .failed: throw VerificationCallbackError.Failed
-        case .unexpected: throw VerificationCallbackError.Unexpected
+        case .unexpected: throw Unexpected.callback
         default: return
         }
     }
@@ -37,7 +40,7 @@ private actor Ceremony: NativeCeremony {
         switch persistence {
         case .refusedPersistence: throw PersistenceCallbackError.Refused
         case .failedPersistence: throw PersistenceCallbackError.Failed
-        case .unexpectedPersistence: throw PersistenceCallbackError.Unexpected
+        case .unexpectedPersistence: throw Unexpected.callback
         default: break
         }
         // Inspect persisted metadata only inside this in-memory harness; the
@@ -92,19 +95,19 @@ struct NativeVaultBridgeFido2 {
         guard !emptyState.0 && emptyState.1 else { throw Unexpected.callback }
 
         // Actual generated callbacks cover declared denied/failed/unexpected outcomes.
-        try await expect(.VerificationDenied) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .denied)); return }
-        try await expect(.OperationFailed) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .failed)); return }
-        try await expect(.OperationFailed) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .unexpected)); return }
-        try await expect(.PersistenceFailed) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .refusedPersistence)); return }
-        try await expect(.OperationFailed) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .failedPersistence)); return }
-        try await expect(.OperationFailed) { try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .unexpectedPersistence)); return }
+        try await expect(.VerificationDenied) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .denied)); return }
+        try await expect(.OperationFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .failed)); return }
+        try await expect(.OperationFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(verification: .unexpected)); return }
+        try await expect(.PersistenceFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .refusedPersistence)); return }
+        try await expect(.OperationFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .failedPersistence)); return }
+        try await expect(.OperationFailed) { _ = try await NativeOperation().register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony(persistence: .unexpectedPersistence)); return }
 
         let before = NativeOperation(); before.cancel()
-        try await expect(.Cancelled) { try await before.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
+        try await expect(.Cancelled) { _ = try await before.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
         let after = NativeOperation()
         _ = try await after.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony())
         after.cancel()
-        try await expect(.AlreadyUsed) { try await after.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
+        try await expect(.AlreadyUsed) { _ = try await after.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
 
         // Deterministic callback gates prove both cancel/completion race winners.
         let cancellationGate = GateCeremony(); let cancellationOperation = NativeOperation()
@@ -115,13 +118,13 @@ struct NativeVaultBridgeFido2 {
         let completionTask = Task { try await completionOperation.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: completionGate) }
         await completionGate.waitUntilStarted(); await completionGate.release(); _ = try await completionTask.value
         completionOperation.cancel()
-        try await expect(.AlreadyUsed) { try await completionOperation.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
+        try await expect(.AlreadyUsed) { _ = try await completionOperation.register(input: registrationInput(), existingSources: [], maxSourceBytes: 65_536, ceremony: Ceremony()); return }
 
         // The source stays in harness memory while actual bridge checks reject
         // lower limits, wrong RP, and a mismatched allow-list.
-        try await expect(.InvalidSource) { try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId), canonicalSource: nilSource, maxSourceBytes: 1, ceremony: Ceremony()); return }
-        try await expect(.NoCredentials) { try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId, rpId: "wrong.example"), canonicalSource: nilSource, maxSourceBytes: 65_536, ceremony: Ceremony()); return }
-        try await expect(.NoCredentials) { try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId, allowed: [Data(repeating: 1, count: 16)]), canonicalSource: nilSource, maxSourceBytes: 65_536, ceremony: Ceremony()); return }
+        try await expect(.InvalidSource) { _ = try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId), canonicalSource: nilSource, maxSourceBytes: 1, ceremony: Ceremony()); return }
+        try await expect(.NoCredentials) { _ = try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId, rpId: "wrong.example"), canonicalSource: nilSource, maxSourceBytes: 65_536, ceremony: Ceremony()); return }
+        try await expect(.NoCredentials) { _ = try await NativeOperation().authenticate(input: assertionInput(nilRegistration.credentialId, allowed: [Data(repeating: 1, count: 16)]), canonicalSource: nilSource, maxSourceBytes: 65_536, ceremony: Ceremony()); return }
     }
     static func main() async {
         if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "acceptance" {

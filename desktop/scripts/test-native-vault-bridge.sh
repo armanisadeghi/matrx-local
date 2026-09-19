@@ -12,4 +12,9 @@ xcrun swiftc -application-extension -parse-as-library -target arm64-apple-macosx
   "$BRIDGE/native_vault_core.swift" "$ROOT/native-vault-provider/tests/NativeVaultBridgeFido2.swift" \
   -framework CryptoKit -o "$WORK/native-vault-bridge-fido2"
 uv run --no-project --with 'fido2==2.2.1' python "$ROOT/native-vault-provider/core/provenance/fido2_swift_bridge_verifier.py" "$WORK/native-vault-bridge-fido2"
-"$WORK/native-vault-bridge-fido2" acceptance
+ACCEPTANCE_OUTPUT="$("$WORK/native-vault-bridge-fido2" acceptance 2>&1)"
+if [[ "$ACCEPTANCE_OUTPUT" != "PASS native Swift bridge acceptance" ]]; then
+  echo "Native bridge acceptance emitted unexpected diagnostics" >&2
+  exit 1
+fi
+printf '%s\n' "$ACCEPTANCE_OUTPUT"

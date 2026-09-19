@@ -25,13 +25,24 @@ const MAX_SOURCE_BYTES: u32 = 65_536;
 pub enum VerificationCallbackError {
     Denied,
     Failed,
-    Unexpected,
 }
 #[derive(uniffi::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistenceCallbackError {
     Refused,
     Failed,
-    Unexpected,
+}
+// UniFFI uses this conversion for undeclared foreign callback errors. Drop
+// their diagnostic text here: the provider returns a fixed failure, not an
+// unwinding panic or caller-controlled error description.
+impl From<uniffi::UnexpectedUniFFICallbackError> for VerificationCallbackError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed
+    }
+}
+impl From<uniffi::UnexpectedUniFFICallbackError> for PersistenceCallbackError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed
+    }
 }
 #[derive(uniffi::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeError {
@@ -216,7 +227,6 @@ impl NativeOperation {
             Ok(()) => Ok(()),
             Err(VerificationCallbackError::Denied) => Err(BridgeError::VerificationDenied),
             Err(VerificationCallbackError::Failed) => Err(BridgeError::OperationFailed),
-            Err(VerificationCallbackError::Unexpected) => Err(BridgeError::OperationFailed),
         }
     }
     async fn register_inner(
@@ -350,7 +360,6 @@ impl RegistrationPersister for CallbackPersister<'_> {
                 .map_err(|_| FixedError::Cancelled),
             Err(PersistenceCallbackError::Refused) => Err(FixedError::PersistenceFailed),
             Err(PersistenceCallbackError::Failed) => Err(FixedError::OperationFailed),
-            Err(PersistenceCallbackError::Unexpected) => Err(FixedError::OperationFailed),
         }
     }
 }

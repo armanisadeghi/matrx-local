@@ -351,33 +351,26 @@ jobs:
           fi
         shell: bash
 
-      # ---- Sign llama.cpp binaries (macOS only) ----
-      # Apple notarization requires every binary inside the app bundle to be
-      # signed with a Developer ID certificate. The llama.cpp binaries and dylibs
-      # we download from GitHub Releases are only ad-hoc signed, so we must
-      # re-sign them with our Developer ID here before tauri-action bundles them.
+      # ---- Sign llama.cpp dylibs (macOS only) ----
+      # Apple notarization requires every Mach-O inside the app bundle to be
+      # signed with a Developer ID certificate. The llama.cpp dylibs we
+      # download from GitHub Releases are only ad-hoc signed and tauri-bundler
+      # never signs `resources`, so we re-sign them here.
       #
-      # This covers two things:
-      #   1. All *.dylib files (shared libraries the binary links against at runtime)
-      #   2. The llama-server executable itself
-      #
-      # Without signing the executable, macOS Gatekeeper blocks it at launch with
-      # "killed by macOS before writing anything" — the exact crash seen in production.
-      - name: Sign llama.cpp binaries for notarization
+      # The EXECUTABLES (llama-server, uv, cloudflared, matrx-syncd,
+      # matrx-egress) are deliberately NOT signed here: they are signed with
+      # `sidecar/sidecar.entitlements.plist` by the
+      # "Stage and sign macOS helper executables" step below. Signing them here
+      # would be wasted work — and before that step existed, tauri-bundler
+      # OVERWROTE this signature with the HOST's entitlements file, which is
+      # what SIGKILLed every helper at exec from v1.4.137 to v1.4.170
+      # (feedback 696c1213).
+      - name: Sign llama.cpp dylibs for notarization
         if: matrix.platform == 'macos-15'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           DYLIB_DIR="desktop/src-tauri/binaries"
-
-          # Determine which llama-server binary applies to this build target
-          if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
-            LLAMA_BIN="$DYLIB_DIR/llama-server-aarch64-apple-darwin"
-            UV_BIN="$DYLIB_DIR/uv-aarch64-apple-darwin"
-          else
-            LLAMA_BIN="$DYLIB_DIR/llama-server-x86_64-apple-darwin"
-            UV_BIN="$DYLIB_DIR/uv-x86_64-apple-darwin"
-          fi
 
           # Sign all dylibs first (they are loaded at runtime by the binary).
           # Per-file timeout via perl alarm (MXL-D-054): codesign can hang
@@ -397,43 +390,6 @@ jobs:
           else
             echo "No dylibs found in $DYLIB_DIR — skipping dylib signing"
           fi
-
-          # Sign the llama-server executable itself.
-          # The binary from llama.cpp GitHub Releases carries only an ad-hoc
-          # signature (flags=adhoc,linker-signed). Gatekeeper rejects ad-hoc
-          # signatures for binaries not launched by the user from their own
-          # build. We must replace it with a proper Developer ID signature so
-          # the signed and notarized app bundle passes Gatekeeper on end-user
-          # machines.
-          if [[ -f "$LLAMA_BIN" ]]; then
-            echo "Signing llama-server binary: $(basename "$LLAMA_BIN")"
-            codesign \
-              --force \
-              --timestamp \
-              --options runtime \
-              --sign "$APPLE_SIGNING_IDENTITY" \
-              "$LLAMA_BIN"
-            echo "✅ llama-server binary signed"
-          else
-            echo "Warning: llama-server binary not found at $LLAMA_BIN — skipping"
-          fi
-
-          # uv performs customer-side managed-runtime installation. It is an
-          # executable in the notarized app and must carry the same hardened
-          # Developer ID signature as every other bundled helper.
-          if [[ ! -f "$UV_BIN" ]]; then
-            echo "ERROR: bundled runtime installer not found at $UV_BIN" >&2
-            exit 1
-          fi
-          echo "Signing bundled runtime installer: $(basename "$UV_BIN")"
-          codesign \
-            --force \
-            --timestamp \
-            --options runtime \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            "$UV_BIN"
-          codesign --verify --strict --verbose=2 "$UV_BIN"
-          echo "✅ bundled runtime installer signed"
 
       # ---- Frontend + Tauri build ----
       - name: Install pnpm
@@ -567,6 +523,42 @@ jobs:
           else
             ./scripts/build-egress.sh --sidecar
           fi
+
+      # ---- macOS helper executables (NEVER externalBin) ----
+      # tauri-bundler signs EVERY `bundle.externalBin` entry with the ONE
+      # `bundle.macOS.entitlements` file chosen for the HOST app. Once the host
+      # started signing with Entitlements.vault.plist (2026-09-16, when the
+      # Apple + Vault profile secrets landed), every helper inherited four
+      # profile-backed keys it cannot carry without a provisioning profile, and
+      # AMFI SIGKILLed each one at exec: exit 137 for matrx-syncd,
+      # matrx-egress, cloudflared, llama-server and uv, in every release from
+      # v1.4.137 to v1.4.170, while Gatekeeper and notarization both said
+      # "accepted" (feedback 696c1213).
+      #
+      # So on macOS the helpers are `bundle.macOS.files` instead — copied
+      # verbatim into Contents/MacOS and never touched by the bundler's
+      # codesign (which carries no --deep) — exactly like the nested
+      # Matrx Engine.app that kept working throughout the outage. They are
+      # signed HERE, with sidecar/sidecar.entitlements.plist. Windows and Linux
+      # keep externalBin; nothing below runs there.
+      - name: Stage and sign macOS helper executables
+        if: matrix.platform == 'macos-15'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$APPLE_SIGNING_IDENTITY" ]] || { echo "ERROR: APPLE_SIGNING_IDENTITY is required to sign the macOS helpers." >&2; exit 1; }
+          if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            TRIPLE="aarch64-apple-darwin"
+          else
+            TRIPLE="x86_64-apple-darwin"
+          fi
+          chmod +x scripts/stage-macos-helpers.sh
+          ./scripts/stage-macos-helpers.sh \
+            --target "$TRIPLE" \
+            --require-all \
+            --sign "$APPLE_SIGNING_IDENTITY"
 
       - name: Build and release
         uses: tauri-apps/tauri-action@action-v1.0.0

@@ -1,7 +1,7 @@
 {
   "name": "aimatrx-desktop",
   "private": true,
-  "version": "1.4.170",
+  "version": "1.4.168",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,9 +14,10 @@
     "sync-types:fast": "node scripts/sync-types.mjs --fast",
     "ensure:syncd": "bash ../scripts/build-syncd.sh",
     "ensure:egress": "bash ../scripts/build-egress.sh --sidecar",
+    "ensure:macos-helpers": "bash ../scripts/stage-macos-helpers.sh",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "(pnpm check:mandate-references || true) && tauri build",
+    "tauri:build": "(pnpm check:mandate-references || true) && pnpm ensure:macos-helpers && tauri build",
     "typecheck": "tsc -b --pretty false",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",

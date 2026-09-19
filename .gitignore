@@ -216,3 +216,4 @@ system/logs/
 
 # MXL-D-091: the dev-world home the E2E harness signed in (a path, machine-local).
 desktop/.harness-home
+desktop/src-tauri/macos-helpers/

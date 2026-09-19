@@ -2,11 +2,11 @@
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/config.schema.json",
   "productName": "AI Matrx",
   "identifier": "com.aimatrx.desktop",
-  "version": "1.4.170",
+  "version": "1.4.168",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm ensure:syncd && pnpm ensure:egress && pnpm dev",
+    "beforeDevCommand": "pnpm ensure:syncd && pnpm ensure:egress && pnpm ensure:macos-helpers && pnpm dev",
     "beforeBuildCommand": "pnpm ensure:syncd && pnpm ensure:egress && pnpm build",
     "beforeBundleCommand": "node scripts/build-native-vault-provider-hook.cjs"
   },

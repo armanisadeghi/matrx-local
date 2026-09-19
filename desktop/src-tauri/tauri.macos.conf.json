@@ -2,20 +2,19 @@
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/config.schema.json",
 
   "bundle": {
-    "externalBin": [
-      "sidecar/matrx-syncd",
-      "sidecar/matrx-egress",
-      "sidecar/cloudflared",
-      "binaries/llama-server",
-      "binaries/uv"
-    ],
+    "externalBin": [],
     "resources": {
       "binaries/*.dylib": "binaries/"
     },
     "macOS": {
       "files": {
         "Frameworks/Matrx Engine.app": "sidecar/Matrx Engine.app",
-        "PlugIns/AI Matrx Vault Provider.appex": "../native-vault-provider/build/AI Matrx Vault Provider.appex"
+        "PlugIns/AI Matrx Vault Provider.appex": "../native-vault-provider/build/AI Matrx Vault Provider.appex",
+        "MacOS/matrx-syncd": "macos-helpers/matrx-syncd",
+        "MacOS/matrx-egress": "macos-helpers/matrx-egress",
+        "MacOS/cloudflared": "macos-helpers/cloudflared",
+        "MacOS/llama-server": "macos-helpers/llama-server",
+        "MacOS/uv": "macos-helpers/uv"
       }
     }
   }

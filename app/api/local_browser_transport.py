@@ -18,7 +18,10 @@ async def execute(request: Request) -> JSONResponse:
         body = await read_execute_body(request)
         operation = body["operation"]
         address = request.client.host if request.client is not None else "unknown"
-        result = await execute_lifecycle(body, address=address)
+        result = await execute_lifecycle(
+            body, address=address,
+            raw_bytes=getattr(request.state, "local_browser_execute_raw", None),
+        )
         return JSONResponse(result, headers=_NO_STORE)
     except TransportRefusal as refusal:
         return JSONResponse(

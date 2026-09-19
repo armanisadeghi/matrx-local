@@ -95,3 +95,22 @@ production regression, not a hypothetical.
     `tests/unit/test_session_freshness.py`, and the mechanical
     `pnpm check:session-custody` (which replaces a grep somebody used to run by
     hand).
+15. **Touched macOS signing, entitlements, `externalBin`, `bundle.macOS.files`,
+    or added a bundled helper executable?** → run
+    `scripts/verify-macos-artifact.sh <the .app>` and watch EVERY helper in
+    `Contents/MacOS` actually exec. tauri-bundler signs each `externalBin` with
+    the ONE `bundle.macOS.entitlements` file picked for the HOST app, so the
+    moment the host moved to `Entitlements.vault.plist` (2026-09-16) all five
+    helpers — `matrx-syncd`, `matrx-egress`, `cloudflared`, `llama-server`,
+    `uv` — inherited profile-backed keys a bare Mach-O cannot carry and AMFI
+    SIGKILLed every one at exec (exit 137) in v1.4.137 through v1.4.170, while
+    Gatekeeper accepted the bundle and the notarization ticket was stapled. On
+    macOS a helper is never an `externalBin`: it is staged and pre-signed with
+    `sidecar/sidecar.entitlements.plist` by `scripts/stage-macos-helpers.sh`
+    and handed to the bundler as a `bundle.macOS.files` entry, the way the
+    nested `Matrx Engine.app` — the one helper that kept working — always was.
+    Entitlement text is not proof; only an exec is.
+    Guards: step 4 of `scripts/verify-macos-artifact.sh` (runs in release CI on
+    both the `.app` and the updater `.app.tar.gz`), the packaged-helper exec
+    check in `scripts/smoke.sh`, and
+    `tests/unit/test_macos_helper_signing_contract.py`.

@@ -163,3 +163,149 @@ def test_host_entitlements_without_profile_carry_no_restricted_keys() -> None:
     assert "embedded.provisionprofile" in sealed["bundle"]["macOS"]["files"]
     host_only = json.loads((src_tauri / "tauri.release.macos.host-only.conf.json").read_text(encoding="utf-8"))
     assert "entitlements" not in host_only["bundle"]["macOS"]
+
+
+# ---------------------------------------------------------------------------
+# macOS helper executables are never `externalBin` (feedback 696c1213)
+#
+# tauri-bundler signs EVERY externalBin entry with the ONE
+# bundle.macOS.entitlements file chosen for the HOST app
+# (tauri-bundler/src/bundle/macos/sign.rs::sign passes the same
+# settings.macos().entitlements for every SignTarget). Once the release started
+# signing the host with Entitlements.vault.plist, every helper inherited four
+# profile-backed keys a bare Mach-O cannot carry, and AMFI SIGKILLed each one
+# at exec — exit 137 for matrx-syncd, matrx-egress, cloudflared, llama-server
+# and uv, in every release from v1.4.137 (2026-09-16) to v1.4.170, while
+# Gatekeeper and the stapled notarization ticket both said "accepted".
+# ---------------------------------------------------------------------------
+
+MACOS_OVERLAY = TAURI_CONFIG.parent / "tauri.macos.conf.json"
+STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-macos-helpers.sh"
+SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke.sh"
+
+MACOS_HELPERS = ("matrx-syncd", "matrx-egress", "cloudflared", "llama-server", "uv")
+PROFILE_BACKED_KEYS = (
+    "com.apple.application-identifier",
+    "com.apple.developer.team-identifier",
+    "com.apple.security.application-groups",
+    "com.apple.developer.authentication-services.autofill-credential-provider",
+)
+
+
+def _macos_overlay() -> dict:
+    return json.loads(MACOS_OVERLAY.read_text(encoding="utf-8"))
+
+
+def test_macos_ships_no_helper_as_an_external_bin() -> None:
+    """The class fix. An externalBin entry on macOS gets the HOST's
+    entitlements, whatever those happen to be that week."""
+    external = _macos_overlay()["bundle"]["externalBin"]
+    assert external == [], (
+        "macOS must declare NO externalBin: tauri-bundler signs each one with "
+        f"the host entitlements file. Found: {external}"
+    )
+
+
+def test_every_macos_helper_ships_as_a_prestaged_bundle_file() -> None:
+    files = _macos_overlay()["bundle"]["macOS"]["files"]
+    for helper in MACOS_HELPERS:
+        key = f"MacOS/{helper}"
+        assert key in files, f"{helper} must ship as a bundle.macOS.files entry at {key}"
+        assert files[key] == f"macos-helpers/{helper}", (
+            f"{key} must come from the signed staging directory produced by "
+            f"scripts/stage-macos-helpers.sh, not {files[key]!r}"
+        )
+    # The model this fix copies: the nested engine app was the ONE macOS helper
+    # that kept working, precisely because it was a files entry, not a sidecar.
+    assert files["Frameworks/Matrx Engine.app"] == "sidecar/Matrx Engine.app"
+
+
+def test_staging_script_signs_helpers_with_the_sidecar_entitlements() -> None:
+    script = STAGE_SCRIPT.read_text(encoding="utf-8")
+    assert "sidecar/sidecar.entitlements.plist" in script
+    assert '--entitlements "$ENTITLEMENTS"' in script
+    assert "--options runtime" in script
+    assert "--timestamp" in script
+    # MXL-D-054: every codesign invocation is bounded.
+    assert "perl -e 'alarm" in script
+    # It must refuse to emit a helper carrying a profile-backed key.
+    for key in PROFILE_BACKED_KEYS:
+        assert key in script, f"staging script must reject {key}"
+    for helper in MACOS_HELPERS:
+        assert f'"{helper}:' in script, f"staging script must stage {helper}"
+
+
+def test_release_stages_and_signs_helpers_before_tauri_builds() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "./scripts/stage-macos-helpers.sh" in workflow
+    assert "--require-all" in workflow, (
+        "release CI must fail on a missing helper input rather than ship an "
+        "app with a helper silently absent"
+    )
+    stage = workflow.index("Stage and sign macOS helper executables")
+    build = workflow.index("uses: tauri-apps/tauri-action@action-v1.0.0")
+    assert stage < build, "helpers must be staged and signed BEFORE tauri builds"
+    # tauri.conf.json's beforeBuildCommand runs INSIDE `tauri build`, after CI
+    # has already staged SIGNED helpers. Wiring staging there would overwrite
+    # them with unsigned copies.
+    before_build = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))["build"][
+        "beforeBuildCommand"
+    ]
+    assert "ensure:macos-helpers" not in before_build
+
+
+def test_artifact_gate_execs_every_bundled_helper() -> None:
+    """Entitlement text is not proof. v1.4.137-v1.4.170 passed every existing
+    check because nothing ever ran a helper."""
+    verify = VERIFY_SCRIPT.read_text(encoding="utf-8")
+    assert 'find "$APP_PATH/Contents/MacOS"' in verify
+    assert "CFBundleExecutable" in verify, "the host executable must be excluded"
+    assert '"$helper" --version' in verify
+    assert '"$HELPER_STATUS" == "137"' in verify, "exit 137 must be named and failed"
+    assert 'HELPER_COUNT" -gt 0' in verify, (
+        "finding zero helpers must fail, or the gate can silently stop checking"
+    )
+    for key in PROFILE_BACKED_KEYS:
+        assert key in verify
+
+
+def test_packaged_smoke_execs_every_bundled_helper() -> None:
+    smoke = SMOKE_SCRIPT.read_text(encoding="utf-8")
+    assert "./scripts/stage-macos-helpers.sh" in smoke
+    assert "bundled helper(s) could not execute" in smoke
+    assert "bundled helpers execute" in smoke
+
+
+def test_host_bundle_helper_lookup_finds_the_host_macos_directory() -> None:
+    """The engine runs from the NESTED Matrx Engine.app, so helpers beside the
+    HOST executable are three directories up. Without this the shipped
+    cloudflared and matrx-egress are never found at all."""
+    import sys
+    import tempfile
+    from unittest import mock
+
+    from app.common import platform_ctx
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        host_macos = root / "AI Matrx.app" / "Contents" / "MacOS"
+        engine_macos = (
+            root
+            / "AI Matrx.app"
+            / "Contents"
+            / "Frameworks"
+            / "Matrx Engine.app"
+            / "Contents"
+            / "MacOS"
+        )
+        host_macos.mkdir(parents=True)
+        engine_macos.mkdir(parents=True)
+        with mock.patch.object(platform_ctx, "_sys_platform", "darwin"), mock.patch.object(
+            sys, "executable", str(engine_macos / "Matrx Engine")
+        ):
+            assert platform_ctx.host_bundle_macos_dir() == host_macos
+        # A source run (no nested bundle) must resolve to None, never a guess.
+        with mock.patch.object(platform_ctx, "_sys_platform", "darwin"), mock.patch.object(
+            sys, "executable", str(root / "python")
+        ):
+            assert platform_ctx.host_bundle_macos_dir() is None

@@ -40,10 +40,15 @@ private func json(_ value: Any) throws -> Data { try JSONSerialization.data(with
         try reject { _ = try NativeVaultPasskeyCodec.matches(json(["matches": [row, row], "truncated": false])) }
         row["user_handle"] = ""
         try reject { _ = try NativeVaultPasskeyCodec.matches(json(["matches": [row], "truncated": false])) }
-        var receipt: [String: Any] = ["mutation_id": id, "item_id": id, "field_id": id, "passkey_id": id, "status": "saved_waiting_for_site", "source_sha256": SHA256.hash(data: source).map { String(format: "%02x", $0) }.joined()]
+        // Actual Python service _receipt_result output for the synthetic source above.
+        // Keep this cross-wire fixture independent of Swift digest formatting.
+        var receipt: [String: Any] = ["mutation_id": id, "item_id": id, "field_id": id, "passkey_id": id, "status": "saved_waiting_for_site", "source_sha256": "cRiff7au1jhkAHj7o6Nf2mw5yJYudNzHWTWqyUjakGM"]
         _ = try NativeVaultPasskeyCodec.receipt(json(receipt), mutationID: id, source: source)
         try reject { _ = try NativeVaultPasskeyCodec.receipt(json(receipt), mutationID: "00000000-0000-4000-8000-000000000002", source: source) }
         try reject { _ = try NativeVaultPasskeyCodec.receipt(json(receipt), mutationID: id, source: Data([0])) }
+        var hexReceipt = receipt
+        hexReceipt["source_sha256"] = SHA256.hash(data: source).map { String(format: "%02x", $0) }.joined()
+        try reject { _ = try NativeVaultPasskeyCodec.receipt(json(hexReceipt), mutationID: id, source: source) }
         receipt["item_id"] = "not-a-uuid"
         try reject { _ = try NativeVaultPasskeyCodec.receipt(json(receipt), mutationID: id, source: source) }
         print("PASS native passkey envelope corpus")

@@ -80,7 +80,7 @@ enum NativeVaultPasskeyCodec {
         guard mutationID.canonicalUUID, try uuid(value["mutation_id"]) == mutationID,
               case .string("saved_waiting_for_site")? = value["status"],
               case let .string(digest)? = value["source_sha256"],
-              digest == SHA256.hash(data: source).map({ String(format: "%02x", $0) }).joined() else { throw rejected() }
+              digest == base64url(Data(SHA256.hash(data: source))) else { throw rejected() }
         return try NativePasskeyReceipt(itemID: uuid(value["item_id"]), fieldID: uuid(value["field_id"]), passkeyID: uuid(value["passkey_id"]))
     }
 }

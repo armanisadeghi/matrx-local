@@ -81,8 +81,8 @@ struct StrictJSON {
     private var bytes: [UInt8]
     private var index = 0
 
-    init(_ data: Data) throws {
-        guard data.count <= 64 * 1024 else { throw Self.bad() }
+    init(_ data: Data, maxBytes: Int = 64 * 1024) throws {
+        guard maxBytes > 0, maxBytes <= 96 * 1024, data.count <= maxBytes else { throw Self.bad() }
         bytes = Array(data)
     }
 
@@ -247,8 +247,8 @@ struct StrictJSON {
 }
 
 enum StrictEnvelope {
-    static func object(_ data: Data, required: Set<String>, optional: Set<String>) throws -> [String: JSONValue] {
-        var parser = try StrictJSON(data)
+    static func object(_ data: Data, required: Set<String>, optional: Set<String>, maxBytes: Int = 64 * 1024) throws -> [String: JSONValue] {
+        var parser = try StrictJSON(data, maxBytes: maxBytes)
         guard case let .object(value) = try parser.parse(), required.isSubset(of: Set(value.keys)), Set(value.keys).isSubset(of: required.union(optional)) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
         return value
     }

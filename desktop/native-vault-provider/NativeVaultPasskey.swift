@@ -248,7 +248,7 @@ final class NativeVaultPasskeyCoordinator {
                     guard preflightHTTP.statusCode == 200, try NativeVaultPasskeyCodec.matches(preflightData).matches.isEmpty, self.current(operation) else { throw EnrollmentError.message("A matching passkey already exists for this website.") }
                 }
                 let label = self.operationLabel.removeValue(forKey: operation.id) ?? defaultLabel
-                let mutation = UUID().uuidString.lowercased(); let empty = try self.exactBody(mutation: mutation, source: Data([0]), label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded)
+                let mutation = UUID().uuidString.lowercased(); let empty = try self.exactBody(mutation: mutation, source: Data(), label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded)
                 let usable = min(caps.maxSourceBytes, 3 * max(0, (caps.maxRequestBodyBytes - empty.count) / 4)); guard usable > 0 else { throw EnrollmentError.message("Passkey storage limit is unavailable. Try again.") }
                 let bridge = NativeOperation(); operation.bridgeOperation = bridge
                 let ceremony = NativeVaultAppleCeremony(operation: operation, coordinator: self, grant: grant, organization: org, mutation: mutation, label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded, maximum: usable, bodyLimit: caps.maxRequestBodyBytes)

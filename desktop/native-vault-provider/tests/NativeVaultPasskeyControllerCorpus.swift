@@ -20,6 +20,7 @@ private final class Server: NativeVaultPasskeyTransporting {
     var source: Data?
     var receipt: [String: Any]?
     var wrongMatchHandle = false
+    var maximumBodyBytes = 131072
     var holdSuffix: String?
     var didSend: ((URLRequest) -> Void)?
     private let lock = NSLock()
@@ -47,7 +48,7 @@ private final class Server: NativeVaultPasskeyTransporting {
         if path == "/api/auth/organizations" {
             object = ["authenticated": true, "user_id": "subject", "organizations": [["id": "00000000-0000-4000-8000-000000000001", "name": "Personal", "is_personal": true, "abbreviation": NSNull()]], "default_organization_id": NSNull(), "default_preference_status": "unset", "warnings": [], "missing_organization_count": 0]
         } else if path.hasSuffix("/capabilities") {
-            object = ["protocol_version": 1, "activation_revision": 1, "max_source_bytes": 65536, "max_credential_ids": 128, "max_request_body_bytes": 131072, "algorithms": [-7]]
+            object = ["protocol_version": 1, "activation_revision": 1, "max_source_bytes": 65536, "max_credential_ids": 128, "max_request_body_bytes": maximumBodyBytes, "algorithms": [-7]]
         } else if path.hasSuffix("/matches") {
             var matches: [[String: Any]] = []
             if source != nil {
@@ -172,6 +173,13 @@ private func makeRequest(rp: String = "example.com", credential: Data = Data(rep
         precondition(positive.registration != nil && positive.error == nil && positive.completionUnderLock)
         precondition(positive.evaluations.count == 2 && positive.evaluations[0] == positive.evaluations[1])
         let source = positive.server.source!
+        var envelope = try! JSONSerialization.jsonObject(with: positive.server.posts[0]) as! [String: Any]
+        envelope["source"] = ""
+        let envelopeBytes = try! JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]).count
+        let tightServer = Server(); tightServer.maximumBodyBytes = envelopeBytes + 4 * ((source.count + 2) / 3)
+        let tight = Journey(server: tightServer); tight.register(); await tight.finish()
+        precondition(tight.registration != nil, "a valid source fitting the advertised body limit was refused")
+        precondition(tightServer.posts[0].count <= tightServer.maximumBodyBytes)
         let object = positive.server.sourceObject
         let credentialID = Server.decode(object["credential_id"] as! String)
         let handle = Server.decode(object["user_handle"] as! String)

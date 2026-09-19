@@ -121,6 +121,42 @@ struct NativeVaultPasswordCorpus {
         noCallback.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
         waitUntil("completion lock must release without Apple's callback") { lockProbe.wasReleased() }
         require(noCallbackDelivered == 1 && heldDuringDelivery && noCallbackRefused == 0, "completion must invoke Apple once under lock, then release without callback")
+        // The actual Apple passkey entrypoint must invalidate an older password
+        // before validation, even when the new request itself is unsupported.
+        let crossFlow = CredentialProviderViewController()
+        crossFlow.nativePasswordKeyOverride = "public-build-key"
+        var heldAuthorization: ((Bool) -> Void)?
+        var staleAcquires = 0; var replacementRefusals = 0
+        crossFlow.nativePasswordAuthorize = { heldAuthorization = $0 }
+        crossFlow.nativePasswordAcquire = { _ in staleAcquires += 1 }
+        crossFlow.nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
+            sessionAccess: NativeVaultSessionAccess(), key: { "public-build-key" },
+            cancel: { _ in replacementRefusals += 1 },
+            completeRegistration: { _ in fatalError("invalid request registered") },
+            completeAssertion: { _ in fatalError("invalid request asserted") })
+        crossFlow.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+        let oldPassword = crossFlow.nativePasswordCoordinator.active!
+        let oldLifetime = crossFlow.nativeRequest
+        var cancelledResources = 0
+        oldLifetime.own { cancelledResources += 1 }
+        crossFlow.prepareInterface(forPasskeyRegistration: ASPasswordCredentialRequest(credentialIdentity: identity))
+        require(oldPassword.terminal && !oldLifetime.isCurrent && cancelledResources == 1 && replacementRefusals == 1,
+                "cross-flow replacement must retire password and owned resources before refusing new request")
+        heldAuthorization?(true)
+        var actorDrained = false
+        Task { @MainActor in actorDrained = true }
+        waitUntil("replacement actor did not drain") { actorDrained }
+        require(staleAcquires == 0, "late password authorization must not acquire credentials for a replacement request")
+        var lateResourceCancelled = false
+        oldLifetime.own { lateResourceCancelled = true }
+        require(lateResourceCancelled, "resource registered after cancellation must be cancelled immediately")
+        var transportSettled = 0
+        let cancelledTransport = BoundedTransport { result in
+            if case .failure = result { transportSettled += 1 }
+        }
+        cancelledTransport.cancel(); cancelledTransport.cancel()
+        cancelledTransport.start(URLRequest(url: URL(string: "https://must-not-send.invalid")!))
+        require(transportSettled == 1, "cancel-before-dispatch must settle once and never start a URL task")
         print("Native Vault password codec corpus passed")
     }
 }

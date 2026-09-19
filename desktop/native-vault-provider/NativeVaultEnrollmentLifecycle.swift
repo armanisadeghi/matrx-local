@@ -1,6 +1,25 @@
 import Foundation
 import CryptoKit
 
+/// One provider request owns every asynchronous resource it starts. Cancellation
+/// marks callbacks stale before cancelling resources (whose callbacks may run inline).
+final class NativeVaultRequestLifetime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var resources: [() -> Void] = []
+    var isCurrent: Bool { lock.lock(); defer { lock.unlock() }; return !cancelled }
+    func own(_ cancel: @escaping () -> Void) {
+        lock.lock()
+        if cancelled { lock.unlock(); cancel() } else { resources.append(cancel); lock.unlock() }
+    }
+    func cancel() {
+        lock.lock()
+        guard !cancelled else { lock.unlock(); return }
+        cancelled = true; let pending = resources; resources.removeAll(); lock.unlock()
+        pending.forEach { $0() }
+    }
+}
+
 @MainActor
 final class NativeVaultCurrentConnectionAdmission {
     private var inFlight = false

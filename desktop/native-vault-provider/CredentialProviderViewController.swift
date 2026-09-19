@@ -14,31 +14,50 @@ let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo
 /// response. This delegate refuses redirects and cancels as soon as the fixed
 /// envelope limit is crossed.
 final class BoundedTransport: NSObject, URLSessionDataDelegate {
-    private var data = Data(); private let limit: Int
+    private var data = Data()
+    private let limit: Int
     private let completion: (Result<(Data, HTTPURLResponse), Error>) -> Void
+    private let lifecycle = NSLock()
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var completed = false
+    private var response: HTTPURLResponse?
     init(limit: Int = 64 * 1024, _ completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
         self.limit = limit; self.completion = completion
     }
     func start(_ request: URLRequest) {
-        let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 10; config.timeoutIntervalForResource = 10
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil); self.session = session
-        let task = session.dataTask(with: request); self.task = task; task.resume()
+        lifecycle.lock()
+        guard !completed, session == nil else { lifecycle.unlock(); return }
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10; config.timeoutIntervalForResource = 10
+        config.urlCache = nil; config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        let task = session.dataTask(with: request)
+        self.session = session; self.task = task; lifecycle.unlock()
+        task.resume()
     }
-    func cancel() { task?.cancel(); task = nil; session?.invalidateAndCancel(); session = nil }
+    private func finish(_ result: Result<(Data, HTTPURLResponse), Error>) {
+        lifecycle.lock()
+        guard !completed else { lifecycle.unlock(); return }
+        completed = true; let session = self.session
+        self.session = nil; task = nil; lifecycle.unlock()
+        session?.invalidateAndCancel()
+        completion(result)
+    }
+    func cancel() { finish(.failure(EnrollmentError.message("Vault request was cancelled."))) }
     func urlSession(_: URLSession, task _: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse, newRequest _: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) { guard data.count <= limit - chunk.count else { dataTask.cancel(); return }; data.append(chunk) }
-    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
-        guard !completed else { return }; completed = true
-        if error != nil { completion(.failure(EnrollmentError.message("Vault connection is temporarily unavailable. Try again."))); return }
-        guard let response = dataTaskResponse() else { completion(.failure(EnrollmentError.message("Account connection is unavailable. Try again."))); return }
-        completion(.success((data, response)))
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard data.count <= limit - chunk.count else { dataTask.cancel(); return }
+        data.append(chunk)
     }
-    private var response: HTTPURLResponse?
-    func urlSession(_: URLSession, dataTask _: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) { self.response = response as? HTTPURLResponse; completionHandler(response.expectedContentLength > Int64(limit) ? .cancel : .allow) }
-    private func dataTaskResponse() -> HTTPURLResponse? { response }
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        guard error == nil, let response else { finish(.failure(EnrollmentError.message("Vault connection is temporarily unavailable. Try again."))); return }
+        finish(.success((data, response)))
+    }
+    func urlSession(_: URLSession, dataTask _: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        self.response = response as? HTTPURLResponse
+        completionHandler(response.expectedContentLength > Int64(limit) ? .cancel : .allow)
+    }
 }
 
 private extension Data { func urlSafeBase64() -> String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") } }
@@ -101,44 +120,75 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     var nativePasswordMatchChoice: (([NativePasswordMatch]) -> Int?)?
     var nativePasswordCancelSink: ((NSError) -> Void)?
     var nativePasswordCompleteSink: (((String, String), @escaping () -> Void) -> Void)?
-    private lazy var nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
+    lazy var nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
         sessionAccess: sessionAccess,
         key: { [weak self] in self?.nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) },
         cancel: { [weak self] message in self?.cancelPasskey(message) },
         completeRegistration: { [weak self] credential in self?.extensionContext.completeRegistrationRequest(using: credential, completionHandler: nil) },
         completeAssertion: { [weak self] credential in self?.extensionContext.completeAssertionRequest(using: credential, completionHandler: nil) }
     )
+    private(set) var nativeRequest = NativeVaultRequestLifetime()
+    func replaceNativeRequest() {
+        nativeRequest.cancel()
+        nativeRequest = NativeVaultRequestLifetime()
+        nativePasskeyCoordinator.cancelCurrent()
+        if let old = nativePasswordCoordinator.active { _ = nativePasswordCoordinator.cancel(old) }
+        nativePasswordTransport.cancel()
+        sessionAccess.cancel()
+        _ = finishOperation()
+        finishConnectionOperation()
+        window?.close(); window = nil
+        connectionStatus = nil; connectButton = nil; retryButton = nil
+    }
+    func ownNativeContext(_ context: LAContext) { nativeRequest.own { context.invalidate() } }
+    private func enrollmentRequest(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+        let lifetime = nativeRequest
+        let transport = BoundedTransport { result in guard lifetime.isCurrent else { return }; completion(result) }
+        lifetime.own { transport.cancel() }
+        guard lifetime.isCurrent else { return }
+        transport.start(request)
+    }
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
     private var connectButton: NSButton?
     private var retryButton: NSButton?
 
-    override func prepareInterfaceForExtensionConfiguration() { showConfiguration() }
+    override func prepareInterfaceForExtensionConfiguration() { replaceNativeRequest(); showConfiguration() }
     override func loadView() { view = NSView() }
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         beginPasswordRequest(serviceIdentifiers)
     }
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier], requestParameters: ASPasskeyCredentialRequestParameters) {
+        replaceNativeRequest()
         nativePasskeyCoordinator.assertList(requestParameters)
     }
     override func prepareInterface(forPasskeyRegistration registrationRequest: any ASCredentialRequest) {
+        replaceNativeRequest()
         nativePasskeyCoordinator.register(registrationRequest)
     }
     override func prepareInterfaceToProvideCredential(for credentialRequest: any ASCredentialRequest) {
+        replaceNativeRequest()
         if let request = credentialRequest as? ASPasskeyCredentialRequest { nativePasskeyCoordinator.assert(request) }
         else { super.prepareInterfaceToProvideCredential(for: credentialRequest) }
     }
 
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
+        replaceNativeRequest()
         // This direct-list provider intentionally has no identity index yet.
         let error = NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode)
         if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
     }
 
     override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
+        replaceNativeRequest()
         let error = NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode)
         if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
+    }
+
+    override func performWithoutUserInteractionIfPossible(passkeyRegistration: ASPasskeyCredentialRequest) {
+        replaceNativeRequest()
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userInteractionRequired.rawValue))
     }
 
     private func cancelPasskey(_ message: String) {
@@ -168,14 +218,21 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             let context = LAContext(); var detail: NSError?
             guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &detail) else { throw EnrollmentError.message("Vault protection is unavailable on this Mac.") }
             startingConnect = true; setConnectionBusy(true)
+            ownNativeContext(context)
+            let lifetime = nativeRequest
             context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Protect your AI Matrx Vault session") { [weak self] allowed, _ in
-                guard allowed else { Task { @MainActor in self?.finishStartingConnect() }; return }
+            guard lifetime.isCurrent else { return }
+                guard allowed else { Task { @MainActor in guard lifetime.isCurrent else { return }; self?.finishStartingConnect() }; return }
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
+                        guard lifetime.isCurrent else { return }
                         let store = try ProviderStore()
-                        let state = try store.initializeExplicitConnect { try NativeVaultPrivateSession().delete(context: context) }
-                        DispatchQueue.main.async { self?.startAuthorization(transaction, generation: state.generation, key: key) }
-                    } catch { DispatchQueue.main.async { self?.finishStartingConnect(); self?.showError(error) } }
+                        let state = try store.initializeExplicitConnect {
+                            guard lifetime.isCurrent else { throw EnrollmentError.message("Vault request was cancelled.") }
+                            try NativeVaultPrivateSession().delete(context: context)
+                        }
+                        DispatchQueue.main.async { guard lifetime.isCurrent else { return }; self?.startAuthorization(transaction, generation: state.generation, key: key) }
+                    } catch { DispatchQueue.main.async { guard lifetime.isCurrent else { return }; self?.finishStartingConnect(); self?.showError(error) } }
                 }
             }
         } catch { showError(error) }
@@ -220,17 +277,21 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             ("code", code),
             ("code_verifier", verifier),
         ])
-        BoundedTransport { [weak self] result in
-            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }; DispatchQueue.main.async { self?.authenticateAndPersist(try? VaultEnvelopeCodec.token(data), operation: operation, key: key) } } catch { DispatchQueue.main.async { self?.finishOperation(operation.id); self?.showError(error) } }
-        }.start(request)
+        enrollmentRequest(request) { [weak self] result in
+            do { let (data, http) = try result.get(); guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }; DispatchQueue.main.async { self?.authenticateAndPersist(try? VaultEnvelopeCodec.token(data), operation: operation, key: key) } } catch { DispatchQueue.main.async { guard self?.activeOperation?.id == operation.id else { return }; self?.finishOperation(operation.id); self?.showError(error) } }
+        }
     }
     private func authenticateAndPersist(_ token: Token?, operation: NativeVaultEnrollmentOperation, key: String) {
-        guard let token else { finishOperation(operation.id); showError(EnrollmentError.message("Account response was rejected. Try again.")); return }
         guard activeOperation?.id == operation.id else { return }
+        guard let token else { finishOperation(operation.id); showError(EnrollmentError.message("Account response was rejected. Try again.")); return }
         let context = LAContext(); var detail: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &detail) else { finishOperation(operation.id); showError(EnrollmentError.message("Vault protection is unavailable on this Mac.")); return }
+        ownNativeContext(context)
+        let lifetime = nativeRequest
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Protect your AI Matrx Vault session") { [weak self] allowed, _ in
+            guard lifetime.isCurrent else { return }
             Task { @MainActor in
+                guard lifetime.isCurrent else { return }
                 guard allowed else { self?.finishOperation(operation.id); return }
                 self?.userinfo(token, operation: operation, key: key, context: context)
             }
@@ -238,7 +299,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     private func userinfo(_ token: Token, operation: NativeVaultEnrollmentOperation, key: String, context: LAContext) {
         var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token.access_token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        BoundedTransport { [weak self] result in
+        enrollmentRequest(request) { [weak self] result in
             do {
                 let (data, http) = try result.get()
                 guard http.statusCode == 200 else { throw connectionResponseError(http.statusCode) }
@@ -257,10 +318,11 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 DispatchQueue.main.async {
                     guard committed, let self, NativeVaultEnrollmentLifecycle.mayCompleteConfiguration(active: self.activeOperation, operationID: operation.id) else { return }
                     self.finishOperation(operation.id, cancel: false)
+                    self.nativeRequest.cancel()
                     self.extensionContext.completeExtensionConfigurationRequest()
                 }
-            } catch { DispatchQueue.main.async { self?.finishOperation(operation.id); self?.showError(error) } }
-        }.start(request)
+            } catch { DispatchQueue.main.async { guard self?.activeOperation?.id == operation.id else { return }; self?.finishOperation(operation.id); self?.showError(error) } }
+        }
     }
     // Configuration and password filling both use the provider-owned session
     // primitive. It returns only an identity label here, never a token.
@@ -279,12 +341,16 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         let context: LAContext
         do { context = try privateSession.authenticatedContext(reason: "Check your AI Matrx Vault connection") }
         catch { setConnectionStatus("Vault protection is unavailable on this Mac."); finishConnectionOperation(); return }
+        ownNativeContext(context)
+        let lifetime = nativeRequest
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Check your AI Matrx Vault connection") { [weak self] allowed, _ in
-            guard allowed else { Task { @MainActor in self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
+            guard lifetime.isCurrent else { return }
+            guard allowed else { Task { @MainActor in guard lifetime.isCurrent else { return }; self?.setConnectionStatus("Unlock Vault protection to check the connected account."); self?.finishConnectionOperation() }; return }
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, lifetime.isCurrent else { return }
                 self.sessionAccess.acquire(key: key, context: context) { result in
                     Task { @MainActor in
+                    guard lifetime.isCurrent else { return }
                     switch result {
                     case let .success(grant): self.setConnectionStatus("Connected account: \(grant.subject)")
                     case let .failure(error): self.setConnectionFailure(error)
@@ -324,19 +390,27 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         loadCurrentConnection()
     }
     private func setConnectionStatus(_ value: String) {
-        DispatchQueue.main.async { [weak self] in self?.connectionStatus?.stringValue = value }
+        let lifetime = nativeRequest
+        DispatchQueue.main.async { [weak self] in guard lifetime.isCurrent else { return }; self?.connectionStatus?.stringValue = value }
     }
     private func setConnectionFailure(_ error: Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? "Vault connection is temporarily unavailable. Try again."
         setConnectionStatus(message)
     }
-    private func showError(_ error: Error) { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
+    private func showError(_ error: Error) {
+        let lifetime = nativeRequest
+        DispatchQueue.main.async { guard lifetime.isCurrent else { return }; NSAlert(error: error).runModal() }
+    }
     @objc private func disconnect() {
+        replaceNativeRequest()
         let privateSession = NativeVaultPrivateSession()
         let context: LAContext
         do { context = try privateSession.authenticatedContext(reason: "Disconnect your AI Matrx Vault session") }
         catch { showError(error); return }
+        ownNativeContext(context)
+        let lifetime = nativeRequest
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Disconnect your AI Matrx Vault session") { [weak self] allowed, _ in
+            guard lifetime.isCurrent else { return }
             guard allowed else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
@@ -354,12 +428,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                         try ProviderIdentityIndex.system.clearWhileLocked()
                     }
                     if let deletionFailure { throw deletionFailure }
-                } catch { self?.showError(error) }
+                } catch { DispatchQueue.main.async { guard lifetime.isCurrent else { return }; self?.showError(error) } }
             }
         }
     }
     @objc private func cancel() {
         let result = finishOperation()
+        replaceNativeRequest()
         if result == .alreadyCommitted {
             extensionContext.completeExtensionConfigurationRequest()
         } else {

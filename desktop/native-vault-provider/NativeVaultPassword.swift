@@ -110,16 +110,31 @@ enum NativePasswordCodec {
 }
 
 protocol NativeVaultPasswordTransporting {
+    func cancel()
     func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void)
 }
+
+extension NativeVaultPasswordTransporting { func cancel() {} }
 
 /// Production transport is injectable so the wire/operation corpus can force
 /// redirects, malformed envelopes, and stale callback ordering without a live
 /// extension or Keychain. The production instance is the bounded no-redirect
 /// URLSession delegate used by enrollment.
 final class NativeVaultPasswordTransport: NativeVaultPasswordTransporting {
+    private let lock = NSLock()
+    private var requests: [UUID: BoundedTransport] = [:]
+    func cancel() {
+        lock.lock(); let pending = Array(requests.values); requests.removeAll(); lock.unlock()
+        pending.forEach { $0.cancel() }
+    }
     func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
-        BoundedTransport(completion).start(request)
+        let id = UUID()
+        let transport = BoundedTransport { [weak self] result in
+            if let self { self.lock.lock(); self.requests.removeValue(forKey: id); self.lock.unlock() }
+            completion(result)
+        }
+        lock.lock(); requests[id] = transport; lock.unlock()
+        transport.start(request)
     }
 }
 
@@ -161,6 +176,8 @@ final class NativeVaultSessionAccess {
     struct Grant { let accessToken: String; let subject: String; let generation: String }
     private let transport: NativeVaultPasswordTransporting
     init(transport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()) { self.transport = transport }
+
+    func cancel() { transport.cancel() }
 
     func acquire(key: String, context: LAContext, completion: @escaping (Result<Grant, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -223,6 +240,7 @@ final class NativeVaultSessionAccess {
 extension CredentialProviderViewController {
     private var nativePasswordKey: String? { nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) }
     func beginPasswordRequest(_ serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+        replaceNativeRequest()
         let identifiers: [(String, String)]
         do { identifiers = try NativePasswordStage.identifiers(serviceIdentifiers) }
         catch { let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return }
@@ -234,6 +252,7 @@ extension CredentialProviderViewController {
         }
         let privateSession = NativeVaultPrivateSession(); let context: LAContext
         do { context = try privateSession.authenticatedContext(reason: "Unlock AI Matrx Vault to choose a password") } catch { return cancelPassword(operation, "Vault protection is unavailable on this Mac.") }
+        ownNativeContext(context)
         context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock AI Matrx Vault to choose a password") { [weak self] allowed, _ in
             Task { @MainActor in
                 guard let self, self.current(operation) else { return }

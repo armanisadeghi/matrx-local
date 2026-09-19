@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -31,4 +32,16 @@ selected = server.authenticate_complete(authentication_state, [auth_data.credent
 flags = AuthenticatorData(raw(payload["authenticatorData"]))
 assert selected.credential_id == auth_data.credential_data.credential_id
 assert flags.is_user_present() and flags.is_user_verified() and flags.is_backup_eligible() and flags.is_backed_up()
+tampered = dict(assertion)
+tampered_response = dict(assertion["response"])
+tampered_authenticator_data = bytearray(raw(payload["authenticatorData"]))
+tampered_authenticator_data[:32] = hashlib.sha256(b"wrong.example").digest()
+tampered_response["authenticatorData"] = b64(bytes(tampered_authenticator_data))
+tampered["response"] = tampered_response
+try:
+    server.authenticate_complete(authentication_state, [auth_data.credential_data], tampered)
+except ValueError:
+    pass
+else:
+    raise AssertionError("RP-ID-hash tampering must be rejected by python-fido2")
 print("PASS Swift UniFFI bridge registration/assertion accepted by python-fido2=2.2.1")

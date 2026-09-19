@@ -148,6 +148,19 @@ if before not in data:
 open(path, "wb").write(data.replace(before, after))
 PY
   expect_failure "wrong extension entry point" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-entry.appex"
+  cp -R "$APPEX" "$WORKDIR/missing-bridge-symbol.appex"
+  python3 - "$WORKDIR/missing-bridge-symbol.appex/Contents/MacOS/VaultProvider" <<'PY'
+import sys
+
+path = sys.argv[1]
+before = b"_uniffi_native_vault_core_fn_constructor_nativeoperation_new"
+after = b"_xniffi_native_vault_core_fn_constructor_nativeoperation_new"
+data = open(path, "rb").read()
+if before not in data:
+    raise SystemExit("native Vault bridge symbol not found")
+open(path, "wb").write(data.replace(before, after))
+PY
+  expect_failure "missing native Vault bridge symbol" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-bridge-symbol.appex"
   expect_failure "missing signed-provider profile" "$ROOT/scripts/verify-native-vault-provider.sh" --require-profile "$APPEX"
-  echo "Self-test passed: wrong bundle, missing AutoFill, missing password/configuration capabilities, obsolete App Sandbox key, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, and missing required profile were rejected."
+  echo "Self-test passed: wrong bundle, missing AutoFill, missing password/configuration capabilities, obsolete App Sandbox key, missing executable, non-executable Mach-O, missing LC_MAIN, wrong entry point, missing bridge symbol, and missing required profile were rejected."
 fi

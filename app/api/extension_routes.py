@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
@@ -38,6 +39,9 @@ from app.api.extension_bridge_routes import publish_event
 from app.api.extension_handlers import HANDLERS
 from app.api.extension_metrics import record as record_metric
 from app.api.extension_ws_manager import (
+    get_registry,
+    register_local_browser_session,
+    resolve_local_browser_result,
     register_session,
     resolve_pending_future,
     send_to_extension_session,
@@ -208,6 +212,16 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _canonical_uuid(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = str(uuid.UUID(value))
+    except ValueError:
+        return None
+    return parsed if parsed == value else None
+
+
 def _build_pong(client_timestamp: Any) -> Dict[str, Any]:
     """Construct the pong envelope.
 
@@ -362,6 +376,67 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
     """Dispatch a single inbound envelope by `type`."""
     msg_type = msg.get("type")
 
+    if msg_type == "local_browser.ready":
+        if set(msg) != {"type", "version"} or type(msg.get("version")) is not int or msg.get("version") != 1:
+            return True
+        session = get_registry().get(session_id)
+        if session is None:
+            return False
+        from app.services.local_browser_context import get_local_browser_context
+        fresh = await get_local_browser_context().refresh()
+        if fresh is None or fresh.context.organization_id is None:
+            await session.send({"type": "local_browser.registration_required", "version": 1, "status": "refused", "reason": "context_unavailable"})
+            return True
+        # A delayed ready cannot advertise a subsequently retired context.
+        final = await get_local_browser_context().refresh()
+        if final is None or final.context != fresh.context or final.owner != fresh.owner:
+            return True
+        return await session.send({
+            "type": "local_browser.register_required", "version": 1,
+            "engine_boot_id": final.context.engine_boot_id, "revision": final.context.revision,
+        })
+
+    if msg_type == "local_browser.register":
+        required = {"type", "version", "engine_boot_id", "expected_revision", "extension_generation", "connection_id"}
+        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or not isinstance(msg.get("engine_boot_id"), str) or type(msg.get("expected_revision")) is not int:
+            return True
+        extension_generation = _canonical_uuid(msg.get("extension_generation"))
+        connection_id = _canonical_uuid(msg.get("connection_id"))
+        if extension_generation is None or connection_id is None:
+            return True
+        from app.services.cloud_sync.instance_manager import get_instance_manager
+        from app.services.local_browser_context import get_local_browser_context
+        first = await get_local_browser_context().refresh()
+        if first is None or first.context.organization_id is None:
+            return True
+        identity = await get_instance_manager().registered_device_identity()
+        final = await get_local_browser_context().refresh()
+        if (
+            identity is None or final is None or final.context != first.context or final.owner != first.owner
+            or msg["engine_boot_id"] != final.context.engine_boot_id or msg["expected_revision"] != final.context.revision
+        ):
+            return True
+        accepted = register_local_browser_session(
+            session_id, engine_boot_id=final.context.engine_boot_id, revision=final.context.revision,
+            owner=final.owner, organization_id=final.context.organization_id,
+            device_id=identity.app_instance_id, extension_generation=extension_generation,
+            connection_id=connection_id,
+        )
+        session = get_registry().get(session_id)
+        if session is not None:
+            await session.send({"type": "local_browser.registration", "version": 1, "status": "acknowledged" if accepted else "refused", **({} if accepted else {"reason": "registration_unavailable"})})
+        return True
+
+    if msg_type == "local_browser.result":
+        required = {"type", "version", "call_id", "operation", "status"}
+        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or _canonical_uuid(msg.get("call_id")) is None or msg.get("operation") not in {"discover", "admit", "renew", "cleanup"} or msg.get("status") not in {"acknowledged", "refused"}:
+            return True
+        session = get_registry().get(session_id)
+        if session is None:
+            return False
+        resolve_local_browser_result(session_id, session.websocket, msg["call_id"], msg)
+        return True
+
     if msg_type == "extension.result":
         call_id = msg.get("callId")
         if not isinstance(call_id, str):
@@ -393,7 +468,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         # Heartbeat — respond inline. The send goes through the same
         # session lock as engine-initiated invocations, so frame
         # interleaving is impossible.
-        from app.api.extension_ws_manager import get_registry, touch_session
+        from app.api.extension_ws_manager import touch_session
 
         session = get_registry().get(session_id)
         if session is None:

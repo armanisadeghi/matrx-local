@@ -395,6 +395,20 @@ run_packaged() {
     fi
     ok "matrx-syncd sidecar ready"
 
+    # macOS helpers are NOT externalBin (tauri-bundler would sign them with the
+    # HOST entitlements — the v1.4.137 exit-137 class). They ship as
+    # bundle.macOS.files, staged here. Unsigned smoke keeps each binary's own
+    # signature; release CI stages with --sign.
+    if [ "$OS" = "macos" ]; then
+      info "Staging the macOS helper executables…"
+      if ! ./scripts/stage-macos-helpers.sh >> "$build_log" 2>&1; then
+        record_fail "packaged: macOS helper staging failed" "$(tail -30 "$build_log")"
+        echo "Full build log: \`$build_log\`" >> "$SUMMARY"
+        return 1
+      fi
+      ok "macOS helpers staged"
+    fi
+
     # --bundles app: build ONLY the runnable app, nothing else.
     #   * No DMG. `bundle_dmg.sh` MOUNTS the disk image and pops a real Finder
     #     window ("drag the app to Applications") in the middle of the run —
@@ -462,6 +476,42 @@ run_packaged() {
     record_ok "packaged: sidecar + app built"
   else
     warn "--no-build: reusing the last packaged build"
+  fi
+
+  # Every bundled helper must actually EXEC. v1.4.137-v1.4.170 shipped five
+  # helpers macOS SIGKILLed at exec (exit 137) while the app itself started
+  # fine, Gatekeeper accepted the bundle and notarization was stapled: nothing
+  # in the harness had ever run one. Now it does.
+  if [ "$OS" = "macos" ]; then
+    local smoke_app
+    smoke_app="$(find desktop/src-tauri/target -type d -name "*.app" -path "*bundle/macos*" 2>/dev/null | head -1)"
+    if [ -n "$smoke_app" ]; then
+      local helper_failures=""
+      local helper_seen=0
+      local host_exe
+      host_exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$smoke_app/Contents/Info.plist" 2>/dev/null)"
+      for helper in "$smoke_app"/Contents/MacOS/*; do
+        [ -f "$helper" ] || continue
+        [ "$(basename "$helper")" = "$host_exe" ] && continue
+        file "$helper" | grep -q "Mach-O" || continue
+        helper_seen=$((helper_seen + 1))
+        DYLD_LIBRARY_PATH="$smoke_app/Contents/Resources/binaries" \
+          perl -e 'alarm 30; exec @ARGV' "$helper" --version >/dev/null 2>&1
+        local helper_status=$?
+        if [ "$helper_status" -ne 0 ]; then
+          helper_failures="$helper_failures\n  $(basename "$helper") exited $helper_status"
+        fi
+      done
+      if [ -n "$helper_failures" ]; then
+        record_fail "packaged: bundled helper(s) could not execute" \
+          "$(printf 'Exit 137 means macOS SIGKILLed the helper at exec — check its entitlements (scripts/stage-macos-helpers.sh).%b' "$helper_failures")"
+      elif [ "$helper_seen" -gt 0 ]; then
+        record_ok "packaged: all $helper_seen bundled helpers execute"
+      else
+        record_fail "packaged: no bundled helpers found in the .app" \
+          "The app ships matrx-syncd, matrx-egress, cloudflared, llama-server and uv; finding none means this check stopped checking anything."
+      fi
+    fi
   fi
 
   local bin

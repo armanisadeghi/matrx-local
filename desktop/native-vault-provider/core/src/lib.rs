@@ -63,6 +63,26 @@ fn map_status(status: StatusCode) -> FixedError {
     }
 }
 
+struct SensitiveCbor(Value);
+
+impl Drop for SensitiveCbor {
+    fn drop(&mut self) {
+        fn wipe(value: &mut Value) {
+            match value {
+                Value::Bytes(bytes) => bytes.zeroize(),
+                Value::Array(values) => values.iter_mut().for_each(wipe),
+                Value::Map(values) => values.iter_mut().for_each(|(key, value)| {
+                    wipe(key);
+                    wipe(value);
+                }),
+                Value::Tag(_, value) => wipe(value),
+                _ => {}
+            }
+        }
+        wipe(&mut self.0);
+    }
+}
+
 struct SensitiveCose(CoseKey);
 
 impl Drop for SensitiveCose {
@@ -248,13 +268,11 @@ fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
     d.end().map_err(|_| FixedError::InvalidSource)
 }
 fn validate_cose_key(bytes: &[u8]) -> Result<(), FixedError> {
+    let cbor =
+        SensitiveCbor(ciborium::de::from_reader(bytes).map_err(|_| FixedError::InvalidSource)?);
+    let mut canonical = Zeroizing::new(Vec::new());
+    ciborium::ser::into_writer(&cbor.0, &mut *canonical).map_err(|_| FixedError::InvalidSource)?;
     let key = SensitiveCose(CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?);
-    let canonical = Zeroizing::new(
-        key.0
-            .clone()
-            .to_vec()
-            .map_err(|_| FixedError::InvalidSource)?,
-    );
     if canonical.as_slice() != bytes
         || !matches!(key.0.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
         || !matches!(

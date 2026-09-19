@@ -6,6 +6,7 @@ import {
   Ear,
   Cpu,
   Activity,
+  Building2,
   Shield,
   Globe,
   Cloud,
@@ -33,6 +34,7 @@ import { NotificationCenter } from "@/components/notifications/NotificationCente
 import { OpenInWindowButton } from "@/components/OpenInWindowButton";
 import { QuickChatModal } from "@/components/quick-actions/QuickChatModal";
 import { QuickLocalChatModal } from "@/components/quick-actions/QuickLocalChatModal";
+import { requestOrganizationPicker } from "@/lib/org/active-org";
 import { QuickNoteModal } from "@/components/quick-actions/QuickNoteModal";
 import { QuickScrapeModal } from "@/components/quick-actions/QuickScrapeModal";
 import { QuickTranscriptModal } from "@/components/quick-actions/QuickTranscriptModal";
@@ -528,6 +530,13 @@ export function QuickActionBar(props: QuickActionBarProps) {
                 {user.email}
               </p>
             )}
+            {user && <button
+              onClick={() => { setUserMenuOpen(false); requestOrganizationPicker(); }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              Change organization
+            </button>}
             <button
               onClick={() => {
                 setUserMenuOpen(false);

@@ -407,6 +407,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
             or engine_boot_id is None
             or type(expected_revision) is not int
             or expected_revision < 0
+            or expected_revision > 9007199254740991
         ):
             return True
         extension_generation = _canonical_uuid(msg.get("extension_generation"))
@@ -433,6 +434,9 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
 
         from app.services.cloud_sync.instance_manager import get_instance_manager
         from app.services.local_browser_context import get_local_browser_context
+        registry = get_registry()
+        original_session = registry.get(session_id)
+        authority_revision = registry.local_authority_revision
         first = await get_local_browser_context().refresh()
         if first is None or first.context.organization_id is None:
             return await reply(accepted=False)
@@ -441,7 +445,10 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         verified_identity = await get_instance_manager().registered_device_identity()
         freshest = await get_local_browser_context().refresh()
         if (
-            identity is None or verified_identity is None or verified_identity != identity
+            registry.local_authority_revision != authority_revision
+            or registry.get(session_id) is not original_session
+            or original_session is None
+            or identity is None or verified_identity is None or verified_identity != identity
             or final is None or freshest is None
             or final.context != first.context or final.owner != first.owner
             or freshest.context != first.context or freshest.owner != first.owner

@@ -9,6 +9,13 @@ Cross-repo map: `/Users/armanisadeghi/code/common-docs/systems/clients/extension
 Coding-session scope: `coding_session_routes.py`; implementation and wire
 contract: `app/services/coding_sessions/FEATURE.md`.
 
+Private local-browser registration replies echo only the validated engine boot,
+context revision, extension generation and connection ID. A synchronous registry
+revision advances on every context/device invalidation, including an empty map;
+registration checks that revision after its awaited authority reads so an old
+candidate cannot be installed after invalidation. The exact socket must still
+match. These replies select transport only; they confer no tab or login authority.
+
 ## OAuth callback handling
 
 The desktop's `src/lib/oauth.ts` retains one local transaction containing an

@@ -107,6 +107,7 @@ async def test_context_change_while_identity_awaits_refuses_the_submitted_candid
     {"engine_boot_id": "not-a-uuid"}, {"expected_revision": -1},
     {"expected_revision": True}, {"extension_generation": "not-a-uuid"},
     {"connection_id": "not-a-uuid"},
+    {"expected_revision": 9007199254740992},
 ])
 async def test_registration_ignores_malformed_correlation_values(
     monkeypatch: pytest.MonkeyPatch, changes: dict[str, object]
@@ -141,3 +142,53 @@ async def test_old_socket_cannot_install_and_duplicate_candidate_is_closed(monke
         "extension_generation": GENERATION, "connection_id": conflicting["connection_id"],
         "reason": "registration_unavailable",
     }
+
+
+@pytest.mark.anyio
+async def test_identity_invalidation_during_final_context_read_cannot_be_undone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, session_id, socket = _wire(monkeypatch, Context())
+    calls = 0
+
+    async def refresh() -> FreshContext:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            # The production identity listener fences even an empty registry.
+            registry.invalidate_local_browser("binding_changed")
+        return _fresh()
+
+    monkeypatch.setattr(context_module, "get_local_browser_context", lambda: SimpleNamespace(refresh=refresh))
+    assert await routes._handle_extension_message(session_id, _message())
+    assert socket.frames[-1]["status"] == "refused"
+    assert registry.current_local_browser(
+        engine_boot_id=BOOT, revision=4, owner=("user", "session"),
+        organization_id="organization", device_id=DEVICE,
+    ) is None
+    # A later independently validated request can register under the new fence.
+    assert await routes._handle_extension_message(session_id, _message())
+    assert socket.frames[-1]["status"] == "acknowledged"
+
+
+@pytest.mark.anyio
+async def test_context_invalidation_during_identity_read_refuses_even_restored_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, session_id, socket = _wire(monkeypatch, Context(_fresh(), _fresh(), _fresh()))
+    calls = 0
+
+    async def identity() -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            registry.invalidate_local_browser("binding_changed")
+        return SimpleNamespace(app_instance_id=DEVICE)
+
+    monkeypatch.setattr(instance_manager, "get_instance_manager", lambda: SimpleNamespace(registered_device_identity=identity))
+    assert await routes._handle_extension_message(session_id, _message())
+    assert socket.frames[-1]["status"] == "refused"
+    assert registry.current_local_browser(
+        engine_boot_id=BOOT, revision=4, owner=("user", "session"),
+        organization_id="organization", device_id=DEVICE,
+    ) is None

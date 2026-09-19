@@ -23,6 +23,7 @@ from app.api.document_routes import router as document_router  # notes — local
 from app.api.access_routes import router as access_router  # filesystem access health
 from app.api.egress_routes import router as egress_router
 from app.api.cloud_sync_routes import router as cloud_sync_router
+from app.api.local_browser_context import router as local_browser_context_router
 from app.api.agent_catalog_routes import router as agent_catalog_router
 from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
@@ -2167,6 +2168,7 @@ app.include_router(document_router, prefix="/notes")
 app.include_router(access_router)
 app.include_router(egress_router)
 app.include_router(cloud_sync_router)
+app.include_router(local_browser_context_router)
 app.include_router(chat_router)
 app.include_router(agent_catalog_router)
 app.include_router(data_router)

@@ -63,6 +63,20 @@ fn map_status(status: StatusCode) -> FixedError {
     }
 }
 
+struct SensitiveCose(CoseKey);
+
+impl Drop for SensitiveCose {
+    fn drop(&mut self) {
+        for (label, value) in &mut self.0.params {
+            if *label == Label::Int(-4) {
+                if let Value::Bytes(bytes) = value {
+                    bytes.zeroize();
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceV1 {
@@ -98,11 +112,12 @@ pub fn canonical_source(
     reject_duplicate_source_keys(bytes)?;
     let value: SourceV1 = serde_json::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
     validate_source(&value)?;
-    let canonical = serde_json::to_vec(&value).map_err(|_| FixedError::InvalidSource)?;
-    if canonical != bytes {
+    let canonical =
+        Zeroizing::new(serde_json::to_vec(&value).map_err(|_| FixedError::InvalidSource)?);
+    if canonical.as_slice() != bytes {
         return Err(FixedError::InvalidSource);
     }
-    Ok(Zeroizing::new(canonical))
+    Ok(canonical)
 }
 
 /// Native-only private export material. It intentionally has no `Debug` or
@@ -171,18 +186,10 @@ pub fn export_source_v1_pkcs8(
         return Err(FixedError::InvalidSource);
     }
     let private_cose = Zeroizing::new(decode(&record.private_cose_key)?);
-    let mut cose = CoseKey::from_slice(&private_cose).map_err(|_| FixedError::InvalidSource)?;
-    let private = passkey_authenticator::private_key_from_cose_key(&cose)
+    let cose =
+        SensitiveCose(CoseKey::from_slice(&private_cose).map_err(|_| FixedError::InvalidSource)?);
+    let private = passkey_authenticator::private_key_from_cose_key(&cose.0)
         .map_err(|_| FixedError::InvalidSource)?;
-    // `CoseKey` owns an additional scalar copy. The RustCrypto key owns and
-    // zeroizes its scalar, then the COSE copy is explicitly wiped here.
-    for (label, value) in &mut cose.params {
-        if *label == Label::Int(-4) {
-            if let Value::Bytes(bytes) = value {
-                bytes.zeroize();
-            }
-        }
-    }
     let der = private
         .to_pkcs8_der()
         .map_err(|_| FixedError::InvalidSource)?;
@@ -214,7 +221,8 @@ fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
     {
         return Err(FixedError::InvalidSource);
     }
-    validate_cose_key(&decode(&v.private_cose_key)?)
+    let private_cose = Zeroizing::new(decode(&v.private_cose_key)?);
+    validate_cose_key(&private_cose)
 }
 fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
     struct UniqueKeys;
@@ -240,26 +248,28 @@ fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
     d.end().map_err(|_| FixedError::InvalidSource)
 }
 fn validate_cose_key(bytes: &[u8]) -> Result<(), FixedError> {
-    let key = CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
-    if key
-        .clone()
-        .to_vec()
-        .map_err(|_| FixedError::InvalidSource)?
-        != bytes
-        || !matches!(key.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
+    let key = SensitiveCose(CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?);
+    let canonical = Zeroizing::new(
+        key.0
+            .clone()
+            .to_vec()
+            .map_err(|_| FixedError::InvalidSource)?,
+    );
+    if canonical.as_slice() != bytes
+        || !matches!(key.0.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
         || !matches!(
-            key.alg,
+            key.0.alg,
             Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES256))
         )
-        || !key.key_id.is_empty()
-        || !key.key_ops.is_empty()
-        || !key.base_iv.is_empty()
-        || key.params.len() != 4
+        || !key.0.key_id.is_empty()
+        || !key.0.key_ops.is_empty()
+        || !key.0.base_iv.is_empty()
+        || key.0.params.len() != 4
     {
         return Err(FixedError::InvalidSource);
     }
     let (mut x, mut y, mut d, mut curve) = (None, None, None, false);
-    for (label, value) in &key.params {
+    for (label, value) in &key.0.params {
         match label {
             Label::Int(-1) => {
                 curve = matches!(value, coset::cbor::value::Value::Integer(v) if i64::try_from(*v).ok() == Some(1))

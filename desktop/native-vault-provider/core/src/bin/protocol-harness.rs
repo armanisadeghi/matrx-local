@@ -42,6 +42,7 @@ fn code(error: FixedError) -> &'static str {
         FixedError::CredentialExcluded => "CredentialExcluded",
         FixedError::NoCredentials => "NoCredentials",
         FixedError::OperationFailed => "OperationFailed",
+        FixedError::Cancelled => "Cancelled",
     }
 }
 fn emit<T: Serialize>(out: &mut impl Write, value: &T) {

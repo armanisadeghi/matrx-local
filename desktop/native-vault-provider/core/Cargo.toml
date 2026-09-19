@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.85.1"
 publish = false
 
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
@@ -15,7 +18,8 @@ p256 = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+uniffi = { version = "0.32.1", optional = true, features = ["cli"] }
 zeroize = "1"
 
 [dev-dependencies]
@@ -23,11 +27,17 @@ zeroize = "1"
 [features]
 default = []
 protocol-test-harness = []
+native-bridge = ["dep:uniffi"]
 
 [[bin]]
 name = "protocol-harness"
 path = "src/bin/protocol-harness.rs"
 required-features = ["protocol-test-harness"]
+
+[[bin]]
+name = "native-vault-bindgen"
+path = "src/bin/native-vault-bindgen.rs"
+required-features = ["native-bridge"]
 
 [patch.crates-io]
 passkey-authenticator = { path = "vendor/passkey-authenticator" }

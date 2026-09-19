@@ -20,6 +20,12 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "native-bridge")]
+mod native_bridge;
+
+#[cfg(feature = "native-bridge")]
+uniffi::setup_scaffolding!();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixedError {
     PersistenceFailed,
@@ -29,6 +35,7 @@ pub enum FixedError {
     CredentialExcluded,
     NoCredentials,
     OperationFailed,
+    Cancelled,
 }
 
 fn map_status(status: StatusCode) -> FixedError {
@@ -468,6 +475,30 @@ pub async fn prepare_registration<U>(
 where
     U: UserValidationMethod<PasskeyItem = StoredCredential> + Sync,
 {
+    prepare_registration_with_display_name(
+        request,
+        user_validation,
+        existing_sources,
+        max_source_bytes,
+        None,
+    )
+    .await
+}
+
+/// Provider-private native factory.  The maintained CTAP type requires a
+/// display string, while Apple's passkey request does not provide one.  This
+/// overload preserves `None` (and distinguishes it from an empty string) in
+/// the canonical source without changing the existing core/harness factory.
+pub async fn prepare_registration_with_display_name<U>(
+    request: passkey_types::ctap2::make_credential::Request,
+    user_validation: U,
+    existing_sources: &[&[u8]],
+    max_source_bytes: usize,
+    display_name: Option<Option<String>>,
+) -> Result<PreparedRegistration, FixedError>
+where
+    U: UserValidationMethod<PasskeyItem = StoredCredential> + Sync,
+{
     if !valid_make(&request) || max_source_bytes == 0 {
         return Err(FixedError::InvalidRequest);
     }
@@ -488,12 +519,15 @@ where
         .make_credential_with_backup_flags(request, BackupFlags::new(true, true).expect("valid"))
         .await
         .map_err(map_status)?;
-    let source = a
-        .store()
+    let captured = a
+        .store_mut()
         .captured
-        .as_ref()
-        .ok_or(FixedError::OperationFailed)?
-        .encode()?;
+        .as_mut()
+        .ok_or(FixedError::OperationFailed)?;
+    if let Some(display_name) = display_name {
+        captured.passkey.user_display_name = display_name;
+    }
+    let source = captured.encode()?;
     if source.len() > max_source_bytes {
         return Err(FixedError::InvalidSource);
     }

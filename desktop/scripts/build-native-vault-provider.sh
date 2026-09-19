@@ -40,6 +40,9 @@ esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/native-vault-provider"
+BRIDGE_TARGET="$($ROOT/scripts/build-native-vault-bridge.sh "$TARGET_ARCH")"
+RUST_TARGET="${TARGET_ARCH/arm64/aarch64}-apple-darwin"
+RUST_LIB="$SOURCE/core/target/$RUST_TARGET/debug"
 OUTPUT="$SOURCE/build/AI Matrx Vault Provider.appex"
 CONTENTS="$OUTPUT/Contents"
 rm -rf "$OUTPUT"
@@ -59,6 +62,13 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
   -framework CryptoKit \
   -framework LocalAuthentication \
   -framework Security \
+  -I "$BRIDGE_TARGET" \
+  -Xcc "-fmodule-map-file=$BRIDGE_TARGET/native_vault_coreFFI.modulemap" \
+  -L "$RUST_LIB" \
+  -Xlinker -force_load \
+  -Xlinker "$RUST_LIB/libnative_vault_core.a" \
+  "$BRIDGE_TARGET/native_vault_core.swift" \
+  "$SOURCE/NativeVaultBridgeConsumer.swift" \
   "$SOURCE/NativeVaultCodec.swift" \
   "$SOURCE/NativeVaultEnrollmentLifecycle.swift" \
   "$SOURCE/NativeVaultState.swift" \

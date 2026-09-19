@@ -46,9 +46,10 @@ def paths(value, where=''):
             yield from paths(item, where)
 allowed_paths = [
     ('bin.path', 'src/bin/protocol-harness.rs'),
+    ('bin.path', 'src/bin/native-vault-bindgen.rs'),
     ('patch.crates-io.passkey-authenticator.path', 'vendor/passkey-authenticator'),
 ]
-if sorted(paths(manifest)) != allowed_paths:
+if sorted(paths(manifest)) != sorted(allowed_paths):
     raise SystemExit('manifest contains an unapproved path dependency')
 lock = Path(sys.argv[2]).read_text()
 if re.search(r'^source = "git\+', lock, re.M):

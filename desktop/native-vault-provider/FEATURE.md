@@ -34,4 +34,6 @@ ready.
 
 ## Change log
 
+- 2026-09-19: Added the provider-private UniFFI 0.32.1 native passkey bridge. The gated Rust static library accepts only typed Apple-adapter inputs, verifies the trusted native callback before maintained core work, commits canonical registration source through the callback before releasing a response, and fences cancellation with a one-shot atomic operation. `build-native-vault-provider.sh` regenerates and statically links its extension-safe Swift bindings for arm64 and x86_64. `test-native-vault-bridge.sh` drives the generated Swift consumer through a real registration/assertion accepted by independent `python-fido2`. The bridge does not advertise passkeys, invoke an AuthenticationServices passkey controller, access provider storage, or establish OS readiness.
+
 - 2026-09-13: Verified shared-state implementation and focused process/filesystem checks at `0eb823933`; documented its separation from unfinished native credential delivery.

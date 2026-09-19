@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from app.api.remote_auth import verify_supabase_token, headers_indicate_tunnel
 from app.services.sync_client import get_sync_client
+from app.services.aidream.organization import _active_memberships
 
 router=APIRouter(prefix='/local-browser', tags=['local-browser'])
 class ContextBody(BaseModel):
@@ -27,7 +28,7 @@ def _state(request:Request)->ContextState:
  if state is None:
   state=ContextState(str(uuid.uuid4())); request.app.state.local_browser_context=state
  return state
-async def _owner(request:Request)->tuple[str,str]:
+async def _owner(request:Request)->tuple[str,str,str]:
  try:
   if headers_indicate_tunnel(request.headers) or request.client is None or not ipaddress.ip_address(request.client.host).is_loopback: raise ValueError
  except ValueError: raise HTTPException(403,'local_browser_context_refused')
@@ -38,17 +39,21 @@ async def _owner(request:Request)->tuple[str,str]:
  if desktop is None or grant is None: raise HTTPException(401,'local_browser_context_refused')
  user,sid=_claim(grant[0]); inbound_user,inbound_sid=_claim(token)
  if desktop.user_id!=user or grant[1]!=user or inbound_user!=user or inbound_sid!=sid: raise HTTPException(401,'local_browser_context_refused')
- return user,sid
+ return user,sid,grant[0]
 @router.get('/context')
 async def get_context(request:Request):
  await _owner(request); state=_state(request)
  return {'engine_boot_id':state.boot_id,'revision':state.revision,'organization_id':state.organization_id}
 @router.post('/context')
 async def set_context(body:ContextBody,request:Request):
- await _owner(request); state=_state(request)
+ _user, _sid, daemon_jwt = await _owner(request); state=_state(request)
  if body.organization_id is not None:
   try: uuid.UUID(body.organization_id)
   except ValueError: raise HTTPException(400,'local_browser_context_refused')
+  try:
+   memberships = await _active_memberships(daemon_jwt)
+   if body.organization_id not in {str(row.get("container_id")) for row in memberships}: raise ValueError
+  except Exception: raise HTTPException(403,'local_browser_context_refused')
  async with state.lock:
   if body.engine_boot_id!=state.boot_id or body.expected_revision!=state.revision: raise HTTPException(409,'local_browser_context_conflict')
   await _owner(request)

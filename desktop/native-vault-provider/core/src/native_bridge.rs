@@ -107,6 +107,43 @@ pub struct NativeAssertionResult {
     pub user_handle: Vec<u8>,
 }
 
+/// Private native handoff material. UniFFI copies this record into Swift, so
+/// Swift-owned buffers have no cryptographic wipe guarantee. Rust owns and
+/// zeroizes the incoming source and intermediate DER until that ABI boundary.
+/// This record deliberately has no Rust `Debug` or serialization implementation.
+#[derive(uniffi::Record)]
+pub struct NativeExportSourcePkcs8 {
+    pub pkcs8_der: Vec<u8>,
+    pub rp_id: String,
+    pub credential_id: Vec<u8>,
+    pub user_handle: Vec<u8>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+}
+
+/// Convert caller-owned canonical source-v1 bytes for the private native
+/// exchange handoff. This function never fetches a vault item or authorizes a
+/// caller; host authority remains outside the bridge.
+#[uniffi::export]
+pub fn native_export_source_pkcs8(
+    source: Vec<u8>,
+    max_source_bytes: u32,
+) -> Result<NativeExportSourcePkcs8, BridgeError> {
+    let source = Zeroizing::new(source);
+    let export =
+        export_source_v1_pkcs8(&source, max_source_bytes as usize).map_err(BridgeError::from)?;
+    Ok(NativeExportSourcePkcs8 {
+        // The Vec crossing UniFFI is copied by generated bindings. It cannot
+        // be zeroized by Rust after transfer; no Rust-owned secret survives.
+        pkcs8_der: export.pkcs8_der().to_vec(),
+        rp_id: export.rp_id().to_owned(),
+        credential_id: export.credential_id().to_vec(),
+        user_handle: export.user_handle().to_vec(),
+        username: export.username().map(ToOwned::to_owned),
+        display_name: export.display_name().map(ToOwned::to_owned),
+    })
+}
+
 #[uniffi::export(callback_interface)]
 #[async_trait]
 pub trait NativeCeremony: Send + Sync {
@@ -554,6 +591,21 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn export_ffi_record_has_no_debug_or_serde_traits() {
+        static_assertions::assert_not_impl_any!(
+            NativeExportSourcePkcs8: std::fmt::Debug, serde::Serialize
+        );
+    }
+
+    #[test]
+    fn export_ffi_refuses_empty_caller_owned_source() {
+        assert!(matches!(
+            native_export_source_pkcs8(vec![], 4096),
+            Err(BridgeError::InvalidSource)
+        ));
+    }
+
     fn registration() -> NativeRegistrationInput {
         NativeRegistrationInput {
             rp_id: "example.com".into(),

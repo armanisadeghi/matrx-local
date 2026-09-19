@@ -89,6 +89,21 @@ struct NativeVaultBridgeFido2 {
         let nilSource = try required(await nilCeremony.savedSource())
         let nilState = await nilCeremony.displayStates()
         guard nilState.0 && !nilState.1 else { throw Unexpected.callback }
+
+        // This calls generated Swift bindings over the private source-v1
+        // bridge. It proves exact public metadata and that CryptoKit accepts
+        // the DER as a P-256 signing key; no private bytes leave harness memory.
+        let exported = try nativeExportSourcePkcs8(source: nilSource, maxSourceBytes: 65_536)
+        guard exported.rpId == "example.com",
+              exported.credentialId == nilRegistration.credentialId,
+              exported.userHandle == Data("swift-rp-user".utf8),
+              exported.username == "swift-rp-user",
+              exported.displayName == nil else { throw Unexpected.callback }
+        let exportKey = try P256.Signing.PrivateKey(derRepresentation: exported.pkcs8Der)
+        let exportPayload = Data("native-source-v1-swift-export".utf8)
+        let exportSignature = try exportKey.signature(for: exportPayload)
+        guard exportKey.publicKey.isValidSignature(exportSignature, for: exportPayload) else { throw Unexpected.callback }
+
         let emptyCeremony = Ceremony()
         _ = try await NativeOperation().register(input: registrationInput(displayName: ""), existingSources: [], maxSourceBytes: 65_536, ceremony: emptyCeremony)
         let emptyState = await emptyCeremony.displayStates()

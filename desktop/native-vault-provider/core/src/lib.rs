@@ -1,8 +1,10 @@
 //! Provider-private passkey operations and registration persistence gate.
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ciborium::value::Value;
 use coset::{CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate, iana};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::pkcs8::EncodePrivateKey;
 use passkey_authenticator::{
     Authenticator, BackupFlags, CredentialIdLength, CredentialStore, DiscoverabilitySupport,
     PasskeyAccessor, StoreInfo, UserValidationMethod,
@@ -18,7 +20,7 @@ use passkey_types::{
 use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "native-bridge")]
 mod native_bridge;
@@ -61,6 +63,40 @@ fn map_status(status: StatusCode) -> FixedError {
     }
 }
 
+struct SensitiveCbor(Value);
+
+impl Drop for SensitiveCbor {
+    fn drop(&mut self) {
+        fn wipe(value: &mut Value) {
+            match value {
+                Value::Bytes(bytes) => bytes.zeroize(),
+                Value::Array(values) => values.iter_mut().for_each(wipe),
+                Value::Map(values) => values.iter_mut().for_each(|(key, value)| {
+                    wipe(key);
+                    wipe(value);
+                }),
+                Value::Tag(_, value) => wipe(value),
+                _ => {}
+            }
+        }
+        wipe(&mut self.0);
+    }
+}
+
+struct SensitiveCose(CoseKey);
+
+impl Drop for SensitiveCose {
+    fn drop(&mut self) {
+        for (label, value) in &mut self.0.params {
+            if *label == Label::Int(-4) {
+                if let Value::Bytes(bytes) = value {
+                    bytes.zeroize();
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceV1 {
@@ -72,7 +108,7 @@ struct SourceV1 {
     username: Option<String>,
     #[serde(deserialize_with = "required_option")]
     display_name: Option<String>,
-    private_cose_key: String,
+    private_cose_key: Zeroizing<String>,
     counter: Option<u32>,
     extensions: serde_json::Map<String, serde_json::Value>,
     backup_eligible: bool,
@@ -96,11 +132,99 @@ pub fn canonical_source(
     reject_duplicate_source_keys(bytes)?;
     let value: SourceV1 = serde_json::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
     validate_source(&value)?;
-    let canonical = serde_json::to_vec(&value).map_err(|_| FixedError::InvalidSource)?;
-    if canonical != bytes {
+    let canonical =
+        Zeroizing::new(serde_json::to_vec(&value).map_err(|_| FixedError::InvalidSource)?);
+    if canonical.as_slice() != bytes {
         return Err(FixedError::InvalidSource);
     }
-    Ok(Zeroizing::new(canonical))
+    Ok(canonical)
+}
+
+/// Native-only private export material. It intentionally has no `Debug` or
+/// serialization implementation: callers may use the PKCS#8 document only at
+/// the native handoff boundary and public metadata only for a typed exchange.
+pub struct SourceV1Pkcs8Export {
+    pkcs8_der: Zeroizing<Vec<u8>>,
+    rp_id: String,
+    credential_id: Vec<u8>,
+    user_handle: Vec<u8>,
+    username: Option<String>,
+    display_name: Option<String>,
+}
+
+impl SourceV1Pkcs8Export {
+    pub fn pkcs8_der(&self) -> &[u8] {
+        &self.pkcs8_der
+    }
+
+    pub fn rp_id(&self) -> &str {
+        &self.rp_id
+    }
+
+    pub fn credential_id(&self) -> &[u8] {
+        &self.credential_id
+    }
+
+    pub fn user_handle(&self) -> &[u8] {
+        &self.user_handle
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+}
+
+/// Convert a canonical source-v1 ES256 credential to an RFC 5958 PKCS#8 DER
+/// key document. The maintained source validator establishes the exact
+/// private/public COSE pair before the maintained RustCrypto encoder runs.
+pub fn export_source_v1_pkcs8(
+    source: &[u8],
+    max_source_bytes: usize,
+) -> Result<SourceV1Pkcs8Export, FixedError> {
+    const MAX_SOURCE_BYTES: usize = 65_536;
+    const MAX_NAME_BYTES: usize = 256;
+    const MAX_DER_BYTES: usize = 4_096;
+    if max_source_bytes == 0 || max_source_bytes > MAX_SOURCE_BYTES {
+        return Err(FixedError::InvalidSource);
+    }
+    let canonical = canonical_source(source, max_source_bytes)?;
+    let record: SourceV1 =
+        serde_json::from_slice(&canonical).map_err(|_| FixedError::InvalidSource)?;
+    if record
+        .username
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_NAME_BYTES)
+        || record
+            .display_name
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_NAME_BYTES)
+    {
+        return Err(FixedError::InvalidSource);
+    }
+    let private_cose = Zeroizing::new(decode(&record.private_cose_key)?);
+    let cose =
+        SensitiveCose(CoseKey::from_slice(&private_cose).map_err(|_| FixedError::InvalidSource)?);
+    let private = passkey_authenticator::private_key_from_cose_key(&cose.0)
+        .map_err(|_| FixedError::InvalidSource)?;
+    let der = private
+        .to_pkcs8_der()
+        .map_err(|_| FixedError::InvalidSource)?;
+    let pkcs8_der = Zeroizing::new(der.as_bytes().to_vec());
+    if pkcs8_der.is_empty() || pkcs8_der.len() > MAX_DER_BYTES {
+        return Err(FixedError::InvalidSource);
+    }
+    Ok(SourceV1Pkcs8Export {
+        pkcs8_der,
+        rp_id: record.rp_id,
+        credential_id: decode(&record.credential_id)?,
+        user_handle: decode(&record.user_handle)?,
+        username: record.username.as_ref().map(ToString::to_string),
+        display_name: record.display_name.as_ref().map(ToString::to_string),
+    })
 }
 fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
     if v.version != 1
@@ -117,7 +241,8 @@ fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
     {
         return Err(FixedError::InvalidSource);
     }
-    validate_cose_key(&decode(&v.private_cose_key)?)
+    let private_cose = Zeroizing::new(decode(&v.private_cose_key)?);
+    validate_cose_key(&private_cose)
 }
 fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
     struct UniqueKeys;
@@ -143,26 +268,26 @@ fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
     d.end().map_err(|_| FixedError::InvalidSource)
 }
 fn validate_cose_key(bytes: &[u8]) -> Result<(), FixedError> {
-    let key = CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
-    if key
-        .clone()
-        .to_vec()
-        .map_err(|_| FixedError::InvalidSource)?
-        != bytes
-        || !matches!(key.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
+    let cbor =
+        SensitiveCbor(ciborium::de::from_reader(bytes).map_err(|_| FixedError::InvalidSource)?);
+    let mut canonical = Zeroizing::new(Vec::new());
+    ciborium::ser::into_writer(&cbor.0, &mut *canonical).map_err(|_| FixedError::InvalidSource)?;
+    let key = SensitiveCose(CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?);
+    if canonical.as_slice() != bytes
+        || !matches!(key.0.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
         || !matches!(
-            key.alg,
+            key.0.alg,
             Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES256))
         )
-        || !key.key_id.is_empty()
-        || !key.key_ops.is_empty()
-        || !key.base_iv.is_empty()
-        || key.params.len() != 4
+        || !key.0.key_id.is_empty()
+        || !key.0.key_ops.is_empty()
+        || !key.0.base_iv.is_empty()
+        || key.0.params.len() != 4
     {
         return Err(FixedError::InvalidSource);
     }
     let (mut x, mut y, mut d, mut curve) = (None, None, None, false);
-    for (label, value) in &key.params {
+    for (label, value) in &key.0.params {
         match label {
             Label::Int(-1) => {
                 curve = matches!(value, coset::cbor::value::Value::Integer(v) if i64::try_from(*v).ok() == Some(1))
@@ -259,13 +384,15 @@ impl StoredCredential {
             ),
             username: self.passkey.username.clone(),
             display_name: self.passkey.user_display_name.clone(),
-            private_cose_key: URL_SAFE_NO_PAD.encode(
-                self.passkey
-                    .key
-                    .clone()
-                    .to_vec()
-                    .map_err(|_| FixedError::InvalidSource)?,
-            ),
+            private_cose_key: URL_SAFE_NO_PAD
+                .encode(
+                    self.passkey
+                        .key
+                        .clone()
+                        .to_vec()
+                        .map_err(|_| FixedError::InvalidSource)?,
+                )
+                .into(),
             counter: None,
             extensions: Default::default(),
             backup_eligible: true,
@@ -560,6 +687,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::pkcs8::DecodePrivateKey;
     use passkey_authenticator::{UiHint, UserCheck};
     use passkey_types::{
         ctap2::{Flags, get_assertion, make_credential},
@@ -705,7 +833,7 @@ mod tests {
             user_handle: URL_SAFE_NO_PAD.encode(b"user"),
             username: None,
             display_name: None,
-            private_cose_key: URL_SAFE_NO_PAD.encode(key),
+            private_cose_key: URL_SAFE_NO_PAD.encode(key).into(),
             counter: None,
             extensions: Default::default(),
             backup_eligible: true,
@@ -723,6 +851,85 @@ mod tests {
             canonical_source(&serde_json::to_vec(&ip).unwrap(), 4096),
             Err(FixedError::InvalidSource)
         );
+    }
+
+    #[test]
+    fn source_v1_export_encodes_exact_validated_key_and_public_metadata() {
+        let source = valid_source();
+        let export = export_source_v1_pkcs8(&source, 4096).expect("source export");
+        let private = p256::SecretKey::from_pkcs8_der(export.pkcs8_der()).expect("pkcs8 der");
+        let public = private.public_key().to_encoded_point(false);
+        let record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        let cose = CoseKey::from_slice(&decode(&record.private_cose_key).expect("cose bytes"))
+            .expect("cose");
+        let mut x = None;
+        let mut y = None;
+        for (label, value) in cose.params {
+            if label == Label::Int(-2) {
+                x = value.as_bytes().map(ToOwned::to_owned);
+            }
+            if label == Label::Int(-3) {
+                y = value.as_bytes().map(ToOwned::to_owned);
+            }
+        }
+        assert_eq!(public.x().map(AsRef::<[u8]>::as_ref), x.as_deref());
+        assert_eq!(public.y().map(AsRef::<[u8]>::as_ref), y.as_deref());
+        assert_eq!(export.rp_id(), "example.com");
+        assert_eq!(export.credential_id(), &[1; 16]);
+        assert_eq!(export.user_handle(), b"user");
+        assert_eq!(export.username(), None);
+        assert_eq!(export.display_name(), None);
+    }
+
+    #[test]
+    fn source_v1_export_keeps_fixed_validation_errors_and_never_derives_bad_pairs() {
+        let source = valid_source();
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, source.len() - 1),
+            Err(FixedError::InvalidSource)
+        ));
+        let mut record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        record.counter = Some(0);
+        let malformed = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&malformed, 4096),
+            Err(FixedError::InvalidSource)
+        ));
+        record.counter = None;
+        record.backup_state = false;
+        let malformed = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&malformed, 4096),
+            Err(FixedError::InvalidSource)
+        ));
+    }
+
+    #[test]
+    fn source_export_enforces_frozen_exchange_bounds() {
+        let source = valid_source();
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, 0),
+            Err(FixedError::InvalidSource)
+        ));
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, 65_537),
+            Err(FixedError::InvalidSource)
+        ));
+        let mut record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        record.username = Some("x".repeat(257));
+        let too_long_name = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&too_long_name, 65_536),
+            Err(FixedError::InvalidSource)
+        ));
+        record.username = Some("x".repeat(256));
+        let boundary_name = serde_json::to_vec(&record).expect("json");
+        assert!(export_source_v1_pkcs8(&boundary_name, 65_536).is_ok());
+    }
+
+    #[test]
+    fn source_export_type_has_no_debug_or_serde_traits() {
+        static_assertions::assert_not_impl_any!(SourceV1Pkcs8Export: std::fmt::Debug, serde::Serialize);
     }
     #[tokio::test]
     async fn maintained_make_and_get_emit_required_flags_and_discoverable_paths() {

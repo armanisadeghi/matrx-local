@@ -18,8 +18,9 @@ type Context = {
 
 let engineUrl: string | null = null;
 let generation = 0;
-let chain: Promise<void> = Promise.resolve();
 let listening = false;
+let activeTransport: AbortController | null = null;
+const REQUEST_TIMEOUT_MS = 5_000;
 
 function current(ticket: number): boolean {
   return ticket === generation;
@@ -28,21 +29,35 @@ function current(ticket: number): boolean {
 async function request(
   url: string,
   token: string,
+  signal: AbortSignal,
   init?: RequestInit,
-): Promise<Response> {
-  return fetch(`${url}/local-browser/context`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+): Promise<Response | null> {
+  const timeout = new AbortController();
+  const timer = globalThis.setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+  const relay = () => timeout.abort();
+  signal.addEventListener("abort", relay, { once: true });
+  try {
+    return await fetch(`${url}/local-browser/context`, {
+      ...init,
+      signal: timeout.signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    return null;
+  } finally {
+    globalThis.clearTimeout(timer);
+    signal.removeEventListener("abort", relay);
+  }
 }
 
 async function synchronize(ticket: number): Promise<void> {
+  const transport = activeTransport;
   const url = engineUrl;
-  if (!url || !current(ticket)) return;
+  if (!url || !current(ticket) || !transport) return;
   const session = await getAuthedSession();
   if (!session || !current(ticket) || url !== engineUrl) return;
   if (!current(ticket) || url !== engineUrl) return;
@@ -58,8 +73,8 @@ async function synchronize(ticket: number): Promise<void> {
   // One conflict retry is safe only after re-reading all current inputs.  A
   // later selection/auth/engine transition has already advanced generation.
   for (let attempt = 0; attempt < 2 && current(ticket) && url === engineUrl; attempt += 1) {
-    const read = await request(url, fresh.access_token);
-    if (!read.ok || !current(ticket) || url !== engineUrl) return;
+    const read = await request(url, fresh.access_token, transport.signal);
+    if (!read || !read.ok || !current(ticket) || url !== engineUrl) return;
     const context = (await read.json()) as Context;
     const latestSession = await getAuthedSession();
     const latestOrganizationId = await getActiveOrganizationId();
@@ -71,7 +86,7 @@ async function synchronize(ticket: number): Promise<void> {
       url !== engineUrl
     ) return;
     if (context.organization_id === latestOrganizationId) return;
-    const write = await request(url, latestSession.access_token, {
+    const write = await request(url, latestSession.access_token, transport.signal, {
       method: "POST",
       body: JSON.stringify({
         engine_boot_id: context.engine_boot_id,
@@ -79,7 +94,7 @@ async function synchronize(ticket: number): Promise<void> {
         organization_id: latestOrganizationId,
       }),
     });
-    if (write.ok || write.status !== 409) return;
+    if (!write || write.ok || write.status !== 409) return;
   }
 }
 
@@ -87,7 +102,11 @@ async function synchronize(ticket: number): Promise<void> {
 export function synchronizeLocalBrowserContext(url: string | null): void {
   engineUrl = url;
   const ticket = ++generation;
-  chain = chain.then(() => synchronize(ticket), () => synchronize(ticket));
+  activeTransport?.abort();
+  activeTransport = new AbortController();
+  // Do not serialize behind a hung old transport. Aborting it above makes the
+  // new generation the only request allowed to reach the engine.
+  void synchronize(ticket);
 }
 
 /** Begin exactly one listener set for this renderer process. */
@@ -104,6 +123,7 @@ export function startLocalBrowserContextSynchronization(): void {
 export function resetLocalBrowserContextSynchronizationForTest(): void {
   engineUrl = null;
   generation = 0;
-  chain = Promise.resolve();
+  activeTransport?.abort();
+  activeTransport = null;
   listening = false;
 }

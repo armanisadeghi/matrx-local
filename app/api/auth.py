@@ -170,9 +170,11 @@ def _auth_error_response(
             )
         except Exception:  # logging must never break the auth decision
             logger.debug("[auth] could not record rejection", exc_info=True)
+    headers = {"Cache-Control": "no-store"} if path.startswith("/local-browser/") else None
     if path == "/v1" or path.startswith("/v1/"):
         return JSONResponse(
             status_code=status_code,
+            headers=headers,
             content={
                 "error": {
                     "message": message,
@@ -182,7 +184,7 @@ def _auth_error_response(
                 }
             },
         )
-    return JSONResponse(status_code=status_code, content={"detail": message})
+    return JSONResponse(status_code=status_code, content={"detail": message}, headers=headers)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

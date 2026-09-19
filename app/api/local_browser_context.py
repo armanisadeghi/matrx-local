@@ -1,164 +1,107 @@
-"""Direct-loopback selected-organization fence for local-browser transport."""
-
+"""Direct-loopback selected-organization transport for the local browser."""
 from __future__ import annotations
 
-import asyncio
-import base64
 import ipaddress
-import json
 import uuid
-from dataclasses import dataclass
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from app.api.remote_auth import headers_indicate_tunnel, verify_supabase_token
 from app.services.aidream.organization import _active_memberships
+from app.services.local_browser_context import BrowserContext, get_local_browser_context, grant_claims
 from app.services.sync_client import get_sync_client
 
 router = APIRouter(prefix="/local-browser", tags=["local-browser"])
 _REFUSED = "local_browser_context_refused"
 _CONFLICT = "local_browser_context_conflict"
+_claim = grant_claims
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _refuse(status_code: int, code: str = _REFUSED) -> HTTPException:
+    return HTTPException(status_code, code, headers=_NO_STORE)
 
 
 class ContextBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-
     engine_boot_id: str
     expected_revision: int
     organization_id: str | None
 
 
-@dataclass
-class ContextState:
-    boot_id: str
-    revision: int = 0
-    organization_id: str | None = None
-    owner: tuple[str, str] | None = None
-    lock: asyncio.Lock | None = None
-
-    def __post_init__(self) -> None:
-        self.lock = asyncio.Lock()
+def _response(context: BrowserContext) -> dict[str, str | int | None]:
+    return {"engine_boot_id": context.engine_boot_id, "revision": context.revision, "organization_id": context.organization_id}
 
 
-def _claim(token: str) -> tuple[str, str]:
-    """Read required claims after the bearer has been issuer-verified."""
+async def _trusted_daemon_context() -> tuple[tuple[str, str, str], BrowserContext]:
+    """Retire from a fresh daemon grant before inspecting any caller credential."""
+    grant = await get_sync_client().access_grant()
+    fresh = await get_local_browser_context().fresh_for_daemon_grant(grant)
+    if fresh is None or grant is None:
+        raise _refuse(401)
+    context, owner = fresh
+    return (owner[0], owner[1], grant[0]), context
+
+
+async def _owner(request: Request) -> tuple[str, str, str, BrowserContext]:
     try:
-        part = token.split(".")[1]
-        padded = part + "=" * (-len(part) % 4)
-        data = json.loads(base64.urlsafe_b64decode(padded.encode()))
-        sub, session_id = data["sub"], data["session_id"]
-        canonical_session_id = str(uuid.UUID(session_id))
-        if not isinstance(sub, str) or canonical_session_id != session_id:
-            raise ValueError
-        return sub, session_id
-    except Exception as exc:
-        raise HTTPException(401, _REFUSED) from exc
-
-
-def _state(request: Request) -> ContextState:
-    state = getattr(request.app.state, "local_browser_context", None)
-    if state is None:
-        state = ContextState(str(uuid.uuid4()))
-        request.app.state.local_browser_context = state
-    return state
-
-
-async def _owner(request: Request) -> tuple[str, str, str]:
-    """Return the exact current daemon owner session and its ephemeral JWT."""
-    try:
-        direct_loopback = (
-            not headers_indicate_tunnel(request.headers)
-            and request.client is not None
-            and ipaddress.ip_address(request.client.host).is_loopback
-        )
+        direct_loopback = not headers_indicate_tunnel(request.headers) and request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
         direct_loopback = False
     if not direct_loopback:
-        raise HTTPException(403, _REFUSED)
+        raise _refuse(403)
 
+    # A forged caller cannot clear valid context: retirement derives only from
+    # the daemon grant, before untrusted bearer validation.
+    (user_id, session_id, daemon_jwt), context = await _trusted_daemon_context()
     authorization = request.headers.get("authorization", "")
     if not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, _REFUSED)
+        raise _refuse(401)
     desktop_jwt = authorization[7:].strip()
     desktop = await verify_supabase_token(desktop_jwt)
-    grant = await get_sync_client().access_grant()
-    if desktop is None or grant is None:
-        raise HTTPException(401, _REFUSED)
-
-    daemon_jwt, daemon_user_id = grant
-    user_id, session_id = _claim(daemon_jwt)
-    inbound_user_id, inbound_session_id = _claim(desktop_jwt)
-    if (
-        desktop.user_id != user_id
-        or daemon_user_id != user_id
-        or inbound_user_id != user_id
-        or inbound_session_id != session_id
-    ):
-        raise HTTPException(401, _REFUSED)
-    return user_id, session_id, daemon_jwt
-
-
-def _fence_for_owner(state: ContextState, owner: tuple[str, str]) -> None:
-    """Clear the context whenever either daemon actor or daemon session changes."""
-    if state.owner != owner:
-        state.owner = owner
-        state.organization_id = None
-        state.revision += 1
+    try:
+        inbound_user_id, inbound_session_id = grant_claims(desktop_jwt)
+    except ValueError as exc:
+        raise _refuse(401) from exc
+    if desktop is None or desktop.user_id != user_id or inbound_user_id != user_id or inbound_session_id != session_id:
+        raise _refuse(401)
+    return user_id, session_id, daemon_jwt, context
 
 
 @router.get("/context")
-async def get_context(request: Request) -> dict[str, str | int | None]:
-    user_id, session_id, _jwt = await _owner(request)
-    state = _state(request)
-    assert state.lock is not None
-    async with state.lock:
-        _fence_for_owner(state, (user_id, session_id))
-        return {
-            "engine_boot_id": state.boot_id,
-            "revision": state.revision,
-            "organization_id": state.organization_id,
-        }
+async def get_context(request: Request, response: Response) -> dict[str, str | int | None]:
+    _user_id, _session_id, _jwt, context = await _owner(request)
+    response.headers.update(_NO_STORE)
+    return _response(context)
 
 
 @router.post("/context")
-async def set_context(body: ContextBody, request: Request) -> dict[str, str | int | None]:
-    user_id, session_id, daemon_jwt = await _owner(request)
-    state = _state(request)
+async def set_context(body: ContextBody, request: Request, response: Response) -> dict[str, str | int | None]:
+    user_id, session_id, daemon_jwt, _context = await _owner(request)
     if body.organization_id is not None:
         try:
             uuid.UUID(body.organization_id)
         except ValueError as exc:
-            raise HTTPException(400, _REFUSED) from exc
+            raise _refuse(400) from exc
         try:
             memberships = await _active_memberships(daemon_jwt)
             member_ids = {str(row.get("container_id")) for row in memberships}
         except Exception as exc:
-            raise HTTPException(403, _REFUSED) from exc
+            raise _refuse(403) from exc
         if body.organization_id not in member_ids:
-            raise HTTPException(403, _REFUSED)
+            raise _refuse(403)
 
-    # Membership is an awaited remote read. Re-read the atomic daemon grant
-    # under the CAS lock so a same-user re-login cannot install an old result.
-    assert state.lock is not None
-    async with state.lock:
-        current_user_id, current_session_id, current_daemon_jwt = await _owner(request)
-        _fence_for_owner(state, (current_user_id, current_session_id))
-        if (current_user_id, current_session_id, current_daemon_jwt) != (
-            user_id,
-            session_id,
-            daemon_jwt,
-        ):
-            raise HTTPException(409, _CONFLICT)
-        if (
-            body.engine_boot_id != state.boot_id
-            or body.expected_revision != state.revision
-        ):
-            raise HTTPException(409, _CONFLICT)
-        state.organization_id = body.organization_id
-        state.revision += 1
-        return {
-            "engine_boot_id": state.boot_id,
-            "revision": state.revision,
-            "organization_id": state.organization_id,
-        }
+    # Membership awaits. Re-read and retire from the current daemon grant
+    # before the engine-owned CAS so an old request cannot restore state.
+    current_user_id, current_session_id, current_jwt, _current = await _owner(request)
+    if (current_user_id, current_session_id, current_jwt) != (user_id, session_id, daemon_jwt):
+        raise _refuse(409, _CONFLICT)
+    result = await get_local_browser_context().compare_and_set(
+        owner=(user_id, session_id), engine_boot_id=body.engine_boot_id,
+        expected_revision=body.expected_revision, organization_id=body.organization_id,
+    )
+    if result is None:
+        raise _refuse(409, _CONFLICT)
+    response.headers.update(_NO_STORE)
+    return _response(result)

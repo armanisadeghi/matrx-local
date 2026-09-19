@@ -19,7 +19,7 @@ importers:
         version: 0.11.9(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.21.11(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.21.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.15.6(react@19.2.4)
@@ -245,8 +245,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.21.11':
-    resolution: {integrity: sha512-lBsZPxxPJ8oZCmaF7fspdPxqwybrzmK6aAtBlgT/8NrPBdEOlXbG+Cvhih4F/pwvXNFq9Mm2dB8A//r7jqzOaQ==}
+  '@ai-matrx/design-system@0.21.12':
+    resolution: {integrity: sha512-33mTVJWwKSJ1n6L+nOLmpYNM1SHyNLPhCeXWlUbn5S8ONpXcFZ/zM+IAQ+AxKKA1ayEoK7P5DFt30dw1ojs21Q==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3664,7 +3664,7 @@ snapshots:
   '@ai-matrx/agents@0.12.8(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/data': 0.16.2(@supabase/supabase-js@2.116.0)(react@19.2.4)
-      '@ai-matrx/design-system': 0.21.11(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@ai-matrx/design-system': 0.21.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit': 0.15.6(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
@@ -3693,7 +3693,7 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.21.11(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.21.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@ai-matrx/kit': 0.15.6(react@19.2.4)
       '@dnd-kit/core': 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

@@ -45,11 +45,11 @@ import Foundation
         }
         guard !FileManager.default.fileExists(atPath: lockURL.path) else { throw Failure.changedReadOnlyRoot }
         try store.locked { _ in () }
-        let state = PublicState(version: 1, generation: generation, host_subject: nil, provider_subject: nil)
+        let state = PublicState(version: 2, generation: generation, host_subject: nil, provider_subject: nil)
         try store.write(state)
         guard try store.read().generation == generation else { throw Failure.badRoundTrip }
         let stateURL = root.appendingPathComponent("NativeVault/state.json")
-        for corrupt in ["{", #"{"version":1,"generation":"\#(generation)","host_subject":null,"provider_subject":null,"unknown":true}"#, #"{"version":1,"generation":"\#(generation)","host_subject":null}"#] {
+        for corrupt in ["{", #"{"version":2,"generation":"\#(generation)","host_subject":null,"provider_subject":null,"unknown":true}"#, #"{"version":2,"generation":"\#(generation)","host_subject":null}"#] {
             try corrupt.data(using: .utf8)!.write(to: stateURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
             do { _ = try store.read(); throw Failure.expectedRefusal } catch Failure.expectedRefusal { throw Failure.expectedRefusal } catch { }

@@ -33,6 +33,49 @@ mod platform {
     }
     #[derive(Deserialize, Serialize, Clone)]
     #[serde(deny_unknown_fields)]
+    struct Suggestions {
+        #[serde(deserialize_with = "required_nullable")]
+        organization_id: Option<String>,
+        revision: String,
+        status: String,
+        refreshed_at_ms: Option<i64>,
+        count: u16,
+        unsupported_count: u16,
+    }
+    #[derive(Clone)]
+    enum SuggestionField {
+        Absent,
+        Null,
+        Value(Suggestions),
+    }
+    impl Default for SuggestionField {
+        fn default() -> Self {
+            Self::Absent
+        }
+    }
+    impl SuggestionField {
+        fn absent(&self) -> bool {
+            matches!(self, Self::Absent)
+        }
+    }
+    impl<'de> Deserialize<'de> for SuggestionField {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            Ok(match Option::<Suggestions>::deserialize(d)? {
+                Some(value) => Self::Value(value),
+                None => Self::Null,
+            })
+        }
+    }
+    impl Serialize for SuggestionField {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            match self {
+                Self::Absent | Self::Null => serializer.serialize_none(),
+                Self::Value(value) => value.serialize(serializer),
+            }
+        }
+    }
+    #[derive(Deserialize, Serialize, Clone)]
+    #[serde(deny_unknown_fields)]
     struct State {
         version: u8,
         generation: String,
@@ -40,6 +83,27 @@ mod platform {
         host_subject: Option<String>,
         #[serde(deserialize_with = "required_nullable")]
         provider_subject: Option<String>,
+        #[serde(default, skip_serializing_if = "SuggestionField::absent")]
+        suggestions: SuggestionField,
+    }
+    fn empty_suggestions() -> Suggestions {
+        Suggestions {
+            organization_id: None,
+            revision: generation(),
+            status: "empty".into(),
+            refreshed_at_ms: None,
+            count: 0,
+            unsupported_count: 0,
+        }
+    }
+    fn empty_state() -> State {
+        State {
+            version: 2,
+            generation: generation(),
+            host_subject: None,
+            provider_subject: None,
+            suggestions: SuggestionField::Value(empty_suggestions()),
+        }
     }
     fn subject(value: &str) -> bool {
         value.len() == 36
@@ -217,12 +281,7 @@ mod platform {
         };
         if fd < 0 {
             return match std::io::Error::last_os_error().raw_os_error() {
-                Some(libc::ENOENT) => Ok(State {
-                    version: 1,
-                    generation: generation(),
-                    host_subject: None,
-                    provider_subject: None,
-                }),
+                Some(libc::ENOENT) => Ok(empty_state()),
                 Some(libc::ELOOP) => Err(TransitionResult::StateCorrupt),
                 _ => Err(TransitionResult::StateUnavailable),
             };
@@ -246,7 +305,7 @@ mod platform {
     fn decode(bytes: &[u8]) -> Result<State, TransitionResult> {
         let state: State =
             serde_json::from_slice(bytes).map_err(|_| TransitionResult::StateCorrupt)?;
-        if state.version != 1
+        if !(state.version == 1 || state.version == 2)
             || !subject(&state.generation)
             || state.host_subject.as_deref().is_some_and(|v| !subject(v))
             || state
@@ -255,6 +314,32 @@ mod platform {
                 .is_some_and(|v| !subject(v))
         {
             return Err(TransitionResult::StateCorrupt);
+        }
+        match (&state.suggestions, state.version) {
+            (SuggestionField::Absent, 1) => {}
+            (SuggestionField::Value(value), 2)
+                if subject(&value.revision)
+                    && value
+                        .organization_id
+                        .as_deref()
+                        .map(subject)
+                        .unwrap_or(true)
+                    && matches!(
+                        value.status.as_str(),
+                        "empty" | "ready" | "stale" | "failed"
+                    )
+                    && value.count <= 2000
+                    && value.unsupported_count <= 2000
+                    && value.refreshed_at_ms.map(|v| v > 0).unwrap_or(true)
+                    && (value.status != "empty"
+                        || (value.organization_id.is_none()
+                            && value.refreshed_at_ms.is_none()
+                            && value.count == 0
+                            && value.unsupported_count == 0))
+                    && (value.status != "ready"
+                        || (value.organization_id.is_some()
+                            && value.refreshed_at_ms.is_some())) => {}
+            _ => return Err(TransitionResult::StateCorrupt),
         }
         Ok(state)
     }
@@ -391,9 +476,11 @@ mod platform {
             if !force && state.host_subject == next {
                 return Ok(TransitionResult::Unchanged);
             };
+            state.version = 2;
             state.generation = generation();
             state.host_subject = if force { None } else { next };
             state.provider_subject = None;
+            state.suggestions = SuggestionField::Value(empty_suggestions());
             write(dir, &state)?;
             Ok(TransitionResult::Applied)
         }) {
@@ -403,13 +490,11 @@ mod platform {
     }
     pub fn status() -> HistoricalStatus {
         match existing_dir().and_then(|dir| match dir {
-            None => Ok(State {
-                version: 1,
-                generation: generation(),
-                host_subject: None,
-                provider_subject: None,
-            }),
-            Some(dir) => { status_lock(&dir)?; read(&dir) },
+            None => Ok(empty_state()),
+            Some(dir) => {
+                status_lock(&dir)?;
+                read(&dir)
+            }
         }) {
             Ok(state) if state.provider_subject.is_some() => HistoricalStatus {
                 state: "configured",
@@ -423,7 +508,10 @@ mod platform {
                 state: "state_corrupt",
                 last_configured_subject: None,
             },
-            Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None },
+            Err(TransitionResult::Busy) => HistoricalStatus {
+                state: "busy",
+                last_configured_subject: None,
+            },
             Err(_) => HistoricalStatus {
                 state: "state_unavailable",
                 last_configured_subject: None,
@@ -432,13 +520,11 @@ mod platform {
     }
     fn status_at(root: &str) -> HistoricalStatus {
         match existing_dir_at(root).and_then(|dir| match dir {
-            None => Ok(State {
-                version: 1,
-                generation: generation(),
-                host_subject: None,
-                provider_subject: None,
-            }),
-            Some(dir) => { status_lock(&dir)?; read(&dir) },
+            None => Ok(empty_state()),
+            Some(dir) => {
+                status_lock(&dir)?;
+                read(&dir)
+            }
         }) {
             Ok(state) if state.provider_subject.is_some() => HistoricalStatus {
                 state: "configured",
@@ -452,7 +538,10 @@ mod platform {
                 state: "state_corrupt",
                 last_configured_subject: None,
             },
-            Err(TransitionResult::Busy) => HistoricalStatus { state: "busy", last_configured_subject: None },
+            Err(TransitionResult::Busy) => HistoricalStatus {
+                state: "busy",
+                last_configured_subject: None,
+            },
             Err(_) => HistoricalStatus {
                 state: "state_unavailable",
                 last_configured_subject: None,
@@ -484,6 +573,7 @@ mod platform {
                 r#"{"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null,"x":1}"#,
                 r#"{"version":1,"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null}"#,
                 r#"{"version":1,"generation":"upper","host_subject":null,"provider_subject":null}"#,
+                r#"{"version":1,"generation":"11111111-1111-4111-8111-111111111111","host_subject":null,"provider_subject":null,"suggestions":null}"#,
             ] {
                 assert!(matches!(
                     decode(invalid.as_bytes()),
@@ -560,7 +650,10 @@ mod platform {
             assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o750);
 
             std::fs::set_permissions(&vault, PermissionsExt::from_mode(0o4755)).unwrap();
-            assert!(matches!(dir_at(path.to_str().unwrap()), Err(TransitionResult::StateUnavailable)));
+            assert!(matches!(
+                dir_at(path.to_str().unwrap()),
+                Err(TransitionResult::StateUnavailable)
+            ));
             assert_eq!(std::fs::metadata(&vault).unwrap().mode() & 0o7777, 0o4755);
             std::fs::remove_dir_all(path).unwrap();
         }
@@ -571,8 +664,14 @@ mod platform {
             std::fs::create_dir(&target).unwrap();
             std::os::unix::fs::symlink(&target, path.join("NativeVault")).unwrap();
 
-            assert!(matches!(dir_at(path.to_str().unwrap()), Err(TransitionResult::StateUnavailable)));
-            assert!(std::fs::symlink_metadata(path.join("NativeVault")).unwrap().file_type().is_symlink());
+            assert!(matches!(
+                dir_at(path.to_str().unwrap()),
+                Err(TransitionResult::StateUnavailable)
+            ));
+            assert!(std::fs::symlink_metadata(path.join("NativeVault"))
+                .unwrap()
+                .file_type()
+                .is_symlink());
             std::fs::remove_dir_all(path).unwrap();
         }
         #[test]

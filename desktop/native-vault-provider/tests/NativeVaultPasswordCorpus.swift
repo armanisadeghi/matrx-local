@@ -1,5 +1,7 @@
 import Foundation
 import AuthenticationServices
+import LocalAuthentication
+import Security
 
 final class ScriptedPasswordTransport: NativeVaultPasswordTransporting {
     var requests: [URLRequest] = []
@@ -100,6 +102,19 @@ struct NativeVaultPasswordCorpus {
         let identity = ASPasswordCredentialIdentity(serviceIdentifier: ASCredentialServiceIdentifier(identifier: "example.com", type: .domain), user: "u", recordIdentifier: "test")
         controller.provideCredentialWithoutUserInteraction(for: ASPasswordCredentialRequest(credentialIdentity: identity))
         require(cancellations.last?.code == ASExtensionError.userInteractionRequired.rawValue, "actual modern callback must require interaction")
+
+        // The actual direct-selection callback uses its signed binding's exact
+        // organization and service digest. It never opens the generic picker.
+        let selectedTransport = ScriptedPasswordTransport()
+        selectedTransport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
+        let selected = CredentialProviderViewController(); selected.nativePasswordKeyOverride = "public-build-key"; selected.nativePasswordTransport = selectedTransport; selected.nativePasswordAuthorize = { $0(true) }; selected.nativePasswordAcquire = { $0(.success(grant)) }; selected.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }
+        selected.nativeIdentityBindingOverride = { _ in NativeVaultIdentityBinding(item: item, kind: .password, organization: org, passkey: nil, serviceDigest: NativeVaultIdentityRecord.serviceDigest(type: "domain", identifier: "example.com")) }
+        var selectedCompleted = 0; var selectedCancelled = 0
+        selected.nativePasswordCompleteSink = { _, done in selectedCompleted += 1; done() }; selected.nativePasswordCancelSink = { _ in selectedCancelled += 1 }
+        selected.prepareInterfaceToProvideCredential(for: ASPasswordCredentialRequest(credentialIdentity: identity))
+        waitUntil("selected controller callback did not finish") { selectedCompleted > 0 || selectedCancelled > 0 }
+        require(selectedCompleted == 1 && selectedCancelled == 0 && selectedTransport.requests.count == 3, "selected callback must use its exact signed account binding")
+
         let routeReplies = [Result<(Data, HTTPURLResponse), Error>.success((report, response("{}").1)), .success((match, response("{}").1)), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         for stage in 1...3 {
             for changedSubject in [false, true] {
@@ -170,6 +185,65 @@ struct NativeVaultPasswordCorpus {
         cancelledTransport.cancel(); cancelledTransport.cancel()
         cancelledTransport.start(URLRequest(url: URL(string: "https://must-not-send.invalid")!))
         require(transportSettled == 1, "cancel-before-dispatch must settle once and never start a URL task")
+        // Drive the actual password callback through real session acquisition.
+        // Only operating-system boundaries are injected; cancellation must not
+        // reach AuthenticationServices before Apple's cleanup callback returns.
+        let cleanupRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: cleanupRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cleanupRoot) }
+        let cleanupDisk = try! ProviderStore(testRoot: cleanupRoot, mode: .explicitConnect)
+        _ = try! cleanupDisk.initializeExplicitConnect(invalidatePrivate: {})
+        let cleanupGeneration = "44444444-4444-4444-8444-444444444444"
+        try! cleanupDisk.write(PublicState(version: 2, generation: cleanupGeneration, host_subject: nil, provider_subject: subject))
+        let missingKeychain = NativeVaultPrivateSession(security: PrivateSessionSecurity(copyMatching: { _, _ in errSecItemNotFound }, add: { _, _ in fatalError("Missing session cannot be saved") }, delete: { _ in errSecSuccess }))
+        let indexLock = NSLock()
+        var indexCallback: ((Bool, Error?) -> Void)?
+        let realAccess = NativeVaultSessionAccess(store: { try ProviderStore(testRoot: cleanupRoot, mode: .providerAccess) }, privateSession: { missingKeychain }, identityIndex: ProviderIdentityIndex { done in indexLock.lock(); indexCallback = done; indexLock.unlock() })
+        let cleanupController = CredentialProviderViewController()
+        cleanupController.nativePasswordKeyOverride = "public-build-key"
+        cleanupController.nativePasswordAuthorize = { $0(true) }
+        cleanupController.nativePasswordAcquire = { done in realAccess.acquire(key: "public-build-key", context: LAContext(), lifetime: cleanupController.nativeRequest, completion: done) }
+        var cleanupCancellations = 0
+        cleanupController.nativePasswordCancelSink = { _ in
+            require((try! cleanupDisk.read()).provider_subject == nil, "Controller cancellation must see durable invalidation")
+            cleanupCancellations += 1
+        }
+        cleanupController.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+        waitUntil("actual session did not reach Apple cleanup") { indexLock.lock(); defer { indexLock.unlock() }; return indexCallback != nil }
+        require(cleanupCancellations == 0, "Password callback must remain open while Apple cleanup is outstanding")
+        indexLock.lock(); let releaseIndex = indexCallback!; indexLock.unlock()
+        releaseIndex(true, nil)
+        waitUntil("controller did not cancel after cleanup") { cleanupCancellations == 1 }
+        // Actual password controller post-grant timeout must stale the captured
+        // ready snapshot before it cancels the credential request.
+        let staleRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("native-post-grant-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: staleRoot, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: staleRoot) }
+        let staleDisk = try! ProviderStore(testRoot: staleRoot, mode: .explicitConnect); _ = try! staleDisk.initializeExplicitConnect(invalidatePrivate: {})
+        let staleGeneration = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", staleRevision = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        let staleState = PublicState(version: 2, generation: staleGeneration, host_subject: nil, provider_subject: subject, suggestions: NativeSuggestions(organization_id: org, revision: staleRevision, status: "ready", refreshed_at_ms: 77, count: 4, unsupported_count: 1))
+        try! staleDisk.write(staleState)
+        let staleController = CredentialProviderViewController(); staleController.nativePasswordKeyOverride = "public-build-key"
+        staleController.sessionAccess = NativeVaultSessionAccess(store: { try ProviderStore(testRoot: staleRoot, mode: .providerAccess) }, identityIndex: ProviderIdentityIndex { _ in fatalError("Ambiguous password failure must preserve Apple entries") })
+        let staleTransport = ScriptedPasswordTransport(); staleTransport.replies = [.failure(URLError(.timedOut))]; staleController.nativePasswordTransport = staleTransport
+        staleController.nativePasswordAuthorize = { $0(true) }; staleController.nativePasswordAcquire = { $0(.success(NativeVaultSessionAccess.Grant(accessToken: "token", subject: subject, generation: staleGeneration, suggestionState: staleState))) }; staleController.nativePasswordCurrentState = { NativePasswordCurrentState(generation: staleGeneration, subject: subject) }
+        var staleCancels = 0; staleController.nativePasswordCancelSink = { _ in
+            let state = try! staleDisk.read(); require(state.suggestions.status == "stale" && state.suggestions.revision == staleRevision && state.suggestions.count == 4 && state.suggestions.unsupported_count == 1, "password post-grant timeout must stale before cancellation"); staleCancels += 1
+        }
+        staleController.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
+        waitUntil("post-grant timeout did not cancel") { staleCancels == 1 }
+        // The actual scope-picker organization request must use the same
+        // captured response reconciliation before any picker presentation.
+        try! staleDisk.write(staleState)
+        let scopeController = CredentialProviderViewController()
+        scopeController.sessionAccess = NativeVaultSessionAccess(store: { try ProviderStore(testRoot: staleRoot, mode: .providerAccess) }, identityIndex: ProviderIdentityIndex { _ in fatalError("Scope 503 must preserve Apple entries") })
+        let scopeTransport = ScriptedPasswordTransport(); let scopeHTTP = HTTPURLResponse(url: URL(string: "https://server.app.matrxserver.com")!, statusCode: 503, httpVersion: nil, headerFields: nil)!; scopeTransport.replies = [.success((Data("{}".utf8), scopeHTTP))]; scopeController.nativePasswordTransport = scopeTransport
+        scopeController.presentSuggestionScopePicker(grant: NativeVaultSessionAccess.Grant(accessToken: "token", subject: subject, generation: staleGeneration, suggestionState: staleState), lifetime: scopeController.nativeRequest)
+        waitUntil("scope failure did not stale captured state") {
+            let state = try! staleDisk.read()
+            return state.suggestions.status == "stale"
+        }
+        let scopeState = try! staleDisk.read()
+        require(scopeState.suggestions.revision == staleRevision && scopeState.suggestions.count == 4 && scopeState.suggestions.unsupported_count == 1, "scope failure must preserve suggestion metadata")
         print("Native Vault password codec corpus passed")
     }
 }

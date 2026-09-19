@@ -21,6 +21,8 @@ private final class Server: NativeVaultPasskeyTransporting {
     var receipt: [String: Any]?
     var wrongMatchHandle = false
     var maximumBodyBytes = 131072
+    var forcedFailureStatus: Int?
+    var forcedTimeout = false
     var holdSuffix: String?
     var didSend: ((URLRequest) -> Void)?
     private let lock = NSLock()
@@ -39,6 +41,10 @@ private final class Server: NativeVaultPasskeyTransporting {
     var sourceObject: [String: Any] { try! JSONSerialization.jsonObject(with: source!) as! [String: Any] }
     func send(_ request: URLRequest, completion: @escaping Reply) {
         requests.append(request); didSend?(request)
+        if forcedTimeout { completion(.failure(URLError(.timedOut))); return }
+        if let status = forcedFailureStatus {
+            completion(.success((Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!))); return
+        }
         let path = request.url!.path
         if let holdSuffix, path.hasSuffix(holdSuffix) {
             lock.lock(); precondition(pending == nil); pending = completion; lock.unlock(); return
@@ -104,6 +110,8 @@ private final class Generation {
     var denyEvaluation: Int?
     var lockEntered = false
     var lockRelease: DispatchSemaphore?
+    var holdEvaluation = false
+    var delayedEvaluation: ((Bool) -> Void)?
     var completionUnderLock = false
     private var lockHeld = false
     init(server: Server = Server(), timeout: TimeInterval = 3) {
@@ -111,26 +119,26 @@ private final class Generation {
         let grant = NativeVaultSessionAccess.Grant(accessToken: "synthetic-token", subject: "subject", generation: "generation")
         coordinator = NativeVaultPasskeyCoordinator(
             sessionAccess: NativeVaultSessionAccess(), transport: server, key: { "synthetic-key" },
-            cancel: { [unowned self] in error = $0 },
-            completeRegistration: { [unowned self] in precondition(lockHeld && !server.posts.isEmpty); completionUnderLock = true; registration = $0 },
-            completeAssertion: { [unowned self] in precondition(lockHeld); completionUnderLock = true; assertion = $0 },
-            acquire: { [unowned self] callback in acquired += 1; callback(.success(grant)) },
+            cancel: { [weak self] in self?.error = $0 },
+            completeRegistration: { [weak self] credential in guard let self else { return }; precondition(self.lockHeld && !self.server.posts.isEmpty); self.completionUnderLock = true; self.registration = credential },
+            completeAssertion: { [weak self] credential in guard let self else { return }; precondition(self.lockHeld); self.completionUnderLock = true; self.assertion = credential },
+            acquire: { [weak self] callback in guard let self else { callback(.failure(URLError(.cancelled))); return }; self.acquired += 1; callback(.success(grant)) },
             currentState: { [generation] in generation.read() },
-            completionLock: { [unowned self] body in
-                // Deliberately block the *background* lock path. A blocking
-                // main-actor implementation cannot pass the race below.
+            completionLock: { [weak self] body in
+                guard let self else { throw URLError(.cancelled) }
                 precondition(!Thread.isMainThread)
-                if let barrier = lockRelease { DispatchQueue.main.async { self.lockEntered = true }; barrier.wait() }
-                lockHeld = true; defer { lockHeld = false }; try body(generation.read())
+                if let barrier = self.lockRelease { DispatchQueue.main.async { self.lockEntered = true }; barrier.wait() }
+                self.lockHeld = true; defer { self.lockHeld = false }; try body(self.generation.read())
             }, organizationChoice: { _ in 0 }, matchChoice: { _ in 0 }, label: { $0 },
-            evaluator: { [unowned self] context, _, callback in
+            evaluator: { [weak self] context, _, callback in
+                guard let self else { callback(false); return }
                 precondition(!context.interactionNotAllowed, "second verification must permit OS interaction")
-                evaluations.append(ObjectIdentifier(context))
-                // Model the real Keychain read's effect between evaluations.
-                context.interactionNotAllowed = true
-                callback(denyEvaluation != evaluations.count)
+                self.evaluations.append(ObjectIdentifier(context)); context.interactionNotAllowed = true
+                if self.holdEvaluation { self.delayedEvaluation = callback; return }
+                callback(self.denyEvaluation != self.evaluations.count)
             }, operationTimeout: timeout)
         controller.nativePasskeyCoordinator = coordinator
+        controller.nativeIdentityBindingOverride = { _ in NativeVaultIdentityBinding(item: "00000000-0000-4000-8000-000000000002", kind: .passkey, organization: "00000000-0000-4000-8000-000000000001", passkey: "00000000-0000-4000-8000-000000000004", serviceDigest: nil) }
         controller.nativePasswordCancelSink = { _ in }
     }
     func register(_ request: ASPasskeyCredentialRequest = makeRequest()) { controller.prepareInterface(forPasskeyRegistration: request) }
@@ -170,6 +178,24 @@ private func makeRequest(rp: String = "example.com", credential: Data = Data(rep
             let match = NativePasskeyMatch(itemID: "item", passkeyID: "passkey", credentialID: Data(), userHandle: Data(), username: "account@example.com", displayName: blank)
             precondition(NativeVaultPasskeyCoordinator.accountLabel(match, index: 0) == "account@example.com")
         }
+        // Retain the controller/coordinator but release the Journey before an
+        // externally held LA callback runs. The previous unowned closure
+        // deterministically dereferenced the released Journey here.
+        var releasedJourney: Journey? = Journey()
+        releasedJourney!.holdEvaluation = true
+        releasedJourney!.register()
+        await wait { releasedJourney?.delayedEvaluation != nil }
+        let retainedController = releasedJourney!.controller
+        let retainedServer = releasedJourney!.server
+        let lateEvaluation = releasedJourney!.delayedEvaluation!
+        weak var releasedWeak = releasedJourney
+        releasedJourney = nil
+        precondition(releasedWeak == nil, "Journey must release before delayed evaluator callback")
+        lateEvaluation(true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        precondition(retainedServer.posts.isEmpty, "late callback after Journey release must not complete a credential ceremony")
+        _ = retainedController // Keep the real coordinator alive through drain.
+
         let positive = Journey(); positive.register(); await positive.finish()
         precondition(positive.registration != nil && positive.error == nil && positive.completionUnderLock)
         precondition(positive.evaluations.count == 2 && positive.evaluations[0] == positive.evaluations[1])
@@ -259,6 +285,29 @@ private func makeRequest(rp: String = "example.com", credential: Data = Data(rep
         lockRace.register(); await wait { lockRace.lockEntered }
         lockRace.generation.replace(); barrier.signal(); await lockRace.finish()
         precondition(lockRace.registration == nil)
+        for failure in [401, 503, 0] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let disk = try! ProviderStore(testRoot: root, mode: .explicitConnect)
+            _ = try! disk.initializeExplicitConnect(invalidatePrivate: {})
+            let subject = "11111111-1111-4111-8111-111111111111", generation = "22222222-2222-4222-8222-222222222222", revision = "33333333-3333-4333-8333-333333333333"
+            let state = PublicState(version: 2, generation: generation, host_subject: nil, provider_subject: subject, suggestions: NativeSuggestions(organization_id: "00000000-0000-4000-8000-000000000001", revision: revision, status: "ready", refreshed_at_ms: 55, count: 3, unsupported_count: 1))
+            try! disk.write(state)
+            let access = NativeVaultSessionAccess(store: { try ProviderStore(testRoot: root, mode: .providerAccess) }, identityIndex: ProviderIdentityIndex { _ in preconditionFailure("Ambiguous API failure must never clear Apple entries") })
+            let server = Server(); server.forcedTimeout = failure == 0; server.forcedFailureStatus = failure == 0 ? nil : failure
+            let controller = CredentialProviderViewController()
+            var cancelled = false
+            let grant = NativeVaultSessionAccess.Grant(accessToken: "synthetic", subject: subject, generation: generation, suggestionState: state)
+            controller.nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(sessionAccess: access, transport: server, key: { "synthetic" }, cancel: { _ in
+                let actual = try! disk.read()
+                precondition(actual.suggestions.status == "stale" && actual.suggestions.revision == revision && actual.suggestions.count == 3 && actual.suggestions.unsupported_count == 1, "Passkey API failure must durably stale captured suggestions before cancel")
+                cancelled = true
+            }, completeRegistration: { _ in preconditionFailure("Failed API cannot register") }, completeAssertion: { _ in preconditionFailure("Failed API cannot assert") }, isExternalCurrent: { controller.nativeRequest.isCurrent }, requestLifetime: { controller.nativeRequest }, acquire: { $0(.success(grant)) }, currentState: { let current = try! disk.read(); return NativePasswordCurrentState(generation: current.generation, subject: current.provider_subject) }, evaluator: { _, _, done in done(true) })
+            controller.prepareInterface(forPasskeyRegistration: makeRequest())
+            await wait { cancelled }
+            precondition(server.requests.count == 1)
+        }
         print("PASS actual native passkey callbacks: registration, assertion, UV, receipt recovery, exact replay, malformed input, account replacement, cancellation and lock race")
     }
 }

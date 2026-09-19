@@ -964,7 +964,7 @@ jobs:
           echo ""
           echo "✅ latest.json updated"
 
-      - name: Fill missing platforms from previous releases
+      - name: Reconstruct missing platforms from current release
         if: steps.release.outputs.is_draft == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -973,15 +973,15 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
-          ALLOW_UNVERIFIED_BACKFILL: ${{ inputs.allow_unverified_backfill && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
           rm -rf /tmp/fill
           mkdir -p /tmp/fill
 
-          # All platform keys Tauri expects. If Tauri omitted an updater flavor,
-          # backfill it from the most recent release that carries that flavor.
+          # All platform keys Tauri expects. The matrix builders can race while
+          # updating latest.json, so reconstruct omitted entries from this
+          # release's own signed assets before validating the manifest.
           python3 << 'PYEOF'
           import json, os, subprocess, sys, urllib.parse, urllib.request
 
@@ -1008,30 +1008,6 @@ jobs:
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
 
-          def published_releases():
-              page = 1
-              while True:
-                  batch = gh_get(f"releases?per_page=100&page={page}")
-                  for release in batch:
-                      if not release.get("draft"):
-                          yield release
-                  if len(batch) < 100:
-                      return
-                  page += 1
-
-          def fetch_latest_json(release_tag):
-              url = f"https://github.com/{repo}/releases/download/{release_tag}/latest.json"
-              req = urllib.request.Request(url, headers={
-                  "Authorization": f"Bearer {gh_token}",
-                  "User-Agent": "release-workflow",
-              })
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      return json.loads(r.read())
-              except Exception as e:
-                  print(f"  Could not fetch latest.json for {release_tag}: {e}")
-                  return None
-
           # Load the current release's latest.json (already patched by previous step)
           subprocess.run(
               ["gh", "release", "download", tag, "--repo", repo,
@@ -1041,121 +1017,60 @@ jobs:
           with open("/tmp/fill/latest.json") as f:
               current = json.load(f)
 
-          # ── Backfill guard: a backfilled entry ships an OLDER build to
-          # updaters. Two protections:
-          #   1. Key-identity check: the entry's minisign signature must have
-          #      been produced by the CURRENT updater keypair (key IDs match).
-          #      A rotated key means old artifacts are un-installable — and,
-          #      around an identity-transition release, backfilling could
-          #      silently route one architecture to a build with the broken
-          #      helper TCC identity. Refuse unless the operator explicitly
-          #      opts in via the allow_unverified_backfill dispatch input.
-          #   2. Loud logging: every backfill lands in the job step summary,
-          #      not just buried logs.
           import base64, pathlib
-
-          allow_unverified = os.environ.get("ALLOW_UNVERIFIED_BACKFILL") == "true"
-          summary_lines = []
-
-          def _minisign_key_id(text_blob_b64_lines):
-              """Key ID (8 bytes, hex) from minisign-format text (pub or sig)."""
-              lines = [
-                  l.strip() for l in text_blob_b64_lines.splitlines()
-                  if l.strip() and not l.startswith(("untrusted", "trusted"))
-              ]
-              blob = base64.b64decode(lines[0])
-              return blob[2:10].hex()
-
-          def current_updater_key_id():
-              conf = json.loads(
-                  pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text()
-              )
-              pub_b64 = conf["plugins"]["updater"]["pubkey"]
-              return _minisign_key_id(base64.b64decode(pub_b64).decode())
-
-          def entry_key_id(entry):
-              # latest.json's `signature` is base64 of the whole minisign
-              # .sig file text (Tauri updater format).
-              return _minisign_key_id(base64.b64decode(entry["signature"]).decode())
 
           missing = EXPECTED_PLATFORMS - set(current["platforms"].keys())
           if not missing:
-              print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to backfill.")
+              print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to reconstruct.")
           else:
-              print(
-                  f"❌ REFUSING release {tag}: updater manifest is missing {sorted(missing)}. "
-                  "Older release artifacts cannot satisfy this release's frozen/managed "
-                  "runtime contract and must never be backfilled. Rebuild every current "
-                  "matrix artifact instead."
-              )
-              sys.exit(1)
-              # Historical backfill implementation remains below temporarily
-              # for release-workflow archaeology, but is unreachable by design.
-              try:
-                  expected_key = current_updater_key_id()
-              except Exception as e:
-                  print(f"❌ Could not derive current updater key id: {e}")
-                  sys.exit(1)
-
-              for rel in published_releases():
-                  if rel["tag_name"] == tag:
-                      continue
-                  if not missing:
-                      break
-                  prev_json = fetch_latest_json(rel["tag_name"])
-                  if not prev_json:
-                      continue
-                  covered = missing & set(prev_json["platforms"].keys())
-                  if not covered:
-                      continue
-                  for key in sorted(covered):
-                      entry = prev_json["platforms"][key]
-                      try:
-                          entry_key = entry_key_id(entry)
-                          verified = entry_key == expected_key
-                      except Exception as e:
-                          entry_key = f"unparseable ({e})"
-                          verified = False
-                      if not verified and not allow_unverified:
-                          print(
-                              f"❌ REFUSING backfill of {key} from {rel['tag_name']}: "
-                              f"updater signature key {entry_key} != current key "
-                              f"{expected_key}. Old artifacts would be "
-                              f"un-installable or carry a pre-fix identity. "
-                              f"Re-run with allow_unverified_backfill=true only "
-                              f"if you know why the key changed."
-                          )
-                          sys.exit(1)
-                      flag = "" if verified else " (UNVERIFIED — operator override)"
-                      print(f"  📦 Backfilling {key} from {rel['tag_name']}{flag}")
-                      print(f"     {key} -> {entry['url']}")
-                      summary_lines.append(
-                          f"| `{key}` | `{rel['tag_name']}` | "
-                          f"{'✅ key match' if verified else '⚠️ UNVERIFIED override'} | "
-                          f"{entry['url']} |"
+              platform_assets = {
+                  "darwin-aarch64":      f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+                  "darwin-aarch64-app":  f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+                  "darwin-x86_64":       f"ai-matrx-mac-intel-{version}.app.tar.gz",
+                  "darwin-x86_64-app":   f"ai-matrx-mac-intel-{version}.app.tar.gz",
+                  "linux-x86_64":        f"ai-matrx-linux-{version}.deb",
+                  "linux-x86_64-deb":    f"ai-matrx-linux-{version}.deb",
+                  "windows-x86_64":      f"ai-matrx-windows-{version}.msi",
+                  "windows-x86_64-msi":  f"ai-matrx-windows-{version}.msi",
+                  "windows-x86_64-nsis": f"ai-matrx-windows-installer-{version}.exe",
+              }
+              sig_dir = pathlib.Path("/tmp/fill/current-signatures")
+              sig_dir.mkdir(parents=True, exist_ok=True)
+              downloaded = set()
+              for key in sorted(missing):
+                  asset_name = platform_assets[key]
+                  sig_name = f"{asset_name}.sig"
+                  if sig_name not in downloaded:
+                      subprocess.run(
+                          ["gh", "release", "download", tag, "--repo", repo,
+                           "--pattern", sig_name, "--dir", str(sig_dir), "--clobber"],
+                          check=True,
                       )
-                      current["platforms"][key] = entry
-                      missing.discard(key)
+                      downloaded.add(sig_name)
+                  signature = base64.b64encode(
+                      (sig_dir / sig_name).read_bytes()
+                  ).decode()
+                  current["platforms"][key] = {
+                      "signature": signature,
+                      "url": f"https://github.com/{repo}/releases/download/{tag}/{asset_name}",
+                  }
+                  print(f"  🔧 Reconstructed {key} from current signed asset {asset_name}")
+                  missing.discard(key)
+
+              print(f"✅ Reconstructed current-release entries; {len(current['platforms'])} platforms present.")
+
+              if missing:
+                  print(
+                      f"❌ REFUSING release {tag}: updater manifest is still missing "
+                      f"{sorted(missing)} after current-artifact reconstruction."
+                  )
+                  sys.exit(1)
 
           if missing:
               print(f"❌ Could not find backfill for: {missing} (no prior release has them)")
               sys.exit(1)
           else:
               print("✅ All missing platforms backfilled.")
-
-          if summary_lines:
-              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-              if summary_path:
-                  with open(summary_path, "a") as f:
-                      f.write(
-                          "## ⚠️ Updater manifest backfill\n\n"
-                          "These platform entries were NOT built by this "
-                          "release — they point at a previous release's "
-                          "artifacts:\n\n"
-                          "| Platform | Source release | Signature key | URL |\n"
-                          "|---|---|---|---|\n"
-                          + "\n".join(summary_lines) + "\n"
-                      )
 
           # Keys alone are insufficient: an unexpected Tauri filename can
           # leave a syntactically complete manifest whose URLs all return 404.

@@ -302,7 +302,32 @@ def test_lifespan_stops_pulse_before_teardown_on_normal_or_exceptional_exit() ->
     try_index = lifespan.body.index(lifecycle_try)
     assert _calls_named(lifespan.body[:try_index], "arm_or_pulse")
     assert len(lifecycle_try.finalbody) >= 3
-    cancel, disarm, await_cancel = lifecycle_try.finalbody[:3]
+    cancel_index = next(
+        index
+        for index, statement in enumerate(lifecycle_try.finalbody)
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Attribute)
+        and statement.value.func.attr == "cancel"
+    )
+    disarm_index = next(
+        index
+        for index, statement in enumerate(lifecycle_try.finalbody)
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "disarm"
+    )
+    await_cancel_index = next(
+        index
+        for index, statement in enumerate(lifecycle_try.finalbody)
+        if isinstance(statement, ast.Try)
+        and any(isinstance(node, ast.Await) for node in ast.walk(statement))
+    )
+    assert cancel_index < disarm_index < await_cancel_index
+    cancel = lifecycle_try.finalbody[cancel_index]
+    disarm = lifecycle_try.finalbody[disarm_index]
+    await_cancel = lifecycle_try.finalbody[await_cancel_index]
     assert isinstance(cancel, ast.Expr)
     assert isinstance(cancel.value, ast.Call)
     assert isinstance(cancel.value.func, ast.Attribute)

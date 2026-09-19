@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use coset::{CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate, iana};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::pkcs8::EncodePrivateKey;
 use passkey_authenticator::{
     Authenticator, BackupFlags, CredentialIdLength, CredentialStore, DiscoverabilitySupport,
     PasskeyAccessor, StoreInfo, UserValidationMethod,
@@ -101,6 +102,71 @@ pub fn canonical_source(
         return Err(FixedError::InvalidSource);
     }
     Ok(Zeroizing::new(canonical))
+}
+
+/// Native-only private export material. It intentionally has no `Debug` or
+/// serialization implementation: callers may use the PKCS#8 document only at
+/// the native handoff boundary and public metadata only for a typed exchange.
+pub struct SourceV1Pkcs8Export {
+    pkcs8_der: Zeroizing<Vec<u8>>,
+    rp_id: String,
+    credential_id: Vec<u8>,
+    user_handle: Vec<u8>,
+    username: Option<String>,
+    display_name: Option<String>,
+}
+
+impl SourceV1Pkcs8Export {
+    pub fn pkcs8_der(&self) -> &[u8] {
+        &self.pkcs8_der
+    }
+
+    pub fn rp_id(&self) -> &str {
+        &self.rp_id
+    }
+
+    pub fn credential_id(&self) -> &[u8] {
+        &self.credential_id
+    }
+
+    pub fn user_handle(&self) -> &[u8] {
+        &self.user_handle
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+}
+
+/// Convert a canonical source-v1 ES256 credential to an RFC 5958 PKCS#8 DER
+/// key document. The maintained source validator establishes the exact
+/// private/public COSE pair before the maintained RustCrypto encoder runs.
+pub fn export_source_v1_pkcs8(
+    source: &[u8],
+    max_source_bytes: usize,
+) -> Result<SourceV1Pkcs8Export, FixedError> {
+    let canonical = canonical_source(source, max_source_bytes)?;
+    let record: SourceV1 =
+        serde_json::from_slice(&canonical).map_err(|_| FixedError::InvalidSource)?;
+    let cose = CoseKey::from_slice(&decode(&record.private_cose_key)?)
+        .map_err(|_| FixedError::InvalidSource)?;
+    let private = passkey_authenticator::private_key_from_cose_key(&cose)
+        .map_err(|_| FixedError::InvalidSource)?;
+    let der = private
+        .to_pkcs8_der()
+        .map_err(|_| FixedError::InvalidSource)?;
+    Ok(SourceV1Pkcs8Export {
+        pkcs8_der: Zeroizing::new(der.as_bytes().to_vec()),
+        rp_id: record.rp_id,
+        credential_id: decode(&record.credential_id)?,
+        user_handle: decode(&record.user_handle)?,
+        username: record.username,
+        display_name: record.display_name,
+    })
 }
 fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
     if v.version != 1
@@ -560,6 +626,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::pkcs8::DecodePrivateKey;
     use passkey_authenticator::{UiHint, UserCheck};
     use passkey_types::{
         ctap2::{Flags, get_assertion, make_credential},
@@ -723,6 +790,69 @@ mod tests {
             canonical_source(&serde_json::to_vec(&ip).unwrap(), 4096),
             Err(FixedError::InvalidSource)
         );
+    }
+
+    #[test]
+    fn source_v1_export_encodes_exact_validated_key_and_public_metadata() {
+        let source = valid_source();
+        let export = export_source_v1_pkcs8(&source, 4096).expect("source export");
+        let private = p256::SecretKey::from_pkcs8_der(export.pkcs8_der()).expect("pkcs8 der");
+        let public = private.public_key().to_encoded_point(false);
+        let record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        let cose = CoseKey::from_slice(&decode(&record.private_cose_key).expect("cose bytes"))
+            .expect("cose");
+        let mut x = None;
+        let mut y = None;
+        for (label, value) in cose.params {
+            if label == Label::Int(-2) {
+                x = value.as_bytes().map(ToOwned::to_owned);
+            }
+            if label == Label::Int(-3) {
+                y = value.as_bytes().map(ToOwned::to_owned);
+            }
+        }
+        assert_eq!(public.x().map(AsRef::<[u8]>::as_ref), x.as_deref());
+        assert_eq!(public.y().map(AsRef::<[u8]>::as_ref), y.as_deref());
+        assert_eq!(export.rp_id(), "example.com");
+        assert_eq!(export.credential_id(), &[1; 16]);
+        assert_eq!(export.user_handle(), b"user");
+        assert_eq!(export.username(), None);
+        assert_eq!(export.display_name(), None);
+    }
+
+    #[test]
+    fn source_v1_export_keeps_fixed_validation_errors_and_never_derives_bad_pairs() {
+        let source = valid_source();
+        assert!(matches!(
+            export_source_v1_pkcs8(&source, source.len() - 1),
+            Err(FixedError::InvalidSource)
+        ));
+        let mut record: SourceV1 = serde_json::from_slice(&source).expect("fixture source");
+        record.counter = Some(0);
+        let malformed = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&malformed, 4096),
+            Err(FixedError::InvalidSource)
+        ));
+        record.counter = None;
+        record.backup_state = false;
+        let malformed = serde_json::to_vec(&record).expect("json");
+        assert!(matches!(
+            export_source_v1_pkcs8(&malformed, 4096),
+            Err(FixedError::InvalidSource)
+        ));
+    }
+
+    #[test]
+    fn source_export_type_has_no_debug_or_serde_derives() {
+        // Keep accidental telemetry traits out of the private return type.
+        let source = include_str!("lib.rs");
+        let declaration = source
+            .split("pub struct SourceV1Pkcs8Export")
+            .next()
+            .expect("export declaration");
+        assert!(!declaration.ends_with("#[derive(Debug)]\n"));
+        assert!(!declaration.ends_with("#[derive(Serialize)]\n"));
     }
     #[tokio::test]
     async fn maintained_make_and_get_emit_required_flags_and_discoverable_paths() {

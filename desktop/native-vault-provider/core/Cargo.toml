@@ -14,7 +14,7 @@ base64 = "0.22"
 coset = "0.4"
 passkey-authenticator = "0.5.0"
 passkey-types = "0.5.0"
-p256 = "0.13"
+p256 = { version = "0.13", features = ["pkcs8"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -38,6 +38,10 @@ required-features = ["protocol-test-harness"]
 name = "native-vault-bindgen"
 path = "src/bin/native-vault-bindgen.rs"
 required-features = ["native-bridge"]
+
+[[bin]]
+name = "source-export-harness"
+path = "src/bin/source-export-harness.rs"
 
 [patch.crates-io]
 passkey-authenticator = { path = "vendor/passkey-authenticator" }

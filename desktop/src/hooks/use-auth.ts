@@ -5,6 +5,7 @@ import {
   getSession,
   signIn as custodianSignIn,
   signOut as custodianSignOut,
+  startSync as custodianStartSync,
   sessionToMatrx,
   type MatrxSession,
   type MatrxUser,
@@ -113,6 +114,16 @@ export function useAuth() {
         error: cleanupFailed ? "Matrx Local could not finish account cleanup. Retry account connection." : null });
     } catch (error) { update({ loading: false, error: String(error) }); }
   }, [update]);
+  /** Start sync — the one control for a daemon that is not running. It answers with the new
+   *  state, so a retry that fails replaces the reason on screen instead of doing nothing. */
+  const startSync = useCallback(async () => {
+    update({ loading: true, error: null });
+    const snapshot = await custodianStartSync();
+    // Identity stays the custody envelope's job: if sync came up signed in, the daemon's own
+    // stream publishes it. This control owns the daemon's state and nothing else.
+    update({ loading: false, snapshot });
+    return snapshot;
+  }, [update]);
   const retryAccountCleanup = useCallback(async () => {
     const snapshot = await getSession();
     const subject = snapshot.user_id;
@@ -122,6 +133,6 @@ export function useAuth() {
       error: subject ? "Your account is signed in, but its connection to Matrx Local is unavailable. Retry account connection." : "Matrx Local could not finish account cleanup. Retry account connection." });
     return recovered;
   }, [update]);
-  return useMemo(() => ({ ...state, signInWithOAuth, cancelOAuth, signOut, retryAccountCleanup }),
-    [state, signInWithOAuth, cancelOAuth, signOut, retryAccountCleanup]);
+  return useMemo(() => ({ ...state, signInWithOAuth, cancelOAuth, signOut, startSync, retryAccountCleanup }),
+    [state, signInWithOAuth, cancelOAuth, signOut, startSync, retryAccountCleanup]);
 }

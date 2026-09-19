@@ -88,6 +88,23 @@ export interface SessionSnapshot {
   readonly since: string | null;
   readonly next_attempt_at: string | null;
   readonly cloud_state_write_pending: boolean;
+  /** What the person can DO about `state_reason`, when the reason alone is not actionable.
+   *
+   *  The daemon's own `/v1/session` does not send one — its states are session states, and their
+   *  reasons already carry the action. It is the daemon-process states (below) that need it: "the
+   *  sync helper cannot start on this computer" is not a remedy, "Update AI Matrx" is. */
+  readonly remedy?: string | null;
+}
+
+/** `syncd_daemon_state` / `syncd_start` — the daemon PROCESS, classified by Rust. */
+export interface DaemonState {
+  readonly running: boolean;
+  /** `running`, or one of `helper_missing`, `helper_cannot_execute`, `never_became_ready`,
+   *  `unreachable`, `incompatible`, `upgrade_blocked`. */
+  readonly code: string;
+  readonly state_reason: string;
+  readonly remedy: string | null;
+  readonly detail: string;
 }
 
 interface ClientConfig {
@@ -96,19 +113,78 @@ interface ClientConfig {
   world: string;
 }
 
-/** The daemon is not running. A STATE with a remedy, never an empty render (law 4). */
+/** The daemon is not running, and we have not yet asked Rust WHY. A STATE with a remedy, never an
+ *  empty render (law 4) — and the generic wording is replaced by the real reason the moment
+ *  `syncd_daemon_state` answers. */
 export const DAEMON_DOWN: SessionSnapshot = Object.freeze({
   signed_in: false,
   user_id: null,
   email: null,
   state: "daemon_not_running" as const,
-  state_reason:
-    "AI Matrx Sync is not running on this computer, so there is no signed-in session. " +
-    "Choose Start sync to start it.",
+  state_reason: "AI Matrx Sync is not running on this computer, so there is no signed-in session.",
+  remedy: "Choose Start sync to start it.",
   since: null,
   next_attempt_at: null,
   cloud_state_write_pending: false,
 });
+
+/** The daemon-down snapshot as currently known: generic until Rust says which of the five ways it
+ *  is down, then the honest one. */
+let daemonDown: SessionSnapshot = DAEMON_DOWN;
+let daemonDownInFlight: Promise<SessionSnapshot> | null = null;
+
+function daemonDownFrom(state: DaemonState): SessionSnapshot {
+  return { ...DAEMON_DOWN, state_reason: state.state_reason, remedy: state.remedy };
+}
+
+/** Ask Rust why sync is down. One call in flight at a time; never throws. */
+export function refreshDaemonDown(): Promise<SessionSnapshot> {
+  daemonDownInFlight ??= (async () => {
+    try {
+      const state = await invoke<DaemonState>("syncd_daemon_state");
+      if (state && !state.running) daemonDown = daemonDownFrom(state);
+    } catch {
+      // The host could not be asked. The generic reason we already have stands; a screen that
+      // knows less must never render less.
+    }
+    return daemonDown;
+  })().finally(() => {
+    daemonDownInFlight = null;
+  });
+  return daemonDownInFlight;
+}
+
+/** The honest daemon-down snapshot to render RIGHT NOW, with a refresh queued behind it. */
+function daemonDownNow(): SessionSnapshot {
+  void refreshDaemonDown();
+  return daemonDown;
+}
+
+/**
+ * **Start sync.** Runs the host's startup reconciliation again and answers with what happened.
+ *
+ * A control that cannot fail visibly is the defect this fixes: if the helper still cannot start,
+ * the returned snapshot carries the new reason, and the screen says it.
+ */
+export async function startSync(): Promise<SessionSnapshot> {
+  let state: DaemonState;
+  try {
+    state = await invoke<DaemonState>("syncd_start");
+  } catch (error) {
+    daemonDown = { ...DAEMON_DOWN, state_reason: String(error), remedy: null };
+    lastSnapshot = daemonDown;
+    return lastSnapshot;
+  }
+  // Both move when a daemon restarts.
+  resetCustodianConfig();
+  forgetToken();
+  if (!state.running) {
+    daemonDown = daemonDownFrom(state);
+    lastSnapshot = daemonDown;
+    return lastSnapshot;
+  }
+  return getSession();
+}
 
 /** S11 — cache until 30 s before expiry, in memory, never persisted. */
 const CACHE_MARGIN_MS = 30_000;
@@ -200,7 +276,7 @@ async function fetchToken(generation: number): Promise<string | null> {
   const response = await request("/v1/token");
   if (generation !== tokenGeneration) return null;
   if (!response) {
-    lastSnapshot = DAEMON_DOWN;
+    lastSnapshot = daemonDownNow();
     cachedToken = null;
     return null;
   }
@@ -226,6 +302,7 @@ async function fetchToken(generation: number): Promise<string | null> {
     if (generation !== tokenGeneration) return null;
     lastSnapshot = {
       ...DAEMON_DOWN,
+      remedy: null,
       state: (body.state as SessionState) ?? "signed_out",
       state_reason: body.state_reason ?? null,
       email: body.email ?? null,
@@ -268,7 +345,7 @@ export async function getSession(): Promise<SessionSnapshot> {
   const response = await request("/v1/session");
   if (generation !== tokenGeneration) return lastSnapshot;
   if (!response || response.status !== 200) {
-    lastSnapshot = DAEMON_DOWN;
+    lastSnapshot = daemonDownNow();
     return lastSnapshot;
   }
   const snapshot = (await response.json()) as SessionSnapshot;
@@ -406,7 +483,7 @@ export async function signIn(): Promise<void> {
 export async function signOut(): Promise<void> {
   await invoke("syncd_sign_out");
   forgetToken();
-  lastSnapshot = { ...DAEMON_DOWN, state: "signed_out", state_reason: null };
+  lastSnapshot = { ...DAEMON_DOWN, state: "signed_out", state_reason: null, remedy: null };
 }
 
 // ------------------------------------------------- the shape call sites read

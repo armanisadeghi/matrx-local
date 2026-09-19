@@ -13,6 +13,7 @@ vi.mock("@/components/ui/card", () => ({ Card: ({ children }: any) => <div>{chil
 vi.mock("@/lib/app-version", () => ({ AppVersion: () => <span>test</span> }));
 vi.mock("lucide-react", () => ({
   AlertTriangle: () => <span data-icon="warn" />,
+  RefreshCw: () => <span data-icon="refresh" />,
   Loader2: () => <span data-icon="spin" />,
   Zap: () => <span data-icon="zap" />,
 }));
@@ -35,7 +36,7 @@ it("renders an exclusive account-connection recovery card", async () => {
   const retryAccountCleanup = vi.fn();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => {
-    root.render(<Login auth={{ signInWithOAuth: vi.fn(), loading: false, error: "Your account is signed in, but its connection to Matrx Local is unavailable. Retry account connection.", accountConnectionUnavailable: true, retryAccountCleanup, snapshot: NEVER_SIGNED_IN }} />);
+    root.render(<Login auth={{ signInWithOAuth: vi.fn(), loading: false, error: "Your account is signed in, but its connection to Matrx Local is unavailable. Retry account connection.", accountConnectionUnavailable: true, retryAccountCleanup, startSync: vi.fn(), snapshot: NEVER_SIGNED_IN }} />);
   });
 
   const retry = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Retry account connection"));
@@ -50,11 +51,11 @@ it("renders an exclusive account-connection recovery card", async () => {
 /** CS-19 — a person signed in yesterday must be TOLD why they are looking at a sign-in screen.
  *  Proven failing before the fix: `Login` ignored `auth.snapshot` entirely, so the screen said
  *  only "Sign in to your workspace" after the custody cutover took the session away. */
-async function renderLogin(snapshot: SessionSnapshot) {
+async function renderLogin(snapshot: SessionSnapshot, startSync = vi.fn()) {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => {
-    root.render(<Login auth={{ signInWithOAuth: vi.fn(), loading: false, error: null, accountConnectionUnavailable: false, retryAccountCleanup: vi.fn(), snapshot }} />);
+    root.render(<Login auth={{ signInWithOAuth: vi.fn(), loading: false, error: null, accountConnectionUnavailable: false, retryAccountCleanup: vi.fn(), startSync, snapshot }} />);
   });
 }
 
@@ -82,4 +83,44 @@ it("leaves a genuine first run alone", async () => {
   await renderLogin(NEVER_SIGNED_IN);
   expect(container.textContent).toContain("Sign in to your workspace");
   expect(container.textContent).not.toContain("Sign in on this computer to start syncing");
+});
+
+/** cb53a722 — a daemon that cannot run must say WHY, offer the remedy, and offer the one control
+ *  that acts on it. Proven failing before the fix: `Login` had no `daemon_not_running` branch, so
+ *  this state rendered a live "Sign in with AI Matrx" that POSTed at a port nothing was listening
+ *  on, and the only "Start sync" anywhere in the product was the word inside that sentence. */
+const DAEMON_DOWN_SNAPSHOT: SessionSnapshot = {
+  ...NEVER_SIGNED_IN,
+  state: "daemon_not_running",
+  state_reason:
+    "This build's sync helper cannot start on this computer (bundled matrx-syncd --version was " +
+    "killed by signal 9), so this computer cannot sign in or sync.",
+  remedy: "Update AI Matrx to the latest version. If this keeps happening after updating, report it from Settings → Support.",
+};
+
+it("says exactly why sync is down, offers the remedy, and never offers a dead sign-in", async () => {
+  const startSync = vi.fn();
+  await renderLogin(DAEMON_DOWN_SNAPSHOT, startSync);
+
+  expect(container.textContent).toContain("killed by signal 9");
+  expect(container.textContent).toContain("Update AI Matrx to the latest version");
+  expect(container.textContent).toContain("Sync is not running");
+  // The sign-in button would post at a daemon that is not there: it is ABSENT, not disabled.
+  expect(container.textContent).not.toContain("Sign in with AI Matrx");
+
+  const start = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Start sync"));
+  expect(start).toBeDefined();
+  await act(async () => start?.click());
+  expect(startSync).toHaveBeenCalledOnce();
+});
+
+it("shows the NEW reason when Start sync fails again", async () => {
+  await renderLogin({
+    ...DAEMON_DOWN_SNAPSHOT,
+    state_reason: "AI Matrx Sync started but never became ready (the new daemon did not report the expected version in time), so this computer cannot sign in or sync.",
+    remedy: "Choose Start sync to try again. If it keeps failing, restart your computer and report it from Settings → Support.",
+  });
+  expect(container.textContent).toContain("never became ready");
+  expect(container.textContent).toContain("restart your computer");
+  expect([...container.querySelectorAll("button")].some((b) => b.textContent?.includes("Start sync"))).toBe(true);
 });

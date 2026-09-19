@@ -588,11 +588,16 @@ export function Settings({
     return () => window.removeEventListener("focus", refreshAfterSettings);
   }, [activeTab, loadNativeVaultProvider]);
 
-  useEffect(() => () => {
-    nativeVaultMounted.current = false;
-    nativeVaultRequest.current += 1;
-    nativeVaultActionCoordinator.current.invalidate();
-    nativeVaultSettingsRequest.current += 1;
+  useEffect(() => {
+    // React StrictMode intentionally runs effect cleanup then setup again in
+    // development. Re-arm this fence for that replay as well as a real mount.
+    nativeVaultMounted.current = true;
+    return () => {
+      nativeVaultMounted.current = false;
+      nativeVaultRequest.current += 1;
+      nativeVaultActionCoordinator.current.invalidate();
+      nativeVaultSettingsRequest.current += 1;
+    };
   }, []);
 
   // Load hardware profile when the system tab becomes active.

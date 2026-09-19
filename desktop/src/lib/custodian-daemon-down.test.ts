@@ -79,6 +79,16 @@ it("Start sync that fails again reports the NEW reason, never silence", async ()
   expect(custodian.currentSession().state_reason).toContain("never became ready");
 });
 
+it("a Start sync the host cannot even hear still answers in sentences", async () => {
+  invoke.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'invoke')"));
+  const custodian = await import("./custodian");
+  const after = await custodian.startSync();
+  expect(after.state_reason).toContain("could not ask this computer to start sync");
+  // The detail is kept, but never alone: a bare TypeError on screen is the same defect again.
+  expect(after.state_reason).toContain("TypeError");
+  expect(after.remedy).toContain("Quit AI Matrx and open it again");
+});
+
 it("Start sync that works reads the daemon's own session", async () => {
   const SIGNED_IN = {
     signed_in: true, user_id: "u1", email: "admin@admin.com", state: "signed_in",

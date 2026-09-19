@@ -171,7 +171,13 @@ export async function startSync(): Promise<SessionSnapshot> {
   try {
     state = await invoke<DaemonState>("syncd_start");
   } catch (error) {
-    daemonDown = { ...DAEMON_DOWN, state_reason: String(error), remedy: null };
+    // The host itself could not be reached. A raw `TypeError` on a person's screen is its own
+    // law-4 breach, so the detail travels inside a sentence that carries a remedy.
+    daemonDown = {
+      ...DAEMON_DOWN,
+      state_reason: `AI Matrx could not ask this computer to start sync (${String(error)}).`,
+      remedy: "Quit AI Matrx and open it again. If this keeps happening, report it from Settings → Support.",
+    };
     lastSnapshot = daemonDown;
     return lastSnapshot;
   }

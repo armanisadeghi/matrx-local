@@ -51,7 +51,7 @@ with open(sys.argv[1], "rb") as source:
 attributes = info.get("NSExtension", {}).get("NSExtensionAttributes", {})
 capabilities = attributes.get("ASCredentialProviderExtensionCapabilities", {})
 if not isinstance(capabilities, dict) or any(
-    capabilities.get(key) is not True for key in ("ProvidesPasswords", "ShowsConfigurationUI")
+    capabilities.get(key) is not True for key in ("ProvidesPasswords", "ProvidesPasskeys", "ShowsConfigurationUI")
 ):
     raise SystemExit("ERROR: password/configuration capabilities must be Boolean true")
 if "ASCredentialProviderExtensionShowsConfigurationUI" in attributes:
@@ -94,7 +94,7 @@ if [[ "$SELF_TEST" == true ]]; then
   /usr/libexec/PlistBuddy -c 'Delete :com.apple.security.app-sandbox' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
   /usr/libexec/PlistBuddy -c 'Add :com.apple.app-sandbox bool true' "$WORKDIR/wrong-sandbox-key.appex/Contents/Resources/VaultProvider.entitlements"
   expect_failure "obsolete App Sandbox entitlement key" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/wrong-sandbox-key.appex"
-  for capability in ProvidesPasswords ShowsConfigurationUI; do
+  for capability in ProvidesPasswords ProvidesPasskeys ShowsConfigurationUI; do
     cp -R "$APPEX" "$WORKDIR/missing-$capability.appex"
     /usr/libexec/PlistBuddy -c "Delete :NSExtension:NSExtensionAttributes:ASCredentialProviderExtensionCapabilities:$capability" "$WORKDIR/missing-$capability.appex/Contents/Info.plist"
     expect_failure "missing $capability" "$ROOT/scripts/verify-native-vault-provider.sh" "$WORKDIR/missing-$capability.appex"

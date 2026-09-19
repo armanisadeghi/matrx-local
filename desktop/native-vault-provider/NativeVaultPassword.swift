@@ -3,7 +3,7 @@ import AuthenticationServices
 import Foundation
 @preconcurrency import LocalAuthentication
 
-private let nativeAPIOrigin = URL(string: "https://server.app.matrxserver.com")!
+let nativeAPIOrigin = URL(string: "https://server.app.matrxserver.com")!
 
 /// A value-free match from the native password endpoint. It deliberately keeps
 /// the Apple request index so a credential cannot be materialized for a

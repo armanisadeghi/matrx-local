@@ -14,17 +14,24 @@ let userinfoURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/userinfo
 /// response. This delegate refuses redirects and cancels as soon as the fixed
 /// envelope limit is crossed.
 final class BoundedTransport: NSObject, URLSessionDataDelegate {
-    private var data = Data(); private let limit = 64 * 1024
+    private var data = Data(); private let limit: Int
     private let completion: (Result<(Data, HTTPURLResponse), Error>) -> Void
-    init(_ completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) { self.completion = completion }
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var completed = false
+    init(limit: Int = 64 * 1024, _ completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+        self.limit = limit; self.completion = completion
+    }
     func start(_ request: URLRequest) {
         let config = URLSessionConfiguration.ephemeral; config.timeoutIntervalForRequest = 10; config.timeoutIntervalForResource = 10
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        session.dataTask(with: request).resume()
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil); self.session = session
+        let task = session.dataTask(with: request); self.task = task; task.resume()
     }
+    func cancel() { task?.cancel(); task = nil; session?.invalidateAndCancel(); session = nil }
     func urlSession(_: URLSession, task _: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse, newRequest _: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
     func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) { guard data.count <= limit - chunk.count else { dataTask.cancel(); return }; data.append(chunk) }
     func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !completed else { return }; completed = true
         if error != nil { completion(.failure(EnrollmentError.message("Vault connection is temporarily unavailable. Try again."))); return }
         guard let response = dataTaskResponse() else { completion(.failure(EnrollmentError.message("Account connection is unavailable. Try again."))); return }
         completion(.success((data, response)))
@@ -94,6 +101,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     var nativePasswordMatchChoice: (([NativePasswordMatch]) -> Int?)?
     var nativePasswordCancelSink: ((NSError) -> Void)?
     var nativePasswordCompleteSink: (((String, String), @escaping () -> Void) -> Void)?
+    private lazy var nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
+        sessionAccess: sessionAccess,
+        key: { [weak self] in self?.nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) },
+        cancel: { [weak self] message in self?.cancelPasskey(message) },
+        completeRegistration: { [weak self] credential in self?.extensionContext.completeRegistrationRequest(using: credential, completionHandler: nil) },
+        completeAssertion: { [weak self] credential in self?.extensionContext.completeAssertionRequest(using: credential, completionHandler: nil) }
+    )
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
     private var connectionStatus: NSTextField?
@@ -105,6 +119,16 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         beginPasswordRequest(serviceIdentifiers)
     }
+    override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier], requestParameters: ASPasskeyCredentialRequestParameters) {
+        nativePasskeyCoordinator.assertList(requestParameters)
+    }
+    override func prepareInterface(forPasskeyRegistration registrationRequest: any ASCredentialRequest) {
+        nativePasskeyCoordinator.register(registrationRequest)
+    }
+    override func prepareInterfaceToProvideCredential(for credentialRequest: any ASCredentialRequest) {
+        if let request = credentialRequest as? ASPasskeyCredentialRequest { nativePasskeyCoordinator.assert(request) }
+        else { super.prepareInterfaceToProvideCredential(for: credentialRequest) }
+    }
 
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
         // This direct-list provider intentionally has no identity index yet.
@@ -115,6 +139,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
         let error = NSError(domain: ASExtensionErrorDomain, code: NativePasswordStage.interactionRequiredCode)
         if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
+    }
+
+    private func cancelPasskey(_ message: String) {
+        extensionContext.cancelRequest(withError: NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue, userInfo: [NSLocalizedDescriptionKey: message]))
     }
 
     private func showConfiguration() {

@@ -74,6 +74,8 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
   "$SOURCE/NativeVaultState.swift" \
   "$SOURCE/NativeVaultPrivateSession.swift" \
   "$SOURCE/NativeVaultPassword.swift" \
+  "$SOURCE/NativeVaultPasskeyCodec.swift" \
+  "$SOURCE/NativeVaultPasskey.swift" \
   "$SOURCE/CredentialProviderViewController.swift" \
   -o "$CONTENTS/MacOS/VaultProvider"
 cp "$SOURCE/Info.plist" "$CONTENTS/Info.plist"

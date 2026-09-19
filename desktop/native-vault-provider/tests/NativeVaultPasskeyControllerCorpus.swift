@@ -5,6 +5,10 @@ import LocalAuthentication
 
 private typealias Reply = (Result<(Data, HTTPURLResponse), Error>) -> Void
 private enum Response { case ok, timeout, missing, corrupt, excluded, conflict, serverError }
+private final class ExclusionRequest: ASPasskeyCredentialRequest {
+    var descriptors: [ASAuthorizationPlatformPublicKeyCredentialDescriptor] = []
+    override var excludedCredentials: [ASAuthorizationPlatformPublicKeyCredentialDescriptor]? { descriptors }
+}
 
 /// An external HTTP boundary. Every successful ceremony still runs the real
 /// controller, coordinator, generated Swift bridge and maintained authenticator.
@@ -199,6 +203,12 @@ private func makeRequest(rp: String = "example.com", credential: Data = Data(rep
         }
         for handle in [Data(), Data(repeating: 1, count: 65)] {
             let test = Journey(); test.authenticate(makeRequest(handle: handle)); await test.finish()
+            precondition(test.acquired == 0 && test.evaluations.isEmpty && test.server.requests.isEmpty)
+        }
+        for excluded in [[Data(repeating: 1, count: 15)], [Data(repeating: 1, count: 1024)], Array(repeating: Data(repeating: 1, count: 16), count: 2), (0..<129).map { Data(repeating: UInt8($0), count: 16) }] {
+            let request = ExclusionRequest(credentialIdentity: ASPasskeyCredentialIdentity(relyingPartyIdentifier: "example.com", userName: "user", credentialID: credentialID, userHandle: handle, recordIdentifier: nil), clientDataHash: Data(repeating: 9, count: 32), userVerificationPreference: .required, supportedAlgorithms: [ASCOSEAlgorithmIdentifier(rawValue: -7)])
+            request.descriptors = excluded.map { ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0) }
+            let test = Journey(); test.register(request); await test.finish()
             precondition(test.acquired == 0 && test.evaluations.isEmpty && test.server.requests.isEmpty)
         }
         for responses: ([Response], [Response], Int) in [([.timeout], [.ok], 1), ([.timeout, .ok], [.missing], 2), ([.serverError, .timeout], [.missing, .ok], 2), ([.conflict], [.ok], 1)] {

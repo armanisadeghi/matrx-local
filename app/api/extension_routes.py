@@ -385,7 +385,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         from app.services.local_browser_context import get_local_browser_context
         fresh = await get_local_browser_context().refresh()
         if fresh is None or fresh.context.organization_id is None:
-            await session.send({"type": "local_browser.registration_required", "version": 1, "status": "refused", "reason": "context_unavailable"})
+            await session.send({"type": "local_browser.register_required", "version": 1, "status": "refused", "reason": "context_unavailable"})
             return True
         # A delayed ready cannot advertise a subsequently retired context.
         final = await get_local_browser_context().refresh()

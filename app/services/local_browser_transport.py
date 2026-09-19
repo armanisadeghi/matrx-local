@@ -51,7 +51,10 @@ def _bounded_json(raw: bytes) -> dict[str, str]:
     if len(raw) > _MAX_BODY:
         raise TransportRefusal("invalid_request", 413)
     try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=lambda pairs: _no_duplicates(pairs))
+        value = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_no_duplicates,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
+        )
     except (RecursionError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise TransportRefusal("invalid_request", 400) from exc
     if not isinstance(value, dict) or set(value) != {"grant", "operation"}:
@@ -135,6 +138,9 @@ class CallbackLimits:
 _LIMITS = CallbackLimits()
 _subscription_context: LocalBrowserContext | None = None
 _unsubscribe: Any = None
+_subscription_manager: Any = None
+_unsubscribe_identity: Any = None
+_observed_device_identity: Any = None
 
 
 def _on_context_change(context: BrowserContext) -> None:
@@ -151,15 +157,56 @@ def _on_context_change(context: BrowserContext) -> None:
             loop.create_task(send_to_extension_session(session_id, {"type": "local_browser.register_required", "version": 1, "engine_boot_id": context.engine_boot_id, "revision": context.revision}))
 
 
-def ensure_context_subscription(context: LocalBrowserContext | None = None) -> None:
-    global _subscription_context, _unsubscribe
-    current = context or get_local_browser_context()
-    if current is _subscription_context:
+async def _notify_identity_ready() -> None:
+    fresh = await get_local_browser_context().refresh()
+    if fresh is None or fresh.context.organization_id is None:
         return
-    if _unsubscribe is not None:
-        _unsubscribe()
-    _subscription_context = current
-    _unsubscribe = current.subscribe(_on_context_change)
+    for session_id in get_registry().session_ids:
+        await send_to_extension_session(session_id, {
+            "type": "local_browser.register_required", "version": 1,
+            "engine_boot_id": fresh.context.engine_boot_id, "revision": fresh.context.revision,
+        })
+
+
+def _on_device_identity_change(identity: Any) -> None:
+    """Synchronous device fence; asynchronous readiness notification follows."""
+    # A removal or replacement makes every current selection unsafe. A first
+    # successful registration has no local binding to retain, and only wakes
+    # ready sockets so they can register once without polling.
+    global _observed_device_identity
+    changed = _observed_device_identity is not None and _observed_device_identity != identity
+    _observed_device_identity = identity
+    if identity is None or changed:
+        registrations = invalidate_local_browser_registrations("binding_changed")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for registration in registrations:
+            loop.create_task(send_to_extension_session(registration.session_id, {"type": "local_browser.invalidate", "version": 1, "reason": "binding_changed"}))
+        if identity is not None:
+            loop.create_task(_notify_identity_ready())
+        return
+    try:
+        asyncio.get_running_loop().create_task(_notify_identity_ready())
+    except RuntimeError:
+        return
+
+
+def ensure_context_subscription(context: LocalBrowserContext | None = None) -> None:
+    global _subscription_context, _unsubscribe, _subscription_manager, _unsubscribe_identity
+    current = context or get_local_browser_context()
+    if current is not _subscription_context:
+        if _unsubscribe is not None:
+            _unsubscribe()
+        _subscription_context = current
+        _unsubscribe = current.subscribe(_on_context_change)
+    manager = get_instance_manager()
+    if manager is not _subscription_manager:
+        if _unsubscribe_identity is not None:
+            _unsubscribe_identity()
+        _subscription_manager = manager
+        _unsubscribe_identity = manager.subscribe_registered_device_identity(_on_device_identity_change)
 
 
 async def read_execute_body(request: Any) -> dict[str, str]:
@@ -194,6 +241,22 @@ def _uuid(value: object) -> str | None:
     return canonical if canonical == value else None
 
 
+def _strict_response_json(raw: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_no_duplicates,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
+        )
+    except (RecursionError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise TransportRefusal("transport_unavailable", 503) from exc
+    if not isinstance(value, dict):
+        raise TransportRefusal("authority_refused", 403)
+    for item in value.values():
+        if isinstance(item, str) and any(0xD800 <= ord(char) <= 0xDFFF for char in item):
+            raise TransportRefusal("authority_refused", 403)
+    return value
+
+
 async def _read_response(response: httpx.Response) -> bytes:
     raw = bytearray()
     async for chunk in response.aiter_bytes():
@@ -207,18 +270,18 @@ async def _verify(fresh: FreshContext, device_id: str, registration: Any, reques
     payload = {"grant": request["grant"], "operation": request["operation"], "app_instance_id": device_id}
     headers = {"Authorization": f"Bearer {fresh.daemon_jwt}", "X-Organization-Id": fresh.context.organization_id or "", "Cache-Control": "no-store"}
     try:
-        async with httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0), headers=headers) as client:
-            async with client.stream("POST", f"{_base_url()}/browser-manager/local/transport/verify", json=payload) as response:
-                raw = await _read_response(response)
+        async with asyncio.timeout(5.0):
+            async with httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0), headers=headers) as client:
+                async with client.stream("POST", f"{_base_url()}/browser-manager/local/transport/verify", json=payload) as response:
+                    if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                        raise TransportRefusal("transport_unavailable", 503)
+                    raw = await _read_response(response)
     except Exception as exc:
         raise TransportRefusal("transport_unavailable", 503) from exc
     if response.headers.get("cache-control", "").lower().find("no-store") < 0:
         raise TransportRefusal("transport_unavailable", 503)
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        raise TransportRefusal("transport_unavailable", 503)
-    if response.status_code != 200 or not isinstance(value, dict):
+    value = _strict_response_json(raw)
+    if response.status_code != 200:
         raise TransportRefusal("authority_refused", 403)
     required = {"status", "operation", "run_id", "app_instance_id", "controller_revision", "jti", "expires_at_ms"}
     if request["operation"] != "discover":
@@ -229,7 +292,7 @@ async def _verify(fresh: FreshContext, device_id: str, registration: Any, reques
         raise TransportRefusal("authority_refused", 403)
     expiry = value.get("expires_at_ms")
     revision = value.get("controller_revision")
-    if type(expiry) is not int or type(revision) is not int or expiry <= int(time.time() * 1000):
+    if type(expiry) is not int or type(revision) is not int or not 0 <= revision <= 9_007_199_254_740_991 or not 0 <= expiry <= 9_007_199_254_740_991 or expiry <= int(time.time() * 1000):
         raise TransportRefusal("authority_refused", 403)
     if request["operation"] != "discover" and (
         value.get("extension_generation") != registration.extension_generation
@@ -299,7 +362,31 @@ def _identity(fresh: FreshContext, device_id: str, registration: Any, controller
     )
 
 
+def _remaining_seconds(expires_at_ms: int) -> float:
+    return (expires_at_ms - int(time.time() * 1000)) / 1000
+
+
+async def _assert_current(
+    fresh: FreshContext, device_id: str, registration: Any, expires_at_ms: int,
+) -> None:
+    if _remaining_seconds(expires_at_ms) <= 0:
+        raise TransportRefusal("authority_refused", 403)
+    later = await get_local_browser_context().refresh()
+    latest_device = await get_instance_manager().registered_device_identity()
+    if not _same(fresh, later, latest_device, device_id):
+        raise TransportRefusal("binding_changed", 409)
+    assert fresh.context.organization_id is not None
+    current = current_local_browser_registration(
+        engine_boot_id=fresh.context.engine_boot_id, revision=fresh.context.revision,
+        owner=fresh.owner, organization_id=fresh.context.organization_id, device_id=device_id,
+    )
+    if current != registration or _remaining_seconds(expires_at_ms) <= 0:
+        raise TransportRefusal("binding_changed", 409)
+
+
 async def _dispatch(registration: Any, request: dict[str, str], entry: _ReplayEntry) -> dict[str, str]:
+    if _remaining_seconds(entry.expires_at_ms) <= 0:
+        raise TransportRefusal("authority_refused", 403)
     call_id = str(uuid.uuid4())
     future = create_local_browser_future(registration, call_id)
     if future is None:
@@ -309,7 +396,10 @@ async def _dispatch(registration: Any, request: dict[str, str], entry: _ReplayEn
         drop_local_browser_future(call_id)
         raise TransportRefusal("binding_changed", 409)
     try:
-        result = await asyncio.wait_for(future, timeout=max(0.001, (entry.expires_at_ms - int(time.time() * 1000)) / 1000))
+        remaining = _remaining_seconds(entry.expires_at_ms)
+        if remaining <= 0:
+            raise TransportRefusal("authority_refused", 403)
+        result = await asyncio.wait_for(future, timeout=remaining)
     except (asyncio.TimeoutError, ConnectionError) as exc:
         raise TransportRefusal("transport_unavailable", 503) from exc
     finally:
@@ -321,6 +411,47 @@ async def _dispatch(registration: Any, request: dict[str, str], entry: _ReplayEn
     if result.get("status") == "refused" and result.get("reason") in _REASONS:
         return {"status": "refused", "operation": request["operation"], "reason": result["reason"]}
     raise TransportRefusal("transport_unavailable", 503)
+
+
+async def _join_replay(
+    entry: _ReplayEntry, fresh: FreshContext, device_id: str, registration: Any,
+) -> dict[str, str]:
+    remaining = _remaining_seconds(entry.expires_at_ms)
+    if remaining <= 0:
+        raise TransportRefusal("authority_refused", 403)
+    try:
+        result = await asyncio.wait_for(asyncio.shield(entry.future), timeout=remaining)
+    except asyncio.TimeoutError as exc:
+        raise TransportRefusal("authority_refused", 403) from exc
+    await _assert_current(fresh, device_id, registration, entry.expires_at_ms)
+    return result
+
+
+def _settle_failure(entry: _ReplayEntry, reason: str = "transport_unavailable") -> None:
+    if not entry.future.done():
+        entry.future.set_exception(TransportRefusal(reason, 503))
+        entry.future.exception()
+
+
+async def _run_replay(
+    entry: _ReplayEntry, registration: Any, request: dict[str, str],
+    fresh: FreshContext, device_id: str,
+) -> None:
+    """Keep the one socket dispatch alive if its initiating HTTP call leaves."""
+    try:
+        result = await _dispatch(registration, request, entry)
+        await _assert_current(fresh, device_id, registration, entry.expires_at_ms)
+        if not entry.future.done():
+            entry.future.set_result(result)
+    except asyncio.CancelledError:
+        _settle_failure(entry)
+        raise
+    except TransportRefusal as refusal:
+        if not entry.future.done():
+            entry.future.set_exception(refusal)
+            entry.future.exception()
+    except BaseException:
+        _settle_failure(entry)
 
 
 async def execute_lifecycle(request: dict[str, str], *, address: str = "unknown", raw_bytes: bytes | None = None) -> dict[str, str]:
@@ -336,29 +467,22 @@ async def execute_lifecycle(request: dict[str, str], *, address: str = "unknown"
         if registration is None:
             raise TransportRefusal("registration_unavailable", 409)
         accepted = await _verify(fresh, device.app_instance_id, registration, request)
-        later = await context.refresh()
-        latest_device = await get_instance_manager().registered_device_identity()
-        if not _same(fresh, later, latest_device, device.app_instance_id):
-            raise TransportRefusal("binding_changed", 409)
-        # Select afresh after every await; no old tuple can dispatch.
-        registration = current_local_browser_registration(engine_boot_id=fresh.context.engine_boot_id, revision=fresh.context.revision, owner=fresh.owner, organization_id=fresh.context.organization_id, device_id=device.app_instance_id)
-        if registration is None:
-            raise TransportRefusal("registration_unavailable", 409)
+        await _assert_current(fresh, device.app_instance_id, registration, accepted["expires_at_ms"])
         entry, creator = await _REPLAYS.join_or_create(
             jti=accepted["jti"], raw=raw_bytes if raw_bytes is not None else json.dumps(request, separators=(",", ":")).encode(),
             identity=_identity(fresh, device.app_instance_id, registration, accepted["controller_revision"]), expires_at_ms=accepted["expires_at_ms"],
         )
         if not creator:
-            return await asyncio.shield(entry.future)
+            return await _join_replay(entry, fresh, device.app_instance_id, registration)
         try:
-            result = await _dispatch(registration, request, entry)
-            entry.future.set_result(result)
-            return result
-        except TransportRefusal as refusal:
-            if not entry.future.done():
-                entry.future.set_exception(refusal)
-                entry.future.exception()  # retain the fixed failure without an unobserved-future warning
+            asyncio.create_task(
+                _run_replay(entry, registration, request, fresh, device.app_instance_id),
+                name="local-browser-lifecycle-replay",
+            )
+        except BaseException:
+            _settle_failure(entry)
             raise
+        return await _join_replay(entry, fresh, device.app_instance_id, registration)
     finally:
         address_gate.release()
         global_gate.release()

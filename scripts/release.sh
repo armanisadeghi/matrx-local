@@ -1007,6 +1007,15 @@ command -v uv &>/dev/null || fail "uv is required to refresh uv.lock."
 uv lock >/dev/null
 ok "uv.lock → $NEW_VERSION"
 
+# The deterministic image-runtime contract hashes uv.lock. A version bump
+# therefore changes the contract even when dependency versions stay fixed.
+# Regenerate it after refreshing the lock so the tag cannot ship a stale
+# manifest that the release workflow will reject.
+info "Refreshing deterministic runtime manifests..."
+uv run --frozen --no-sync python scripts/generate-runtime-manifests.py >/dev/null
+uv run --frozen --no-sync python scripts/generate-runtime-locks.py >/dev/null
+ok "Runtime manifests refreshed."
+
 info "Refreshing Cargo.lock (workspace root)..."
 command -v cargo &>/dev/null || fail "cargo is required to refresh Cargo.lock."
 (cd desktop/src-tauri && cargo update -p aimatrx-desktop >/dev/null)
@@ -1025,7 +1034,15 @@ git add \
     desktop/src-tauri/Cargo.toml \
     Cargo.lock \
     desktop/package.json \
-    uv.lock
+    uv.lock \
+    config/runtime-manifests/image-gen-contract.json \
+    config/runtime-manifests/image-gen-aarch64-apple-darwin.json \
+    config/runtime-manifests/image-gen-aarch64-apple-darwin.requirements.txt \
+    config/runtime-manifests/image-gen-x86_64-apple-darwin.json \
+    config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json \
+    config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.requirements.txt \
+    config/runtime-manifests/image-gen-x86_64-unknown-linux-gnu.json \
+    config/runtime-manifests/image-gen-x86_64-unknown-linux-gnu.requirements.txt
 git commit -m "$COMMIT_MSG"
 RELEASE_COMMITTED=true
 ok "Committed: '$COMMIT_MSG'"

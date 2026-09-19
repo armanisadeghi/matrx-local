@@ -428,8 +428,22 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         return True
 
     if msg_type == "local_browser.result":
+        operation = msg.get("operation")
+        status = msg.get("status")
         required = {"type", "version", "call_id", "operation", "status"}
-        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or _canonical_uuid(msg.get("call_id")) is None or msg.get("operation") not in {"discover", "admit", "renew", "cleanup"} or msg.get("status") not in {"acknowledged", "refused"}:
+        if status == "acknowledged":
+            required.add("receipt")
+            valid = {
+                "discover": {"accepted"}, "admit": {"created", "cancelled", "failed"},
+                "renew": {"accepted"}, "cleanup": {"closed", "already_absent", "unconfirmed"},
+            }
+            receipt_ok = msg.get("receipt") in valid.get(operation, set())
+        elif status == "refused":
+            required.add("reason")
+            receipt_ok = isinstance(msg.get("reason"), str) and msg["reason"] in {"context_unavailable", "registration_unavailable", "authority_refused", "rate_limited", "transport_unavailable", "binding_changed", "invalid_request", "retry_conflict"}
+        else:
+            receipt_ok = False
+        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or _canonical_uuid(msg.get("call_id")) is None or operation not in {"discover", "admit", "renew", "cleanup"} or not receipt_ok:
             return True
         session = get_registry().get(session_id)
         if session is None:

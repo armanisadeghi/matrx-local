@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 import httpx
@@ -49,6 +50,64 @@ def test_closed_json_rejects_duplicate_nested_and_oversized_grants():
         transport._bounded_json(json.dumps({"grant": "x" * (9 * 1024), "operation": "discover"}).encode())
     with pytest.raises(transport.TransportRefusal):
         transport._bounded_json(b'{"grant":"x","operation":"claim"}')
+    with pytest.raises(transport.TransportRefusal):
+        transport._bounded_json(b'{"grant":"\\ud800","operation":"discover"}')
+    with pytest.raises(transport.TransportRefusal):
+        transport._bounded_json((b"[" * 16_000) + (b"]" * 16_000))
+
+
+@pytest.mark.anyio
+async def test_server_callback_uses_actual_closed_contract_and_streams_limit(monkeypatch):
+    sent: dict[str, object] = {}
+    payload = {
+        "status": "accepted", "operation": "admit",
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "app_instance_id": "00000000-0000-0000-0000-000000000002",
+        "controller_revision": 7,
+        "jti": "00000000-0000-0000-0000-000000000003",
+        "expires_at_ms": 4_000_000_000_000,
+        "extension_generation": "00000000-0000-0000-0000-000000000004",
+        "connection_id": "00000000-0000-0000-0000-000000000005",
+    }
+
+    class Response:
+        status_code = 200
+        headers = {"cache-control": "no-store"}
+        async def aiter_bytes(self):
+            yield json.dumps(payload).encode()
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return False
+        @asynccontextmanager
+        async def stream(self, method, url, json):
+            sent.update(method=method, url=url, body=json)
+            yield Response()
+
+    monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(transport, "get_aidream_server_url", lambda: "https://server.example")
+    fresh = FreshContext(BrowserContext("boot", 1, "org"), ("user", "session"), "daemon")
+    registration = type("Registration", (), {"extension_generation": "00000000-0000-0000-0000-000000000004", "connection_id": "00000000-0000-0000-0000-000000000005"})()
+    result = await transport._verify(fresh, "00000000-0000-0000-0000-000000000002", registration, {"grant": "opaque", "operation": "admit"})
+    assert result["status"] == "accepted"
+    assert sent["body"] == {"grant": "opaque", "operation": "admit", "app_instance_id": "00000000-0000-0000-0000-000000000002"}
+
+    payload["connection_id"] = "00000000-0000-0000-0000-000000000099"
+    with pytest.raises(transport.TransportRefusal) as wrong_pair:
+        await transport._verify(fresh, "00000000-0000-0000-0000-000000000002", registration, {"grant": "opaque", "operation": "admit"})
+    assert wrong_pair.value.reason == "binding_changed"
+    payload["connection_id"] = "00000000-0000-0000-0000-000000000005"
+    payload["expires_at_ms"] = 1
+    with pytest.raises(transport.TransportRefusal):
+        await transport._verify(fresh, "00000000-0000-0000-0000-000000000002", registration, {"grant": "opaque", "operation": "admit"})
+
+    class TooLarge(Response):
+        async def aiter_bytes(self):
+            yield b"x" * (4 * 1024 + 1)
+    with pytest.raises(transport.TransportRefusal):
+        await transport._read_response(TooLarge())
 
 
 @pytest.mark.anyio
@@ -105,12 +164,58 @@ async def test_execute_rechecks_context_and_device_after_server_await(monkeypatc
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "result", "expected"),
+    [
+        ("admit", {"status": "acknowledged", "operation": "admit", "receipt": "failed"}, {"status": "acknowledged", "operation": "admit", "receipt": "failed"}),
+        ("cleanup", {"status": "acknowledged", "operation": "cleanup", "receipt": "unconfirmed"}, {"status": "acknowledged", "operation": "cleanup", "receipt": "unconfirmed"}),
+    ],
+)
+async def test_dispatch_propagates_only_the_exact_extension_receipt(monkeypatch, operation, result, expected):
+    future = asyncio.get_running_loop().create_future()
+    future.set_result(result)
+    monkeypatch.setattr(transport, "create_local_browser_future", lambda *_: future)
+    async def sent(*_): return True
+    monkeypatch.setattr(transport, "send_local_browser_execute", sent)
+    monkeypatch.setattr(transport, "drop_local_browser_future", lambda *_: None)
+    entry = transport._ReplayEntry(b"digest", transport._ReplayIdentity(("u", "s"), "b", 1, "o", "d", "g", "c", 1), 4_000_000_000_000, asyncio.get_running_loop().create_future())
+    assert await transport._dispatch(object(), {"grant": "opaque", "operation": operation}, entry) == expected
+
+
+@pytest.mark.anyio
+async def test_dispatch_refuses_unknown_extension_receipt(monkeypatch):
+    future = asyncio.get_running_loop().create_future()
+    future.set_result({"status": "acknowledged", "operation": "cleanup", "receipt": "invented"})
+    monkeypatch.setattr(transport, "create_local_browser_future", lambda *_: future)
+    async def sent(*_): return True
+    monkeypatch.setattr(transport, "send_local_browser_execute", sent)
+    monkeypatch.setattr(transport, "drop_local_browser_future", lambda *_: None)
+    entry = transport._ReplayEntry(b"digest", transport._ReplayIdentity(("u", "s"), "b", 1, "o", "d", "g", "c", 1), 4_000_000_000_000, asyncio.get_running_loop().create_future())
+    with pytest.raises(transport.TransportRefusal):
+        await transport._dispatch(object(), {"grant": "opaque", "operation": "cleanup"}, entry)
+
+
+@pytest.mark.anyio
+async def test_replay_joins_exact_bytes_and_identity_but_refuses_conflicts():
+    table = transport._ReplayTable()
+    identity = transport._ReplayIdentity(("u", "s"), "boot", 1, "org", "device", "gen", "conn", 1)
+    first, creator = await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b'{"grant":"a"}', identity=identity, expires_at_ms=4_000_000_000_000)
+    second, joined = await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b'{"grant":"a"}', identity=identity, expires_at_ms=4_000_000_000_000)
+    assert creator and not joined and first is second
+    with pytest.raises(transport.TransportRefusal) as conflicting_bytes:
+        await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b'{"grant":"b"}', identity=identity, expires_at_ms=4_000_000_000_000)
+    assert conflicting_bytes.value.reason == "retry_conflict"
+    with pytest.raises(transport.TransportRefusal):
+        await table.join_or_create(jti="00000000-0000-0000-0000-000000000001", raw=b'{"grant":"a"}', identity=transport._ReplayIdentity(("u", "s"), "boot", 2, "org", "device", "gen", "conn", 1), expires_at_ms=4_000_000_000_000)
+
+
+@pytest.mark.anyio
 async def test_execute_route_bypasses_normal_bearer_but_never_loses_no_store(monkeypatch):
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.include_router(route.router)
 
-    async def refused(_body, *, address):
+    async def refused(_body, *, address, raw_bytes):
         assert address == "127.0.0.1"
         raise transport.TransportRefusal("authority_refused", 403)
 

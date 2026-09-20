@@ -1040,6 +1040,48 @@ def test_organization_refusal_is_never_a_terminal_rejection() -> None:
     assert "Choose your organization" in mapped["message"]
 
 
+def test_the_servers_own_organization_hold_is_recognised_as_held_not_terminal() -> None:
+    """The GENUINE server-side hold — not the client's own pre-send refusal.
+
+    `/coding-sessions/bridge` is exempt from this transport's own
+    pre-send organization check (aidream_client.py
+    `_ORGANIZATION_SELF_RESOLVED_PATHS`): aidream resolves the coding
+    session's organization itself, from the connection's own configured
+    organization, and answers a genuine 409
+    `{"error": "organization_required", ...}` when nothing was configured yet
+    (`MissingCodingSessionOrganization` in aidream's
+    `coding_session_bridge/ownership.py`). Before this fix,
+    `_organization_refusal_of` only recognised the client's OWN synthetic
+    refusal (by type, or by one of two specific legacy sentences) — a real
+    server response never matched either, so 409 (a `_TERMINAL_STATUSES`
+    member) would eventually quarantine a session that was only ever WAITING
+    on the person to choose an organization, not failing.
+    """
+    from app.services.coding_sessions.service import (
+        _is_terminal_rejection,
+        _organization_refusal_of,
+    )
+
+    server_hold = AIDreamError(
+        409,
+        '[aidream_client] /coding-sessions/bridge → HTTP 409: '
+        '{"error":"organization_required","message":"This coding session '
+        '(user=11111111-1111-4111-8111-111111111111) has not been told which '
+        'organization it belongs to, and coding-session transports carry no '
+        'organization on the wire. Choose one of the organizations listed on '
+        'this hold and set it on the session, then retry."}',
+    )
+
+    refusal = _organization_refusal_of(server_hold)
+    assert refusal is not None, "the server's genuine hold must be recognised"
+    assert refusal["code"] == "organization_required"
+    assert refusal["held"] is True
+
+    # And the practical consequence: it must never be quarantined, no matter
+    # how many attempts pile up — it is waiting, not broken.
+    assert _is_terminal_rejection(server_hold, attempts=10_000) is False
+
+
 @pytest.mark.anyio
 async def test_rows_quarantined_for_the_organization_refusal_are_requeued(
     bridge_db: LocalDatabase,

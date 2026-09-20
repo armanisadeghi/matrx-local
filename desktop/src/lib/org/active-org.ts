@@ -48,6 +48,7 @@
 
 import supabase from "@/lib/supabase";
 import { getAuthedSession } from "@/lib/custodian";
+import { getAppRuntimeConfig } from "@/lib/app-config";
 
 const STORAGE_KEY = "matrx-local.active-organization.v1";
 const CHANGE_EVENT = "matrx-local.active-organization.change";
@@ -84,6 +85,31 @@ export function isOrganizationNotSelectedError(
   err: unknown,
 ): err is OrganizationNotSelectedError {
   return err instanceof OrganizationNotSelectedError;
+}
+
+/**
+ * Thrown when a held request settles because the signed-in user belongs to NO
+ * organization at all — there is nothing the picker can ever produce, so
+ * holding for the full timeout would just be a wait for someone the picker
+ * cannot help. Distinct from {@link OrganizationNotSelectedError} ("you have
+ * organizations but never chose one"): this one names the real remedy —
+ * create or join an organization — with the link the app already has for it.
+ */
+export class OrganizationNoMembershipsError extends Error {
+  readonly code = "organization_no_memberships";
+  readonly remedy = `You do not belong to any organization yet. Create or join one at ${getAppRuntimeConfig().webAppOrigin}/organizations, then try again.`;
+
+  constructor(message = "You do not belong to any organization yet.") {
+    super(message);
+    this.name = "OrganizationNoMembershipsError";
+  }
+}
+
+/** True when `err` is the no-memberships-at-all failure. */
+export function isOrganizationNoMembershipsError(
+  err: unknown,
+): err is OrganizationNoMembershipsError {
+  return err instanceof OrganizationNoMembershipsError;
 }
 
 interface MembershipRow {
@@ -288,6 +314,18 @@ export async function requireActiveOrganizationId(options?: {
 }): Promise<string> {
   const already = await getActiveOrganizationId();
   if (already) return already;
+
+  // Zero memberships means there is nothing the picker can ever produce —
+  // settle NOW with the typed refusal instead of holding for the full
+  // timeout on a user the picker cannot help. Still raise the picker (it
+  // shows the same "you have no organization" message to whoever is
+  // looking), but never let a silent multi-minute clock be what ends the
+  // hold.
+  const organizations = await listMemberOrganizations();
+  if (organizations.length === 0) {
+    requestOrganizationPicker();
+    throw new OrganizationNoMembershipsError();
+  }
 
   const timeoutMs = options?.timeoutMs ?? ORGANIZATION_HOLD_TIMEOUT_MS;
   const held = await new Promise<string | null>((resolve) => {

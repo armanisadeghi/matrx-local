@@ -126,6 +126,21 @@ _ORGANIZATION_UNRESOLVED_MARKER = "Waiting for you to choose an organization"
 _LEGACY_ORGANIZATION_MARKER = "Cannot name an organization for this request"
 _ORGANIZATION_BLOCKER_CODE = ORGANIZATION_HELD_CODE
 
+# The SERVER's own hold, not a local refusal. `/coding-sessions/bridge` is
+# exempt from this transport's own pre-send organization check (see
+# `_ORGANIZATION_SELF_RESOLVED_PATHS` in aidream_client.py) because aidream
+# resolves this coding session's organization itself — from the connection's
+# OWN configured organization (never a user-level default), raising
+# `MissingCodingSessionOrganization` and answering 409
+# `{"error": "organization_required", ...}` when nothing was configured yet
+# (aidream `coding_session_bridge/ownership.py`). That is the exact same
+# "waiting for one click" state as the local refusal above, just discovered on
+# the wire instead of before the request left this Mac — so it must be
+# recognised the same way, or a genuinely held session reads as a plain
+# failure that eventually gets quarantined (409 is a `_TERMINAL_STATUSES`
+# member) instead of pausing with a remedy.
+_SERVER_ORGANIZATION_REQUIRED_MARKER = '"organization_required"'
+
 
 @dataclass(frozen=True)
 class PublisherCircuitConfig:
@@ -507,6 +522,27 @@ def _organization_refusal_of(exc: Exception) -> dict[str, Any] | None:
             OrganizationNotResolvedError(
                 "This Mac has no organization chosen yet.",
                 remedy="Choose your organization in Matrx Local.",
+                held=True,
+            )
+        )
+    # THE SERVER'S OWN HOLD (see _SERVER_ORGANIZATION_REQUIRED_MARKER above):
+    # a genuine 409 from aidream's coding-session ownership resolver, not
+    # anything raised locally. Scoped to AIDreamError + 409 so an unrelated
+    # payload that happens to quote the same JSON key is never mistaken for
+    # a hold.
+    if (
+        isinstance(exc, AIDreamError)
+        and exc.status == 409
+        and _SERVER_ORGANIZATION_REQUIRED_MARKER in message
+    ):
+        return organization_refusal(
+            OrganizationNotResolvedError(
+                "This coding session has not been told which organization it "
+                "belongs to.",
+                remedy=(
+                    "Choose the organization for this coding session, then "
+                    "try again."
+                ),
                 held=True,
             )
         )

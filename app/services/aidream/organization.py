@@ -162,11 +162,24 @@ async def set_device_organization(organization_id: str, *, user_id: str) -> None
     await _clear_hold()
 
 
-async def clear_device_organization() -> None:
-    """Forget this device's pick (sign-out)."""
+async def clear_device_organization(*, user_id: str) -> None:
+    """Forget this device's pick (sign-out) — only if it belongs to this user.
+
+    A device's SET organization is scoped to whoever set it, exactly like
+    ``get_device_organization``/``set_device_organization``. Without this
+    check, one local user's DELETE could erase a DIFFERENT signed-in user's
+    choice on the same Mac — a request that is not theirs to answer wiping an
+    answer they never gave.
+    """
     from app.services.local_db.repositories import AppSettingsRepo
 
-    await AppSettingsRepo().set(DEVICE_ORGANIZATION_SETTING, None)
+    repo = AppSettingsRepo()
+    stored = await repo.get(DEVICE_ORGANIZATION_SETTING)
+    if isinstance(stored, dict):
+        owner = stored.get("user_id")
+        if isinstance(owner, str) and owner and owner != user_id:
+            return
+    await repo.set(DEVICE_ORGANIZATION_SETTING, None)
     _org_cache.clear()
 
 

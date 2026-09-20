@@ -63,13 +63,19 @@ class AIDreamError(Exception):
 # Owner-scoped coding-session routes. The server exempts them from the
 # organization admission gate (aidream/api/middleware/auth.py
 # ORGANIZATION_EXEMPT_PATHS) and resolves the organization INSIDE the handler
-# from the signed-in user's own default/personal organization
-# (coding_session_bridge/ownership.py) — "coding agents never choose or supply
-# an organization UUID". Demanding one here anyway is what paused every
-# delivery on a Mac with several memberships and no default chosen: 116,803
-# envelopes for nine days (2026-08-30 → 2026-09-08) behind a header the server
-# would not have read. A caller-supplied header still wins; this only stops the
-# transport from REFUSING to send when it has nothing to say.
+# from the connection's OWN person-set organization — never a user-level
+# default or personal organization, both abolished by Arman on 2026-09-19
+# (coding_session_bridge/ownership.py: `_configured_coding_session_organization`
+# reads `connection_organization_id`, membership-verified). When nothing was
+# configured yet, the handler HOLDS: it raises `MissingCodingSessionOrganization`
+# and the route answers 409 `{"error": "organization_required", ...}` — see
+# `_organization_refusal_of` in app/services/coding_sessions/service.py, which
+# turns that response into the same HELD refusal as a local one. Demanding a
+# header here anyway is what paused every delivery on a Mac with several
+# memberships and no default chosen: 116,803 envelopes for nine days
+# (2026-08-30 → 2026-09-08) behind a header the server would not have read. A
+# caller-supplied header still wins; this only stops the transport from
+# REFUSING to send when it has nothing to say.
 # ── One immediate retry for a transport that failed on the wire (SR-09) ──────
 #
 # Measured over the 72h to 2026-09-14 on this transport: 394 deliveries of

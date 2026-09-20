@@ -33,6 +33,9 @@ vi.mock("@/lib/supabase", () => ({
 }));
 vi.mock("@/lib/custodian", () => ({ getAuthedSession }));
 vi.mock("@/lib/api", () => ({ engine: { put: enginePut, delete: engineDelete } }));
+vi.mock("@/lib/app-config", () => ({
+  getAppRuntimeConfig: () => ({ webAppOrigin: "https://web.example.test" }),
+}));
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -269,6 +272,35 @@ describe("requireActiveOrganizationId — the hold", () => {
     const mod = await import("./active-org");
     await expect(mod.requireActiveOrganizationId({ timeoutMs: 1 })).resolves.toBe("org-1");
     expect(fakeWindow.seen).not.toContain(mod.REQUEST_PICKER_EVENT);
+  });
+
+  it("settles IMMEDIATELY with a create-or-join remedy when the user has zero memberships — never the full timeout", async () => {
+    // Zero memberships means the picker can never produce an answer. Before
+    // this fix, requireActiveOrganizationId() still opened the picker and
+    // then awaited the CHANGE_EVENT until the timeout elapsed — a real wait
+    // (proven red below via fake timers: a huge timeout with no advance would
+    // hang this test on the old code).
+    mockMemberships([]);
+    mockOrganizationsTable([]);
+
+    const mod = await import("./active-org");
+    // A timeout far longer than any sane test would tolerate waiting for —
+    // this call must resolve WITHOUT the timer ever firing.
+    const held = mod.requireActiveOrganizationId({ timeoutMs: 10 * 60 * 1000 });
+
+    await expect(held).rejects.toBeInstanceOf(mod.OrganizationNoMembershipsError);
+    let caught: unknown;
+    try {
+      await held;
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(mod.OrganizationNoMembershipsError);
+    const err = caught as InstanceType<typeof mod.OrganizationNoMembershipsError>;
+    expect(err.remedy).toMatch(/do not belong to any organization/i);
+    expect(err.remedy).toMatch(/organizations/i);
+    // The picker was still raised, for whoever is looking at the window.
+    expect(fakeWindow.seen).toContain(mod.REQUEST_PICKER_EVENT);
   });
 });
 

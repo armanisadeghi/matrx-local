@@ -92,7 +92,23 @@ async def write_active_organization(
 
 
 @router.delete("/active", response_model=ActiveOrganization)
-async def forget_active_organization() -> ActiveOrganization:
-    """Forget this Mac's pick — sign-out, or an account switch."""
-    await clear_device_organization()
+async def forget_active_organization(
+    authorization: str | None = Header(default=None),
+) -> ActiveOrganization:
+    """Forget this Mac's pick — sign-out, or an account switch.
+
+    Bearer-scoped exactly like GET/PUT above: this route used to take no
+    bearer at all, so any local caller could clear whichever user's choice
+    happened to be stored, on a machine where more than one account can be
+    signed in. ``clear_device_organization`` only clears the stored pick when
+    it belongs to the authenticated caller.
+    """
+    jwt_value = _bearer(authorization)
+    user_id = jwt_user_id(jwt_value)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="That sign-in could not be read. Sign in to Matrx Local again.",
+        )
+    await clear_device_organization(user_id=user_id)
     return ActiveOrganization(organization_id=None)

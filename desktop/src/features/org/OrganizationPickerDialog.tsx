@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@ai-matrx/design-system";
 import { registerActionNeededHandler } from "@/features/action-needed/actions";
+import { getAppRuntimeConfig } from "@/lib/app-config";
+import { openExternal } from "@/lib/open-external";
 import {
   REQUEST_PICKER_EVENT,
   listMemberOrganizations,
@@ -138,9 +140,22 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
         {organizations === null && !error ? (
           <p className="text-sm text-muted-foreground">Loading your organizations…</p>
         ) : organizations && organizations.length === 0 && !error ? (
-          <p className="text-sm text-muted-foreground">
-            You don&apos;t belong to any organization yet.
-          </p>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              You don&apos;t belong to any organization yet, so there is nothing to pick. Any
+              request that needed one has already stopped waiting — create an organization or ask
+              whoever runs your workspace to invite you, then try again.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                void openExternal(`${getAppRuntimeConfig().webAppOrigin}/organizations`)
+              }
+            >
+              Create or join an organization
+            </Button>
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {(organizations ?? []).map((org) => (

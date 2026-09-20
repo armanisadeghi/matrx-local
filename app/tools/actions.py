@@ -139,7 +139,10 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
             "Screen", "local_screen",
             "Screen capture and display enumeration.",
             "desktop", ("screen", "screenshot", "local", "actions"),
-            {"screenshot": "Screenshot", "list": "ListScreens"},
+            {
+                "screenshot": "Screenshot", "list": "ListScreens",
+                "capture_book": "BookCapture",
+            },
         ),
         ActionGroup(
             "System", "local_system",

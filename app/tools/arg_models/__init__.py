@@ -19,6 +19,7 @@ from app.tools.arg_models.file_ops_args import (
     GrepArgs,
     ListDirectoryArgs,
 )
+from app.tools.arg_models.book_args import BookCaptureArgs
 from app.tools.arg_models.system_args import (
     SystemInfoArgs,
     ScreenshotArgs,
@@ -88,6 +89,7 @@ from app.tools.arg_models.app_args import (
 )
 
 __all__ = [
+    "BookCaptureArgs",
     # execution
     "BashArgs", "BashOutputArgs", "TaskStopArgs",
     # file ops

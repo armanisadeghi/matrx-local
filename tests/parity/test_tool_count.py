@@ -42,6 +42,7 @@ EXPECTED_DARWIN_ONLY = {
     "SearchPhotos", "GetPhoto",
     "GetLocation",
     "TranscribeWithSpeech", "ListSpeechLocales",
+    "BookCapture",  # drives a reader window with macOS screencapture
 }
 EXPECTED_WINDOWS_ONLY = {
     "PSSetEnv", "RegistryRead", "RegistryWrite", "EventLog", "WindowsFeatures",

@@ -169,10 +169,10 @@ def test_snapshot_counts() -> None:
     # handlers are factory-made in app/tools/actions.py, not tool_* source
     # functions — hence source_tool_functions stays at 116.
     assert counts == {
-        "dispatcher_tool_names": 138,
-        "catalog_cloud_names": 138,
-        "source_tool_functions": 119,
-        "dispatcher_handler_function_names": 138,
+        "dispatcher_tool_names": 139,
+        "catalog_cloud_names": 139,
+        "source_tool_functions": 120,
+        "dispatcher_handler_function_names": 139,
         "orphan_source_functions": 0,
     }, (
         f"TOOL SURFACE COUNTS CHANGED: {counts}. If intentional, update this "

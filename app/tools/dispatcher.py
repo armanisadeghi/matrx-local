@@ -58,6 +58,7 @@ from app.tools.tools.process_manager import (
     tool_list_terminals,
     tool_tail_terminal,
 )
+from app.tools.tools.book_capture import tool_book_capture
 from app.tools.tools.window_manager import (
     tool_focus_window,
     tool_list_windows,
@@ -207,6 +208,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     # ── System ───────────────────────────────────────────────────────
     "SystemInfo": tool_system_info,
     "Screenshot": tool_screenshot,
+    "BookCapture": tool_book_capture,
     "ListScreens": tool_list_screens,
     "ListDirectory": tool_list_directory,
     "OpenUrl": tool_open_url,

@@ -120,6 +120,7 @@ from app.tools.arg_models.process_args import (
     ListPortsArgs,
     ListProcessesArgs,
 )
+from app.tools.arg_models.book_args import BookCaptureArgs
 from app.tools.arg_models.system_args import (
     BatteryStatusArgs,
     ClipboardReadArgs,
@@ -286,6 +287,16 @@ _META: dict[str, ToolMeta] = {
         output_schema=screenshot_artifact_json_schema(),
     ),
     "ListScreens": ToolMeta(category="local_system", tags=("screen", "display", "local")),
+    "BookCapture": ToolMeta(
+        "local_book_capture",
+        "Page through an e-book already open in a reader on this Mac, capture "
+        "every page from the reader's own window, and file the result in the "
+        "user's library as one searchable PDF Source.",
+        "local_system", ("book", "capture", "screen", "ocr", "local"),
+        BookCaptureArgs,
+        timeout_seconds=1800.0,
+        platforms=("darwin",),
+    ),
     "OpenUrl": ToolMeta(
         "local_open_url",
         "Open a URL in the default web browser on the local system.",

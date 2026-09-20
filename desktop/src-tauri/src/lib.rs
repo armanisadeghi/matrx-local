@@ -31,6 +31,7 @@ mod syncd;
 mod error_outbox;
 mod native_vault;
 mod native_vault_settings;
+mod native_vault_exchange;
 mod tcc;
 
 mod transcription;
@@ -136,17 +137,26 @@ async fn open_native_vault_provider_settings(app: tauri::AppHandle) -> native_va
 }
 
 #[tauri::command]
-async fn invalidate_native_vault_host_actor() -> native_vault::TransitionResult {
+async fn invalidate_native_vault_host_actor(app: tauri::AppHandle) -> native_vault::TransitionResult {
+    if native_vault_exchange::invalidate(&app).await.is_err() {
+        return native_vault::TransitionResult::StateUnavailable;
+    }
     tokio::task::spawn_blocking(native_vault::invalidate)
         .await
         .unwrap_or(native_vault::TransitionResult::StateUnavailable)
 }
 
 #[tauri::command]
-async fn reconcile_native_vault_host_actor(subject: Option<String>) -> native_vault::TransitionResult {
-    tokio::task::spawn_blocking(move || native_vault::reconcile(subject))
+async fn reconcile_native_vault_host_actor(app: tauri::AppHandle, subject: Option<String>) -> native_vault::TransitionResult {
+    let result = tokio::task::spawn_blocking(move || native_vault::reconcile(subject))
         .await
-        .unwrap_or(native_vault::TransitionResult::StateUnavailable)
+        .unwrap_or(native_vault::TransitionResult::StateUnavailable);
+    if !matches!(result, native_vault::TransitionResult::Unchanged)
+        && native_vault_exchange::invalidate(&app).await.is_err()
+    {
+        return native_vault::TransitionResult::StateUnavailable;
+    }
+    result
 }
 
 // ── Engine termination ladder (shared by the launch sweep and the quit path) ─
@@ -2552,6 +2562,7 @@ pub fn run() {
             installed_app_version,
             running_app_version,
             native_vault_provider_status,
+            native_vault_exchange::native_vault_exchange,
             request_native_vault_provider_enable,
             open_native_vault_provider_settings,
             invalidate_native_vault_host_actor,

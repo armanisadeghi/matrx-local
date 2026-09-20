@@ -21,6 +21,6 @@ RUST_ARCH="${ARCH/arm64/aarch64}"
   "$ROOT/native-vault-provider/NativeVaultPasskey.swift" \
   "$ROOT/native-vault-provider/NativeVaultIdentity.swift" \
   "$ROOT/native-vault-provider/CredentialProviderViewController.swift" \
-  "$ROOT/native-vault-provider/tests/NativeVaultPasswordCorpus.swift" \
+  "$ROOT/native-vault-provider/tests/NativeVaultSessionAccessCorpus.swift" \
   -o "$WORKDIR/corpus"
 "$WORKDIR/corpus"

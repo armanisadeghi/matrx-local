@@ -71,7 +71,7 @@ final class ProviderStore {
             if let existing {
                 // Reconnect first makes public status disconnected under the
                 // generation lock, then clears the matching private session.
-                let next = PublicState(version: 1, generation: UUID().canonical, host_subject: existing.host_subject, provider_subject: nil)
+                let next = PublicState(version: 2, generation: UUID().canonical, host_subject: existing.host_subject, provider_subject: nil)
                 try write(next)
                 try invalidatePrivate()
                 return next
@@ -79,7 +79,7 @@ final class ProviderStore {
             // No state has been published yet: remove any stale provider item
             // before the first durable generation becomes observable.
             try invalidatePrivate()
-            let initial = PublicState(version: 1, generation: current.generation, host_subject: nil, provider_subject: nil)
+            let initial = PublicState(version: 2, generation: current.generation, host_subject: nil, provider_subject: nil)
             try write(initial)
             return initial
         }
@@ -88,7 +88,7 @@ final class ProviderStore {
     func read() throws -> PublicState {
         if let existing = try readExisting() { return existing }
         if mode == .existingOnly { throw unavailable() }
-        return PublicState(version: 1, generation: UUID().canonical, host_subject: nil, provider_subject: nil)
+        return PublicState(version: 2, generation: UUID().canonical, host_subject: nil, provider_subject: nil)
     }
 
     private func readExisting() throws -> PublicState? {
@@ -130,7 +130,8 @@ private func isOwnedDirectory(_ fd: Int32, permissions: mode_t) -> Bool {
 
 private enum StateJSON {
     static func encode(_ value: PublicState) throws -> Data {
-        let body: [String: Any] = ["version": value.version, "generation": value.generation, "host_subject": value.host_subject ?? NSNull(), "provider_subject": value.provider_subject ?? NSNull()]
+        var body: [String: Any] = ["version": value.version, "generation": value.generation, "host_subject": value.host_subject ?? NSNull(), "provider_subject": value.provider_subject ?? NSNull()]
+        if value.version == 2 { body["suggestions"] = ["organization_id": value.suggestions.organization_id ?? NSNull() as Any, "revision": value.suggestions.revision, "status": value.suggestions.status, "refreshed_at_ms": value.suggestions.refreshed_at_ms ?? NSNull(), "count": value.suggestions.count, "unsupported_count": value.suggestions.unsupported_count] }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 }

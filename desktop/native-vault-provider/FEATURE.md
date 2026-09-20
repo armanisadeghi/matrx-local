@@ -1,21 +1,23 @@
 ---
 type: Feature
 title: Native Vault provider enrollment
-description: Provider-owned native OAuth enrollment and non-secret host lifecycle boundary.
+description: Native OAuth enrollment, shared protected session and value-free host lifecycle boundary.
 ---
 
 # Native Vault provider enrollment
 
-The macOS credential-provider extension owns its distinct public OAuth client, PKCE transaction, provider-only Data Protection Keychain session, and App Group status publication. The host reads only the non-secret generation/status record and may invalidate or reconcile its actor; it cannot receive private session data or request token material. `ready` remains false until separate signed-provider, Keychain, LocalAuthentication, and real admin OAuth acceptance gates pass.
+The macOS credential-provider extension owns its distinct public OAuth client, PKCE transaction, Data Protection Keychain session shared with the signed containing native exchange process, and App Group status publication. The containing process is trusted for protected exchange after local verification and current account/generation checks. Its webview and Python helper remain separate processes without the Keychain group; public commands expose only selections and value-free status. Host library validation remains enabled. The host may invalidate or reconcile its actor through the shared generation/status record. `ready` remains false until separate signed-provider, Keychain, LocalAuthentication, and real admin OAuth acceptance gates pass.
 
-The first password unit is direct-list only: AuthenticationServices supplies the
+For password use, AuthenticationServices supplies the
 request's actual domain/URL identifiers, the provider performs LocalAuthentication
 before its protected Keychain read, chooses a current organization, lists value-free
 matches, and materializes only the selected matching item. The provider uses one
-session/refresh primitive for configuration and password use. It does not populate
-the identity store, handle no-interaction filling, or claim signed OS delivery.
+session/refresh primitive for configuration, password use and passkey use. `NativeVaultTransport.swift` holds the provider-only OAuth endpoints, bounded no-redirect request transport, form encoding, and response classification; `NativeVaultSessionAccess.swift` holds the shared protected-session acquisition and reconciliation primitive without extension UI dependencies. It
+publishes bounded metadata-only identity suggestions and validates selected records
+against the current account, generation and scope revision. It requires interaction
+before credential use; source and harness checks do not establish signed OS delivery.
 
-Canonical contract: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-ENROLLMENT.md`.
+Canonical contracts: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-ENROLLMENT.md` and `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-IDENTITIES.md`.
 
 ## Strict envelope corpus
 
@@ -32,7 +34,13 @@ ready.
 
 `NativeVaultState.swift` and the host's `native_vault.rs` use the Foundation-resolved App Group and held directory descriptors. Only explicit Connect initializes missing provider state, after private-session invalidation; ordinary reads never create it. Host status is historical metadata, with explicit busy/corrupt outcomes, and never means credential filling is ready. `desktop/scripts/test-native-vault-state.sh` and the Rust native-vault tests exercise the actual state implementation, including process contention and symlink refusal. Signed Keychain, enrollment lifecycle and OS credential delivery require separate acceptance under the canonical contract above.
 
+## Identity suggestions
+
+The provider's v2 public status holds only selected organization/revision, freshness and aggregate counts. `NativeVaultIdentity.swift` keeps account labels and service metadata in request-local Apple identity entries; it does not expose them through the host bridge. A selected password record is bound to the current subject, generation, scope revision and actual Apple service before the existing materialization path begins. A selected suggestion whose organization membership disappeared refuses before any match lookup; it never falls back to another organization. Unbound requests use the device choice or the explicit picker, without the account-level default. An invalid record refuses selection; stale metadata still requires current online authority before credential use. Shared session acquisition completes durable terminal cleanup before delivering failure. Ambiguous session and protected-API failures preserve Apple entries while marking only the captured revision stale; late responses cannot alter a replacement enrollment or revision.
+
 ## Change log
+
+- 2026-09-20: Integrated suggestions with the current organization decoder and refused missing bound membership before lookup. The standalone core declares its own Cargo workspace so nested managed checkouts cannot inherit an unrelated parent workspace.
 
 - 2026-09-19: Exposed the already-validated source-v1-to-PKCS#8 converter through the provider-private UniFFI bridge. The caller supplies owned canonical source bytes; the bridge has no vault fetch or authority function, zeroizes Rust-owned incoming bytes/intermediates, and returns DER plus typed public metadata to generated Swift. Generated Swift necessarily owns ABI copies and has no cryptographic wipe guarantee. The application-extension Swift harness verifies exact metadata and CryptoKit DER interoperability from synthetic in-memory source; this remains a conversion handoff only, with no controller, storage, entitlement, or transfer flow.
 

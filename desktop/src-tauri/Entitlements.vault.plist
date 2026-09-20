@@ -6,11 +6,8 @@
     <string>JH83UH9P4D.com.aimatrx.desktop</string>
     <key>com.apple.developer.team-identifier</key>
     <string>JH83UH9P4D</string>
-    <!-- ── Hardened Runtime: PyInstaller / ctypes / cffi compatibility ─────── -->
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
+    <!-- Private native custody requires library validation. Python runtime
+         exceptions belong only to the separately signed engine helper. -->
 
     <!-- ── Hardware devices ───────────────────────────────────────────────── -->
     <!-- Microphone: audio recording, TranscribeAudio, RecordAudio, live transcription -->
@@ -60,13 +57,17 @@
     <key>com.apple.security.network.client</key>
     <true/>
 
-    <!-- Apple requires AutoFill permission on both the provider and its host.
-         This does not grant the host access to the provider's Keychain group. -->
+    <!-- Apple requires AutoFill permission on both provider and containing app. -->
     <key>com.apple.developer.authentication-services.autofill-credential-provider</key>
     <true/>
 
-    <!-- The host sees only nonsecret provider status/invalidation state. The
-         provider-only Keychain access group remains absent from this target. -->
+    <!-- The native exchange controller shares the protected provider session.
+         This trusts the entire signed containing process, not a Swift module.
+         Webview and Python/helper processes never receive this group. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>JH83UH9P4D.com.aimatrx.desktop.vault-provider</string>
+    </array>
     <key>com.apple.security.application-groups</key>
     <array>
         <string>group.com.aimatrx.desktop.vault-status</string>

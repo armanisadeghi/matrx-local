@@ -3,7 +3,6 @@ import AuthenticationServices
 import Foundation
 @preconcurrency import LocalAuthentication
 
-let nativeAPIOrigin = URL(string: "https://server.app.matrxserver.com")!
 
 /// A value-free match from the native password endpoint. It deliberately keeps
 /// the Apple request index so a credential cannot be materialized for a
@@ -110,45 +109,17 @@ enum NativePasswordCodec {
     }
 }
 
-protocol NativeVaultPasswordTransporting {
-    func cancel()
-    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void)
-}
-
-extension NativeVaultPasswordTransporting { func cancel() {} }
-
-/// Production transport is injectable so the wire/operation corpus can force
-/// redirects, malformed envelopes, and stale callback ordering without a live
-/// extension or Keychain. The production instance is the bounded no-redirect
-/// URLSession delegate used by enrollment.
-final class NativeVaultPasswordTransport: NativeVaultPasswordTransporting {
-    private let lock = NSLock()
-    private var requests: [UUID: BoundedTransport] = [:]
-    func cancel() {
-        lock.lock(); let pending = Array(requests.values); requests.removeAll(); lock.unlock()
-        pending.forEach { $0.cancel() }
-    }
-    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
-        let id = UUID()
-        let transport = BoundedTransport { [weak self] result in
-            if let self { self.lock.lock(); self.requests.removeValue(forKey: id); self.lock.unlock() }
-            completion(result)
-        }
-        lock.lock(); requests[id] = transport; lock.unlock()
-        transport.start(request)
-    }
-}
-
 @MainActor
 final class NativePasswordOperation {
     enum Phase { case authorizing, selectingOrganization, loadingMatches, selectingCredential, materializing, completed, cancelled }
     let id = UUID()
+    let lifetime: NativeVaultRequestLifetime
     let identifiers: [(type: String, identifier: String)]
     var phase: Phase = .authorizing
     var generation: String?
     var subject: String?
     var terminal = false
-    init(_ identifiers: [(String, String)]) { self.identifiers = identifiers.map { (type: $0.0, identifier: $0.1) } }
+    init(_ identifiers: [(String, String)], lifetime: NativeVaultRequestLifetime) { self.lifetime = lifetime; self.identifiers = identifiers.map { (type: $0.0, identifier: $0.1) } }
 }
 
 /// Sole owner for request identity and terminal state. A replacement marks its
@@ -156,13 +127,13 @@ final class NativePasswordOperation {
 @MainActor
 final class NativePasswordOperationCoordinator {
     private(set) var active: NativePasswordOperation?
-    func begin(_ identifiers: [(String, String)]) -> NativePasswordOperation {
-        if let old = active, !old.terminal { old.terminal = true; old.phase = .cancelled }
-        let next = NativePasswordOperation(identifiers); active = next; return next
+    func begin(_ identifiers: [(String, String)], lifetime: NativeVaultRequestLifetime = NativeVaultRequestLifetime()) -> NativePasswordOperation {
+        if let old = active, !old.terminal { old.terminal = true; old.phase = .cancelled; old.lifetime.cancel() }
+        let next = NativePasswordOperation(identifiers, lifetime: lifetime); active = next; return next
     }
     func current(_ operation: NativePasswordOperation) -> Bool { active === operation && !operation.terminal }
     func cancel(_ operation: NativePasswordOperation) -> Bool {
-        guard current(operation) else { return false }; operation.terminal = true; operation.phase = .cancelled; active = nil; return true
+        guard current(operation) else { return false }; operation.terminal = true; operation.phase = .cancelled; operation.lifetime.cancel(); active = nil; return true
     }
     func prepareCompletion(_ operation: NativePasswordOperation) -> Bool {
         guard current(operation) else { return false }; operation.terminal = true; operation.phase = .completed; return true
@@ -170,82 +141,18 @@ final class NativePasswordOperationCoordinator {
     func clearCompleted(_ operation: NativePasswordOperation) { if active === operation { active = nil } }
 }
 
-/// The one provider-owned authorized session primitive. Both configuration and
-/// password use must enter through this boundary so refresh_pending, Keychain
-/// access, subject validation, and generation fencing cannot drift.
-final class NativeVaultSessionAccess {
-    struct Grant { let accessToken: String; let subject: String; let generation: String }
-    private let transport: NativeVaultPasswordTransporting
-    init(transport: NativeVaultPasswordTransporting = NativeVaultPasswordTransport()) { self.transport = transport }
-
-    func cancel() { transport.cancel() }
-
-    func acquire(key: String, context: LAContext, completion: @escaping (Result<Grant, Error>) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result: Result<(PrivateSession, PublicState, Bool), Error> = Result {
-                try ProviderStore(mode: .providerAccess).locked { state in
-                    guard let session = try NativeVaultPrivateSession().readActive(context: context, matching: state) else { throw EnrollmentError.message("Vault connection is not configured. Connect an account.") }
-                    if session.expires_at_ms > Int64(Date().timeIntervalSince1970 * 1000) + 10_000 { return (session, state, false) }
-                    _ = try NativeVaultPrivateSession().beginRefresh(session, context: context)
-                    return (session, state, true)
-                }
-            }
-            switch result {
-            case let .failure(error): completion(.failure(error))
-            case let .success((session, state, refresh)):
-                if refresh { self.refresh(session, state: state, key: key, context: context, completion: completion) }
-                else { self.validate(token: session.access_token, subject: session.subject, generation: state.generation, key: key) { result in
-                    switch result {
-                    case let .failure(error): completion(.failure(error))
-                    case let .success(identity): self.recheck(generation: state.generation, subject: identity.sub) { valid in completion(valid ? .success(Grant(accessToken: session.access_token, subject: identity.sub, generation: state.generation)) : .failure(EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider."))) }
-                    }
-                } }
-            }
-        }
-    }
-    private func refresh(_ session: PrivateSession, state: PublicState, key: String, context: LAContext, completion: @escaping (Result<Grant, Error>) -> Void) {
-        var request = URLRequest(url: tokenURL); request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(key, forHTTPHeaderField: "apikey")
-        request.httpBody = formBody([("grant_type", "refresh_token"), ("client_id", clientID), ("refresh_token", session.refresh_token)])
-        transport.send(request) { result in
-            do {
-                let (data, response) = try result.get(); guard response.statusCode == 200 else { throw connectionResponseError(response.statusCode) }
-                let token = try VaultEnvelopeCodec.token(data)
-                self.validate(token: token.access_token, subject: session.subject, generation: state.generation, key: key) { identity in
-                    do {
-                        let identity = try identity.get()
-                        try ProviderStore(mode: .providerAccess).locked { current in
-                            guard current.generation == state.generation, current.provider_subject == identity.sub else { throw EnrollmentError.message("A host account change cancelled Vault connection. Reconnect the provider.") }
-                            let expires = Int64(Date().timeIntervalSince1970 * 1000) + Int64(token.expires_in) * 1000
-                            try NativeVaultPrivateSession().save(PrivateSession(version: 1, phase: "active", subject: identity.sub, generation: state.generation, access_token: token.access_token, refresh_token: token.refresh_token, expires_at_ms: expires), context: context)
-                        }
-                        completion(.success(Grant(accessToken: token.access_token, subject: identity.sub, generation: state.generation)))
-                    } catch { completion(.failure(error)) }
-                }
-            } catch { completion(.failure(error)) }
-        }
-    }
-    private func validate(token: String, subject: String, generation: String, key: String, completion: @escaping (Result<Identity, Error>) -> Void) {
-        var request = URLRequest(url: userinfoURL); request.timeoutInterval = 10; request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization"); request.setValue(key, forHTTPHeaderField: "apikey"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        transport.send(request) { result in
-            do { let (data, response) = try result.get(); guard response.statusCode == 200 else { throw connectionResponseError(response.statusCode) }; let identity = try VaultEnvelopeCodec.userinfo(data); guard identity.sub == subject else { throw EnrollmentError.message("Vault connection needs reconnect.") }; completion(.success(identity)) } catch { completion(.failure(error)) }
-        }
-    }
-    private func recheck(generation: String, subject: String, completion: @escaping (Bool) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            completion((try? ProviderStore(mode: .providerAccess).locked { $0.generation == generation && $0.provider_subject == subject }) ?? false)
-        }
-    }
-}
-
 extension CredentialProviderViewController {
     private var nativePasswordKey: String? { nativePasswordKeyOverride ?? (Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String) }
     func beginPasswordRequest(_ serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         replaceNativeRequest()
+        beginPasswordRequestAfterReplacement(serviceIdentifiers)
+    }
+    func beginPasswordRequestAfterReplacement(_ serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+        let lifetime = nativeRequest
         let identifiers: [(String, String)]
         do { identifiers = try NativePasswordStage.identifiers(serviceIdentifiers) }
         catch { let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return }
-        let operation = nativePasswordCoordinator.begin(identifiers)
+        let operation = nativePasswordCoordinator.begin(identifiers, lifetime: lifetime)
         guard let key = nativePasswordKey, key.validToken else { return cancelPassword(operation, "This build has no public Vault configuration. Install an updated AI Matrx build.") }
         if let authorize = nativePasswordAuthorize, let acquire = nativePasswordAcquire {
             authorize { [weak self] allowed in Task { @MainActor in guard let self, self.current(operation) else { return }; guard allowed else { self.cancelPassword(operation, "Unlock Vault protection to continue."); return }; acquire { result in Task { @MainActor in self.receivedGrant(result, operation: operation) } } } }
@@ -258,16 +165,28 @@ extension CredentialProviderViewController {
             Task { @MainActor in
                 guard let self, self.current(operation) else { return }
                 guard allowed else { self.cancelPassword(operation, "Unlock Vault protection to continue."); return }
-                self.sessionAccess.acquire(key: key, context: context) { result in Task { @MainActor in self.receivedGrant(result, operation: operation) } }
+                self.sessionAccess.acquire(key: key, context: context, lifetime: lifetime) { result in Task { @MainActor in self.receivedGrant(result, operation: operation) } }
             }
         }
     }
     private func receivedGrant(_ result: Result<NativeVaultSessionAccess.Grant, Error>, operation: NativePasswordOperation) {
         guard current(operation) else { return }
-        guard case let .success(grant) = result else { return cancelPassword(operation, "Vault connection needs reconnect.") }
+        guard case let .success(grant) = result else {
+            return cancelPassword(operation, "Vault connection needs reconnect.")
+        }
         operation.generation = grant.generation; operation.subject = grant.subject; operation.phase = .selectingOrganization
+        // Direct selected credentials are already bound to a live record and
+        // must never be delayed by inventory work. Generic list callbacks may
+        // refresh their existing selected scope in parallel.
+        if nativePasswordSelectedBinding == nil { refreshSuggestionsForCredentialList(grant: grant, lifetime: nativeRequest) }
         var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/auth/organizations")); request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        nativePasswordTransport.send(request) { [weak self] result in Task { @MainActor in self?.receivedOrganizations(result, grant: grant, operation: operation) } }
+        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedOrganizations(result, grant: grant, operation: operation) } }
+    }
+    private func sendPasswordRequest(_ request: URLRequest, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+        let access = sessionAccess; let lifetime = operation.lifetime
+        nativePasswordTransport.send(request) { result in
+            access.reconcileResponse(result, grant: grant, lifetime: lifetime, completion: completion)
+        }
     }
     private func receivedOrganizations(_ result: Result<(Data, HTTPURLResponse), Error>, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         withLiveGrant(operation, grant) { [weak self] in self?.processOrganizations(result, grant: grant, operation: operation) }
@@ -276,7 +195,15 @@ extension CredentialProviderViewController {
         do {
             let (data, response) = try result.get(); guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
             let organizations = try NativePasswordCodec.organizations(data, subject: grant.subject)
-            let selected = selectOrganization(organizations, operation: operation)
+            let selected: NativeOrganization?
+            if let bound = nativePasswordSelectedBinding {
+                guard let exact = organizations.first(where: { $0.id == bound.organization }) else {
+                    throw EnrollmentError.message("The selected account is no longer available. Refresh Vault suggestions.")
+                }
+                selected = exact
+            } else {
+                selected = selectOrganization(organizations, operation: operation)
+            }
             if let selected { loadMatches(selected, grant: grant, operation: operation) }
         } catch { cancelPassword(operation, "Vault organizations are unavailable. Try again.") }
     }
@@ -305,7 +232,7 @@ extension CredentialProviderViewController {
         let rows = operation.identifiers.map { ["type": $0.type, "identifier": $0.identifier] }
         guard JSONSerialization.isValidJSONObject(["identifiers": rows]), let body = try? JSONSerialization.data(withJSONObject: ["identifiers": rows]) else { return cancelPassword(operation, "The requested website is not supported.") }
         var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/vault/native/passwords/matches")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        nativePasswordTransport.send(request) { [weak self] result in Task { @MainActor in self?.receivedMatches(result, organization: organization, grant: grant, operation: operation) } }
+        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedMatches(result, organization: organization, grant: grant, operation: operation) } }
     }
     private func receivedMatches(_ result: Result<(Data, HTTPURLResponse), Error>, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         withLiveGrant(operation, grant) { [weak self] in self?.processMatches(result, organization: organization, grant: grant, operation: operation) }
@@ -313,7 +240,14 @@ extension CredentialProviderViewController {
     private func processMatches(_ result: Result<(Data, HTTPURLResponse), Error>, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         do {
             let (data, response) = try result.get(); guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
-            let result = try NativePasswordCodec.matches(data); guard !result.matches.isEmpty else { return cancelPassword(operation, "No saved password matches this website.") }
+            let decoded = try NativePasswordCodec.matches(data)
+            let result: (matches: [NativePasswordMatch], truncated: Bool, reason: String?)
+            if let expected = nativePasswordSelectedBinding {
+                guard operation.identifiers.count == 1, operation.identifiers[0].identifier == expected.service.identifier else { return cancelPassword(operation, "The selected password is no longer available.") }
+                result = (decoded.matches.filter { $0.itemID == expected.item && $0.identifierIndex == 0 }, false, decoded.reason)
+            } else { result = decoded }
+            guard !result.matches.isEmpty else { return cancelPassword(operation, nativePasswordSelectedBinding == nil ? "No saved password matches this website." : "The selected password is no longer available.") }
+            if nativePasswordSelectedBinding != nil { guard result.matches.count == 1 else { return cancelPassword(operation, "The selected password is no longer available.") }; return materialize(result.matches[0], organization: organization, grant: grant, operation: operation) }
             operation.phase = .selectingCredential
             let alert = NSAlert(); alert.messageText = "Choose a saved password"; alert.informativeText = result.truncated ? "Only the first matching passwords in \(organization.name) are shown; more may be available." : "Only matching passwords in \(organization.name) are shown."
             if let choice = nativePasswordMatchChoice { guard let index = choice(result.matches), result.matches.indices.contains(index) else { return cancelPassword(operation, "Password selection was cancelled.") }; return materialize(result.matches[index], organization: organization, grant: grant, operation: operation) }
@@ -331,7 +265,7 @@ extension CredentialProviderViewController {
         let rows = operation.identifiers.map { ["type": $0.type, "identifier": $0.identifier] }
         guard let body = try? JSONSerialization.data(withJSONObject: ["identifiers": rows, "request_identifier_index": match.identifierIndex]) else { return cancelPassword(operation, "The selected password is no longer available.") }
         var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/vault/native/passwords/\(match.itemID)/materialize")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        nativePasswordTransport.send(request) { [weak self] result in Task { @MainActor in self?.receivedMaterial(result, grant: grant, operation: operation) } }
+        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedMaterial(result, grant: grant, operation: operation) } }
     }
     private func receivedMaterial(_ result: Result<(Data, HTTPURLResponse), Error>, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         guard current(operation) else { return }
@@ -377,4 +311,25 @@ extension CredentialProviderViewController {
     }
     private func current(_ operation: NativePasswordOperation) -> Bool { nativePasswordCoordinator.current(operation) }
     private func cancelPassword(_ operation: NativePasswordOperation, _ message: String) { guard nativePasswordCoordinator.cancel(operation) else { return }; let error = NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue, userInfo: [NSLocalizedDescriptionKey: message]); if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) } }
+}
+
+
+extension CredentialProviderViewController {
+    private func cancelSelectedPassword() {
+        let error = NSError(domain: ASExtensionErrorDomain, code: ASExtensionError.userCanceled.rawValue, userInfo: [NSLocalizedDescriptionKey: "The selected password is no longer available."])
+        if let sink = nativePasswordCancelSink { sink(error) } else { extensionContext.cancelRequest(withError: error) }
+    }
+    func beginSelectedPassword(_ identity: ASPasswordCredentialIdentity) {
+        let lifetime = self.nativeRequest; let service = identity.serviceIdentifier
+        let bindingOverride = nativeIdentityBindingOverride
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let record = identity.recordIdentifier ?? ""
+            let binding: NativeVaultIdentityBinding? = bindingOverride?(record) ?? ((try? ProviderStore(mode: .providerAccess).locked { NativeVaultIdentityRecord.parse(record, state: $0) }) ?? nil)
+            DispatchQueue.main.async {
+                guard let self, lifetime.isCurrent, let binding, binding.kind == .password else { self?.cancelSelectedPassword(); return }
+                guard let digest = binding.serviceDigest, NativeVaultIdentityRecord.serviceDigest(type: service.type == .URL ? "url" : "domain", identifier: service.identifier) == digest else { self.cancelSelectedPassword(); return }; self.nativePasswordSelectedBinding = (binding.item, binding.organization, service, digest)
+                self.beginPasswordRequestAfterReplacement([service])
+            }
+        }
+    }
 }

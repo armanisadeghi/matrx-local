@@ -111,7 +111,7 @@ for entry in "${HELPERS[@]}"; do
         for key in com.apple.application-identifier \
                    com.apple.developer.team-identifier \
                    com.apple.security.application-groups \
-                   com.apple.developer.authentication-services.autofill-credential-provider; do
+                   com.apple.developer.authentication-services.autofill-credential-provider keychain-access-groups com.apple.security.keychain-access-groups; do
             if [[ "$ENTS" == *"$key"* ]]; then
                 echo "ERROR: staged helper $name carries the profile-backed entitlement '$key' — macOS will SIGKILL it at exec." >&2
                 exit 1

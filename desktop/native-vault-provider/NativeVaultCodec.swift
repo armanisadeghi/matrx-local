@@ -7,11 +7,34 @@ enum EnrollmentError: LocalizedError {
     var errorDescription: String? { if case .message(let value) = self { value } else { nil } }
 }
 
+struct NativeSuggestions: Codable, Equatable {
+    let organization_id: String?
+    let revision: String
+    let status: String
+    let refreshed_at_ms: Int64?
+    let count: Int
+    let unsupported_count: Int
+
+    static func empty() -> NativeSuggestions {
+        NativeSuggestions(organization_id: nil, revision: UUID().canonical, status: "empty", refreshed_at_ms: nil, count: 0, unsupported_count: 0)
+    }
+}
+
 struct PublicState: Codable {
     let version: Int
     let generation: String
     let host_subject: String?
     let provider_subject: String?
+    let suggestions: NativeSuggestions
+    private enum CodingKeys: String, CodingKey { case version, generation, host_subject, provider_subject, suggestions }
+    init(version: Int = 2, generation: String, host_subject: String?, provider_subject: String?, suggestions: NativeSuggestions = .empty()) {
+        self.version = version; self.generation = generation; self.host_subject = host_subject; self.provider_subject = provider_subject; self.suggestions = suggestions
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version); try c.encode(generation, forKey: .generation); try c.encode(host_subject, forKey: .host_subject); try c.encode(provider_subject, forKey: .provider_subject)
+        if version == 2 { try c.encode(suggestions, forKey: .suggestions) }
+    }
 }
 
 struct PrivateSession: Codable {
@@ -295,12 +318,21 @@ enum VaultEnvelopeCodec {
         guard data.count <= 2048 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
         let object: [String: JSONValue]
         do {
-            object = try StrictEnvelope.object(data, required: ["version", "generation", "host_subject", "provider_subject"], optional: [])
-        } catch {
-            throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.")
-        }
-        guard case .number("1")? = object["version"], case let .string(generation)? = object["generation"], generation.canonicalUUID, let host = optionalCanonicalUUID(object["host_subject"]), let provider = optionalCanonicalUUID(object["provider_subject"]) else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
-        return PublicState(version: 1, generation: generation, host_subject: host, provider_subject: provider)
+            object = try StrictEnvelope.object(data, required: ["version", "generation", "host_subject", "provider_subject"], optional: ["suggestions"])
+        } catch { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
+        guard case let .number(versionText)? = object["version"], let version = Int(versionText), (1...2).contains(version), case let .string(generation)? = object["generation"], generation.canonicalUUID, let host = optionalCanonicalUUID(object["host_subject"]), let provider = optionalCanonicalUUID(object["provider_subject"]) else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
+        if version == 1 { guard object["suggestions"] == nil else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }; return PublicState(version: 1, generation: generation, host_subject: host, provider_subject: provider, suggestions: .empty()) }
+        guard case let .object(raw)? = object["suggestions"], Set(raw.keys) == Set(["organization_id", "revision", "status", "refreshed_at_ms", "count", "unsupported_count"]), let organization = optionalCanonicalUUID(raw["organization_id"]), case let .string(revision)? = raw["revision"], revision.canonicalUUID, case let .string(status)? = raw["status"], Set(["empty", "ready", "stale", "failed"]).contains(status), let refreshed = optionalPositiveInt64(raw["refreshed_at_ms"]), case let .number(countText)? = raw["count"], let count = Int(countText), case let .number(unsupportedText)? = raw["unsupported_count"], let unsupported = Int(unsupportedText), (0...2000).contains(count), (0...2000).contains(unsupported) else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") }
+        if status == "empty" { guard organization == nil, refreshed == nil, count == 0, unsupported == 0 else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") } }
+        if status == "ready" { guard organization != nil, refreshed != nil else { throw EnrollmentError.message("Vault status is corrupt. Reconnect the provider.") } }
+        return PublicState(version: 2, generation: generation, host_subject: host, provider_subject: provider, suggestions: NativeSuggestions(organization_id: organization, revision: revision, status: status, refreshed_at_ms: refreshed, count: count, unsupported_count: unsupported))
+    }
+
+    private static func optionalPositiveInt64(_ value: JSONValue?) -> Int64?? {
+        guard let value else { return nil }
+        if case .null = value { return .some(nil) }
+        guard case let .number(text) = value, let number = Int64(text), number > 0 else { return nil }
+        return .some(number)
     }
 
     private static func optionalCanonicalUUID(_ value: JSONValue?) -> String?? {

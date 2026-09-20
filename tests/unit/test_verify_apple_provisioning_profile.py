@@ -24,10 +24,10 @@ def host_source_entitlements() -> dict[str, object]:
     return plistlib.loads(path.read_bytes())
 
 
-def test_host_source_declares_autofill_without_provider_keychain_access() -> None:
+def test_host_source_declares_exact_shared_exchange_keychain_access() -> None:
     signed = host_source_entitlements()
     assert signed[AUTOFILL] is True
-    assert "keychain-access-groups" not in signed
+    assert signed["keychain-access-groups"] == [profile_verifier.PROVIDER_KEYCHAIN_GROUP]
     profile_verifier.assert_signed_contract("host", signed)
     profile_verifier.assert_profile_authorizes("host", provider_profile(), signed)
 
@@ -97,20 +97,30 @@ def test_profile_rejects_provider_group_outside_its_authorized_prefix() -> None:
         profile_verifier.assert_profile_authorizes("provider", profile, signed_provider())
 
 
-def test_host_rejects_provider_keychain_group_even_when_profile_can_grant_extra_defaults() -> None:
+@pytest.mark.parametrize("groups", [None, [], ["JH83UH9P4D.*"], ["JH83UH9P4D.com.aimatrx.other"], ["JH83UH9P4D.com.aimatrx.desktop.vault-provider", "JH83UH9P4D.other"]])
+def test_host_rejects_missing_or_broader_shared_keychain_grant(groups: object) -> None:
     _, expected_host, _ = profile_verifier.expected_contract("host")
     signed_host = dict(expected_host)
-    signed_host["keychain-access-groups"] = [profile_verifier.PROVIDER_KEYCHAIN_GROUP]
-    with pytest.raises(ValueError, match="never include a Keychain access group"):
+    if groups is None:
+        signed_host.pop("keychain-access-groups", None)
+    else:
+        signed_host["keychain-access-groups"] = groups
+    with pytest.raises(ValueError, match="keychain-access-groups"):
         profile_verifier.assert_signed_contract("host", signed_host)
 
 
-def test_host_rejects_wildcard_keychain_grant_even_when_it_can_match_the_provider_group() -> None:
-    _, expected_host, _ = profile_verifier.expected_contract("host")
-    signed_host = dict(expected_host)
-    signed_host["keychain-access-groups"] = [f"{profile_verifier.TEAM_ID}.*"]
-    with pytest.raises(ValueError, match="never include a Keychain access group"):
-        profile_verifier.assert_signed_contract("host", signed_host)
+def test_host_shared_keychain_requires_profile_authority() -> None:
+    profile = provider_profile()
+    profile["keychain-access-groups"] = ["JH83UH9P4D.other"]
+    with pytest.raises(ValueError, match="keychain-access-groups"):
+        profile_verifier.assert_profile_authorizes("host", profile, host_source_entitlements())
+
+
+def test_host_rejects_alternate_keychain_entitlement_spelling() -> None:
+    signed = host_source_entitlements()
+    signed["com.apple.security.keychain-access-groups"] = [profile_verifier.PROVIDER_KEYCHAIN_GROUP]
+    with pytest.raises(ValueError, match="outside the reviewed native contract"):
+        profile_verifier.assert_signed_contract("host", signed)
 
 
 def test_host_rejects_team_wildcard_instead_of_its_exact_signed_team() -> None:
@@ -136,6 +146,24 @@ def test_host_allows_nonrestricted_runtime_claims_outside_its_intended_contract(
     signed_host["com.apple.security.network.client"] = True
 
     profile_verifier.assert_signed_contract("host", signed_host)
+
+
+@pytest.mark.parametrize("claim", [
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.allow-dyld-environment-variables",
+    "com.apple.security.get-task-allow",
+])
+@pytest.mark.parametrize("enabled", [True, 1, "true"])
+def test_host_private_custody_refuses_runtime_injection_exceptions(claim, enabled) -> None:
+    _, signed, _ = profile_verifier.expected_contract("host")
+    signed[claim] = enabled
+    with pytest.raises(ValueError, match="custody forbids"):
+        profile_verifier.assert_signed_contract("host", signed)
+
+
+def test_checked_in_host_entitlements_preserve_private_custody() -> None:
+    profile_verifier.assert_signed_contract("host", host_source_entitlements())
 
 
 def test_provider_rejects_unreviewed_healthkit_claim_even_when_profile_grants_it() -> None:

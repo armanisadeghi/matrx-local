@@ -49,3 +49,6 @@ required-features = ["source-export-test-harness"]
 
 [patch.crates-io]
 passkey-authenticator = { path = "vendor/passkey-authenticator" }
+
+# Standalone even when this checkout is a managed worktree inside another workspace.
+[workspace]

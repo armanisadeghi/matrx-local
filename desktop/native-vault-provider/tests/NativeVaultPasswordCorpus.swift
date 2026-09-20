@@ -115,6 +115,24 @@ struct NativeVaultPasswordCorpus {
         waitUntil("selected controller callback did not finish") { selectedCompleted > 0 || selectedCancelled > 0 }
         require(selectedCompleted == 1 && selectedCancelled == 0 && selectedTransport.requests.count == 3, "selected callback must use its exact signed account binding")
 
+        // Losing membership in a suggestion's bound organization must refuse
+        // before listing another tenant's matches, even with one membership left.
+        let missingBindingTransport = ScriptedPasswordTransport()
+        missingBindingTransport.replies = [.success((report, response("{}").1)), .failure(URLError(.cancelled))]
+        let missingBinding = CredentialProviderViewController()
+        missingBinding.nativePasswordKeyOverride = "public-build-key"
+        missingBinding.nativePasswordTransport = missingBindingTransport
+        missingBinding.nativePasswordAuthorize = { $0(true) }
+        missingBinding.nativePasswordAcquire = { $0(.success(grant)) }
+        missingBinding.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }
+        missingBinding.nativeIdentityBindingOverride = { _ in NativeVaultIdentityBinding(item: item, kind: .password, organization: strangerOrg, passkey: nil, serviceDigest: NativeVaultIdentityRecord.serviceDigest(type: "domain", identifier: "example.com")) }
+        var missingBindingCancelled = 0
+        missingBinding.nativePasswordCancelSink = { _ in missingBindingCancelled += 1 }
+        missingBinding.nativePasswordCompleteSink = { _, _ in fatalError("Missing bound membership must never complete") }
+        missingBinding.prepareInterfaceToProvideCredential(for: ASPasswordCredentialRequest(credentialIdentity: identity))
+        waitUntil("missing suggestion membership did not cancel") { missingBindingCancelled == 1 }
+        require(missingBindingTransport.requests.count == 1, "missing bound membership must not fall back to another organization")
+
         let routeReplies = [Result<(Data, HTTPURLResponse), Error>.success((report, response("{}").1)), .success((match, response("{}").1)), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         for stage in 1...3 {
             for changedSubject in [false, true] {

@@ -417,7 +417,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             do {
                 let (data, http) = try response.get()
                 guard http.statusCode == 200 else { throw EnrollmentError.message("Vault organizations are unavailable. Try again.") }
-                let values = try NativePasswordCodec.organizations(data, subject: grant.subject).organizations
+                let values = try NativePasswordCodec.organizations(data, subject: grant.subject)
                 guard !values.isEmpty else { throw EnrollmentError.message("Your account has no available organization.") }
                 let alert = NSAlert(); alert.messageText = "Show suggestions from"; alert.informativeText = "Device suggestions expose websites and usernames to Apple's local suggestion service."
                 let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 340, height: 28)); values.forEach { picker.addItem(withTitle: $0.name) }

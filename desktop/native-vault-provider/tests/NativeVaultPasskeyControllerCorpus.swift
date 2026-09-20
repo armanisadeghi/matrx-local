@@ -97,6 +97,13 @@ private final class Generation {
     func read() -> NativePasswordCurrentState { lock.lock(); defer { lock.unlock() }; return NativePasswordCurrentState(generation: value, subject: "subject") }
 }
 
+private final class TerminalObserver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func record(_ message: String) { lock.lock(); values.append(message); lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return values.count }
+}
+
 @MainActor private final class Journey {
     let server: Server
     let generation = Generation()
@@ -114,12 +121,12 @@ private final class Generation {
     var delayedEvaluation: ((Bool) -> Void)?
     var completionUnderLock = false
     private var lockHeld = false
-    init(server: Server = Server(), timeout: TimeInterval = 3) {
+    init(server: Server = Server(), timeout: TimeInterval = 3, terminalObserver: TerminalObserver? = nil) {
         self.server = server
         let grant = NativeVaultSessionAccess.Grant(accessToken: "synthetic-token", subject: "subject", generation: "generation")
         coordinator = NativeVaultPasskeyCoordinator(
             sessionAccess: NativeVaultSessionAccess(), transport: server, key: { "synthetic-key" },
-            cancel: { [weak self] in self?.error = $0 },
+            cancel: { [weak self, terminalObserver] message in terminalObserver?.record(message); self?.error = message },
             completeRegistration: { [weak self] credential in guard let self else { return }; precondition(self.lockHeld && !self.server.posts.isEmpty); self.completionUnderLock = true; self.registration = credential },
             completeAssertion: { [weak self] credential in guard let self else { return }; precondition(self.lockHeld); self.completionUnderLock = true; self.assertion = credential },
             acquire: { [weak self] callback in guard let self else { callback(.failure(URLError(.cancelled))); return }; self.acquired += 1; callback(.success(grant)) },
@@ -178,23 +185,26 @@ private func makeRequest(rp: String = "example.com", credential: Data = Data(rep
             let match = NativePasskeyMatch(itemID: "item", passkeyID: "passkey", credentialID: Data(), userHandle: Data(), username: "account@example.com", displayName: blank)
             precondition(NativeVaultPasskeyCoordinator.accountLabel(match, index: 0) == "account@example.com")
         }
-        // Retain the controller/coordinator but release the Journey before an
-        // externally held LA callback runs. The previous unowned closure
-        // deterministically dereferenced the released Journey here.
-        var releasedJourney: Journey? = Journey()
+        // The terminal observer survives Journey. A delayed callback after
+        // Journey release must resume the acquire continuation into exactly one
+        // cancellation; a bare missing-owner return leaks it and this wait fails.
+        let terminalObserver = TerminalObserver()
+        var releasedJourney: Journey? = Journey(timeout: 30, terminalObserver: terminalObserver)
         releasedJourney!.holdEvaluation = true
         releasedJourney!.register()
         await wait { releasedJourney?.delayedEvaluation != nil }
         let retainedController = releasedJourney!.controller
         let retainedServer = releasedJourney!.server
         let lateEvaluation = releasedJourney!.delayedEvaluation!
-        weak var releasedWeak = releasedJourney
+        weak let releasedWeak = releasedJourney
         releasedJourney = nil
         precondition(releasedWeak == nil, "Journey must release before delayed evaluator callback")
-        lateEvaluation(true)
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        precondition(retainedServer.posts.isEmpty, "late callback after Journey release must not complete a credential ceremony")
-        _ = retainedController // Keep the real coordinator alive through drain.
+        withExtendedLifetime(retainedController) { lateEvaluation(true) }
+        await wait { terminalObserver.count == 1 }
+        withExtendedLifetime(retainedController) {
+            precondition(terminalObserver.count == 1, "late callback must produce exactly one terminal cancellation")
+            precondition(retainedServer.requests.isEmpty && retainedServer.posts.isEmpty, "late callback after Journey release must not send transport or complete a credential ceremony")
+        }
 
         let positive = Journey(); positive.register(); await positive.finish()
         precondition(positive.registration != nil && positive.error == nil && positive.completionUnderLock)

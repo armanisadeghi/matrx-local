@@ -25,12 +25,14 @@ place to put one and no point in trying. We support exactly two modes:
    public signing keys from
    ``<SUPABASE_URL>/auth/v1/.well-known/jwks.json`` via ``jwt.PyJWKClient``
    (with a 1-hour key cache) and verify the signature locally. No secret
-   needed on the engine. Tokens signed with HS256 are still common in
-   Supabase projects — they are NOT verifiable here and will fall through
-   to mode 2.
-2. **Loopback presence-only (the desktop default).** When the token is
-   HS256 (cannot be verified by JWKS) OR ``SUPABASE_URL`` is unset, we
-   accept any non-empty Bearer. This is correct for a process that only
+   needed on the engine. The key fetch, cache and algorithm allow-list are
+   owned by ``app/api/remote_auth.py`` and consumed here. The Matrx project
+   signs ES256 (verified 2026-09-20); a legacy HS256 token is NOT verifiable
+   here and falls through to mode 2.
+2. **Loopback presence-only (the degraded path).** When the token is
+   HS256 (cannot be verified without a symmetric secret this engine must
+   not hold) OR ``SUPABASE_URL`` is unset, we accept any non-empty Bearer.
+   This is correct for a process that only
    listens on ``127.0.0.1``: the security boundary is the loopback
    socket, not the JWT signature.
 
@@ -48,16 +50,14 @@ Public API
 
 from __future__ import annotations
 
-import asyncio
-import os
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import HTTPException, Request, WebSocket
 
 from app.api.auth_rejection_log import log_rejection
+from app.api.remote_auth import supabase_jwks_url
 from app.common.system_logger import get_logger
-from app.config import SUPABASE_URL
 
 logger = get_logger()
 
@@ -65,18 +65,6 @@ logger = get_logger()
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-
-def _supabase_jwks_url() -> Optional[str]:
-    """Derive the well-known JWKS URL from ``SUPABASE_URL``.
-
-    Returns ``None`` when ``SUPABASE_URL`` is empty, which lets the caller
-    cleanly skip the JWKS path without raising.
-    """
-    base = (SUPABASE_URL or "").rstrip("/")
-    if not base:
-        return None
-    return f"{base}/auth/v1/.well-known/jwks.json"
 
 
 # One-time startup notice. The engine is a desktop sidecar — its security
@@ -93,10 +81,11 @@ def _log_startup_notice_once(reason: str) -> None:
       * ``"presence_only"`` — no JWKS configured (no SUPABASE_URL).
         Engine accepts any non-empty Bearer on loopback. This is the
         normal mode for desktop installs.
-      * ``"hs256_token_passthrough"`` — JWKS is configured but the
-        incoming token is HS256-signed (cannot be verified by JWKS).
-        Engine accepts on presence. Migrate the Supabase project to
-        RS256/ES256 if you want crypto verification of these tokens.
+      * ``"token_unverifiable"`` — JWKS is configured, but this token could
+        not be CHECKED: it is a legacy HS256 token (verifiable only with a
+        symmetric secret this engine must not hold), or the project's key set
+        was out of reach. Accepted on presence over loopback only; over the
+        tunnel it is refused.
     """
     global _STARTUP_NOTICE_LOGGED
     if _STARTUP_NOTICE_LOGGED:
@@ -109,21 +98,17 @@ def _log_startup_notice_once(reason: str) -> None:
             "(no JWKS configured). Accepts any non-empty Bearer over "
             "loopback. This is the expected mode for desktop installs."
         )
-    elif reason == "hs256_token_passthrough":
+    elif reason == "token_unverifiable":
         logger.info(
-            "[extension_auth] /extension/* auth: JWKS is configured but "
-            "incoming tokens are HS256-signed (Supabase project still on "
-            "symmetric signing). HS256 tokens cannot be verified by JWKS, "
-            "so they are accepted on presence over loopback. Migrate the "
-            "Supabase project to RS256/ES256 if you want crypto "
-            "verification of these tokens."
+            "[extension_auth] /extension/* auth: JWKS is configured, but a "
+            "token arrived that this engine could not CHECK — a legacy HS256 "
+            "token (no symmetric secret here, by design) or the project's key "
+            "set out of reach. It is accepted on presence over loopback only; "
+            "over the tunnel it is refused. A token the engine actively "
+            "REFUSES is rejected on every surface. The project signs ES256 as "
+            "of 2026-09-20, so a user holding an HS256 token gets a verifiable "
+            "one by signing in again."
         )
-
-# Per-kid suppression for the per-request DEBUG noise. Without this, a
-# steady stream of /extension/sessions polls (every 2s) emits one DEBUG
-# line per call for the same offending key id, drowning the log.
-_DEBUG_FAILED_KIDS: set[str] = set()
-
 
 # Rate-limited rejection logging lives in ONE place for every surface:
 # app/api/auth_rejection_log.py. It used to live here and only here, which is
@@ -134,32 +119,6 @@ def _log_rejection(kind: str, path: str, reason: str, *, method: str = "") -> No
     """Log an auth-rejected /extension/* request with rate-limit suppression."""
     log_rejection("extension_auth", kind, path, reason, method=method)
 
-
-
-def _debug_log_jwks_failure(token: str, exc: Exception) -> None:
-    """DEBUG-log a JWKS validation failure once per (kid, error-type).
-
-    Per-request DEBUG output is too noisy when the same token (or family
-    of tokens with the same ``kid``) keeps arriving. We hash the
-    combination of ``kid`` and exception class so a genuinely new failure
-    still surfaces while the steady-state poll-loop noise is muted.
-    """
-    try:
-        import jwt as _jwt
-
-        kid = _jwt.get_unverified_header(token).get("kid") or "<no-kid>"
-    except Exception:
-        kid = "<unparseable>"
-    cache_key = f"{kid}:{type(exc).__name__}"
-    if cache_key in _DEBUG_FAILED_KIDS:
-        return
-    _DEBUG_FAILED_KIDS.add(cache_key)
-    logger.debug(
-        "[extension_auth] JWKS validation failed for kid=%s: %s "
-        "(further failures with this kid are suppressed)",
-        kid,
-        exc,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -202,53 +161,13 @@ class ExtensionPrincipal:
 
 # ---------------------------------------------------------------------------
 # JWKS path (preferred)
+#
+# The JWKS URL, the key cache, the algorithm allow-list and the failure
+# cooldown live in exactly ONE place for the whole engine:
+# ``app/api/remote_auth.py``. This surface consumes them — a second
+# PyJWKClient here is how one surface silently keeps accepting what the other
+# rejects.
 # ---------------------------------------------------------------------------
-
-# Cached PyJWKClient — the client itself caches signing keys with a TTL,
-# but constructing it does an HTTP fetch the first time, so we hold one
-# per process keyed by JWKS URL.
-_jwks_client_cache: dict[str, Any] = {}
-
-
-def _get_jwks_client(jwks_url: str) -> Any:
-    """Return a cached ``jwt.PyJWKClient`` for the given URL.
-
-    The PyJWKClient caches signing keys for one hour; we re-use the same
-    client object so that cache survives across requests.
-    """
-    cached = _jwks_client_cache.get(jwks_url)
-    if cached is not None:
-        return cached
-    # Lazy import — keep ``jwt`` out of the module-import cycle so the
-    # catalog regen / tooling that touches this file works without a
-    # mandatory PyJWT runtime.
-    import jwt as _jwt
-
-    client = _jwt.PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
-    _jwks_client_cache[jwks_url] = client
-    return client
-
-
-def _decode_with_jwks_sync(token: str, jwks_url: str) -> dict[str, Any]:
-    """Verify ``token`` against Supabase JWKS. Synchronous (run in a thread).
-
-    PyJWT's ``decode`` is CPU-bound (signature verification) and the JWKS
-    client's first call is blocking I/O — both warrant ``asyncio.to_thread``.
-
-    ``verify_aud=False``: Supabase tokens carry ``aud="authenticated"``
-    which we don't pin since we accept any authenticated user. ``verify_exp``
-    stays default-on, so expired tokens are rejected.
-    """
-    import jwt as _jwt
-
-    client = _get_jwks_client(jwks_url)
-    signing_key = client.get_signing_key_from_jwt(token)
-    return _jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["ES256", "RS256"],
-        options={"verify_aud": False},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -297,14 +216,14 @@ async def _verify_token(token: str, *, via_tunnel: bool = False) -> ExtensionPri
     """Verify ``token`` and return a populated principal.
 
     Verification strategy:
-      * RS256/ES256 + JWKS configured → verify the signature locally.
-      * Otherwise (HS256 — the Supabase project's mode — or no JWKS) → the
-        engine cannot check the signature itself (it holds no symmetric
-        secret by design). Ask the issuer instead: introspect the token via
-        the Supabase auth server. A confirmed token yields a fully-verified
-        principal even for HS256.
+      * ES256/RS256 + JWKS configured → verify the signature locally against
+        the project's published key (``remote_auth``, the one primitive).
+        This is the project's mode: it signs ES256.
+      * Otherwise (a legacy HS256 token, or no JWKS) → the engine cannot check
+        the signature itself and holds no symmetric secret by design, so
+        ``remote_auth`` reports the token UNVERIFIABLE rather than invalid.
 
-    Trust fallback when introspection cannot confirm the token:
+    Trust fallback when the token could not be verified:
       * via tunnel → REJECT. Remote callers must present a verified identity;
         there is no presence-only bypass over the public bridge.
       * direct loopback → degraded (presence-only) principal. The loopback
@@ -330,36 +249,15 @@ async def _verify_token(token: str, *, via_tunnel: bool = False) -> ExtensionPri
             via_pairing=True,
         )
 
-    # Peek at the token header to choose the validation path.
-    try:
-        import jwt as _jwt
+    # ONE verifier for the whole engine. It owns the JWKS key cache, the
+    # algorithm allow-list, the bounded resolve and the refresh budget — and,
+    # critically, the difference between "this token is refused" and "this
+    # machine could not check it", which is the only thing this surface is
+    # allowed to downgrade on loopback.
+    from app.api.remote_auth import verify_supabase_token_result
 
-        alg = _jwt.get_unverified_header(token).get("alg")
-    except Exception as exc:
-        # Malformed token. Fail closed.
-        raise exc
-
-    jwks_url = _supabase_jwks_url()
-
-    # JWKS path: only meaningful for asymmetric tokens with a configured URL.
-    if jwks_url and alg != "HS256":
-        try:
-            payload = await asyncio.to_thread(
-                _decode_with_jwks_sync, token, jwks_url
-            )
-            return _principal_from_payload(payload, token)
-        except Exception as exc:
-            # JWKS path was applicable but rejected the token (bad sig,
-            # expired, unreachable issuer, etc.). Fail closed — do NOT
-            # silently downgrade to presence-only for an asymmetric token
-            # that failed crypto verification.
-            _debug_log_jwks_failure(token, exc)
-            raise exc
-
-    # HS256 (or no JWKS): verify by introspection against the auth server.
-    from app.api.remote_auth import verify_supabase_token
-
-    verified = await verify_supabase_token(token)
+    verification = await verify_supabase_token_result(token)
+    verified = verification.user
     if verified is not None:
         return ExtensionPrincipal(
             user_id=verified.user_id,
@@ -369,40 +267,21 @@ async def _verify_token(token: str, *, via_tunnel: bool = False) -> ExtensionPri
             verified=True,
         )
 
-    # Introspection could not confirm the token.
+    if verification.status == "invalid":
+        # A verdict: malformed, expired, wrong signature, or an algorithm we
+        # refuse. Fail closed on EVERY surface — loopback included. There is no
+        # presence-only downgrade for a token we actively rejected.
+        raise ValueError("token failed verification")
+
+    # ``unavailable`` / ``unconfigured``: we could not check it at all.
     if via_tunnel:
         raise ValueError("unverified token over tunnel")
 
     # Direct loopback: presence-only is acceptable (the socket is the boundary).
     _log_startup_notice_once(
-        "hs256_token_passthrough" if jwks_url else "presence_only"
+        "token_unverifiable" if supabase_jwks_url() else "presence_only"
     )
     return _degraded_principal(token)
-
-
-def _principal_from_payload(
-    payload: dict[str, Any], raw_token: str
-) -> ExtensionPrincipal:
-    """Construct a principal from a verified JWT payload."""
-    sub = payload.get("sub")
-    if not isinstance(sub, str) or not sub:
-        # A signature-valid token without a ``sub`` claim is not actionable;
-        # treat it as a hard failure rather than silently empty.
-        raise ValueError("JWT missing 'sub' claim")
-
-    email_raw = payload.get("email")
-    email = email_raw if isinstance(email_raw, str) and email_raw else None
-
-    role = payload.get("role")
-    is_anon = role == "anon" or bool(payload.get("is_anonymous"))
-
-    return ExtensionPrincipal(
-        user_id=sub,
-        email=email,
-        is_anon=is_anon,
-        raw_token=raw_token,
-        verified=True,
-    )
 
 
 def _degraded_principal(token: str) -> ExtensionPrincipal:

@@ -47,8 +47,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from app.api.extension_auth import _supabase_jwks_url
 from app.api.extension_metrics import reset_metrics
+from app.api.remote_auth import supabase_jwks_url
 from app.api.tunnel_state import get_tunnel_snapshot
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
@@ -249,7 +249,7 @@ async def _check_jwt_validation_posture() -> CheckResult:
     """
     t0 = time.perf_counter()
 
-    jwks_configured = _supabase_jwks_url() is not None
+    jwks_configured = supabase_jwks_url() is not None
 
     # Confirm PyJWT is importable so the JWKS verification path will
     # actually run if/when an asymmetric token arrives. We don't hit

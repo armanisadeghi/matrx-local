@@ -2521,13 +2521,28 @@ async def websocket_endpoint(websocket: WebSocket):
     from app.api.remote_auth import (
         headers_indicate_tunnel,
         is_instance_owner,
-        verify_supabase_token,
+        verify_supabase_token_result,
     )
 
     via_tunnel = headers_indicate_tunnel(websocket.headers)
     if via_tunnel:
-        verified = await verify_supabase_token(token)
+        verification = await verify_supabase_token_result(token)
+        verified = verification.user
         if verified is None:
+            # Both refuse the connection, but they are not the same event and
+            # the client must not be told to sign in again over a session this
+            # machine merely could not CHECK (proxy-identity rule 3).
+            if verification.status in ("unavailable", "unconfigured"):
+                logger.warning(
+                    "WebSocket refused - could not verify the session (%s); "
+                    "the session is NOT signed out: %s",
+                    verification.status,
+                    url,
+                )
+                await websocket.close(
+                    code=1013, reason="Session check unavailable - try again"
+                )
+                return
             logger.warning("WebSocket rejected - unverified token over tunnel: %s", url)
             await websocket.close(code=1008, reason="Invalid or expired credentials")
             return

@@ -12,7 +12,7 @@ For password use, AuthenticationServices supplies the
 request's actual domain/URL identifiers, the provider performs LocalAuthentication
 before its protected Keychain read, chooses a current organization, lists value-free
 matches, and materializes only the selected matching item. The provider uses one
-session/refresh primitive for configuration, password use and passkey use. It
+session/refresh primitive for configuration, password use and passkey use. `NativeVaultTransport.swift` holds the provider-only OAuth endpoints, bounded no-redirect request transport, form encoding, and response classification; `NativeVaultSessionAccess.swift` holds the shared protected-session acquisition and reconciliation primitive without extension UI dependencies. It
 publishes bounded metadata-only identity suggestions and validates selected records
 against the current account, generation and scope revision. It requires interaction
 before credential use; source and harness checks do not establish signed OS delivery.

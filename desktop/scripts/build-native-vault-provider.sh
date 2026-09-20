@@ -72,7 +72,9 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
   "$SOURCE/NativeVaultCodec.swift" \
   "$SOURCE/NativeVaultEnrollmentLifecycle.swift" \
   "$SOURCE/NativeVaultState.swift" \
+  "$SOURCE/NativeVaultTransport.swift" \
   "$SOURCE/NativeVaultPrivateSession.swift" \
+  "$SOURCE/NativeVaultSessionAccess.swift" \
   "$SOURCE/NativeVaultPassword.swift" \
   "$SOURCE/NativeVaultPasskeyCodec.swift" \
   "$SOURCE/NativeVaultPasskey.swift" \

@@ -3,7 +3,8 @@ export type ActionNeededKind =
   | "filesystem_access"
   | "api_key"
   | "external_approval"
-  | "capability_install";
+  | "capability_install"
+  | "organization";
 
 export type ActionNeededStatus = "active" | "checking" | "resolved";
 

@@ -22,6 +22,7 @@ class ActionNeededKind(str, Enum):
     API_KEY = "api_key"
     EXTERNAL_APPROVAL = "external_approval"
     CAPABILITY_INSTALL = "capability_install"
+    ORGANIZATION = "organization"
 
 
 class ActionNeededStatus(str, Enum):
@@ -95,6 +96,42 @@ def os_permission_needed(
         ),
         source=source,
         details=details,
+    )
+
+
+def organization_required_needed(
+    *, feature: str, source: str, user_id: str | None = None
+) -> ActionNeeded:
+    """The ask this Mac raises when nothing has chosen an organization yet.
+
+    The sidecar cannot show UI, and it must not guess (Arman, 2026-09-19: a
+    saved user-level "default organization" never participates in building a
+    request, and the personal organization is not a fallback). So a call that
+    finds no SET organization publishes this, the desktop shell turns it into
+    the organization picker, the user sets one, and the caller retries with
+    the set value.
+
+    Deliberately NOT worded as an error: nothing is broken, the work is
+    waiting on one choice. And deliberately never the words "default
+    organization" — there is no such thing to set.
+    """
+
+    return ActionNeeded(
+        fingerprint="organization:required",
+        code="organization_required",
+        kind=ActionNeededKind.ORGANIZATION,
+        feature=feature,
+        title="Choose your organization",
+        message=(
+            "This Mac hasn't been told which organization to work in yet. "
+            "Choose one and the work that's waiting will continue."
+        ),
+        action=ActionNeededAction(
+            kind="choose_organization",
+            label="Choose organization",
+        ),
+        source=source,
+        details={"user_id": user_id} if user_id else None,
     )
 
 

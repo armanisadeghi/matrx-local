@@ -1,7 +1,6 @@
 """The ONE Python-side resolver for "which organization does this call act
 in" — mirrors the desktop TS resolver (``desktop/src/lib/org/active-org.ts``)
-and the platform-canonical rule (matrx-extend ``src/lib/org/active-org.ts`` /
-matrx-frontend ``lib/organizations/resolveActiveOrgContext.ts``).
+and the platform-canonical rule (matrx-extend ``src/lib/org/active-org.ts``).
 
 aidream's AuthMiddleware refuses every authenticated request that names no
 organization (400 ``organization_required``) before it routes, and it will
@@ -9,43 +8,60 @@ NEVER pick one for the caller — a server that guesses is exactly how work
 lands in the wrong tenant. The caller states it; the server only verifies
 membership.
 
-Resolution order — deliberately NOT "owner-or-oldest membership" (that WAS
-the guess this module replaces):
+## The ruling this module enforces (Arman, 2026-09-19)
 
-    1. The user's durable default-organization preference
-       (``users.user_preferences`` -> ``organization.defaultOrganizationId``)
-       — IF they are still a member.
-    2. Exactly ONE active membership -> that organization (there is nothing
-       to choose, so choosing it invents nothing).
-    3. The user's OWN PERSONAL organization (``current_personal_org_id()``,
-       the same RPC matrx-frontend's resolver uses) — IF it is one of their
-       memberships. Every account has exactly one; this is the platform's
-       stated fallback (frontend rule b, and the server's own rule for
-       coding-session storage), not a guess. Added 2026-09-12: without it a
-       multi-org user with no stated default had file sync, screenshot
-       publishing and coding-session artifacts all parked on a question the
-       rest of the platform never asks.
-    4. Otherwise: refuse with ``VaultUnavailable("no_organization", ...)``
-       naming the remedy. Never "first", "owner", "oldest", or "most
-       recent".
+A "default organization" is at most a per-client DISPLAY preference. Nothing
+that builds a request may read the user-level saved preference
+(``users.user_preferences -> organization.defaultOrganizationId``), and
+nothing may fall back to the personal organization. Both rungs used to live
+here and both are gone.
 
-There is deliberately no "this device's stored selection" step here (unlike
-the TS resolver): that selection lives in the desktop UI's own local
-storage, a browser-only concept this background Python service has no
-access to. The default-preference and sole-membership rules above are
-shared with every other surface (desktop UI, matrx-extend, matrx-frontend)
-because they read the SAME `users.user_preferences` row and the SAME
-membership table — so the common case (a user with one org, or a stated
-default) resolves identically everywhere. A user with several orgs and no
-stated default gets asked to set one via the desktop UI's organization
-picker; this module does not pick for them.
+    "one missed org check that should have just failed turns into 50 in a
+    month and 5,000 in a year, and suddenly we don't have orgs any more, we
+    have a user and a default org, which means we just have user now."
+
+What a client MAY remember is the organization the USER THEMSELVES SET on
+this device. That is the little picker's state, not a preference read out of
+their account.
+
+## Resolution order
+
+    1. THIS DEVICE'S SET organization — the id the user chose in the desktop
+       picker, which the desktop pushes to the engine (``PUT
+       /organization/active``) and this module reads back out of the local
+       app-settings row. Honoured only when it belongs to the SAME user and
+       is still one of their live memberships.
+    2. Exactly ONE active membership -> that organization. There is nothing
+       to choose, so choosing it invents nothing.
+    3. Nothing. The call is HELD, not guessed: this module publishes an
+       ``organization_required`` action-needed item, the desktop shell turns
+       that into the picker, the user sets one, and the caller retries with
+       the set value.
+
+The sidecar cannot show UI itself, which is why step 3 goes through the
+action-needed registry (``app/services/action_needed/``) — the same durable
+channel every other blocked-on-the-user operation uses. It survives a
+desktop reconnect (the registry replays snapshots) and it is what a
+background job with no window attached leaves behind instead of guessing.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+# Cached per JWT subject. Cleared whenever the device's set organization
+# changes, so a switch takes effect on the next call rather than the next
+# engine restart.
 _org_cache: dict[str, str] = {}
+
+# The local app-settings key holding this device's set organization. Local
+# SQLite on purpose: this is a per-DEVICE choice, so it must never ride the
+# cloud settings sync (that would turn one device's pick into every device's
+# pick, which is the "default organization" this ruling abolished).
+DEVICE_ORGANIZATION_SETTING = "active_organization"
+
+#: The one operation key the organization hold reconciles under.
+_HOLD_OPERATION_KEY = "organization:required"
 
 
 def _jwt_sub(jwt_value: str) -> str | None:
@@ -101,84 +117,110 @@ async def _active_memberships(jwt_value: str) -> list[dict[str, Any]]:
     ]
 
 
-async def _default_organization_id(jwt_value: str, user_id: str) -> str | None:
-    """The user's durable default-organization preference, read straight
-    from ``users.user_preferences`` (the same row the web app, the extension,
-    and the desktop UI's own resolver write). Never raises — a preference we
-    cannot read simply does not participate in resolution."""
-    import httpx
+# ----------------------------------------------------------------------
+# This device's SET organization
+# ----------------------------------------------------------------------
 
-    from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
 
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/user_preferences"
+async def get_device_organization(user_id: str | None = None) -> str | None:
+    """The organization the user SET on this device, or ``None``.
+
+    Stored with the user id that set it, so a second account signing in on
+    the same Mac never inherits the first account's pick. Never raises — a
+    store we cannot read simply has nothing set.
+    """
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as http:
-            resp = await http.get(
-                url,
-                params={"select": "preferences", "user_id": f"eq.{user_id}"},
-                headers={
-                    "apikey": SUPABASE_PUBLISHABLE_KEY,
-                    "Accept-Profile": "users",
-                    "Authorization": f"Bearer {jwt_value}",
-                },
-            )
-        resp.raise_for_status()
-        rows = resp.json()
+        from app.services.local_db.repositories import AppSettingsRepo
+
+        stored = await AppSettingsRepo().get(DEVICE_ORGANIZATION_SETTING)
     except Exception:
         return None
-    if not isinstance(rows, list) or not rows:
+    if not isinstance(stored, dict):
         return None
-    preferences = rows[0].get("preferences") if isinstance(rows[0], dict) else None
-    if not isinstance(preferences, dict):
+    organization_id = stored.get("organization_id")
+    if not isinstance(organization_id, str) or not organization_id:
         return None
-    organization = preferences.get("organization")
-    if not isinstance(organization, dict):
+    owner = stored.get("user_id")
+    if user_id is not None and isinstance(owner, str) and owner and owner != user_id:
         return None
-    default_id = organization.get("defaultOrganizationId")
-    return default_id if isinstance(default_id, str) and default_id else None
+    return organization_id
 
 
-async def _personal_organization_id(jwt_value: str) -> str | None:
-    """The caller's own personal organization via the canonical
-    ``current_personal_org_id()`` RPC (SECURITY DEFINER, no arguments).
-    Never raises — an RPC we cannot reach simply does not participate."""
-    import httpx
+async def set_device_organization(organization_id: str, *, user_id: str) -> None:
+    """Record the organization the user SET in the desktop picker.
 
-    from app.config import (
-        SUPABASE_PROFILE_HEADERS,
-        SUPABASE_PUBLISHABLE_KEY,
-        SUPABASE_URL,
+    The desktop is the only writer: it owns the picker, and this is the value
+    every background job on this Mac acts under until the user changes it.
+    """
+    from app.services.local_db.repositories import AppSettingsRepo
+
+    await AppSettingsRepo().set(
+        DEVICE_ORGANIZATION_SETTING,
+        {"organization_id": organization_id, "user_id": user_id},
     )
+    _org_cache.clear()
+    await _clear_hold()
 
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/current_personal_org_id"
+
+async def clear_device_organization() -> None:
+    """Forget this device's pick (sign-out)."""
+    from app.services.local_db.repositories import AppSettingsRepo
+
+    await AppSettingsRepo().set(DEVICE_ORGANIZATION_SETTING, None)
+    _org_cache.clear()
+
+
+def invalidate_organization_cache() -> None:
+    """Drop the memoised answers — used by tests and by sign-out."""
+    _org_cache.clear()
+
+
+# ----------------------------------------------------------------------
+# The hold
+# ----------------------------------------------------------------------
+
+
+async def _raise_hold(user_id: str | None) -> None:
+    """Publish the ask, so the desktop shell can show the picker."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as http:
-            resp = await http.post(
-                url,
-                json={},
-                headers={
-                    "apikey": SUPABASE_PUBLISHABLE_KEY,
-                    **SUPABASE_PROFILE_HEADERS,
-                    "Authorization": f"Bearer {jwt_value}",
-                    "Content-Type": "application/json",
-                },
-            )
-        resp.raise_for_status()
-        value = resp.json()
+        from app.services.action_needed.models import organization_required_needed
+        from app.services.action_needed.registry import get_action_needed_registry
+
+        await get_action_needed_registry().reconcile_operation(
+            _HOLD_OPERATION_KEY,
+            organization_required_needed(
+                feature="AI Matrx",
+                source="aidream.organization",
+                user_id=user_id,
+            ),
+        )
     except Exception:
-        return None
-    return value if isinstance(value, str) and value else None
+        # Publishing the ask must never replace the caller's own refusal —
+        # the raised OrganizationNotResolvedError still carries the remedy.
+        pass
+
+
+async def _clear_hold() -> None:
+    try:
+        from app.services.action_needed.registry import get_action_needed_registry
+
+        await get_action_needed_registry().reconcile_operation(_HOLD_OPERATION_KEY, None)
+    except Exception:
+        pass
 
 
 class OrganizationNotResolvedError(Exception):
-    """Raised when no organization resolves for this caller — never a guess.
+    """Raised when this device has no organization set — never a guess.
 
-    Carries ``remedy``, a plain-language string a UI can show verbatim.
+    Carries ``remedy``, a plain-language string a UI can show verbatim, and
+    ``held``: True when the ask has been published and the operation is
+    waiting on the user rather than broken.
     """
 
-    def __init__(self, message: str, *, remedy: str) -> None:
+    def __init__(self, message: str, *, remedy: str, held: bool = False) -> None:
         super().__init__(message)
         self.remedy = remedy
+        self.held = held
 
 
 async def resolve_active_organization_id(jwt_value: str) -> str:
@@ -210,23 +252,24 @@ async def resolve_active_organization_id(jwt_value: str) -> str:
 
     by_id = {str(row["container_id"]): row for row in memberships}
 
-    if user_id:
-        preferred = await _default_organization_id(jwt_value, user_id)
-        if preferred and preferred in by_id:
-            _org_cache[cache_key] = preferred
-            return preferred
+    # 1. What the user SET on this device.
+    device_choice = await get_device_organization(user_id)
+    if device_choice and device_choice in by_id:
+        _org_cache[cache_key] = device_choice
+        await _clear_hold()
+        return device_choice
 
+    # 2. Exactly one membership — nothing to choose.
     if len(by_id) == 1:
         (only_id,) = by_id.keys()
         _org_cache[cache_key] = only_id
+        await _clear_hold()
         return only_id
 
-    personal = await _personal_organization_id(jwt_value)
-    if personal and personal in by_id:
-        _org_cache[cache_key] = personal
-        return personal
-
+    # 3. Hold. Ask, and let the caller retry once the user has set one.
+    await _raise_hold(user_id)
     raise OrganizationNotResolvedError(
-        "You belong to more than one organization and haven't set a default.",
-        remedy="Choose your organization in the desktop app, then try again.",
+        "This Mac has no organization chosen yet.",
+        remedy="Choose your organization in Matrx Local, then this will continue.",
+        held=True,
     )

@@ -15,6 +15,7 @@ from app.api.catalog_routes import router as catalog_router
 from app.api.routes import router as api_router
 from app.api.tool_routes import router as tool_router
 from app.api.action_needed_routes import router as action_needed_router
+from app.api.organization_routes import router as organization_router
 from app.api.browser_runtime_routes import router as browser_runtime_router
 from app.api.sandbox_routes import router as sandbox_router
 from app.api.remote_scraper_routes import router as remote_scraper_router
@@ -2167,6 +2168,7 @@ app.include_router(catalog_router)
 app.include_router(api_router)
 app.include_router(tool_router, prefix="/tools", tags=["tools"])
 app.include_router(action_needed_router)
+app.include_router(organization_router)
 app.include_router(browser_runtime_router)
 # Orchestrator-shape sandbox dispatch — invoked by aidream's local-proxy
 # reverse-proxy on behalf of agents that bind to this PC as a compute target.

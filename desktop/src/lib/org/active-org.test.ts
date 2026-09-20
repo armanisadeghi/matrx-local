@@ -1,28 +1,38 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * These tests prove the resolver never round-trips through `GET
- * /auth/whoami` (or any aidream HTTP call at all) — it resolves purely from
- * Supabase (membership RPC + user_preferences) and this device's own
- * stored selection. aidream cannot answer "which organization does this
- * client carry" any more: whoami itself now 400s without a header, so
- * asking it to bootstrap the header would be circular.
+ * THE RULING UNDER TEST (Arman, 2026-09-19)
+ *
+ *   A saved "default organization" on the user's account is at most a display
+ *   preference. Nothing that builds a request may read it, and the personal
+ *   organization is never a fallback. What this device MAY remember is the
+ *   organization the user THEMSELVES SET here. With nothing set, the request
+ *   HOLDS, the picker appears, the user sets one, and the request proceeds.
+ *
+ * These tests are built to FAIL if that preference rung ever comes back: the
+ * headline case plants a preference naming a DIFFERENT organization and
+ * asserts both that it is not returned AND that `user_preferences` is never
+ * read at all. A resolver that quietly reads it would go green on the first
+ * assertion alone.
+ *
+ * They also keep the older guarantee: the resolver never round-trips through
+ * `GET /auth/whoami` (or any aidream HTTP call) — aidream itself 400s without
+ * `X-Organization-Id`, so asking it to bootstrap the header is circular.
  */
 
-const { rpc, from, getAuthedSession } = vi.hoisted(() => ({
+const { rpc, from, getAuthedSession, enginePut, engineDelete } = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
   getAuthedSession: vi.fn(),
+  enginePut: vi.fn(),
+  engineDelete: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase", () => ({
-  default: {
-    rpc,
-    schema: vi.fn(() => ({ from })),
-  },
+  default: { rpc, schema: vi.fn(() => ({ from })) },
 }));
-
 vi.mock("@/lib/custodian", () => ({ getAuthedSession }));
+vi.mock("@/lib/api", () => ({ engine: { put: enginePut, delete: engineDelete } }));
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -40,16 +50,52 @@ class MemoryStorage {
   }
 }
 
+/** The real listener semantics the hold depends on — not a dispatch spy. */
+class FakeWindow {
+  private listeners = new Map<string, Set<(event: { type: string }) => void>>();
+  readonly seen: string[] = [];
+  addEventListener(type: string, fn: (event: { type: string }) => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(fn);
+  }
+  removeEventListener(type: string, fn: (event: { type: string }) => void): void {
+    this.listeners.get(type)?.delete(fn);
+  }
+  dispatchEvent(event: { type: string }): boolean {
+    this.seen.push(event.type);
+    for (const fn of [...(this.listeners.get(event.type) ?? [])]) fn(event);
+    return true;
+  }
+}
+
+const STORAGE_KEY = "matrx-local.active-organization.v1";
 const storage = new MemoryStorage();
+let fakeWindow: FakeWindow;
 
 beforeEach(() => {
-  vi.restoreAllMocks();
+  vi.resetModules();
+  rpc.mockReset();
+  from.mockReset();
+  getAuthedSession.mockReset();
+  enginePut.mockReset().mockResolvedValue({ organization_id: null });
+  engineDelete.mockReset().mockResolvedValue({ organization_id: null });
   storage.clear();
+  fakeWindow = new FakeWindow();
   (globalThis as unknown as { localStorage: MemoryStorage }).localStorage = storage;
-  (globalThis as unknown as { window: { dispatchEvent: (e: unknown) => void } }).window = {
-    dispatchEvent: vi.fn(),
-  };
+  (globalThis as unknown as { window: FakeWindow }).window = fakeWindow;
+  if (typeof (globalThis as { CustomEvent?: unknown }).CustomEvent !== "function") {
+    (globalThis as unknown as { CustomEvent: unknown }).CustomEvent = class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    };
+  }
   getAuthedSession.mockResolvedValue({ user: { id: "user-1" } });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function mockMemberships(containerIds: string[]) {
@@ -59,6 +105,10 @@ function mockMemberships(containerIds: string[]) {
   });
 }
 
+/**
+ * `organizations` answers; ANY other table throws. That is the point — a
+ * resolver reaching for `user_preferences` cannot pass silently.
+ */
 function mockOrganizationsTable(
   rows: Array<{ id: string; name: string; is_personal?: boolean }>,
 ) {
@@ -66,137 +116,158 @@ function mockOrganizationsTable(
   const select = vi.fn().mockReturnValue({ in: inFn });
   from.mockImplementation((table: string) => {
     if (table === "organizations") return { select };
-    // user_preferences path — default: no row, no preference.
-    const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
-    const eq = vi.fn().mockReturnValue({ maybeSingle });
-    const prefSelect = vi.fn().mockReturnValue({ eq });
-    return { select: prefSelect };
+    throw new Error(
+      `the resolver read the "${table}" table — a request may only use what this device SET`,
+    );
   });
 }
 
-function mockPreference(userId: string, organizationId: string | null) {
-  const maybeSingle = vi.fn().mockResolvedValue({
-    data: { preferences: { organization: { defaultOrganizationId: organizationId } } },
-    error: null,
-  });
-  const eq = vi.fn((col: string, val: string) => {
-    expect(col).toBe("user_id");
-    expect(val).toBe(userId);
-    return { maybeSingle };
-  });
-  const prefSelect = vi.fn().mockReturnValue({ eq });
-
-  const priorFrom = from.getMockImplementation();
-  from.mockImplementation((table: string) => {
-    if (table === "user_preferences") return { select: prefSelect };
-    return priorFrom!(table);
-  });
+function storedTables(): string[] {
+  return from.mock.calls.map((call) => String(call[0]));
 }
 
 describe("resolveActiveOrganization", () => {
-  it("never makes an HTTP call (e.g. GET /auth/whoami) — resolves purely from Supabase + local storage", async () => {
-    // aidream's own /auth/whoami now 400s without X-Organization-Id, so a
-    // resolver that round-tripped through it to learn the organization
-    // would be circular by construction. This asserts the network is never
-    // touched at all.
+  it("never makes an HTTP call (e.g. GET /auth/whoami) — Supabase and this device only", async () => {
     const fetchSpy = vi.fn();
     (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch;
-
     mockMemberships(["org-1"]);
     mockOrganizationsTable([{ id: "org-1", name: "Solo Org", is_personal: false }]);
 
     const { resolveActiveOrganization } = await import("./active-org");
-    const result = await resolveActiveOrganization();
-
-    expect(result?.id).toBe("org-1");
+    expect((await resolveActiveOrganization())?.id).toBe("org-1");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("resolves the sole membership when nothing is stored and no default is set (positive control)", async () => {
+  it("resolves the sole membership — choosing the only option invents nothing", async () => {
     mockMemberships(["org-1"]);
     mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
 
     const { resolveActiveOrganization } = await import("./active-org");
-    const result = await resolveActiveOrganization();
-
-    expect(result).toEqual({ id: "org-1", name: "Solo Org", isPersonal: false });
+    expect(await resolveActiveOrganization()).toEqual({
+      id: "org-1",
+      name: "Solo Org",
+      isPersonal: false,
+    });
   });
 
-  it("refuses with a remedy for a multi-org user with no stored selection and no default preference", async () => {
+  it("THE RULING: a saved account preference naming another org is NEVER used — the request holds", async () => {
+    // Plant the exact thing the deleted rung used to read. `user_preferences`
+    // is not even mockable here: reading it throws.
     mockMemberships(["org-1", "org-2"]);
     mockOrganizationsTable([
       { id: "org-1", name: "First Org" },
       { id: "org-2", name: "Second Org" },
     ]);
-    mockPreference("user-1", null);
 
-    const { requireActiveOrganizationId, OrganizationNotSelectedError } = await import(
-      "./active-org"
-    );
+    const { resolveActiveOrganization } = await import("./active-org");
+    const result = await resolveActiveOrganization();
 
-    await expect(requireActiveOrganizationId()).rejects.toBeInstanceOf(
-      OrganizationNotSelectedError,
+    expect(result).toBeNull();
+    expect(storedTables()).not.toContain("user_preferences");
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("never falls back to the personal organization", async () => {
+    mockMemberships(["org-work", "org-personal"]);
+    mockOrganizationsTable([
+      { id: "org-work", name: "Work", is_personal: false },
+      { id: "org-personal", name: "Arman", is_personal: true },
+    ]);
+
+    const { resolveActiveOrganization } = await import("./active-org");
+    expect(await resolveActiveOrganization()).toBeNull();
+  });
+
+  it("prefers this device's set selection", async () => {
+    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-1", name: "First Org" }));
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+
+    const { resolveActiveOrganization } = await import("./active-org");
+    expect((await resolveActiveOrganization())?.id).toBe("org-1");
+  });
+
+  it("drops a selection the user is no longer a member of and HOLDS rather than guessing", async () => {
+    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-gone", name: "Removed Org" }));
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+
+    const { resolveActiveOrganization } = await import("./active-org");
+    expect(await resolveActiveOrganization()).toBeNull();
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("requireActiveOrganizationId — the hold", () => {
+  it("raises the picker and RESUMES with what the user sets", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+
+    const mod = await import("./active-org");
+    const held = mod.requireActiveOrganizationId({ timeoutMs: 5_000 });
+
+    // The picker is asked for BEFORE anything is sent.
+    await vi.waitFor(() => expect(fakeWindow.seen).toContain(mod.REQUEST_PICKER_EVENT));
+
+    await mod.setActiveOrganization("org-2");
+
+    // The SAME call that was held now returns the set id — the request
+    // proceeds instead of the user meeting a failure.
+    await expect(held).resolves.toBe("org-2");
+  });
+
+  it("tells the engine what the user set, so background work uses it too", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+
+    const mod = await import("./active-org");
+    await mod.setActiveOrganization("org-2");
+
+    expect(enginePut).toHaveBeenCalledWith("/organization/active", {
+      organization_id: "org-2",
+    });
+  });
+
+  it("gives up with a remedy — never a guessed organization — when nobody answers", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+
+    const mod = await import("./active-org");
+    await expect(mod.requireActiveOrganizationId({ timeoutMs: 1 })).rejects.toBeInstanceOf(
+      mod.OrganizationNotSelectedError,
     );
     try {
-      await requireActiveOrganizationId();
-      throw new Error("expected requireActiveOrganizationId to throw");
+      await mod.requireActiveOrganizationId({ timeoutMs: 1 });
+      throw new Error("expected the hold to time out");
     } catch (err) {
-      expect(err).toBeInstanceOf(OrganizationNotSelectedError);
-      expect((err as InstanceType<typeof OrganizationNotSelectedError>).remedy).toMatch(
-        /choose your organization/i,
-      );
+      expect(err).toBeInstanceOf(mod.OrganizationNotSelectedError);
+      const remedy = (err as InstanceType<typeof mod.OrganizationNotSelectedError>).remedy;
+      expect(remedy).toMatch(/choose your organization/i);
+      expect(remedy.toLowerCase()).not.toContain("default");
     }
   });
 
-  it("resolves the user's durable default preference for a multi-org user (positive control)", async () => {
-    mockMemberships(["org-1", "org-2"]);
-    mockOrganizationsTable([
-      { id: "org-1", name: "First Org" },
-      { id: "org-2", name: "Second Org" },
-    ]);
-    mockPreference("user-1", "org-2");
-    getAuthedSession.mockResolvedValue({ user: { id: "user-1" } });
-
-    const { resolveActiveOrganization } = await import("./active-org");
-    const result = await resolveActiveOrganization();
-
-    expect(result?.id).toBe("org-2");
-  });
-
-  it("prefers a still-valid stored selection over the default preference", async () => {
-    storage.setItem(
-      "matrx-local.active-organization.v1",
-      JSON.stringify({ id: "org-1", name: "First Org" }),
-    );
-    mockMemberships(["org-1", "org-2"]);
-    mockOrganizationsTable([
-      { id: "org-1", name: "First Org" },
-      { id: "org-2", name: "Second Org" },
-    ]);
-    mockPreference("user-1", "org-2");
-
-    const { resolveActiveOrganization } = await import("./active-org");
-    const result = await resolveActiveOrganization();
-
-    expect(result?.id).toBe("org-1");
-  });
-
-  it("drops a stored selection that is no longer an active membership", async () => {
-    storage.setItem(
-      "matrx-local.active-organization.v1",
-      JSON.stringify({ id: "org-gone", name: "Removed Org" }),
-    );
+  it("returns immediately when the sole membership answers — no picker", async () => {
     mockMemberships(["org-1"]);
-    mockOrganizationsTable([{ id: "org-1", name: "First Org" }]);
+    mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
 
-    const { resolveActiveOrganization } = await import("./active-org");
-    const result = await resolveActiveOrganization();
-
-    expect(result?.id).toBe("org-1");
-    // The stale selection is gone — resolution fell through to the
-    // sole-membership rule (which re-persists org-1), never keeping the
-    // removed organization around.
-    expect(storage.getItem("matrx-local.active-organization.v1")).toContain("org-1");
-    expect(storage.getItem("matrx-local.active-organization.v1")).not.toContain("org-gone");
+    const mod = await import("./active-org");
+    await expect(mod.requireActiveOrganizationId({ timeoutMs: 1 })).resolves.toBe("org-1");
+    expect(fakeWindow.seen).not.toContain(mod.REQUEST_PICKER_EVENT);
   });
 });

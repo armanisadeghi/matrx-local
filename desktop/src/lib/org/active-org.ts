@@ -14,22 +14,36 @@
  * the server only verifies membership. There is no server-side lookup that
  * substitutes for this.
  *
- * ## Resolution order (mirrors matrx-extend's canonical resolver —
- * `src/lib/org/active-org.ts` — which itself mirrors matrx-frontend's
- * `lib/organizations/resolveActiveOrgContext.ts`; consume the platform's
- * answer, never invent a second one)
+ * ## The ruling this file enforces (Arman, 2026-09-19)
  *
- *   1. This install's stored selection — IF the user is still a member.
- *   2. The user's durable default-organization preference
- *      (`users.user_preferences` → `organization.defaultOrganizationId`) —
- *      IF they are still a member.
- *   3. Exactly ONE membership → that organization (there is nothing to
+ * A saved "default organization" on the user's ACCOUNT is at most a
+ * per-client display preference. NOTHING that builds a request may read it,
+ * and nothing may fall back to the personal organization. Both rungs used to
+ * be in this file and both are gone.
+ *
+ *     "one missed org check that should have just failed turns into 50 in a
+ *     month and 5,000 in a year, and suddenly we don't have orgs any more,
+ *     we have a user and a default org, which means we just have user now."
+ *
+ * What this device MAY remember is the organization the USER THEMSELVES SET
+ * here — the little picker's state, not a preference read out of an account.
+ *
+ * ## Resolution order
+ *
+ *   1. THIS DEVICE'S SET organization — IF the user is still a member.
+ *   2. Exactly ONE membership -> that organization (there is nothing to
  *      choose, so choosing it invents nothing).
- *   4. Otherwise `null`, ON PURPOSE — the signal the UI uses to make the user
- *      pick, via `OrganizationNotSelectedError`. Never "first", "personal",
- *      "most recent", or "system": a guessed organization writes a user's
- *      work into the wrong tenant, which is the defect class this whole
- *      contract exists to end (common-docs/projects/no-db-assigned-org).
+ *   3. Otherwise `null`, ON PURPOSE — and `null` at a request boundary is a
+ *      HOLD, not a failure: `requireActiveOrganizationId()` raises the
+ *      picker, waits for the user to SET one, and the request then proceeds.
+ *      Never "first", "personal", "most recent", or "system": a guessed
+ *      organization writes a user's work into the wrong tenant, which is the
+ *      defect class this whole contract exists to end
+ *      (common-docs/projects/no-db-assigned-org).
+ *
+ * The Python sidecar cannot read this device's `localStorage`, so every SET
+ * is also pushed to the engine (`PUT /organization/active`) — that is how a
+ * background job on this Mac knows what the user chose instead of guessing.
  */
 
 import supabase from "@/lib/supabase";
@@ -115,31 +129,6 @@ export async function listMemberOrganizations(): Promise<MemberOrganization[]> {
   }));
 }
 
-/**
- * The user's durable, cross-device default organization. Read straight from
- * `users.user_preferences` (the same row the web app and the extension
- * write) so this device agrees with every other surface. Never throws — a
- * preference we cannot read simply does not participate in resolution.
- */
-async function readDefaultOrganizationId(userId: string): Promise<string | null> {
-  try {
-    const { data, error } = await supabase
-      .schema("users")
-      .from("user_preferences")
-      .select("preferences")
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (error || !data) return null;
-    const prefs = (data as { preferences?: unknown }).preferences as
-      | { organization?: { defaultOrganizationId?: string | null } }
-      | null
-      | undefined;
-    return prefs?.organization?.defaultOrganizationId ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function readStoredSelection(): StoredActiveOrganization | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -159,15 +148,58 @@ function writeStoredSelection(value: StoredActiveOrganization | null): void {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
     }
   } catch {
-    // localStorage unavailable / quota — selection lives in memory only for
-    // this session; resolution falls through to the default/sole-membership
-    // rules on every call instead.
+    // localStorage unavailable / quota — the selection does not survive this
+    // session; resolution re-runs the sole-membership rule on every call, and
+    // otherwise HOLDS and asks again. It never falls through to a guess.
   }
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
 }
 
+/**
+ * Tell the Python sidecar what the user just SET.
+ *
+ * The engine cannot read this window's `localStorage`, and it is forbidden to
+ * go looking for a saved preference on the account instead — so the set value
+ * has to cross the process boundary explicitly. Every background job on this
+ * Mac (file sync, the scraper, the vault, delegation, coding-session
+ * artifacts) then acts under exactly what the user chose.
+ *
+ * Imported lazily: `@/lib/api` is the app's heaviest module and pulls this
+ * one back in transitively.
+ */
+async function pushSelectionToEngine(organizationId: string | null): Promise<void> {
+  try {
+    const { engine } = await import("@/lib/api");
+    if (organizationId === null) await engine.delete("/organization/active");
+    else await engine.put("/organization/active", { organization_id: organizationId });
+  } catch (err) {
+    // The engine may simply not be up yet. That is not a reason to fail the
+    // user's choice — the desktop is still correct, and `App.tsx` re-pushes
+    // the stored selection when the engine comes back. It IS a reason to say
+    // so out loud rather than leave a silent divergence (law 4).
+    console.warn(
+      "[active-org] the engine did not take this Mac's organization; background work will ask again until it does",
+      err,
+    );
+  }
+}
+
 async function persistSelection(org: MemberOrganization): Promise<void> {
   writeStoredSelection({ id: org.id, name: org.name });
+  await pushSelectionToEngine(org.id);
+}
+
+/**
+ * Re-state this Mac's set organization to the engine.
+ *
+ * Called on engine (re)connect: the engine's copy lives in its own local
+ * store, and a fresh engine, a reinstall, or a `--fresh` dev home starts with
+ * nothing. Without this, background work would hold on a question the user
+ * already answered in this window.
+ */
+export async function republishActiveOrganizationToEngine(): Promise<void> {
+  const stored = readStoredSelection();
+  if (stored) await pushSelectionToEngine(stored.id);
 }
 
 /**
@@ -180,8 +212,7 @@ async function persistSelection(org: MemberOrganization): Promise<void> {
  */
 export async function resolveActiveOrganization(): Promise<MemberOrganization | null> {
   const session = await getAuthedSession();
-  const userId = session?.user?.id;
-  if (!userId) return null;
+  if (!session?.user?.id) return null;
 
   const organizations = await listMemberOrganizations();
   if (organizations.length === 0) return null;
@@ -194,15 +225,6 @@ export async function resolveActiveOrganization(): Promise<MemberOrganization | 
     // Selection survived losing the membership — drop it rather than send an
     // organization the server will refuse.
     writeStoredSelection(null);
-  }
-
-  const preferred = await readDefaultOrganizationId(userId);
-  if (preferred) {
-    const match = byId.get(preferred);
-    if (match) {
-      await persistSelection(match);
-      return match;
-    }
   }
 
   if (organizations.length === 1) {
@@ -226,11 +248,58 @@ export async function getActiveOrganizationId(): Promise<string | null> {
   return resolved?.id ?? null;
 }
 
-/** The active organization id, or a loud, remediable failure. */
-export async function requireActiveOrganizationId(): Promise<string> {
-  const id = await getActiveOrganizationId();
-  if (!id) throw new OrganizationNotSelectedError();
-  return id;
+/**
+ * How long a held request waits for the user to set an organization before it
+ * gives up. A knob, not a magic number (`limits-are-knobs-agents-set-them`):
+ * pass `timeoutMs` to change it for one call site rather than editing this.
+ */
+export const ORGANIZATION_HOLD_TIMEOUT_MS = 2 * 60 * 1000;
+
+/**
+ * THE REQUEST BOUNDARY. Every org-scoped call goes through here.
+ *
+ * When nothing is set on this device this does NOT fail — it HOLDS: it raises
+ * the picker, waits for the user to set one, and then returns that id so the
+ * caller's request proceeds. A request that dies with "no organization" and
+ * makes the user go hunting for a setting is the shape Arman outlawed on
+ * 2026-09-19; the whole point is that the missed check turns into a question,
+ * not into a silent default.
+ *
+ * It only throws when the user does not answer inside the hold window, so a
+ * caller can never block forever, and the error still carries the remedy.
+ */
+export async function requireActiveOrganizationId(options?: {
+  timeoutMs?: number;
+}): Promise<string> {
+  const already = await getActiveOrganizationId();
+  if (already) return already;
+
+  const timeoutMs = options?.timeoutMs ?? ORGANIZATION_HOLD_TIMEOUT_MS;
+  const held = await new Promise<string | null>((resolve) => {
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener(CHANGE_EVENT, onChanged);
+      clearTimeout(timer);
+      resolve(value);
+    };
+    function onChanged() {
+      const chosen = readStoredSelection();
+      if (chosen) finish(chosen.id);
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    window.addEventListener(CHANGE_EVENT, onChanged);
+    // Ask AFTER the listener is attached: the picker can resolve on the very
+    // next tick if one is already open and the user clicks immediately.
+    requestOrganizationPicker();
+    // And re-check once, in case a selection landed between the read above
+    // and the listener being attached.
+    onChanged();
+  });
+
+  if (!held) throw new OrganizationNotSelectedError();
+  return held;
 }
 
 /**
@@ -249,9 +318,10 @@ export async function setActiveOrganization(
   return match;
 }
 
-/** Forget this device's selection (sign-out). */
+/** Forget this device's selection (sign-out). The engine forgets too. */
 export function clearActiveOrganization(): void {
   writeStoredSelection(null);
+  void pushSelectionToEngine(null);
 }
 
 /**

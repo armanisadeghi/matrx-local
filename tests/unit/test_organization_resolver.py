@@ -1,13 +1,29 @@
 """The ONE Python-side organization resolver
 (``app.services.aidream.organization.resolve_active_organization_id``).
 
-aidream's AuthMiddleware refuses every authenticated request that names no
-organization, and refuses to pick one for the caller. `GET /auth/whoami`
-cannot bootstrap it either — it now requires the header itself, so a
-resolver that round-tripped through it would be circular. These tests prove
-the resolver never makes an HTTP call to aidream (only to Supabase directly,
-for membership + preference reads) and that a multi-org user with no stated
-default gets a refusal carrying a remedy rather than a guessed organization.
+THE RULING UNDER TEST (Arman, 2026-09-19)
+
+    A saved "default organization" on the user's account is at most a display
+    preference. Nothing that builds a request may read it, and the personal
+    organization is never a fallback. What a client may use is what the user
+    THEMSELVES SET on this device. With nothing set, the work HOLDS: the
+    sidecar publishes an ``organization_required`` action-needed item, the
+    desktop turns that into the picker, and the caller retries with the set
+    value.
+
+    "one missed org check that should have just failed turns into 50 in a
+    month and 5,000 in a year, and suddenly we don't have orgs any more, we
+    have a user and a default org, which means we just have user now."
+
+These tests are built to FAIL if either deleted rung comes back. The fake
+HTTP client below REFUSES the ``user_preferences`` and
+``current_personal_org_id`` endpoints outright, so a resolver that reaches
+for them cannot pass quietly — and the headline case also asserts the hold
+was published, which a guessing resolver would never do.
+
+They keep the older guarantee too: the resolver never round-trips through
+aidream (``GET /auth/whoami`` itself 400s without ``X-Organization-Id``, so
+asking it to bootstrap the header is circular).
 """
 
 from __future__ import annotations
@@ -15,12 +31,21 @@ from __future__ import annotations
 import jwt as pyjwt
 import pytest
 
+from app.services.aidream import organization as org_module
 from app.services.aidream.organization import (
     OrganizationNotResolvedError,
     resolve_active_organization_id,
 )
 
 USER_ID = "11111111-1111-4111-8111-111111111111"
+ORG_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+ORG_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+ORG_PERSONAL = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+# Naming the banned endpoints is how this test proves the resolver never
+# reaches for either one: the fake HTTP client below REFUSES them.
+# org-default-exempt: named only so the fake client can refuse them, never read
+BANNED_ENDPOINTS = ("user_preferences", "current_personal_org_id")
 
 
 def _jwt() -> str:
@@ -39,13 +64,16 @@ class _FakeResponse:
 
 
 class _FakeAsyncClient:
-    """Records every call made through it — the honest way to prove "no
-    aidream HTTP call was made": aidream calls go through a DIFFERENT client
-    (``app.services.aidream.client.AIDreamClient``), which this test never
-    touches at all. This fake only stands in for the direct Supabase REST
-    calls the resolver is allowed to make."""
+    """Stands in for the direct Supabase REST calls the resolver is allowed
+    to make, and BLOWS UP on the two it is not.
+
+    aidream calls go through a different client entirely
+    (``app.services.aidream.client.AIDreamClient``), which these tests never
+    touch — so "no aidream HTTP call" is structural, not asserted.
+    """
 
     calls: list[tuple[str, str]] = []
+    memberships: list[str] = []
 
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -56,110 +84,135 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    personal_organization_id: str | None = None
+    def _record(self, method: str, url: str) -> None:
+        type(self).calls.append((method, url))
+        for banned in BANNED_ENDPOINTS:
+            if banned in url:
+                raise AssertionError(
+                    f"the resolver read {banned!r} — a request may only use "
+                    "what the user SET on this device"
+                )
 
-    async def post(self, url, *, json, headers):
-        _FakeAsyncClient.calls.append(("POST", url))
-        if url.endswith("/rpc/current_personal_org_id"):
-            return _FakeResponse(_FakeAsyncClient.personal_organization_id)
-        # mbr_for_user RPC
-        return _FakeResponse(
-            [
-                {"container_id": cid, "status": "active"}
-                for cid in _FakeAsyncClient.membership_ids
-            ]
-        )
+    async def post(self, url, **kwargs):
+        self._record("POST", url)
+        if url.endswith("/rpc/mbr_for_user"):
+            return _FakeResponse(
+                [
+                    {"container_id": org_id, "status": "active"}
+                    for org_id in type(self).memberships
+                ]
+            )
+        raise AssertionError(f"unexpected POST {url}")
 
-    async def get(self, url, *, params, headers):
-        _FakeAsyncClient.calls.append(("GET", url))
-        default_id = _FakeAsyncClient.default_organization_id
-        if default_id is None:
-            return _FakeResponse([])
-        return _FakeResponse(
-            [{"preferences": {"organization": {"defaultOrganizationId": default_id}}}]
-        )
+    async def get(self, url, **kwargs):
+        self._record("GET", url)
+        raise AssertionError(f"unexpected GET {url}")
 
 
 @pytest.fixture(autouse=True)
-def _reset(monkeypatch: pytest.MonkeyPatch):
-    import app.services.aidream.organization as organization_module
+def _isolate(monkeypatch):
+    import httpx
 
-    organization_module._org_cache.clear()
     _FakeAsyncClient.calls = []
-    _FakeAsyncClient.membership_ids = []
-    _FakeAsyncClient.default_organization_id = None
-    _FakeAsyncClient.personal_organization_id = None
-    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
-    yield
+    _FakeAsyncClient.memberships = []
+    org_module.invalidate_organization_cache()
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    # No device selection, and nothing publishes for real, unless a test says so.
+    monkeypatch.setattr(org_module, "get_device_organization", _none_device)
+    holds: list[str | None] = []
+    monkeypatch.setattr(org_module, "_raise_hold", _recorder(holds))
+    monkeypatch.setattr(org_module, "_clear_hold", _noop)
+    yield holds
+    org_module.invalidate_organization_cache()
+
+
+async def _none_device(user_id=None):
+    return None
+
+
+async def _noop():
+    return None
+
+
+def _recorder(sink):
+    async def _raise_hold(user_id):
+        sink.append(user_id)
+
+    return _raise_hold
+
+
+def _device(organization_id: str | None):
+    async def _get(user_id=None):
+        return organization_id
+
+    return _get
 
 
 @pytest.mark.anyio
-async def test_resolves_sole_membership_and_never_calls_aidream_http() -> None:
-    """Positive control: a single membership resolves cleanly, and every
-    call made is to Supabase directly (POST rpc/mbr_for_user, GET
-    user_preferences) — never a round trip through aidream's own API
-    (e.g. GET /auth/whoami, which now requires the header it would be
-    trying to obtain)."""
-    _FakeAsyncClient.membership_ids = ["org-1"]
+async def test_this_devices_set_organization_wins(monkeypatch):
+    _FakeAsyncClient.memberships = [ORG_A, ORG_B]
+    monkeypatch.setattr(org_module, "get_device_organization", _device(ORG_B))
 
-    org_id = await resolve_active_organization_id(_jwt())
-
-    assert org_id == "org-1"
-    for method, url in _FakeAsyncClient.calls:
-        assert "/auth/whoami" not in url
-        assert "aidream" not in url.lower() or "supabase" in url.lower()
+    assert await resolve_active_organization_id(_jwt()) == ORG_B
 
 
 @pytest.mark.anyio
-async def test_resolves_stated_default_for_multi_org_user() -> None:
-    """Positive control for the refusal test below: same multi-org
-    membership set, but WITH a stated default preference — resolves without
-    asking."""
-    _FakeAsyncClient.membership_ids = ["org-1", "org-2"]
-    _FakeAsyncClient.default_organization_id = "org-2"
+async def test_sole_membership_resolves_without_asking(_isolate):
+    _FakeAsyncClient.memberships = [ORG_A]
 
-    org_id = await resolve_active_organization_id(_jwt())
-
-    assert org_id == "org-2"
+    assert await resolve_active_organization_id(_jwt()) == ORG_A
+    assert _isolate == [], "nothing to choose — the user should not be asked"
 
 
 @pytest.mark.anyio
-async def test_multi_org_user_with_no_default_resolves_own_personal_org() -> None:
-    """A multi-org user with no stated default lands in their OWN personal
-    organization — the platform's stated fallback (matrx-frontend rule b,
-    the server's coding-session rule) — never first/owner/oldest."""
-    _FakeAsyncClient.membership_ids = ["org-1", "org-2", "org-personal"]
-    _FakeAsyncClient.default_organization_id = None
-    _FakeAsyncClient.personal_organization_id = None
-    _FakeAsyncClient.personal_organization_id = "org-personal"
-
-    org_id = await resolve_active_organization_id(_jwt())
-
-    assert org_id == "org-personal"
-
-
-@pytest.mark.anyio
-async def test_multi_org_user_with_no_default_and_no_personal_membership_is_refused() -> None:
-    """When even the personal organization is not among the memberships (or
-    the RPC is unavailable), the refusal carries a plain-language remedy —
-    never a guess (no owner-or-oldest, no first, no most-recent)."""
-    _FakeAsyncClient.membership_ids = ["org-1", "org-2"]
-    _FakeAsyncClient.default_organization_id = None
-    _FakeAsyncClient.personal_organization_id = None
-    _FakeAsyncClient.personal_organization_id = "org-elsewhere"
+async def test_multi_org_with_nothing_set_holds_and_asks(_isolate):
+    """THE RULING. No preference read, no personal-org fallback, no guess —
+    the work is held and the user is asked."""
+    _FakeAsyncClient.memberships = [ORG_A, ORG_B, ORG_PERSONAL]
 
     with pytest.raises(OrganizationNotResolvedError) as excinfo:
         await resolve_active_organization_id(_jwt())
 
-    assert excinfo.value.remedy
-    assert "choose your organization" in excinfo.value.remedy.lower()
+    error = excinfo.value
+    assert error.held is True
+    assert _isolate == [USER_ID], "the picker was never asked for"
+    assert "default" not in str(error).lower()
+    assert "default" not in error.remedy.lower()
+    assert "choose your organization" in error.remedy.lower()
+    # Structural proof the deleted rungs are gone: neither endpoint was even
+    # reached (the fake client raises on them).
+    urls = " ".join(url for _, url in _FakeAsyncClient.calls)
+    for banned in BANNED_ENDPOINTS:
+        assert banned not in urls
 
 
 @pytest.mark.anyio
-async def test_no_membership_is_refused_with_a_remedy() -> None:
-    _FakeAsyncClient.membership_ids = []
+async def test_a_stale_device_selection_is_not_used(_isolate, monkeypatch):
+    """The user left that organization. Hold — never silently substitute."""
+    _FakeAsyncClient.memberships = [ORG_A, ORG_B]
+    monkeypatch.setattr(org_module, "get_device_organization", _device("org-gone"))
+
+    with pytest.raises(OrganizationNotResolvedError):
+        await resolve_active_organization_id(_jwt())
+    assert _isolate == [USER_ID]
+
+
+@pytest.mark.anyio
+async def test_no_membership_at_all_is_a_different_answer(_isolate):
+    """Nothing to choose FROM is not the same as nothing chosen: asking the
+    user to pick from an empty list would be a screen that lies."""
+    _FakeAsyncClient.memberships = []
 
     with pytest.raises(OrganizationNotResolvedError) as excinfo:
         await resolve_active_organization_id(_jwt())
+    assert excinfo.value.held is False
+    assert "added to an organization" in excinfo.value.remedy
+    assert _isolate == []
 
-    assert excinfo.value.remedy
+
+@pytest.mark.anyio
+async def test_the_deleted_rungs_are_gone_from_the_module():
+    """A resolver can be rewritten to call these again; this says plainly
+    that today it cannot, because they do not exist."""
+    assert not hasattr(org_module, "_default_organization_id")
+    assert not hasattr(org_module, "_personal_organization_id")

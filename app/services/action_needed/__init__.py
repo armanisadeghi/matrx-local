@@ -12,6 +12,7 @@ from .models import (
     capability_install_needed,
     filesystem_access_needed,
     download_resolution_needed,
+    organization_required_needed,
     os_permission_needed,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "capability_install_needed",
     "filesystem_access_needed",
     "download_resolution_needed",
+    "organization_required_needed",
     "os_permission_needed",
 ]

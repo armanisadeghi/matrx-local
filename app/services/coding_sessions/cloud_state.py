@@ -410,9 +410,9 @@ def _explain_inventory_block(reason: str) -> str:
         detail = reason.split(":", 1)[1]
         if "Cannot name an organization" in detail:
             return (
-                "AI Matrx needs to know which organization to answer for, and this "
-                "Mac has no default organization chosen. Choose your organization "
-                "in Matrx Local, then refresh."
+                "AI Matrx needs to know which organization to answer for, and "
+                "nobody has told this Mac which one to use yet. Choose your "
+                "organization in Matrx Local and this list will fill in."
             )
         if "HTTP 400" in detail:
             return (

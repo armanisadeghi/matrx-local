@@ -814,6 +814,10 @@ info "Checking @ai-matrx packages are npm latest..."
 # own sorts, filters and a hardcoded default-agent NAME; the guard is what stops
 # that class returning. Self-test first so a green run means it can fail.
 (cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || fail "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
+
+# THE ORGANIZATION IS WHAT THE USER SET — never a saved default, never the
+# personal org (Arman, 2026-09-19).
+(cd desktop && pnpm check:org-default-ban:self-test && pnpm check:org-default-ban) || fail "A default organization is back (see above). Nothing that builds a request may read a saved default-organization preference, and the personal org is never a fallback. With nothing SET on this device, HOLD the request, show the picker, and continue once the user picks: desktop/src/lib/org/active-org.ts and app/services/aidream/organization.py."
 # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
 # ../common-docs/policies/archived-items.md): every list over an entity that can
 # be archived carries an archive filter, the default hides archived, revealing

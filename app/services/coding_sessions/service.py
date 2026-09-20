@@ -112,9 +112,9 @@ _QUARANTINE_AFTER_ATTEMPTS = 25
 _ORGANIZATION_UNRESOLVED_MARKER = "Cannot name an organization for this request"
 _ORGANIZATION_BLOCKER_CODE = "organization_not_chosen"
 _ORGANIZATION_BLOCKER_MESSAGE = (
-    "Delivery is paused: this Mac has no default organization chosen, and AI "
-    "Matrx needs to know which organization your coding sessions belong to. "
-    "Nothing is lost — every event stays queued here."
+    "Delivery is paused: nobody has told this Mac which organization to work "
+    "in yet, and AI Matrx needs to know which one your coding sessions belong "
+    "to. Nothing is lost — every event stays queued here."
 )
 _ORGANIZATION_BLOCKER_REMEDY = (
     "Choose your organization in Matrx Local (the organization picker). "

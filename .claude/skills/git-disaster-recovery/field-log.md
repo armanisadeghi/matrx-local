@@ -13,6 +13,9 @@ session. Leave a one-off here with the repo and the date.
 
 | When | Repo | What we thought | What was true | Folded into SKILL.md? |
 |---|---|---|---|---|
+| 2026-09-20 | matrx-frontend | merge-tree clean means the leftover stays clean | After one land, the next leftover collided in FOUND_DEFECTS.md / window-panels. Re-probe after every push | Stage 4 |
+| 2026-09-20 | matrx-frontend | Keep-both on FOUND_DEFECTS.md can keep the same D number | Two D339 filings. Later leftover gets the next free ID | Stage 4 |
+| 2026-09-20 | matrx-frontend | Delete the leftover branch as soon as the merge commit exists | Push was rejected because GitHub moved. Delete only after `origin/main` is an ancestor | Stage 4 |
 | 2026-09-19 | aidream | 149 ahead / 433 behind was a second product line | 129 of 149 local commits were already on GitHub as the same patch; ~10 unique; GitHub half of the split was real | Stage 1a |
 | 2026-09-19 | aidream | 76 worktrees were unique leftover work | 56 already pointed at commits on GitHub; 12 had unique patches | Stage 2 |
 | 2026-09-19 | aidream | Untracked files were new work | 46 of 67 already existed on `origin/main`; local `main` was stale | Stage 1b |
@@ -58,3 +61,5 @@ session. Leave a one-off here with the repo and the date.
 | 2026-09-20 | common-docs | Two mains same SHA and leftover worktrees already on GitHub meant stand down | Unique untracked files still existed. `log.md` and Integration Maintainer already named Unmerged work intake; the file was never on GitHub | Stage 0 / 1b |
 | 2026-09-20 | common-docs | Stash board rows already on GitHub, so drop the stash | Two disaster-recovery log lines in that stash were still unique | Stage 2 mixed stash |
 | 2026-09-20 | common-docs | Dirty skill files were this recovery's notes to commit | They were matrx-local's rewrite and would have unwound the extend stand-down already on GitHub | Bucket J, two-recovery skill |
+| 2026-09-20 | common-docs | Stage 6 reset was ordered, so reset now | Five new screenshots and a recapture set had appeared. Re-diff first | Stage 6 |
+| 2026-09-20 | common-docs | A walker committed three files on stale shared main | Extracted through intake. Did not reset him | Stage 4b |

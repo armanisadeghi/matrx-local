@@ -184,7 +184,8 @@ Delete A, B, and H. Leave C through G and I through L.
 - Remove a worktree only if its commit is on `origin/main`. Let git refuse dirty
   ones. Skip a hung remove.
 - Delete local and remote branches whose unique patches are on `origin/main`.
-  Cherry / patch-id, not `--merged`.
+  Cherry / patch-id, not `--merged`. Re-cherry immediately before each
+  delete. Leftovers flip A↔C while GitHub moves.
 - Drop a stash only when it is empty or older than what is already on GitHub. If
   you cannot prove every file is already on GitHub, it stays. A mixed stash
   (some files B, some unique lines) is not a Stage 2 drop.
@@ -220,6 +221,7 @@ Sharpenings that kept those rules from being twisted:
   behavior claim are not "just docs."
 - Merge onto current GitHub `main` in one short-lived intake checkout. Never
   onto the dirty shared checkout. Never reset it to make room.
+  `gh pr merge` dying on `log.md` is keep-both in intake, not a hold.
 - Failing CI stops a merge only when it proves this change broke boot, auth,
   data, or a shared contract.
 - After it is reachable from `origin/main`, delete the leftover.
@@ -236,7 +238,9 @@ and had to go back.
 
 **4b. Wave 1 — obvious yes.** Docs, coverage-only tests, comments, lessons.
 Draft PRs that merge cleanly may land. Draft is not a hold. Mid-wave, drop
-anything that turns out already to be on GitHub.
+anything that turns out already to be on GitHub. A focused commit on stale
+shared `main` mid-recovery is not the dirty blob: extract unique lines
+through intake. Do not reset that author.
 
 **4c. Wave 2 — recent product, no real overlap.** Mechanical git conflicts
 (imports, two names for the same helper, changelog lines): keep both.
@@ -251,8 +255,18 @@ are one decision.
 only on the stale shared checkout. Last unique edit older than 72 hours.
 
 One leftover at a time onto the intake tree, then push `origin/main`. Do not
-squash unrelated leftovers into one merge. After it is on GitHub `main`, delete
-that leftover's PR, branch, and worktree.
+squash unrelated leftovers into one merge. After it is reachable from
+`origin/main` (`merge-base --is-ancestor`), delete that leftover's PR, branch,
+and worktree. A merge commit that only exists in intake is not landed. If
+`git push origin HEAD:main` is rejected because GitHub moved, merge
+`origin/main` into the intake commit and push again. Never force-push.
+
+Re-probe `merge-tree` after every successful land. Clean against the previous
+tip is not clean against the new one.
+
+A `FOUND_DEFECTS.md` collision is keep-both: the filing already on GitHub keeps
+its number; the leftover filing takes the next free ID. Same for any ledger
+that forbids duplicate IDs.
 
 The dirty shared checkout catching up is Stage 6, not this stage.
 
@@ -338,6 +352,8 @@ while unknown dirty still has no owner and no orphan park.
 
 A reset of the shared folder onto GitHub `main` is allowed only when Arman
 has ordered it **and** unique dirty is parked as named files (not one blob).
+Re-diff every dirty path against current `origin/main` immediately before
+the reset. New unique files appear while you work. Land or park them first.
 Aidream 2026-09-19: he ordered it because the disaster inverted the usual
 "local is truth every 30 minutes" rule — remote `main` became the line.
 
@@ -507,6 +523,9 @@ Rows from the 2026-09-19 transcript, not imagined.
 | "log.md says the file was created, so it is on GitHub" | Check the path on `origin/main`. A Creation line can land without the file. |
 | "This stash is B because one of its files already landed" | A mixed stash stays until the unique lines land. |
 | "I'll overwrite the skill with this repo's findings" | Keep GitHub. Land only the new capability. Two recoveries must not rewind each other. |
+| "gh pr merge failed, so hold the PR" | `log.md` keep-both in intake. A git conflict is not a real conflict. |
+| "Arman ordered Stage 6, reset now" | Re-diff dirty vs current GitHub first. New unique files appear while you work. |
+| "Someone committed on the stale shared folder, reset them" | Extract unique lines through intake. Do not reset that author. |
 | "I'll wait for the official audit script" | It ran ~16 minutes with no output. Count with ordinary git. |
 | "I'll reset the dirty checkout to make room" | Open an intake worktree from current `origin/main`. |
 | "Failing CI means do not merge" | Stop only when this change broke boot, auth, data, or a shared contract. |
@@ -549,6 +568,9 @@ Rows from the 2026-09-19 transcript, not imagined.
 - "release.sh stopped, so we stop."
 - "The first release shipped, so we can slow down."
 - "I'll wait for the subagent roster before I pull."
+- "gh pr merge failed, so the PR waits."
+- "He ordered the reset, so skip the last dirty pass."
+- "They committed on stale main, so reset them."
 - "I'll just run `pnpm db-types` on this behind checkout."
 - "HEAD matches GitHub, so there is nothing left."
 - "SKILL.md synced, so I can ignore the untracked companions."

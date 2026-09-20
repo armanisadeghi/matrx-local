@@ -72,7 +72,12 @@ def census(sources: dict[str, str]) -> list[str]:
             if symbol != 'matrx_vault_exchange_dispatch' or path != 'desktop/native-vault-provider/NativeVaultExchangeHost.swift':
                 errors.append(f'{path}: unreviewed native C export {symbol}')
         for symbol in set(re.findall(r'\bmatrx_vault_\w+\b', text)):
-            if symbol != 'matrx_vault_exchange_dispatch' or path not in {'desktop/native-vault-provider/NativeVaultExchangeHost.swift', 'desktop/src-tauri/src/native_vault_exchange.rs', 'desktop/src-tauri/src/native_vault_file_import.rs'}:
+            if symbol != 'matrx_vault_exchange_dispatch' or path not in {
+                'desktop/native-vault-provider/NativeVaultExchangeHost.swift',
+                'desktop/src-tauri/src/native_vault_exchange.rs',
+                'desktop/src-tauri/src/native_vault_exchange_bridge.rs',
+                'desktop/src-tauri/src/native_vault_file_import.rs',
+            }:
                 errors.append(f'{path}: unreviewed native C symbol {symbol}')
         if not path.startswith('desktop/native-vault-provider/'):
             for symbol in set(re.findall(r'\b(?:NativeVaultPrivateSession|PrivateSessionSecurity|nativeExportSourcePkcs8|NativeExportSourcePkcs8)\b', text)):

@@ -18,6 +18,7 @@ def test_real_shipped_sources_satisfy_custody_contract():
 @pytest.mark.parametrize(('path', 'addition'), [
     ('desktop/src-tauri/src/lib.rs', '\n#[tauri::command]\nasync fn native_vault_reveal() {}'),
     ('desktop/src-tauri/src/native_vault_exchange.rs', '\nfn matrx_vault_read_secret();'),
+    ('desktop/src-tauri/src/native_vault_exchange_bridge.rs', '\nfn matrx_vault_read_secret();'),
     ('desktop/native-vault-provider/NativeVaultExchangeHost.swift', '\n@_cdecl("matrx_vault_secret")\nfunc extra() {}'),
     ('desktop/native-vault-provider/NativeVaultTransport.swift', '\nlet reader = Security.SecItemCopyMatching'),
     ('desktop/src-tauri/src/native_vault_exchange.rs', '\nuse Security::SecItemCopyMatching as hidden;'),

@@ -32,6 +32,7 @@ mod error_outbox;
 mod native_vault;
 mod native_vault_settings;
 mod native_vault_exchange;
+mod native_vault_exchange_bridge;
 mod native_vault_file_import;
 mod tcc;
 

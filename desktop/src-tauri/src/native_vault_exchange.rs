@@ -72,22 +72,12 @@ async fn dispatch(
     input: Vec<u8>,
 ) -> Result<Vec<u8>, &'static str> {
     use std::{
-        ffi::c_void,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
         },
         time::Duration,
     };
-    unsafe extern "C" {
-        fn matrx_vault_exchange_dispatch(
-            input: *const u8,
-            length: isize,
-            window: *mut c_void,
-            output: *mut u8,
-            capacity: isize,
-        ) -> isize;
-    }
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let pending = cancelled.clone();
@@ -98,22 +88,7 @@ async fn dispatch(
         let handle = anchor
             .and_then(|window| window.ns_window().ok())
             .unwrap_or(std::ptr::null_mut());
-        let mut output = vec![0u8; 2048];
-        let length = unsafe {
-            matrx_vault_exchange_dispatch(
-                input.as_ptr(),
-                input.len() as isize,
-                handle,
-                output.as_mut_ptr(),
-                output.len() as isize,
-            )
-        };
-        let result = if (0..=2048).contains(&length) {
-            output.truncate(length as usize);
-            Some(output)
-        } else {
-            None
-        };
+        let result = crate::native_vault_exchange_bridge::dispatch(&input, handle);
         let _ = sender.send(result);
     })
     .map_err(|_| "Native passkey transfer could not start.")?;

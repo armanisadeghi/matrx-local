@@ -100,7 +100,10 @@ Fetch. Do not move `HEAD` or the working tree.
 
 Count with ordinary git: extra worktrees, local branches, remote branches besides
 `main`, open PRs, stashes, dirty and untracked files, `HEAD` vs `origin/main`
-left-right. If an official audit script goes silent, drop it.
+left-right. If an official audit script goes silent, drop it. If
+`git cherry HEAD origin/main` (the GitHub-only side) hangs on a large behind
+count, kill it. The direction that decides unique local work is
+`git cherry origin/main HEAD`.
 
 - A handful of leftovers already on `origin/main` → this is not a disaster. Junior
   leftover pass. This skill stands down.
@@ -115,12 +118,16 @@ The status line is usually a liar. The hygiene pile is usually not.
 **1a. The two mains as patches.** Record GitHub `main` SHA, local `HEAD`,
 merge-base, last push age. Then `git cherry origin/main HEAD`. Same-message
 commits on GitHub usually mean "already landed under a new hash." Report unique
-local commits, not the ahead count.
+local commits, not the ahead count. Cherry `+` plus a same-message commit
+already on GitHub, with later GitHub commits on those files, is J: keep
+GitHub. The leftover is not newer just because the patches differ.
 
 **1b. Dirty checkout vs GitHub, not vs stale local `main`.** For each modified or
 untracked path: already matches `origin/main`, already exists on `origin/main`,
 generated/lockfile/`.wt` noise, or truly unique. Untracked often only looks new
-because local `main` froze.
+because local `main` froze. Dirty can also be a rewind: a working-tree file
+older than GitHub (a version number, a config). That is junk, not unique
+product.
 
 **1c. Bucket every leftover** — every worktree, local branch, remote branch, PR,
 and stash gets one letter:
@@ -148,6 +155,10 @@ fifteenth fate.
 **1d. Census sibling repos** with the same four numbers: extra worktrees, unique
 local commits (`cherry`, not ahead), dirty vs `origin/main`, open PRs.
 
+Resolve `git rev-parse --git-common-dir` for every folder. A differently named
+folder that shares another repo's `.git` is that repo's leftover, not a new
+disaster. Do not assign a second recovery to it.
+
 Stop and report two sentences: what the status implied, what the patches say.
 Ask before any delete.
 
@@ -156,9 +167,12 @@ Ask before any delete.
 Delete A, B, and H. Leave C through G and I through L.
 
 - Remove a worktree only if its commit is on `origin/main`. Let git refuse dirty
-  ones. Skip a hung remove.
+  ones. Skip a hung remove. In zsh, never name a helper variable `path` —
+  that is PATH, and git vanishes inside the function.
 - Delete local and remote branches whose unique patches are on `origin/main`.
-  Cherry / patch-id, not `--merged`.
+  Cherry / patch-id, not `--merged`. `git branch -d` checks stale local
+  `main` and will refuse a leftover that is already on GitHub. After cherry
+  unique=0, `-D` is the delete.
 - Drop a stash only when it is empty or older than what is already on GitHub. If
   you cannot prove it, it stays.
 
@@ -300,7 +314,8 @@ ordered Stage 6.
 Same stages. Do not invent a second method. Suggested order from the first
 census: smallest pile first (that night: common-docs, then matrx-local, then
 matrx-frontend). Confirm sandbox / extend / ship are still one worktree on
-`main`, then ignore them.
+`main`, then ignore them. A folder that is only another name for an already
+counted checkout (same common git dir) is not a sibling — skip it.
 
 ## Stage 6 — Shared checkout last
 
@@ -473,6 +488,9 @@ Rows from the 2026-09-19 transcript, not imagined.
 | Excuse | Reality |
 |---|---|
 | "149 ahead means 149 unique commits" | Cherry / patch-id. Most were already on GitHub under new hashes. |
+| "Cherry said plus, so this leftover is newer" | Same-message on GitHub plus later GitHub commits on those files is J. Keep GitHub. |
+| "This dirty file is uncommitted new work" | Compare to GitHub. A rewind (older version number, older config) is junk. |
+| "I need the GitHub-only cherry to finish before I know unique work" | Kill it if it hangs. `git cherry origin/main HEAD` is the unique-local direction. |
 | "I'll wait for the official audit script" | It ran ~16 minutes with no output. Count with ordinary git. |
 | "I'll reset the dirty checkout to make room" | Open an intake worktree from current `origin/main`. |
 | "Failing CI means do not merge" | Stop only when this change broke boot, auth, data, or a shared contract. |

@@ -29,6 +29,7 @@ from app.services.cloud_sync.instance_manager import (
 from app.services.cloud_sync.settings_sync import SettingsSync
 
 APP_INSTANCE_ID = "44444444-4444-4444-8444-444444444444"
+TEST_ORGANIZATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,22 @@ class _Http:
         self.resp = _Resp()
 
     def set_response(self, resp: _Resp) -> None:
+        if isinstance(resp._json, list):
+            resp._json = [
+                {
+                    **row,
+                    **(
+                        {"organization_id": TEST_ORGANIZATION_ID}
+                        if isinstance(row, dict)
+                        and {"id", "user_id", "instance_id"} <= set(row)
+                        and "organization_id" not in row
+                        else {}
+                    ),
+                }
+                if isinstance(row, dict)
+                else row
+                for row in resp._json
+            ]
         self.resp = resp
 
     def bodies(self, method: str) -> list[dict]:
@@ -113,6 +130,14 @@ def http(monkeypatch):
     import app.services.sync_client as sync_client
 
     monkeypatch.setattr(sync_client, "get_sync_client", lambda: _DaemonClient())
+    async def registration_context(self, *, expected_owner=None):
+        assert expected_owner in (None, "user-1")
+        return "user-1", {
+            "Authorization": "Bearer daemon-access-token",
+            "X-Organization-Id": TEST_ORGANIZATION_ID,
+        }, TEST_ORGANIZATION_ID
+
+    monkeypatch.setattr(SettingsSync, "_registration_context", registration_context)
     return rec
 
 
@@ -164,19 +189,22 @@ def test_registration_discards_response_when_daemon_owner_changes_in_flight(http
     sync = _configured_sync()
     calls = 0
 
-    async def context(*, expected_owner=None):
+    async def registration_context(*, expected_owner=None):
         nonlocal calls
         calls += 1
         owner = "user-1" if calls == 1 else "user-2"
         if expected_owner is not None and owner != expected_owner:
             raise RuntimeError("sync_daemon_owner_changed")
-        return owner, {"Authorization": "Bearer daemon-access-token"}
+        return owner, {
+            "Authorization": "Bearer daemon-access-token",
+            "X-Organization-Id": TEST_ORGANIZATION_ID,
+        }, TEST_ORGANIZATION_ID
 
-    monkeypatch.setattr(sync, "_request_context", context)
+    monkeypatch.setattr(sync, "_registration_context", registration_context)
 
     assert asyncio.run(sync.register_instance({"instance_id": "inst_test"})) is None
     assert sync._known_metadata is None
-    assert sync._last_registration_result is None
+    assert sync._last_registration_result == "error:sync_daemon_owner_changed"
 
 
 def test_tunnel_writer_uses_current_daemon_grant_headers(http, monkeypatch):

@@ -8,6 +8,8 @@ import types
 import pytest
 
 from app.services.cloud_sync.settings_sync import SettingsSync
+from app.services.cloud_sync import instance_manager
+from app.services.cloud_sync.instance_manager import InstanceManager
 
 
 USER = "11111111-1111-4111-8111-111111111111"
@@ -22,14 +24,14 @@ def _sync() -> SettingsSync:
     return sync
 
 
-def _response(monkeypatch, payloads):
+def _response(monkeypatch, payloads, *, organization_id=ORG_A):
     class Response:
         is_success = True
         status_code = 201
         text = ""
 
         def json(self):
-            return [{"id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "user_id": USER, "instance_id": INSTANCE}]
+            return [{"id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "user_id": USER, "instance_id": INSTANCE, "organization_id": organization_id}]
 
     class Client:
         async def __aenter__(self):
@@ -55,7 +57,11 @@ async def test_registration_context_uses_current_daemon_grant_and_device_organiz
     async def grant():
         return "daemon-token", USER
 
+    calls = 0
+
     async def selected(token):
+        nonlocal calls
+        calls += 1
         assert token == "daemon-token"
         return ORG_A
 
@@ -66,10 +72,11 @@ async def test_registration_context_uses_current_daemon_grant_and_device_organiz
     assert owner == USER
     assert organization_id == ORG_A
     assert headers["X-Organization-Id"] == ORG_A
+    assert calls == 2
 
 
 @pytest.mark.anyio
-async def test_registration_writes_device_selected_organization_not_caller_data(monkeypatch):
+async def test_registration_writes_device_selected_organization_not_caller_data(monkeypatch, tmp_path):
     sync = _sync()
     sent = []
     _response(monkeypatch, sent)
@@ -79,15 +86,18 @@ async def test_registration_writes_device_selected_organization_not_caller_data(
         return USER, {"Authorization": "Bearer daemon", "X-Organization-Id": ORG_A}, ORG_A
 
     monkeypatch.setattr(sync, "_registration_context", context)
-    # Avoid this test depending on durable device-identity persistence.
+    manager = InstanceManager()
+    manager._instance_id = INSTANCE
+    monkeypatch.setattr(instance_manager, "INSTANCE_FILE", tmp_path / "instance.json")
     monkeypatch.setattr(
         "app.services.cloud_sync.instance_manager.get_instance_manager",
-        lambda: types.SimpleNamespace(accept_registration_identity=lambda *_a, **_k: True),
+        lambda: manager,
     )
 
     assert await sync.register_instance({"instance_id": INSTANCE}) is not None
     assert sent[0][0]["organization_id"] == ORG_A
     assert sent[0][1]["X-Organization-Id"] == ORG_A
+    assert manager._instance_record()["registered_device"]["user_id"] == USER
 
 
 @pytest.mark.anyio
@@ -99,7 +109,57 @@ async def test_registration_refuses_a_caller_supplied_organization_before_http(m
     monkeypatch.setattr(sync, "_registration_context", context)
 
     assert await sync.register_instance({"instance_id": INSTANCE, "organization_id": ORG_B}) is None
-    assert sync.get_debug_state()["last_registration_result"] == "error:registration_org_spoof"
+    assert sync.get_debug_state()["last_registration_result"] == "error:registration_identity_spoof"
+
+
+@pytest.mark.anyio
+async def test_registration_refuses_a_caller_supplied_user_before_http(monkeypatch):
+    sync = _sync()
+
+    async def context(*, expected_owner=None):
+        return USER, {"Authorization": "Bearer daemon", "X-Organization-Id": ORG_A}, ORG_A
+
+    monkeypatch.setattr(sync, "_registration_context", context)
+    assert await sync.register_instance({"instance_id": INSTANCE, "user_id": ORG_B}) is None
+
+
+@pytest.mark.anyio
+async def test_configured_owner_a_with_current_daemon_b_never_posts(monkeypatch):
+    import app.services.aidream.organization as organization
+    import app.services.sync_client as sync_client
+
+    sync = _sync()
+
+    async def grant():
+        return "daemon-b", ORG_B
+
+    async def selected(_token):
+        return ORG_A
+
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: types.SimpleNamespace(access_grant=grant))
+    monkeypatch.setattr(organization, "resolve_active_organization_id", selected)
+    assert await sync.register_instance({"instance_id": INSTANCE}) is None
+    assert sync.is_orphan
+
+
+@pytest.mark.anyio
+async def test_owner_switch_during_organization_resolution_never_posts(monkeypatch):
+    import app.services.aidream.organization as organization
+    import app.services.sync_client as sync_client
+
+    sync = _sync()
+    grants = iter([("daemon-a", USER), ("daemon-b", ORG_B)])
+
+    async def grant():
+        return next(grants)
+
+    async def selected(_token):
+        return ORG_A
+
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: types.SimpleNamespace(access_grant=grant))
+    monkeypatch.setattr(organization, "resolve_active_organization_id", selected)
+    assert await sync.register_instance({"instance_id": INSTANCE}) is None
+    assert sync.is_orphan
 
 
 @pytest.mark.anyio
@@ -132,3 +192,21 @@ async def test_registration_discards_response_when_device_organization_changes_d
 
     assert await sync.register_instance({"instance_id": INSTANCE}) is None
     assert len(sent) == 1
+
+
+@pytest.mark.anyio
+async def test_wrong_response_organization_cannot_persist_registered_device(monkeypatch, tmp_path):
+    sync = _sync()
+    sent = []
+    _response(monkeypatch, sent, organization_id=ORG_B)
+    manager = InstanceManager()
+    manager._instance_id = INSTANCE
+    monkeypatch.setattr(instance_manager, "INSTANCE_FILE", tmp_path / "instance.json")
+    monkeypatch.setattr("app.services.cloud_sync.instance_manager.get_instance_manager", lambda: manager)
+
+    async def context(*, expected_owner=None):
+        return USER, {"Authorization": "Bearer daemon", "X-Organization-Id": ORG_A}, ORG_A
+
+    monkeypatch.setattr(sync, "_registration_context", context)
+    assert await sync.register_instance({"instance_id": INSTANCE}) is None
+    assert "registered_device" not in manager._instance_record()

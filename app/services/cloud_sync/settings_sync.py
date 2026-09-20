@@ -582,13 +582,29 @@ class SettingsSync:
         if grant is None:
             raise RuntimeError("sync_daemon_session_unavailable")
         access_token, user_id = grant
+        expected_owner = expected_owner or self._expected_user_id
         if expected_owner is not None and user_id != expected_owner:
             raise RuntimeError("sync_daemon_owner_changed")
-        organization_id = await resolve_active_organization_id(access_token)
+        await resolve_active_organization_id(access_token)
+        # Organization resolution awaits storage/network. Re-read the daemon
+        # grant before constructing an HTTP request so a B session cannot use
+        # A's configured registration snapshot or A's selected organization.
+        current_grant = await get_sync_client().access_grant()
+        if current_grant is None:
+            raise RuntimeError("sync_daemon_session_unavailable")
+        current_access_token, current_user_id = current_grant
+        if current_user_id != user_id or (
+            expected_owner is not None and current_user_id != expected_owner
+        ):
+            raise RuntimeError("sync_daemon_owner_changed")
+        current_organization_id = await resolve_active_organization_id(current_access_token)
+        final_grant = await get_sync_client().access_grant()
+        if final_grant is None or final_grant[1] != current_user_id:
+            raise RuntimeError("sync_daemon_owner_changed")
         return user_id, {
-            **self._headers(access_token),
-            "X-Organization-Id": organization_id,
-        }, organization_id
+            **self._headers(final_grant[0]),
+            "X-Organization-Id": current_organization_id,
+        }, current_organization_id
 
     def _log_http_error(self, operation: str, resp: Any) -> str:
         """Log and return a descriptive error string from a non-2xx response."""
@@ -710,16 +726,16 @@ class SettingsSync:
         try:
             user_id, headers, organization_id = await self._registration_context()
             owner = user_id
-            if "organization_id" in registration:
+            if "organization_id" in registration or "user_id" in registration:
                 # The instance manager never supplies an organization. Reject
                 # rather than let any caller smuggle a different tenant.
-                self._last_registration_result = "error:registration_org_spoof"
+                self._last_registration_result = "error:registration_identity_spoof"
                 self._is_orphan = True
                 return None
             payload = {
+                **registration,
                 "user_id": user_id,
                 "organization_id": organization_id,
-                **registration,
                 "is_active": True,
                 "last_seen": datetime.now(timezone.utc).isoformat(),
             }
@@ -757,6 +773,11 @@ class SettingsSync:
                 row = rows[0] if rows else None
                 if row:
                     from app.services.cloud_sync.instance_manager import get_instance_manager
+                    if row.get("organization_id") != organization_id:
+                        self._last_registration_result = "error:organization_mismatch"
+                        self._is_orphan = True
+                        get_instance_manager().clear_registered_device_identity()
+                        return None
                     if not get_instance_manager().accept_registration_identity(
                         row,
                         expected_origin=registration_snapshot[1],

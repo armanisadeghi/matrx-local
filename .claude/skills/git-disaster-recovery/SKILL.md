@@ -44,6 +44,11 @@ Companions, read only when pointed:
 ## Hard bans
 
 - Never force-push.
+- Never leave a local worktree or a local branch behind. Arman, 2026-09-20:
+  "there is no reason for ever having a worktree. Updates should always be
+  made to the single source of truth that is pushed live every 30 minutes."
+  An intake worktree lives for the minutes one landing takes, then it is
+  removed. Remote branches are tolerated; local ones are forbidden.
 - Never commit the dirty shared tree as one blob.
 - Never merge onto the dirty shared checkout or reset it "to make room".
   Landing happens in one short-lived intake worktree from current `origin/main`.
@@ -195,9 +200,40 @@ anything other than a failed build or a failed live health check, that is a
 bug in the gate: get past it, keep merging, and fix the class. Then the
 ordinary loop: pull first, commit, resolve, release, every 30 minutes.
 
+One halt seen twice in one day: a down-migration sitting at the top level of
+the migrations folder. The release sweep reads it as pending forward work and
+refuses it. It belongs in the repo's inverse directory with the header that
+directory requires. Move it, do not "fix" its SQL.
+
 Fresh dirty files after this point with no real conflict are committed on
 the ordinary cadence. Real conflicts go to Arman immediately, one at a time,
 with one recommendation.
+
+### 7. The hours after: keep local equal to remote while lanes write
+
+The folder is clean, but dozens of sessions write into it every minute, and
+the next usage pause or crash strands their half-finished files as dirty
+paths nobody owns. Do not let that pile grow back. Every 30 minutes:
+
+- Fetch, `pull --no-rebase`, push. If the pull is refused because an
+  untracked file "would be overwritten", a lane pushed that file from its
+  own worktree and left a copy here: if the copy is byte-identical to
+  `origin/main`, delete it; if it differs, move it aside and land the
+  unique hunk later. Never a blanket clean.
+- Classify the dirty set again with the step 2 table. Files older than 30
+  minutes with no writer are cut-off work: commit them in coherent clusters
+  with explicit paths and plain messages, pull, push. Files touched in the
+  last few minutes belong to a live writer: leave them.
+- Type-check GitHub main in an intake worktree after every batch. A blind
+  batch that breaks the build is undone the same hour, one file at a time,
+  never by reverting the batch.
+- Remove every worktree that is not the release script's own, landing its
+  unique files on main first. Idle or live makes no difference: nothing
+  waits in a worktree. A slow filesystem makes `worktree remove` hang: unregister it under
+  `.git/worktrees/` and delete the directory in the background.
+- The shared-checkout guard reads the whole command line. One `checkout -- .`
+  or `add -A` anywhere in a chained command refuses the entire chain before
+  any of it runs. Name every path.
 
 ## Done means
 

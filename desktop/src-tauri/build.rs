@@ -19,6 +19,19 @@ fn build_native_vault_exchange() {
         .to_owned();
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("native-vault-exchange");
     let target = std::env::var("TARGET").unwrap();
+    let custody_guard = desktop
+        .parent()
+        .unwrap()
+        .join("scripts/check-native-vault-custody.py");
+    println!("cargo:rerun-if-changed={}", custody_guard.display());
+    for path in ["src", "src-tauri/src"] {
+        println!("cargo:rerun-if-changed={}", desktop.join(path).display());
+    }
+    let guard = Command::new("python3")
+        .arg(&custody_guard)
+        .status()
+        .expect("Python is required for the native Vault custody check");
+    assert!(guard.success(), "Native Vault custody check failed");
     for path in [
         "native-vault-provider/core/src",
         "native-vault-provider/core/vendor",

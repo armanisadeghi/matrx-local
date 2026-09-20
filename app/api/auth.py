@@ -21,7 +21,7 @@ from app.api.auth_rejection_log import log_rejection
 from app.api.remote_auth import (
     headers_indicate_tunnel,
     is_instance_owner,
-    verify_supabase_token,
+    verify_supabase_token_result,
 )
 from app.services.pairing import matches_pair_token
 from app.services.catalogs.models import KNOWN_KINDS as _CATALOG_KINDS
@@ -267,24 +267,52 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         # Tunnel traffic is untrusted: require a cryptographically-verified
-        # Supabase identity (validated by the auth server, since the project
-        # signs HS256 and the engine holds no secret) AND that the identity is
-        # this instance's owner. A static local API key is deliberately NOT
-        # accepted over the tunnel — it's a loopback-only credential.
-        # Direct-loopback traffic keeps the presence-only boundary — the
-        # loopback socket itself is the trust boundary there.
+        # Supabase identity (the signature is checked locally against the
+        # project's published ES256 key — see remote_auth) AND that the
+        # identity is this instance's owner. A static local API key is
+        # deliberately NOT accepted over the tunnel — it's a loopback-only
+        # credential. Direct-loopback traffic keeps the presence-only boundary
+        # — the loopback socket itself is the trust boundary there.
         if via_tunnel and not (
             path.startswith("/extension/") and matches_pair_token(token)
         ):
-            user = await verify_supabase_token(token)
+            verification = await verify_supabase_token_result(token)
+            user = verification.user
             if user is None:
+                # A refused request must say WHICH thing went wrong. "Invalid
+                # or expired credentials" for a session we simply could not
+                # CHECK is a lie that sends the user to sign in again over a
+                # network blip (proxy-identity rule 3). Both still fail closed.
+                unverifiable = verification.status in ("unavailable", "unconfigured")
+                unconfigured = verification.status == "unconfigured"
                 log_rejection(
                     "auth",
                     "http",
                     path,
-                    "unverified_token_over_tunnel",
+                    f"token_{verification.status}_over_tunnel",
                     method=request.method,
                 )
+                if unverifiable:
+                    return _auth_error_response(
+                        path,
+                        request=request,
+                        status_code=503,
+                        message=(
+                            "This machine is not set up to check sessions, so it "
+                            "refused the request. Your session has NOT been "
+                            "signed out. Use the app directly on this machine."
+                            if unconfigured
+                            else "This machine could not check your session, so "
+                            "it refused the request. Your session has NOT been "
+                            "signed out — try again in a moment, or use the app "
+                            "directly on this machine."
+                        ),
+                        code=(
+                            "session_verification_unconfigured"
+                            if unconfigured
+                            else "session_verification_unavailable"
+                        ),
+                    )
                 return _auth_error_response(
                     path,
                     request=request,

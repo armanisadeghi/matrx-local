@@ -22,13 +22,30 @@ This module draws the missing distinction and verifies identity:
    genuine tunnel request. So presence of the marker is a safe one-way
    signal: "treat as untrusted remote."
 
-2. :func:`verify_supabase_token` — the Supabase project signs JWTs with
-   HS256. The engine has no secure place for the symmetric signing secret
-   (CLAUDE.md hard rule) and cannot verify HS256 locally. The correct
-   verification for a token you can't check yourself is to ask the issuer:
-   we call GoTrue's ``GET /auth/v1/user`` with the token. A 200 means the
-   auth server validated the signature + expiry and hands back the user.
-   Results are cached briefly so the hot path doesn't hammer the network.
+2. :func:`verify_supabase_token` — the Matrx Supabase project signs access
+   tokens with **ES256**, an asymmetric algorithm whose *public* verifying
+   keys are published at ``/auth/v1/.well-known/jwks.json``. A public key
+   needs no secure storage, so the engine verifies the signature ITSELF,
+   locally, with PyJWT — exactly as trusted as asking the auth server,
+   because the signature is cryptographically checked either way.
+
+   This module used to call GoTrue's ``GET /auth/v1/user`` instead, on the
+   premise that the project signed HS256 and the engine had no safe place
+   for a symmetric secret. **That premise is stale** (the project rotated to
+   ES256; verified 2026-09-20), and the round trip it justified put a
+   5s-timeout network call on the auth hot path of every tunnel-reachable
+   request — so a network blip locked the user out of their own desktop app.
+   Contract: ``common-docs/systems/platform/proxy-identity/FEATURE.md`` —
+   local verification instead of a per-request auth-server round trip, a
+   BOUNDED resolve, and an authority we could not REACH is never read as a
+   signed-out person.
+
+   Everything this engine needs is a standard JWT claim: ``sub``, ``email``,
+   ``role``/``aud``, ``is_anonymous``. Claims do NOT carry ``created_at``,
+   ``identities``, ``last_sign_in_at``, ``factors`` or the ``*_confirmed_at``
+   fields — a future call site that needs one of those, or that deliberately
+   wants a per-request revocation check, keeps the network call ON PURPOSE
+   and writes the reason down.
 
 3. A local API key (``MATRX_LOCAL_API_KEY`` / ``TEST_MODE``) for headless
    and test callers that have no Supabase session.
@@ -43,15 +60,14 @@ Trust contract enforced by callers (see ``auth.py`` / ``extension_auth.py``):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Literal, Optional
-
-import httpx
+from typing import Any, Literal, Optional
 
 from app.common.system_logger import get_logger
-from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
+from app.config import SUPABASE_URL
 
 logger = get_logger()
 
@@ -79,7 +95,7 @@ def headers_indicate_tunnel(headers) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Supabase token verification (introspection — works for HS256)
+# Supabase token verification (local signature check against the project JWKS)
 #
 # Note: there is intentionally no "local API key" accepted here. Over the
 # tunnel only a verified Supabase identity (owner) is accepted; on direct
@@ -102,35 +118,43 @@ TokenVerificationStatus = Literal[
     "invalid",
     "unavailable",
     "unconfigured",
-    "misconfigured",
 ]
 
 
 @dataclass(frozen=True)
 class TokenVerificationResult:
-    """Issuer-verification result.
+    """Local-verification result.
 
-    The four failure statuses answer four different questions and must never
+    The three failure statuses answer three different questions and must never
     be collapsed:
 
-    ``invalid``       the ISSUER judged the USER's token bad (expired, revoked,
-                      malformed, wrong project). Signing in again fixes it.
-    ``misconfigured`` the issuer rejected *our* ``apikey`` — the engine's
-                      publishable key is wrong, missing, or has been rotated.
-                      Nothing the user does fixes this, and their stored
-                      session is not at fault, so it must never be erased.
-    ``unavailable``   the issuer could not be reached / returned 5xx.
-    ``unconfigured``  this engine has no Supabase URL or publishable key at all.
+    ``invalid``       we REFUSE this token: the signature does not match the
+                      project's published key, it has expired, it is
+                      malformed, or it names an algorithm outside the
+                      allow-list (``none``, HS384, an invention). A verdict.
+                      Signing in again fixes it, and it is the only failure a
+                      caller may treat as "this session is over".
+    ``unavailable``   we could not CHECK the token: the key set could not be
+                      fetched, the project publishes no key for its ``kid``,
+                      or it is a legacy HS256 token (verifiable only with a
+                      symmetric secret this engine must not hold). Nothing is
+                      known about the session — per the proxy-identity
+                      contract, an authority we could not reach is never a
+                      signed-out person, so callers that persist credentials
+                      MUST NOT erase a previously-good session on this.
+    ``unconfigured``  this engine has no Supabase URL at all, so there is no
+                      issuer to verify against.
     """
 
     status: TokenVerificationStatus
     user: Optional[VerifiedUser] = None
 
 
-# Positive results cached briefly to keep the auth hot-path off the network.
-# Keyed by a hash of the token (never store the raw token in a process-global
-# dict). Negative results get a shorter TTL so a freshly-issued token isn't
-# locked out by a stale "invalid" entry.
+# Verification is local, so this cache exists only to skip repeated signature
+# math for the same token on a hot path — not to dodge the network. Keyed by a
+# hash of the token (never store the raw token in a process-global dict).
+# Negative results get a shorter TTL so a freshly-issued token isn't locked out
+# by a stale "invalid" entry.
 _POSITIVE_TTL_SECONDS = 60.0
 _NEGATIVE_TTL_SECONDS = 5.0
 _MAX_CACHE_ENTRIES = 512
@@ -155,7 +179,7 @@ def _cache_get(key: str) -> tuple[bool, Optional[VerifiedUser]]:
     return True, value
 
 
-def _cache_put(key: str, value: Optional[VerifiedUser]) -> None:
+def _cache_put(key: str, value: Optional[VerifiedUser], ttl: Optional[float] = None) -> None:
     if len(_verify_cache) >= _MAX_CACHE_ENTRIES:
         # Cheap eviction: drop everything already expired, then, if still
         # full, clear the map. Auth caches are small and short-lived so a
@@ -165,25 +189,150 @@ def _cache_put(key: str, value: Optional[VerifiedUser]) -> None:
             _verify_cache.pop(k, None)
         if len(_verify_cache) >= _MAX_CACHE_ENTRIES:
             _verify_cache.clear()
-    ttl = _POSITIVE_TTL_SECONDS if value is not None else _NEGATIVE_TTL_SECONDS
+    if ttl is None:
+        ttl = _POSITIVE_TTL_SECONDS if value is not None else _NEGATIVE_TTL_SECONDS
+    if ttl <= 0:
+        return
     _verify_cache[key] = (time.monotonic() + ttl, value)
 
 
-# GoTrue answers a bad USER token with 403 ``bad_jwt`` (or a 401 about the
-# token); the API gateway in front of it answers a bad/missing ``apikey`` with
-# 401 and a body that names the API key. Classification is positive-evidence
-# only: anything we cannot positively tie to our own key stays a session verdict.
-_API_KEY_ERROR_CODES = {"no_api_key", "invalid_api_key", "api_key_invalid"}
+# ---------------------------------------------------------------------------
+# JWKS: the ONE local-verification primitive in this repo
+#
+# app/api/extension_auth.py consumes ``verify_supabase_token_result`` rather
+# than building a second PyJWKClient — one key cache, one algorithm allow-list,
+# one refresh budget, one set of verdicts. A second copy is how one surface
+# silently keeps accepting what the other rejects.
+#
+# Shape copied from the platform's existing verifier
+# (aidream/packages/matrx-connect/matrx_connect/middleware/auth.py): our own
+# kid -> key map in front of PyJWT's client, one refresh at a time, and a
+# refresh cooldown. That is what keeps the steady state at ZERO network calls
+# and stops unknown-kid traffic from turning this engine into a JWKS hammer.
+# ---------------------------------------------------------------------------
+
+# The algorithms whose verifying key is PUBLIC. HS256 is deliberately absent:
+# verifying it needs the project's symmetric secret, which a program running on
+# the user's machine has no safe place to hold (CLAUDE.md configuration
+# posture). An HS256 token is reported ``unavailable``, never ``invalid`` — we
+# did not check it, so we know nothing about it. Any OTHER algorithm (``none``,
+# HS384/512, an attacker's invention) is a token we refuse to accept at all,
+# which IS a verdict: ``invalid``.
+VERIFY_ALGORITHMS = ("ES256", "RS256")
+
+# The resolve is BOUNDED (proxy-identity rule 2). PyJWT's key fetch is blocking
+# urllib; its own timeout covers the socket and the outer wait_for covers
+# everything else, so no auth request can hang on a stalled issuer.
+_JWKS_FETCH_TIMEOUT_SECONDS = 5.0
+_JWKS_RESOLVE_TIMEOUT_SECONDS = 6.0
+
+# At most one key-set fetch per this window, whatever arrives. A key we already
+# hold is used without asking the network at all, so this budget never delays a
+# token whose key is known — it only caps what unknown kids and an unreachable
+# issuer can cost. Without it, every token bearing a kid we do not have (a
+# flood of them needs no credentials) is its own outbound fetch.
+JWKS_REFRESH_COOLDOWN_SECONDS = 30.0
+
+_jwks_client_cache: dict[str, Any] = {}
+_jwks_keys: dict[str, Any] = {}
+_jwks_last_refresh = 0.0
+_jwks_lock = asyncio.Lock()
 
 
-def missing_supabase_config() -> list[str]:
-    """Name the account-service settings this engine is missing (in order)."""
-    missing: list[str] = []
-    if not SUPABASE_URL:
-        missing.append("SUPABASE_URL")
-    if not SUPABASE_PUBLISHABLE_KEY:
-        missing.append("SUPABASE_PUBLISHABLE_KEY")
-    return missing
+def supabase_jwks_url() -> Optional[str]:
+    """Derive the project's well-known JWKS URL from ``SUPABASE_URL``.
+
+    Returns ``None`` when ``SUPABASE_URL`` is empty, which lets callers skip
+    the JWKS path cleanly instead of raising.
+    """
+    base = (SUPABASE_URL or "").rstrip("/")
+    if not base:
+        return None
+    return f"{base}/auth/v1/.well-known/jwks.json"
+
+
+def get_jwks_client(jwks_url: str) -> Any:
+    """Return the process-wide ``jwt.PyJWKClient`` for ``jwks_url``."""
+    cached = _jwks_client_cache.get(jwks_url)
+    if cached is not None:
+        return cached
+    # Lazy import — keep ``jwt`` out of the module-import cycle so catalog
+    # regeneration and other tooling that touches this file still works.
+    import jwt as _jwt
+
+    client = _jwt.PyJWKClient(jwks_url, cache_keys=True, timeout=_JWKS_FETCH_TIMEOUT_SECONDS)
+    _jwks_client_cache[jwks_url] = client
+    return client
+
+
+async def _signing_key_for(kid: str, jwks_url: str) -> Any:
+    """Return the published key for ``kid``, fetching the key set if needed.
+
+    A key we already hold answers with NO network call — that is the steady
+    state, and it is why a blip or a stalled issuer is not felt by anyone whose
+    key is known. A kid we do not hold costs at most one fetch per
+    ``JWKS_REFRESH_COOLDOWN_SECONDS``, for everyone, so unauthenticated traffic
+    carrying invented kids cannot amplify into a fetch per request.
+
+    Raises ``jwt.PyJWKClientError`` when the key cannot be produced, for any
+    reason — the caller turns that into "could not check", never a verdict.
+    """
+    global _jwks_last_refresh
+
+    import jwt as _jwt
+
+    key = _jwks_keys.get(kid)
+    if key is not None:
+        return key
+
+    async with _jwks_lock:
+        # Another request may have refreshed while we waited for the lock.
+        key = _jwks_keys.get(kid)
+        if key is not None:
+            return key
+
+        now = time.monotonic()
+        if _jwks_last_refresh and now - _jwks_last_refresh < JWKS_REFRESH_COOLDOWN_SECONDS:
+            raise _jwt.PyJWKClientError(
+                f'no published key for kid "{kid}" and the key-set refresh is '
+                "within its cooldown"
+            )
+        _jwks_last_refresh = now
+
+        client = get_jwks_client(jwks_url)
+        signing_keys = await asyncio.wait_for(
+            asyncio.to_thread(client.get_signing_keys, True),
+            timeout=_JWKS_RESOLVE_TIMEOUT_SECONDS,
+        )
+        # Replace wholesale: a key the project has retired must stop verifying.
+        _jwks_keys.clear()
+        _jwks_keys.update({k.key_id: k for k in signing_keys if k.key_id})
+
+        key = _jwks_keys.get(kid)
+        if key is None:
+            raise _jwt.PyJWKClientError(f'Unable to find a signing key that matches: "{kid}"')
+        return key
+
+
+def _decode_with_key(token: str, key: Any) -> dict[str, Any]:
+    """Check ``token``'s signature and expiry against an already-resolved key.
+
+    ``verify_aud=False``: Supabase stamps ``aud="authenticated"`` and this
+    engine accepts any authenticated user of the project, so pinning the
+    audience would add a failure mode without adding a check. ``verify_exp``
+    stays default-on, so an expired token is rejected here rather than by a
+    round trip. The algorithm allow-list is passed explicitly — PyJWT refuses
+    any token whose header names something else, which is what closes
+    algorithm-confusion.
+    """
+    import jwt as _jwt
+
+    return _jwt.decode(
+        token,
+        key.key,
+        algorithms=list(VERIFY_ALGORITHMS),
+        options={"verify_aud": False},
+    )
 
 
 # The unconfigured check is purely local, so it can be reached on EVERY
@@ -191,6 +340,17 @@ def missing_supabase_config() -> list[str]:
 # action-needed card raised on session verification is the surface that keeps saying
 # it), then stay at DEBUG so one broken build cannot bury the log file.
 _unconfigured_logged: set[str] = set()
+
+
+def missing_supabase_config() -> list[str]:
+    """Name the account-service settings session verification is missing.
+
+    Only ``SUPABASE_URL`` is required now: the verifying key is PUBLIC and is
+    fetched from that URL's JWKS document. The publishable key is no longer
+    part of verifying a session (it was only needed as the ``apikey`` header
+    on the retired GoTrue round trip).
+    """
+    return [] if SUPABASE_URL else ["SUPABASE_URL"]
 
 
 def _log_unconfigured_once() -> None:
@@ -209,45 +369,60 @@ def _log_unconfigured_once() -> None:
     logger.error(message, signature, signature)
 
 
-def _issuer_error_fields(resp) -> tuple[str, str]:
-    """Return (error_code, message) from an issuer error body; never raises."""
-    try:
-        body = resp.json()
-    except Exception:
-        return "", ""
-    if not isinstance(body, dict):
-        return "", ""
-    raw_code = body.get("error_code") or body.get("error") or body.get("code")
-    error_code = raw_code if isinstance(raw_code, str) else ""
-    for field in ("message", "msg", "error_description", "hint"):
-        value = body.get(field)
-        if isinstance(value, str) and value:
-            return error_code, value
-    return error_code, ""
+# One line the first time an HS256 token shows up, not one per request. Capped:
+# ``alg`` is attacker-controlled text on a PRE-AUTH path, so an uncapped set
+# here is a remote memory leak and a remote log flood.
+_MAX_LOGGED_ALGS = 8
+_unverifiable_alg_logged: set[str] = set()
 
 
-def _rejection_is_about_our_api_key(
-    status_code: int, error_code: str, message: str
-) -> bool:
-    """True when the issuer rejected OUR apikey rather than the user's token."""
-    if status_code != 401:
-        return False
-    if error_code.lower() in _API_KEY_ERROR_CODES:
-        return True
-    return "api key" in message.lower()
+def _log_unverifiable_algorithm_once(alg: str) -> None:
+    if alg in _unverifiable_alg_logged or len(_unverifiable_alg_logged) >= _MAX_LOGGED_ALGS:
+        logger.debug("[remote_auth] token alg=%s is not locally verifiable", alg)
+        return
+    _unverifiable_alg_logged.add(alg)
+    logger.warning(
+        "[remote_auth] a session token signed with %s arrived; this engine can "
+        "only verify %s (public keys from the project JWKS) and holds no "
+        "symmetric signing secret by design. The session is treated as "
+        "UNVERIFIABLE, not invalid — it is not erased. Remedy: the Supabase "
+        "project must issue asymmetric tokens (it signs ES256 as of "
+        "2026-09-20); a user holding an older token gets one by signing in "
+        "again.",
+        alg,
+        "/".join(VERIFY_ALGORITHMS),
+    )
+
+
+def _positive_ttl_for(claims: dict[str, Any]) -> float:
+    """Cache a verified token for at most as long as it is still valid.
+
+    Expiry is checked at verification time, so a flat 60s cache would keep
+    accepting a token for up to a minute after it expired.
+    """
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)):
+        return _POSITIVE_TTL_SECONDS
+    return max(0.0, min(_POSITIVE_TTL_SECONDS, exp - time.time()))
 
 
 async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
-    """Validate a token against the configured Supabase Auth issuer.
+    """Verify a Supabase access token locally against the project's JWKS.
 
-    ``invalid`` is an issuer verdict and may be cached briefly. ``unavailable``
-    means the issuer could not be reached or returned a transient server error;
-    callers that persist credentials must not erase a previously-good session
-    merely because validation infrastructure is temporarily unavailable.
+    No auth-server round trip: the signature is checked against the project's
+    published public key, which is exactly as trusted and costs no network on
+    the steady path (the key set is cached in-process for an hour).
+
+    ``invalid`` is a cryptographic verdict about the token and may be cached
+    briefly. ``unavailable`` means we could not check it at all; callers that
+    persist credentials must not erase a previously-good session merely
+    because the key set was momentarily out of reach.
     """
     if not token:
         return TokenVerificationResult("invalid")
-    if not (SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY):
+
+    jwks_url = supabase_jwks_url()
+    if not jwks_url:
         _log_unconfigured_once()
         return TokenVerificationResult("unconfigured")
 
@@ -259,88 +434,111 @@ async def verify_supabase_token_result(token: str) -> TokenVerificationResult:
             cached,
         )
 
-    url = f"{SUPABASE_URL.rstrip('/')}/auth/v1/user"
-    headers = {
-        "apikey": SUPABASE_PUBLISHABLE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    }
+    import jwt as _jwt
+
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, headers=headers)
+        header = _jwt.get_unverified_header(token)
+        alg = header.get("alg")
+        kid = header.get("kid") or ""
     except Exception as exc:
-        logger.debug("[remote_auth] token introspection network error: %s", exc)
+        # Not a JWT at all. That is a verdict about the token itself, and it
+        # needs no issuer to reach — cache it like any other rejection.
+        logger.debug("[remote_auth] token header unreadable: %s", exc)
+        _cache_put(key, None)
+        return TokenVerificationResult("invalid")
+
+    if alg == "HS256":
+        # The one algorithm we genuinely cannot judge: verifying it needs the
+        # project's symmetric secret, which this engine must not hold. We did
+        # not check the token, so we say nothing about the session.
+        _log_unverifiable_algorithm_once("HS256")
         return TokenVerificationResult("unavailable")
 
-    if resp.status_code in {401, 403}:
-        error_code, message = _issuer_error_fields(resp)
-        if _rejection_is_about_our_api_key(resp.status_code, error_code, message):
-            # OUR configuration is broken, not the user's session. Never cache
-            # this against the token and never let a caller treat it as a bad
-            # session: with a rotated/incorrect publishable key EVERY user would
-            # otherwise be told to sign in again, forever, for no reason.
-            logger.warning(
-                "[remote_auth] issuer rejected token introspection "
-                "(HTTP %s error_code=%s message=%s)",
-                resp.status_code,
-                error_code or "-",
-                message or "-",
-            )
-            logger.error(
-                "[remote_auth] MISCONFIGURATION: %s rejected this engine's "
-                "Supabase apikey (HTTP %s: %s). No user session is at fault and "
-                "signing in again cannot help. Remedy: correct/rotate "
-                "SUPABASE_PUBLISHABLE_KEY for %s and restart the engine.",
-                SUPABASE_URL,
-                resp.status_code,
-                message or error_code or "no detail returned",
-                SUPABASE_URL,
-            )
-            return TokenVerificationResult("misconfigured")
+    if alg not in VERIFY_ALGORITHMS or not kid:
+        # ``none``, HS384/512, an invented algorithm, or an asymmetric token
+        # naming no key: we REFUSE these, which is a verdict, not an inability.
+        # (Reported as unavailable, this was a real hole: on direct loopback
+        # the /extension/* surface downgrades "could not check" to a
+        # presence-only principal, so an RS512 token with a garbage signature
+        # got in where it used to be rejected.)
+        logger.debug("[remote_auth] refusing token alg=%s kid=%s", alg, kid or "<none>")
+        _cache_put(key, None)
+        return TokenVerificationResult("invalid")
+
+    try:
+        signing_key = await _signing_key_for(kid, jwks_url)
+        claims = await asyncio.wait_for(
+            asyncio.to_thread(_decode_with_key, token, signing_key),
+            timeout=_JWKS_RESOLVE_TIMEOUT_SECONDS,
+        )
+    except (
+        _jwt.PyJWKClientError,
+        asyncio.TimeoutError,
+        TimeoutError,
+        OSError,
+    ) as exc:
+        # We could not produce the key — unreachable issuer, a kid the project
+        # does not publish, or a refresh inside its cooldown. Nothing is known
+        # about this session: never cached, never an ``invalid`` verdict
+        # (proxy-identity rule 3).
         logger.warning(
-            "[remote_auth] issuer rejected this session as invalid "
-            "(HTTP %s error_code=%s message=%s)",
-            resp.status_code,
-            error_code or "-",
-            message or "-",
+            "[remote_auth] could not verify this session because the key for "
+            "kid=%s was unavailable from %s (%s: %s). The session is NOT "
+            "treated as signed out.",
+            kid,
+            jwks_url,
+            type(exc).__name__,
+            exc,
+        )
+        return TokenVerificationResult("unavailable")
+    except _jwt.InvalidTokenError as exc:
+        logger.warning(
+            "[remote_auth] rejected this session: the token failed signature / "
+            "expiry verification against the project key set (%s: %s)",
+            type(exc).__name__,
+            exc,
         )
         _cache_put(key, None)
         return TokenVerificationResult("invalid")
-    if resp.status_code != 200:
-        logger.debug(
-            "[remote_auth] token introspection temporarily unavailable (HTTP %s)",
-            resp.status_code,
+    except Exception as exc:
+        # Anything unanticipated is an inability to check, not a verdict.
+        logger.warning(
+            "[remote_auth] unexpected failure verifying a session (%s: %s); "
+            "treating it as unverifiable, not invalid",
+            type(exc).__name__,
+            exc,
         )
         return TokenVerificationResult("unavailable")
 
-    try:
-        data = resp.json()
-    except Exception:
-        return TokenVerificationResult("unavailable")
-
-    uid = data.get("id")
+    uid = claims.get("sub")
     if not isinstance(uid, str) or not uid:
-        return TokenVerificationResult("unavailable")
+        # A signed token with no subject cannot identify anybody. The
+        # signature was valid, so this is a real verdict about the token.
+        logger.warning("[remote_auth] rejected this session: verified token carries no 'sub'")
+        _cache_put(key, None)
+        return TokenVerificationResult("invalid")
 
-    email = data.get("email")
-    role = data.get("role") or data.get("aud")
-    is_anon = role == "anon" or bool(data.get("is_anonymous"))
+    email = claims.get("email")
+    role = claims.get("role") or claims.get("aud")
+    is_anon = role == "anon" or bool(claims.get("is_anonymous"))
     user = VerifiedUser(
         user_id=uid,
         email=email if isinstance(email, str) and email else None,
         is_anon=is_anon,
     )
-    _cache_put(key, user)
+    _cache_put(key, user, ttl=_positive_ttl_for(claims))
     return TokenVerificationResult("verified", user)
 
 
 async def verify_supabase_token(token: str) -> Optional[VerifiedUser]:
-    """Validate a Supabase access token via the auth server; cache the result.
+    """Validate a Supabase access token locally; cache the result.
 
-    Returns a :class:`VerifiedUser` when the token is genuine and unexpired,
-    or ``None`` when it is invalid/expired/unverifiable. Never raises — a
-    network failure is treated as "not verified" (fail closed) so an
-    unreachable auth server cannot turn into an auth bypass.
+    Returns a :class:`VerifiedUser` when the signature and expiry check out,
+    or ``None`` when the token is invalid/expired/unverifiable. Never raises —
+    an unreadable key set is treated as "not verified" (fail closed) so it
+    cannot turn into an auth bypass. Callers that need to tell "bad token"
+    apart from "could not check" — anything that erases a stored session —
+    must use :func:`verify_supabase_token_result` instead.
     """
     return (await verify_supabase_token_result(token)).user
 

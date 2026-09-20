@@ -16,6 +16,7 @@ COMMANDS = {
     'native_vault_provider_status', 'request_native_vault_provider_enable',
     'open_native_vault_provider_settings', 'invalidate_native_vault_host_actor',
     'reconcile_native_vault_host_actor', 'native_vault_exchange',
+    'native_vault_file_import',
 }
 SECURITY = {
     'SecItemCopyMatching': 'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
@@ -61,14 +62,17 @@ def census(sources: dict[str, str]) -> list[str]:
         for symbol in re.findall(r'#\[tauri::command\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', text):
             if 'native_vault' in symbol:
                 commands.add(symbol)
-                expected = 'desktop/src-tauri/src/native_vault_exchange.rs' if symbol == 'native_vault_exchange' else 'desktop/src-tauri/src/lib.rs'
+                expected = {
+                    'native_vault_exchange': 'desktop/src-tauri/src/native_vault_exchange.rs',
+                    'native_vault_file_import': 'desktop/src-tauri/src/native_vault_file_import.rs',
+                }.get(symbol, 'desktop/src-tauri/src/lib.rs')
                 if symbol not in COMMANDS or path != expected:
                     errors.append(f'{path}: unreviewed native command {symbol}')
         for symbol in re.findall(r'@_cdecl\("([^"]+)"\)', text):
             if symbol != 'matrx_vault_exchange_dispatch' or path != 'desktop/native-vault-provider/NativeVaultExchangeHost.swift':
                 errors.append(f'{path}: unreviewed native C export {symbol}')
         for symbol in set(re.findall(r'\bmatrx_vault_\w+\b', text)):
-            if symbol != 'matrx_vault_exchange_dispatch' or path not in {'desktop/native-vault-provider/NativeVaultExchangeHost.swift', 'desktop/src-tauri/src/native_vault_exchange.rs'}:
+            if symbol != 'matrx_vault_exchange_dispatch' or path not in {'desktop/native-vault-provider/NativeVaultExchangeHost.swift', 'desktop/src-tauri/src/native_vault_exchange.rs', 'desktop/src-tauri/src/native_vault_file_import.rs'}:
                 errors.append(f'{path}: unreviewed native C symbol {symbol}')
         if not path.startswith('desktop/native-vault-provider/'):
             for symbol in set(re.findall(r'\b(?:NativeVaultPrivateSession|PrivateSessionSecurity|nativeExportSourcePkcs8|NativeExportSourcePkcs8)\b', text)):
@@ -111,10 +115,24 @@ def census(sources: dict[str, str]) -> list[str]:
         errors.append('TypeScript request shapes changed; native selection and operation IDs only')
     host = sources.get('desktop/native-vault-provider/NativeVaultExchangeHost.swift', '')
     actions = set(re.findall(r'action == "(\w+)"', host))
-    if actions != {'begin_export', 'status', 'cancel', 'confirm', 'invalidate'}:
+    if actions != {'begin_export', 'status', 'cancel', 'confirm', 'invalidate', 'import_begin', 'import_status', 'import_preview', 'import_choose_scope', 'import_confirm', 'import_cancel', 'import_recover'}:
         errors.append(f'Native host actions changed: {sorted(actions)}')
     if 'CStr::from_ptr' in exchange or 'matrx_vault_exchange_free' in exchange:
         errors.append('exchange response must use caller-owned bounded storage')
+    file_import = sources.get('desktop/src-tauri/src/native_vault_file_import.rs', '')
+    import_request_bodies = re.findall(r'pub enum Request\s*\{(.*?)\n\}', file_import, re.S)
+    import_variants = {'BeginFileImport', 'Status', 'Preview', 'ChooseScope', 'Confirm', 'Cancel', 'Recover'}
+    if len(import_request_bodies) != 1 or set(re.findall(r'^\s*([A-Z]\w*)\s*(?:[{},(]|$)', import_request_bodies[0], re.M)) != import_variants:
+        errors.append('native file import request variants changed; review public command contract')
+    for forbidden in ('source', 'path', 'token', 'authorization', 'url'):
+        if re.search(rf'pub struct (?:Status|Preview|Slot)\s*\{{[^}}]*\b{forbidden}\b', file_import, re.S):
+            errors.append(f'native file import public response contains forbidden {forbidden} field')
+    import_typescript = sources.get('desktop/src/lib/native-vault-file-import.ts', '')
+    expected_import_actions = {'begin_file_import', 'recover', 'status', 'cancel', 'preview', 'choose_scope', 'confirm'}
+    if set(re.findall(r'"([a-z_]+)"', import_typescript.split('export type NativeVaultFileImportRequest', 1)[-1].split('export type NativeVaultImportPhase', 1)[0])) != expected_import_actions:
+        errors.append('TypeScript native file import actions changed; metadata-only request contract required')
+    if re.search(r'\b(source|path|token|authorization|url)\b', import_typescript, re.I):
+        errors.append('TypeScript native file import contract contains private material')
     return errors
 
 

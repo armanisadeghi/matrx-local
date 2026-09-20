@@ -10,7 +10,9 @@ vi.mock("@/contexts/AccessHealthContext", () => ({ useAccessHealthContext: () =>
 vi.mock("@/lib/api", () => ({ engine: { get: vi.fn(async () => ({ urls: [] })) } }));
 vi.mock("@/lib/settings", () => ({ loadSettings: async () => ({}), saveSetting: vi.fn(), saveSettings: vi.fn(), syncAllSettings: vi.fn(), broadcastSettingsChanged: vi.fn(), settingsToCloud: vi.fn(), mergeCloudSettings: vi.fn(), clampConcurrency: vi.fn(), MIN_CONCURRENCY: 1, MAX_CONCURRENCY: 10 }));
 vi.mock("@/components/settings/CloudAgentToolsCard", () => ({ CloudAgentToolsCard: () => null }));
+vi.mock("@/components/settings/NativeVaultImport", () => ({ NativeVaultImport: () => null }));
 vi.mock("@/features/filesystem/FilesystemIndexSettings", () => ({ FilesystemIndexSettings: () => null }));
+vi.mock("@/lib/org/active-org", () => ({ requestOrganizationPicker: vi.fn() }));
 import { Settings } from "./Settings";
 let root: Root | undefined;
 let container: HTMLDivElement;

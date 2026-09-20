@@ -53,7 +53,7 @@ struct NativeVaultPasswordCorpus {
         let item = "33333333-3333-4333-8333-333333333333"
         // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
         let report = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
-        let decoded = try! NativePasswordCodec.organizations(report, subject: subject)
+        let decoded = try! NativeOrganizationCodec.organizations(report, subject: subject)
         require(decoded.count == 1 && decoded[0].id == org, "valid organization report must decode")
         // THE SAVED DEFAULT IS INERT (Arman, 2026-09-19). This report names an
         // account-level default the user is not even a member of. The decoder
@@ -64,7 +64,7 @@ struct NativeVaultPasswordCorpus {
         let strangerOrg = "44444444-4444-4444-8444-444444444444"
         // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
         let withStrangerDefault = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(strangerOrg)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
-        let ignoring = try! NativePasswordCodec.organizations(withStrangerDefault, subject: subject)
+        let ignoring = try! NativeOrganizationCodec.organizations(withStrangerDefault, subject: subject)
         require(ignoring.count == 1 && ignoring[0].id == org, "the account-level default must not reach the caller")
         let match = "{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}".data(using: .utf8)!
         require((try! NativePasswordCodec.matches(match)).matches.first?.itemID == item, "value-free match must decode")
@@ -106,6 +106,7 @@ struct NativeVaultPasswordCorpus {
         // The actual direct-selection callback uses its signed binding's exact
         // organization and service digest. It never opens the generic picker.
         let selectedTransport = ScriptedPasswordTransport()
+        // org-default-exempt: synthetic server envelope exercises rejection of saved-preference authority; never selects a request scope.
         selectedTransport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         let selected = CredentialProviderViewController(); selected.nativePasswordKeyOverride = "public-build-key"; selected.nativePasswordTransport = selectedTransport; selected.nativePasswordAuthorize = { $0(true) }; selected.nativePasswordAcquire = { $0(.success(grant)) }; selected.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }
         selected.nativeIdentityBindingOverride = { _ in NativeVaultIdentityBinding(item: item, kind: .password, organization: org, passkey: nil, serviceDigest: NativeVaultIdentityRecord.serviceDigest(type: "domain", identifier: "example.com")) }

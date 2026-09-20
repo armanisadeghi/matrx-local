@@ -2,7 +2,7 @@
 name = "native-vault-core"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85.1"
+rust-version = "1.88.0"
 publish = false
 
 [lib]
@@ -11,6 +11,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
+jiter = { version = "0.17.0", default-features = false }
 coset = "0.4"
 ciborium = "0.2"
 passkey-authenticator = "0.5.0"
@@ -30,12 +31,18 @@ static_assertions = "1"
 default = []
 protocol-test-harness = []
 source-export-test-harness = []
+import-rp-proof-harness = []
 native-bridge = ["dep:uniffi"]
 
 [[bin]]
 name = "protocol-harness"
 path = "src/bin/protocol-harness.rs"
 required-features = ["protocol-test-harness"]
+
+[[bin]]
+name = "import-rp-proof-harness"
+path = "src/bin/import-rp-proof-harness.rs"
+required-features = ["import-rp-proof-harness"]
 
 [[bin]]
 name = "native-vault-bindgen"
@@ -48,6 +55,7 @@ path = "src/bin/source-export-harness.rs"
 required-features = ["source-export-test-harness"]
 
 [patch.crates-io]
+jiter = { path = "vendor/jiter" }
 passkey-authenticator = { path = "vendor/passkey-authenticator" }
 
 # Standalone even when this checkout is a managed worktree inside another workspace.

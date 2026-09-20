@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
+import { NativeVaultImport } from "@/components/settings/NativeVaultImport";
 import { VersionFacts } from "@/components/settings/VersionFacts";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -3222,6 +3223,7 @@ export function Settings({
           )}
 
           {activeTab === "vault" && (
+            <div className="space-y-4">
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
@@ -3309,6 +3311,8 @@ export function Settings({
                 )}
               </CardContent>
             </Card>
+            <NativeVaultImport />
+            </div>
           )}
 
           {/* ── Storage Tab ────────────────────────────────── */}

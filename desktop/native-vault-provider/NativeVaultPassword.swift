@@ -13,11 +13,6 @@ struct NativePasswordMatch {
     let identifierIndex: Int
 }
 
-struct NativeOrganization {
-    let id: String
-    let name: String
-    let isPersonal: Bool
-}
 
 struct NativePasswordCurrentState { let generation: String; let subject: String? }
 
@@ -41,35 +36,6 @@ enum NativePasswordStage {
 
 enum NativePasswordCodec {
     private static func rejected() -> Error { EnrollmentError.message("Vault response was rejected. Try again.") }
-
-    /// THE ORGANIZATION IS WHAT THE USER SET (Arman, 2026-09-19). The report
-    /// still CARRIES the account-level saved preference — the wire shape is
-    /// the server's — and this decoder deliberately does not hand it back:
-    /// nothing that builds a request may read it, and an AutoFill request
-    /// built under a saved default is a password read out of the wrong
-    /// tenant. The key is named below only to keep the envelope strict.
-    static func organizations(_ data: Data, subject: String) throws -> [NativeOrganization] {
-        // org-default-exempt: named ONLY to keep the envelope strict; never decoded
-        let object = try StrictEnvelope.object(data, required: ["authenticated", "user_id", "organizations", "default_organization_id", "default_preference_status", "warnings", "missing_organization_count"], optional: [])
-        guard case .bool(true)? = object["authenticated"], case .string(subject)? = object["user_id"], case let .array(rows)? = object["organizations"], rows.count <= 128 else { throw rejected() }
-        var organizations: [NativeOrganization] = []
-        var seen = Set<String>()
-        for row in rows {
-            guard case let .object(value) = row else { throw rejected() }
-            let abbreviationIsValid: Bool
-            switch value["abbreviation"] { case .null?, .string?: abbreviationIsValid = true; default: abbreviationIsValid = false }
-            guard case let .object(value) = row,
-                  Set(value.keys) == Set(["id", "name", "is_personal", "abbreviation"]),
-                  case let .string(id)? = value["id"], id.canonicalUUID,
-                  case let .string(name)? = value["name"], !name.isEmpty, name.unicodeScalars.count <= 256,
-                  case let .bool(personal)? = value["is_personal"],
-                  abbreviationIsValid,
-                  seen.insert(id).inserted else { throw rejected() }
-            organizations.append(NativeOrganization(id: id, name: name, isPersonal: personal))
-        }
-        guard case let .string(status)? = object["default_preference_status"], ["valid", "unset", "stale", "malformed", "unavailable"].contains(status), case .array? = object["warnings"], case .number? = object["missing_organization_count"] else { throw rejected() }
-        return organizations
-    }
 
     static func matches(_ data: Data) throws -> (matches: [NativePasswordMatch], truncated: Bool, reason: String?) {
         let object = try StrictEnvelope.object(data, required: ["matches", "truncated", "reason"], optional: [])
@@ -194,7 +160,7 @@ extension CredentialProviderViewController {
     private func processOrganizations(_ result: Result<(Data, HTTPURLResponse), Error>, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         do {
             let (data, response) = try result.get(); guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
-            let organizations = try NativePasswordCodec.organizations(data, subject: grant.subject)
+            let organizations = try NativeOrganizationCodec.organizations(data, subject: grant.subject)
             let selected: NativeOrganization?
             if let bound = nativePasswordSelectedBinding {
                 guard let exact = organizations.first(where: { $0.id == bound.organization }) else {

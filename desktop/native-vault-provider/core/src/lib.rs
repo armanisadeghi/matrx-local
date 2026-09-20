@@ -1,8 +1,13 @@
 //! Provider-private passkey operations and registration persistence gate.
+pub mod cxf;
+
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ciborium::value::Value;
-use coset::{CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate, iana};
+use coset::{
+    AsCborValue, CborSerializable, CoseKey, Label, RegisteredLabel, RegisteredLabelWithPrivate,
+    iana,
+};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::EncodePrivateKey;
 use passkey_authenticator::{
@@ -65,6 +70,67 @@ fn map_status(status: StatusCode) -> FixedError {
 
 struct SensitiveCbor(Value);
 
+#[cfg(test)]
+thread_local! {
+    static PRIVATE_ENCODING_OBSERVATIONS: std::cell::RefCell<Vec<(usize, usize, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Size the maintained encoding without retaining bytes, then allocate once.
+/// Growing a Vec while encoding a private value could leave an unwiped old
+/// allocation behind even though the final Vec has a zeroizing owner.
+fn encode_private(
+    encode: impl Fn(&mut dyn std::io::Write) -> Result<(), ()>,
+) -> Result<Zeroizing<Vec<u8>>, ()> {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|size| *size <= 65_536)
+                .ok_or_else(|| std::io::Error::other("private encoding limit"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    encode(&mut count)?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(count.0));
+    struct Fixed<'a>(&'a mut Vec<u8>, usize);
+    impl std::io::Write for Fixed<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self
+                .0
+                .len()
+                .checked_add(bytes.len())
+                .is_none_or(|size| size > self.1)
+            {
+                return Err(std::io::Error::other("private encoding limit"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[cfg(test)]
+    let allocation = bytes.as_ptr();
+    encode(&mut Fixed(&mut bytes, count.0))?;
+    if bytes.len() != count.0 {
+        return Err(());
+    }
+    #[cfg(test)]
+    PRIVATE_ENCODING_OBSERVATIONS.with(|values| {
+        values
+            .borrow_mut()
+            .push((bytes.len(), bytes.capacity(), allocation == bytes.as_ptr()))
+    });
+    Ok(bytes)
+}
+
 impl Drop for SensitiveCbor {
     fn drop(&mut self) {
         fn wipe(value: &mut Value) {
@@ -94,6 +160,34 @@ impl Drop for SensitiveCose {
                 }
             }
         }
+    }
+}
+
+impl SensitiveCose {
+    pub(crate) fn into_zeroizing_cbor(mut self) -> Result<Zeroizing<Vec<u8>>, ()> {
+        // Keep the scalar in a wiping owner before the consuming coset conversion.
+        // Restore it only after the complete Value tree has a wiping owner too.
+        let private = self
+            .0
+            .params
+            .iter_mut()
+            .find(|(label, _)| *label == Label::Int(-4))
+            .ok_or(())?;
+        let Value::Bytes(bytes) = &mut private.1 else {
+            return Err(());
+        };
+        let mut scalar = Zeroizing::new(std::mem::take(bytes));
+        let key = std::mem::take(&mut self.0);
+        let mut value = SensitiveCbor(key.to_cbor_value().map_err(|_| ())?);
+        let Value::Map(entries) = &mut value.0 else {
+            return Err(());
+        };
+        let entry = entries
+            .iter_mut()
+            .find(|(label, _)| *label == Value::Integer((-4).into()))
+            .ok_or(())?;
+        entry.1 = Value::Bytes(std::mem::take(&mut *scalar));
+        encode_private(|out| ciborium::ser::into_writer(&value.0, out).map_err(|_| ()))
     }
 }
 
@@ -132,8 +226,8 @@ pub fn canonical_source(
     reject_duplicate_source_keys(bytes)?;
     let value: SourceV1 = serde_json::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?;
     validate_source(&value)?;
-    let canonical =
-        Zeroizing::new(serde_json::to_vec(&value).map_err(|_| FixedError::InvalidSource)?);
+    let canonical = encode_private(|out| serde_json::to_writer(out, &value).map_err(|_| ()))
+        .map_err(|_| FixedError::InvalidSource)?;
     if canonical.as_slice() != bytes {
         return Err(FixedError::InvalidSource);
     }
@@ -236,7 +330,7 @@ fn validate_source(v: &SourceV1) -> Result<(), FixedError> {
     {
         return Err(FixedError::InvalidSource);
     }
-    if !(16..=1023).contains(&decode(&v.credential_id)?.len())
+    if !(16..=1024).contains(&decode(&v.credential_id)?.len())
         || !(1..=64).contains(&decode(&v.user_handle)?.len())
     {
         return Err(FixedError::InvalidSource);
@@ -270,8 +364,8 @@ fn reject_duplicate_source_keys(bytes: &[u8]) -> Result<(), FixedError> {
 fn validate_cose_key(bytes: &[u8]) -> Result<(), FixedError> {
     let cbor =
         SensitiveCbor(ciborium::de::from_reader(bytes).map_err(|_| FixedError::InvalidSource)?);
-    let mut canonical = Zeroizing::new(Vec::new());
-    ciborium::ser::into_writer(&cbor.0, &mut *canonical).map_err(|_| FixedError::InvalidSource)?;
+    let canonical = encode_private(|out| ciborium::ser::into_writer(&cbor.0, out).map_err(|_| ()))
+        .map_err(|_| FixedError::InvalidSource)?;
     let key = SensitiveCose(CoseKey::from_slice(bytes).map_err(|_| FixedError::InvalidSource)?);
     if canonical.as_slice() != bytes
         || !matches!(key.0.kty, RegisteredLabel::Assigned(iana::KeyType::EC2))
@@ -693,6 +787,29 @@ mod tests {
         ctap2::{Flags, get_assertion, make_credential},
         webauthn,
     };
+    #[test]
+    fn private_encoding_allocates_exactly_once_and_refuses_second_pass_growth() {
+        let bytes =
+            encode_private(|writer| writer.write_all(b"private fixture").map_err(|_| ())).unwrap();
+        assert_eq!(bytes.len(), bytes.capacity());
+        let pass = std::cell::Cell::new(0);
+        let grew = std::cell::Cell::new(false);
+        assert!(
+            encode_private(|writer| {
+                pass.set(pass.get() + 1);
+                if pass.get() == 1 {
+                    writer.write_all(b"a").map_err(|_| ())
+                } else {
+                    let result = writer.write_all(b"aa");
+                    grew.set(result.is_ok());
+                    result.map_err(|_| ())
+                }
+            })
+            .is_err()
+        );
+        assert!(!grew.get());
+        assert!(encode_private(|writer| writer.write_all(&[0; 65_537]).map_err(|_| ())).is_err());
+    }
     struct Uv;
     #[async_trait]
     impl UserValidationMethod for Uv {
@@ -841,6 +958,19 @@ mod tests {
         })
         .unwrap()
     }
+    #[test]
+    fn private_cose_validation_observes_one_fixed_allocation() {
+        let source = valid_source();
+        let record: SourceV1 = serde_json::from_slice(&source).unwrap();
+        let cose = Zeroizing::new(decode(&record.private_cose_key).unwrap());
+        PRIVATE_ENCODING_OBSERVATIONS.with(|values| values.borrow_mut().clear());
+        validate_cose_key(&cose).unwrap();
+        PRIVATE_ENCODING_OBSERVATIONS.with(|values| {
+            let values = values.borrow();
+            assert_eq!(values.as_slice(), &[(cose.len(), cose.len(), true)]);
+        });
+    }
+
     #[test]
     fn canonical_fixture_and_numeric_ip_refusal() {
         let source = valid_source();

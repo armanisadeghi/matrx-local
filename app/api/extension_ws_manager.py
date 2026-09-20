@@ -150,6 +150,7 @@ class ExtensionSessionRegistry:
         # socket registry.  A registration is a selector for a live socket,
         # never an identity or an alternate connection registry.
         self._local_registration: dict[str, LocalBrowserRegistration] = {}
+        self._local_authority_revision = 0
         self._local_results: dict[str, LocalBrowserWaiter] = {}
 
     @property
@@ -262,7 +263,15 @@ class ExtensionSessionRegistry:
         ]
         return candidates[0] if len(candidates) == 1 else None
 
+    @property
+    def local_authority_revision(self) -> int:
+        """Synchronous fence for context/device changes across registration awaits."""
+        return self._local_authority_revision
+
     def invalidate_local_browser(self, reason: str) -> list[LocalBrowserRegistration]:
+        # Advance even if the map is empty: an in-flight first registration
+        # must not install a stale candidate after this invalidation.
+        self._local_authority_revision += 1
         registrations = list(self._local_registration.values())
         self._local_registration.clear()
         for waiter in list(self._local_results.values()):

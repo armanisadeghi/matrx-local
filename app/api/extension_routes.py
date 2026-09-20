@@ -398,34 +398,70 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
 
     if msg_type == "local_browser.register":
         required = {"type", "version", "engine_boot_id", "expected_revision", "extension_generation", "connection_id"}
-        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or not isinstance(msg.get("engine_boot_id"), str) or type(msg.get("expected_revision")) is not int:
+        engine_boot_id = _canonical_uuid(msg.get("engine_boot_id"))
+        expected_revision = msg.get("expected_revision")
+        if (
+            set(msg) != required
+            or type(msg.get("version")) is not int
+            or msg.get("version") != 1
+            or engine_boot_id is None
+            or type(expected_revision) is not int
+            or expected_revision < 0
+            or expected_revision > 9007199254740991
+        ):
             return True
         extension_generation = _canonical_uuid(msg.get("extension_generation"))
         connection_id = _canonical_uuid(msg.get("connection_id"))
         if extension_generation is None or connection_id is None:
             return True
+        reply_fields = {
+            "engine_boot_id": engine_boot_id,
+            "expected_revision": expected_revision,
+            "extension_generation": extension_generation,
+            "connection_id": connection_id,
+        }
+
+        async def reply(*, accepted: bool) -> bool:
+            session = get_registry().get(session_id)
+            if session is None:
+                return False
+            return await session.send({
+                "type": "local_browser.registration", "version": 1,
+                "status": "acknowledged" if accepted else "refused",
+                **reply_fields,
+                **({} if accepted else {"reason": "registration_unavailable"}),
+            })
+
         from app.services.cloud_sync.instance_manager import get_instance_manager
         from app.services.local_browser_context import get_local_browser_context
+        registry = get_registry()
+        original_session = registry.get(session_id)
+        authority_revision = registry.local_authority_revision
         first = await get_local_browser_context().refresh()
         if first is None or first.context.organization_id is None:
-            return True
+            return await reply(accepted=False)
         identity = await get_instance_manager().registered_device_identity()
         final = await get_local_browser_context().refresh()
+        verified_identity = await get_instance_manager().registered_device_identity()
+        freshest = await get_local_browser_context().refresh()
         if (
-            identity is None or final is None or final.context != first.context or final.owner != first.owner
-            or msg["engine_boot_id"] != final.context.engine_boot_id or msg["expected_revision"] != final.context.revision
+            registry.local_authority_revision != authority_revision
+            or registry.get(session_id) is not original_session
+            or original_session is None
+            or identity is None or verified_identity is None or verified_identity != identity
+            or final is None or freshest is None
+            or final.context != first.context or final.owner != first.owner
+            or freshest.context != first.context or freshest.owner != first.owner
+            or engine_boot_id != freshest.context.engine_boot_id or expected_revision != freshest.context.revision
         ):
-            return True
+            return await reply(accepted=False)
         accepted = register_local_browser_session(
-            session_id, engine_boot_id=final.context.engine_boot_id, revision=final.context.revision,
-            owner=final.owner, organization_id=final.context.organization_id,
-            device_id=identity.app_instance_id, extension_generation=extension_generation,
+            session_id, engine_boot_id=freshest.context.engine_boot_id, revision=freshest.context.revision,
+            owner=freshest.owner, organization_id=freshest.context.organization_id,
+            device_id=verified_identity.app_instance_id, extension_generation=extension_generation,
             connection_id=connection_id,
         )
-        session = get_registry().get(session_id)
-        if session is not None:
-            await session.send({"type": "local_browser.registration", "version": 1, "status": "acknowledged" if accepted else "refused", **({} if accepted else {"reason": "registration_unavailable"})})
-        return True
+        return await reply(accepted=accepted)
 
     if msg_type == "local_browser.result":
         operation = msg.get("operation")

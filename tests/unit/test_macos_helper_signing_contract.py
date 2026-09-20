@@ -189,6 +189,8 @@ PROFILE_BACKED_KEYS = (
     "com.apple.developer.team-identifier",
     "com.apple.security.application-groups",
     "com.apple.developer.authentication-services.autofill-credential-provider",
+    "keychain-access-groups",
+    "com.apple.security.keychain-access-groups",
 )
 
 

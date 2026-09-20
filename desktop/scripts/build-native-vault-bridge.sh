@@ -12,15 +12,20 @@ esac
 if ! rustup target list --toolchain 1.93.1 --installed | grep -Fx "$TARGET" >/dev/null; then
   rustup target add --toolchain 1.93.1 "$TARGET"
 fi
-OUT="$ROOT/native-vault-provider/build/native-vault-bridge/$TARGET"
-rm -rf "$OUT"
-mkdir -p "$OUT"
 (
   cd "$CORE"
   cargo +1.93.1 build --release --locked --features native-bridge --target "$TARGET"
-  LIBDIR="$CORE/target/$TARGET/release"
-  test -f "$LIBDIR/libnative_vault_core.a"
-  test -f "$LIBDIR/libnative_vault_core.dylib"
+)
+LIBDIR="$CORE/target/$TARGET/release"
+test -f "$LIBDIR/libnative_vault_core.a"
+test -f "$LIBDIR/libnative_vault_core.dylib"
+# Every caller owns its generated bindings until its compilation has finished.
+# Never remove the shared architecture directory underneath another compiler.
+PARENT="$ROOT/native-vault-provider/build/native-vault-bridge/$TARGET"
+mkdir -p "$PARENT"
+OUT="$(mktemp -d "$PARENT/bindings.XXXXXXXX")"
+(
+  cd "$CORE"
   cargo +1.93.1 run --release --locked --features native-bridge --bin native-vault-bindgen -- "$LIBDIR/libnative_vault_core.dylib" "$OUT"
 )
 test -s "$OUT/native_vault_core.swift"

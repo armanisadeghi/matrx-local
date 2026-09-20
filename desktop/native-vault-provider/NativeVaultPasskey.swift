@@ -3,39 +3,6 @@ import AuthenticationServices
 import Foundation
 @preconcurrency import LocalAuthentication
 
-private let nativePasskeyResponseLimit = 96 * 1024
-
-protocol NativeVaultPasskeyTransporting: AnyObject {
-    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void)
-    func cancel()
-}
-
-final class NativeVaultPasskeyTransport: NativeVaultPasskeyTransporting {
-    private let lock = NSLock()
-    private var active: (id: UUID, transport: BoundedTransport)?
-    private let makeTransport: (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport
-    init(makeTransport: @escaping (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport = { BoundedTransport(limit: nativePasskeyResponseLimit, $0) }) {
-        self.makeTransport = makeTransport
-    }
-    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
-        let id = UUID()
-        let transport = makeTransport { [weak self] result in
-            guard let self else { completion(result); return }
-            self.lock.lock()
-            if self.active?.id == id { self.active = nil }
-            self.lock.unlock()
-            completion(result)
-        }
-        lock.lock(); let previous = active; active = (id, transport); lock.unlock()
-        previous?.transport.cancel()
-        transport.start(request)
-    }
-    func cancel() {
-        lock.lock(); let pending = active; active = nil; lock.unlock()
-        pending?.transport.cancel()
-    }
-}
-
 fileprivate enum NativePasskeyOutcome { case uncertainSave }
 
 @MainActor

@@ -1,6 +1,7 @@
 import Foundation
 
-// Provider-owned OAuth. The host never receives a token or Keychain handle.
+// Native OAuth shared by the provider and containing native exchange process.
+// Tokens never enter webview, Python, or value-free host command responses.
 let clientID = "d8a02629-f5f2-4064-ab26-31da07f082fc"
 let callback = URL(string: "matrx-vault-provider://oauth/callback")!
 let authorizeURL = URL(string: "https://db.matrxserver.com/auth/v1/oauth/authorize")!
@@ -77,3 +78,39 @@ func connectionResponseError(_ status: Int) -> Error {
     default: return EnrollmentError.message("Vault connection was rejected. Reconnect the provider.")
     }
 }
+
+private let nativePasskeyResponseLimit = 96 * 1024
+
+protocol NativeVaultPasskeyTransporting: AnyObject {
+    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void)
+    func cancel()
+}
+
+final class NativeVaultPasskeyTransport: NativeVaultPasskeyTransporting {
+    private let lock = NSLock()
+    private var active: (id: UUID, transport: BoundedTransport)?
+    private let makeTransport: (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport
+    init(makeTransport: @escaping (@escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> BoundedTransport = { BoundedTransport(limit: nativePasskeyResponseLimit, $0) }) {
+        self.makeTransport = makeTransport
+    }
+    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+        let id = UUID()
+        let transport = makeTransport { [weak self] result in
+            guard let self else { completion(result); return }
+            self.lock.lock()
+            if self.active?.id == id { self.active = nil }
+            self.lock.unlock()
+            completion(result)
+        }
+        lock.lock(); let previous = active; active = (id, transport); lock.unlock()
+        previous?.transport.cancel()
+        transport.start(request)
+    }
+    func cancel() {
+        lock.lock(); let pending = active; active = nil; lock.unlock()
+        pending?.transport.cancel()
+    }
+}
+
+
+let nativeAPIOrigin = URL(string: "https://server.app.matrxserver.com")!

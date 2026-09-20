@@ -30,8 +30,8 @@ final class NativeVaultPasswordTransport: NativeVaultPasswordTransporting {
     }
 }
 
-/// The one provider-owned authorized session primitive. Both configuration and
-/// password use must enter through this boundary so refresh_pending, Keychain
+/// The shared protected native session primitive. Enrollment, exchange and
+/// password use enter through this boundary so refresh_pending, Keychain
 /// access, subject validation, and generation fencing cannot drift.
 final class NativeVaultSessionAccess {
     struct Grant {

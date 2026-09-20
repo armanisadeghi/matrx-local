@@ -111,6 +111,7 @@ def expected_contract(kind: str) -> tuple[str, dict[str, object], set[str]]:
             TEAM_ENTITLEMENT: TEAM_ID,
             "com.apple.developer.authentication-services.autofill-credential-provider": True,
             "com.apple.security.application-groups": [STATUS_GROUP],
+            "keychain-access-groups": [PROVIDER_KEYCHAIN_GROUP],
         },
         set(),
     )
@@ -164,15 +165,15 @@ def values_are_type_exact(actual: object, expected: object) -> bool:
 
 def assert_signed_contract(kind: str, signed_entitlements: dict[object, object]) -> None:
     _, expected_signed, _ = expected_contract(kind)
+    if kind == "host":
+        for key in ("com.apple.security.cs.disable-library-validation", "com.apple.security.cs.allow-unsigned-executable-memory", "com.apple.security.cs.allow-dyld-environment-variables", "com.apple.security.get-task-allow"):
+            if signed_entitlements.get(key) is not None and signed_entitlements[key] is not False:
+                fail(f"signed host custody forbids {key!r}")
     if kind == "provider" and not values_are_type_exact(signed_entitlements, expected_signed):
         fail("signed provider entitlements must exactly match the reviewed native contract")
     for key, expected_value in expected_signed.items():
         if not values_are_type_exact(signed_entitlements.get(key), expected_value):
             fail(f"signed {kind} entitlement {key!r} must equal {expected_value!r}")
-    if kind == "host":
-        for key in ("keychain-access-groups", "com.apple.security.keychain-access-groups"):
-            if key in signed_entitlements:
-                fail("host signed entitlements must never include a Keychain access group")
     for key in signed_entitlements:
         if is_restricted_signed_entitlement(key) and key not in expected_signed:
             fail(f"signed {kind} entitlement {key!r} is outside the reviewed native contract")

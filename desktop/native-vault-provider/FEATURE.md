@@ -1,12 +1,12 @@
 ---
 type: Feature
 title: Native Vault provider enrollment
-description: Provider-owned native OAuth enrollment and non-secret host lifecycle boundary.
+description: Native OAuth enrollment, shared protected session and value-free host lifecycle boundary.
 ---
 
 # Native Vault provider enrollment
 
-The macOS credential-provider extension owns its distinct public OAuth client, PKCE transaction, provider-only Data Protection Keychain session, and App Group status publication. The host reads only the non-secret generation/status record and may invalidate or reconcile its actor; it cannot receive private session data or request token material. `ready` remains false until separate signed-provider, Keychain, LocalAuthentication, and real admin OAuth acceptance gates pass.
+The macOS credential-provider extension owns its distinct public OAuth client, PKCE transaction, Data Protection Keychain session shared with the signed containing native exchange process, and App Group status publication. The containing process is trusted for protected exchange after local verification and current account/generation checks. Its webview and Python helper remain separate processes without the Keychain group; public commands expose only selections and value-free status. Host library validation remains enabled. The host may invalidate or reconcile its actor through the shared generation/status record. `ready` remains false until separate signed-provider, Keychain, LocalAuthentication, and real admin OAuth acceptance gates pass.
 
 For password use, AuthenticationServices supplies the
 request's actual domain/URL identifiers, the provider performs LocalAuthentication

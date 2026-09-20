@@ -89,3 +89,13 @@ def test_shipped_command_without_vault_prefix_requires_review():
     sources[path] += '\n#[tauri::command]\nasync fn reveal_session() {}'
     sources[path] = sources[path].replace('tauri::generate_handler![', 'tauri::generate_handler![reveal_session,', 1)
     assert any('command registration' in error for error in module.census(sources))
+
+
+@pytest.mark.parametrize('handler', [
+    '|invoke| { private_reader(invoke); }',
+    'hidden_handler',
+])
+def test_uninventoried_invoke_handler_is_refused(handler):
+    sources = module.collect(ROOT)
+    sources['desktop/src-tauri/src/lib.rs'] += '\nfn extra() { tauri::Builder::default().invoke_handler(' + handler + '); }'
+    assert any('invoke handler' in error for error in module.census(sources))

@@ -33,15 +33,24 @@ def census(sources: dict[str, str]) -> list[str]:
     errors = []
     commands = set()
     registrations = {}
+    invoke_handlers = {}
     for path, text in sources.items():
         if not path.endswith('.rs'):
             continue
         text = re.sub(r'//[^\n]*', '', text)
+        invocations = list(re.finditer(r'\b(?:r#)?invoke_handler\s*\(', text))
+        if invocations:
+            invoke_handlers[path] = len(invocations)
+        for invocation in invocations:
+            if not re.match(r'\s*tauri::generate_handler!\s*\[', text[invocation.end():]):
+                errors.append(f'{path}: direct or aliased invoke handler bypasses reviewed registration inventory')
         entries = []
         for body in re.findall(r'(?:tauri::)?generate_handler!\s*\[([^\]]*)\]', text, re.S):
             entries.extend(entry.strip() for entry in body.split(',') if entry.strip())
         if entries:
             registrations[path] = sorted(entries)
+    if invoke_handlers != {'desktop/src-tauri/src/lib.rs': 1}:
+        errors.append('invoke handler count or location changed; review containing-process entry points')
     reviewed = json.loads((ROOT / 'scripts/native-vault-command-inventory.json').read_text())
     if registrations != reviewed:
         errors.append('shipped command registration inventory changed; review containing-process custody before updating inventory')

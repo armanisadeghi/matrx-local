@@ -64,7 +64,11 @@ def test_get_note_propagates_postgrest_failure(monkeypatch) -> None:
 
 class _FileManager:
     def __init__(self) -> None:
-        self.state: dict[str, Any] = {"note_hashes": {"General/note.md": "old-hash"}}
+        # Sync state is account-scoped: a legacy top-level note_hashes carries no
+        # principal marker and is never adopted, so the fake states it as user-1's.
+        self.state: dict[str, Any] = {
+            "accounts": {"user-1": {"note_hashes": {"General/note.md": "old-hash"}}}
+        }
 
     def write_note(
         self, _folder: str, _label: str, _content: str, file_path: str | None
@@ -82,6 +86,11 @@ class _FileManager:
 class _NotesRepo:
     def __init__(self) -> None:
         self.statuses: list[tuple[str, str]] = []
+
+    async def get(self, note_id: str) -> dict[str, Any] | None:
+        # The engine refuses to push a row whose persisted owner is not the
+        # signed-in principal, so the fake must answer as the owner's own row.
+        return {"id": note_id, "user_id": "user-1", "file_path": "General/note.md"}
 
     async def set_sync_status(self, note_id: str, status: str, **_kwargs: Any) -> None:
         self.statuses.append((note_id, status))

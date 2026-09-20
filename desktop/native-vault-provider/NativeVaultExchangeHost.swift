@@ -8,9 +8,12 @@ private enum NativeVaultExchangeHost {
     static var controller: AnyObject?
 
     static func dispatch(_ data: Data, window: NSWindow?) throws -> Data {
-        guard #available(macOS 26.0, *) else { throw CocoaError(.featureUnsupported) }
         let object = try StrictEnvelope.object(data, required: ["action"], optional: ["item_ids", "organization_id", "operation_id"], maxBytes: 96 * 1024)
         guard case let .string(action)? = object["action"] else { throw CocoaError(.coderInvalidValue) }
+        guard #available(macOS 26.0, *) else {
+            if action == "invalidate", object.count == 1 { return Data("{}".utf8) }
+            throw CocoaError(.featureUnsupported)
+        }
         if action == "invalidate", object.count == 1 {
             (controller as? NativeVaultExportController)?.invalidate()
             controller = nil
@@ -37,25 +40,24 @@ private enum NativeVaultExchangeHost {
             let id = next.beginExport(itemIDs: ids, organizationID: organization)
             return try JSONEncoder().encode(next.status(operationID: id))
         }
-        guard (action == "status" || action == "cancel"), object.count == 2,
+        guard (action == "status" || action == "cancel" || action == "confirm"), object.count == 2,
               case let .string(raw)? = object["operation_id"], let id = UUID(uuidString: raw),
               let controller = controller as? NativeVaultExportController else { throw CocoaError(.coderInvalidValue) }
         if action == "cancel" { controller.cancel(operationID: id) }
+        if action == "confirm" { controller.confirm(operationID: id) }
         return try JSONEncoder().encode(controller.status(operationID: id))
     }
 }
 
 @_cdecl("matrx_vault_exchange_dispatch")
-func matrxVaultExchangeDispatch(_ input: UnsafePointer<UInt8>?, _ length: Int, _ window: UnsafeMutableRawPointer?) -> UnsafeMutablePointer<CChar>? {
-    guard Thread.isMainThread, let input, length > 0, length <= 96 * 1024 else { return nil }
-    let text: String? = MainActor.assumeIsolated {
+func matrxVaultExchangeDispatch(_ input: UnsafePointer<UInt8>?, _ length: Int, _ window: UnsafeMutableRawPointer?, _ output: UnsafeMutablePointer<UInt8>?, _ capacity: Int) -> Int {
+    guard Thread.isMainThread, let input, length > 0, length <= 96 * 1024,
+          let output, capacity >= 2_048 else { return -1 }
+    let result: Data? = MainActor.assumeIsolated {
         let anchor = window.map { Unmanaged<NSWindow>.fromOpaque($0).takeUnretainedValue() }
-        guard let result = try? NativeVaultExchangeHost.dispatch(Data(bytes: input, count: length), window: anchor),
-              result.count <= 2_048, let text = String(data: result, encoding: .utf8) else { return nil }
-        return text
+        return try? NativeVaultExchangeHost.dispatch(Data(bytes: input, count: length), window: anchor)
     }
-    return text.flatMap { strdup($0) }
+    guard let result, result.count <= 2_048 else { return -1 }
+    result.copyBytes(to: output, count: result.count)
+    return result.count
 }
-
-@_cdecl("matrx_vault_exchange_free")
-func matrxVaultExchangeFree(_ response: UnsafeMutablePointer<CChar>?) { free(response) }

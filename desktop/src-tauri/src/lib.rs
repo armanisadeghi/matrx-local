@@ -138,7 +138,9 @@ async fn open_native_vault_provider_settings(app: tauri::AppHandle) -> native_va
 
 #[tauri::command]
 async fn invalidate_native_vault_host_actor(app: tauri::AppHandle) -> native_vault::TransitionResult {
-    native_vault_exchange::invalidate(&app).await;
+    if native_vault_exchange::invalidate(&app).await.is_err() {
+        return native_vault::TransitionResult::StateUnavailable;
+    }
     tokio::task::spawn_blocking(native_vault::invalidate)
         .await
         .unwrap_or(native_vault::TransitionResult::StateUnavailable)
@@ -149,8 +151,10 @@ async fn reconcile_native_vault_host_actor(app: tauri::AppHandle, subject: Optio
     let result = tokio::task::spawn_blocking(move || native_vault::reconcile(subject))
         .await
         .unwrap_or(native_vault::TransitionResult::StateUnavailable);
-    if !matches!(result, native_vault::TransitionResult::Unchanged) {
-        native_vault_exchange::invalidate(&app).await;
+    if !matches!(result, native_vault::TransitionResult::Unchanged)
+        && native_vault_exchange::invalidate(&app).await.is_err()
+    {
+        return native_vault::TransitionResult::StateUnavailable;
     }
     result
 }

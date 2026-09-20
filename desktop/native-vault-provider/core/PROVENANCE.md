@@ -11,3 +11,5 @@
 - Pristine must semantically fail false/false, true/false, and cross-user exclusion while true/true is a control; patched must pass all four.
 - The pinned core compiler is Rust 1.93.1; `cargo metadata --locked` reports no selected package with a higher declared `rust-version`.
 - `provenance/fido2_verifier.py` is the isolated `python-fido2==2.2.1` RP completion proof used by `desktop/scripts/check-native-vault-core.sh`.
+
+- `jiter` 0.17.0 is vendored from its official crates.io archive with default features disabled. Its official archive SHA-256 is `bc2f2b4e673d798b3dbad0af24bc23b92013e680a6b9ad300b4e5e52fafe0586`; the exact narrow local delta is [`provenance/jiter-0.17.0-native-vault.patch`](provenance/jiter-0.17.0-native-vault.patch), SHA-256 `d78a1a6b65c7086d0279c64037ace6ca33485c59d5bb57be914bde06c3242ee4`. It adds only bounded maintained-string/key entry points and zeroizing reusable tape storage for the strict CXF walker.

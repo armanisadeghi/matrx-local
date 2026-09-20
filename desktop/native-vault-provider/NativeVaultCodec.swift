@@ -291,8 +291,18 @@ enum VaultEnvelopeCodec {
     }
 
     static func token(_ data: Data) throws -> Token {
-        let object = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["id_token", "scope"])
-        guard case let .string(access)? = object["access_token"], case let .string(kind)? = object["token_type"], case let .number(expiry)? = object["expires_in"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken, kind.lowercased() == "bearer", let expiresIn = Int(expiry), (1...86400).contains(expiresIn) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        let object = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["expires_at", "id_token", "scope", "user", "weak_password"])
+        // Supabase Auth constrains GOTRUE_JWT_EXP to one week (604_800 seconds).
+        guard case let .string(access)? = object["access_token"], case let .string(kind)? = object["token_type"], case let .number(expiry)? = object["expires_in"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken, kind.lowercased() == "bearer", let expiresIn = Int(expiry), (1...604_800).contains(expiresIn) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        if let expiresAt = object["expires_at"] {
+            guard case let .number(value) = expiresAt, let timestamp = Int64(value), timestamp > 0 else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
+        if let user = object["user"] {
+            guard case .object = user else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
+        if let weakPassword = object["weak_password"] {
+            guard case .null = weakPassword else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
         let scope: String?
         if let scopeValue = object["scope"] {
             guard case let .string(value) = scopeValue, Set(["openid", "email", "offline_access"]).isSubset(of: Set(value.split(whereSeparator: { $0.isWhitespace }).map(String.init))) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
@@ -370,3 +380,43 @@ extension String {
 }
 
 extension UUID { var canonical: String { uuidString.lowercased() } }
+
+struct NativeOrganization {
+    let id: String
+    let name: String
+    let isPersonal: Bool
+}
+
+/// Shared strict organization report decoder; never selects a saved preference.
+enum NativeOrganizationCodec {
+    private static func rejected() -> Error { EnrollmentError.message("Vault response was rejected. Try again.") }
+    /// THE ORGANIZATION IS WHAT THE USER SET (Arman, 2026-09-19). The report
+    /// still CARRIES the account-level saved preference — the wire shape is
+    /// the server's — and this decoder deliberately does not hand it back:
+    /// nothing that builds a request may read it, and an AutoFill request
+    /// built under a saved default is a password read out of the wrong
+    /// tenant. The key is named below only to keep the envelope strict.
+    static func organizations(_ data: Data, subject: String) throws -> [NativeOrganization] {
+        // org-default-exempt: named ONLY to keep the envelope strict; never decoded
+        let object = try StrictEnvelope.object(data, required: ["authenticated", "user_id", "organizations", "default_organization_id", "default_preference_status", "warnings", "missing_organization_count"], optional: [])
+        guard case .bool(true)? = object["authenticated"], case .string(subject)? = object["user_id"], case let .array(rows)? = object["organizations"], rows.count <= 128 else { throw rejected() }
+        var organizations: [NativeOrganization] = []
+        var seen = Set<String>()
+        for row in rows {
+            guard case let .object(value) = row else { throw rejected() }
+            let abbreviationIsValid: Bool
+            switch value["abbreviation"] { case .null?, .string?: abbreviationIsValid = true; default: abbreviationIsValid = false }
+            guard case let .object(value) = row,
+                  Set(value.keys) == Set(["id", "name", "is_personal", "abbreviation"]),
+                  case let .string(id)? = value["id"], id.canonicalUUID,
+                  case let .string(name)? = value["name"], !name.isEmpty, name.unicodeScalars.count <= 256,
+                  case let .bool(personal)? = value["is_personal"],
+                  abbreviationIsValid,
+                  seen.insert(id).inserted else { throw rejected() }
+            organizations.append(NativeOrganization(id: id, name: name, isPersonal: personal))
+        }
+        guard case let .string(status)? = object["default_preference_status"], ["valid", "unset", "stale", "malformed", "unavailable"].contains(status), case .array? = object["warnings"], case .number? = object["missing_organization_count"] else { throw rejected() }
+        return organizations
+    }
+
+}

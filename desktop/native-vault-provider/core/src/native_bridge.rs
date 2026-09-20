@@ -144,6 +144,126 @@ pub fn native_export_source_pkcs8(
     })
 }
 
+/// Private Swift handoff, never a host command or serializable preview. Generated
+/// UniFFI buffers are ABI copies; only parser-owned input/intermediates promise
+/// zeroization. Swift owns the returned sources until its operation terminates.
+#[derive(uniffi::Record)]
+pub struct NativeImportCandidate {
+    pub title: String,
+    pub canonical_source: Vec<u8>,
+}
+
+#[derive(uniffi::Enum)]
+pub enum NativeImportUnsupportedReason {
+    Scoped,
+    MixedOrMultipleCredentials,
+    UnsupportedCredential,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeImportUnsupported {
+    pub index: u32,
+    pub title: String,
+    pub reason: NativeImportUnsupportedReason,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeImportInventory {
+    pub total: u32,
+    pub candidates: Vec<NativeImportCandidate>,
+    pub unsupported: Vec<NativeImportUnsupported>,
+}
+
+#[derive(uniffi::Object)]
+pub struct NativeFileImportOperation {
+    state: AtomicU8,
+}
+
+#[uniffi::export]
+impl NativeFileImportOperation {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: AtomicU8::new(FRESH),
+        })
+    }
+
+    pub fn cancel(&self) {
+        let _ = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (state != FINISHED).then_some(CANCELLED)
+            });
+    }
+
+    pub fn parse(&self, bytes: Vec<u8>) -> Result<NativeImportInventory, BridgeError> {
+        let bytes = Zeroizing::new(bytes);
+        self.state
+            .compare_exchange(FRESH, RUNNING, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|state| {
+                if state == CANCELLED {
+                    BridgeError::Cancelled
+                } else {
+                    BridgeError::AlreadyUsed
+                }
+            })?;
+        let parsed = crate::cxf::parse_cxf_v1_with_cancel(bytes, || {
+            self.state.load(Ordering::Acquire) == CANCELLED
+        });
+        let inventory = match parsed {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = self.state.compare_exchange(
+                    RUNNING,
+                    FINISHED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                return Err(match error {
+                    crate::cxf::CxfError::Cancelled => BridgeError::Cancelled,
+                    crate::cxf::CxfError::TransferLimit => BridgeError::InvalidRequest,
+                    crate::cxf::CxfError::UnsupportedFormat => BridgeError::InvalidSource,
+                });
+            }
+        };
+        // Linearize before materializing ABI copies. A cancelled parse drops the
+        // zeroizing inventory without allocating any returned private records.
+        self.state
+            .compare_exchange(RUNNING, FINISHED, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| BridgeError::Cancelled)?;
+        Ok(NativeImportInventory {
+            total: inventory.total_items() as u32,
+            candidates: inventory
+                .candidates()
+                .iter()
+                .map(|candidate| NativeImportCandidate {
+                    title: candidate.title().to_owned(),
+                    canonical_source: candidate.canonical_source().to_vec(),
+                })
+                .collect(),
+            unsupported: inventory
+                .unsupported()
+                .iter()
+                .map(|item| NativeImportUnsupported {
+                    index: item.index() as u32,
+                    title: item.title().to_owned(),
+                    reason: match item.reason() {
+                        crate::cxf::CxfUnsupportedReason::Scoped => {
+                            NativeImportUnsupportedReason::Scoped
+                        }
+                        crate::cxf::CxfUnsupportedReason::MixedOrMultipleCredentials => {
+                            NativeImportUnsupportedReason::MixedOrMultipleCredentials
+                        }
+                        crate::cxf::CxfUnsupportedReason::UnsupportedCredential => {
+                            NativeImportUnsupportedReason::UnsupportedCredential
+                        }
+                    },
+                })
+                .collect(),
+        })
+    }
+}
+
 #[uniffi::export(callback_interface)]
 #[async_trait]
 pub trait NativeCeremony: Send + Sync {
@@ -507,6 +627,49 @@ fn assertion_request(input: &NativeAssertionInput) -> Result<get_assertion::Requ
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn file_import_bridge_retains_source_identity_and_is_one_shot() {
+        let key = p256::SecretKey::from_slice(&[7; 32]).unwrap();
+        let der = key.to_pkcs8_der().unwrap();
+        let fixture = serde_json::json!({
+            "version":{"major":1,"minor":0},"exporterRpId":"example.com",
+            "exporterDisplayName":"Example","timestamp":0,
+            "accounts":[{"id":"YQ","username":"","email":"","collections":[],
+            "items":[{"id":"aQ","title":"Imported key","credentials":[{
+                "type":"passkey","credentialId":URL_SAFE_NO_PAD.encode([1u8;16]),
+                "rpId":"example.com","username":"user","userDisplayName":"User",
+                "userHandle":"dXNlcg","key":URL_SAFE_NO_PAD.encode(der.as_bytes())
+            }]}]}]
+        });
+        let operation = NativeFileImportOperation::new();
+        let inventory = operation
+            .parse(serde_json::to_vec(&fixture).unwrap())
+            .unwrap();
+        assert_eq!(inventory.total, 1);
+        assert_eq!(inventory.candidates.len(), 1);
+        assert!(inventory.unsupported.is_empty());
+        let restored =
+            export_source_v1_pkcs8(&inventory.candidates[0].canonical_source, 65_536).unwrap();
+        assert_eq!(restored.pkcs8_der(), der.as_bytes());
+        assert_eq!(inventory.candidates[0].title, "Imported key");
+        assert!(matches!(
+            operation.parse(Vec::new()),
+            Err(BridgeError::AlreadyUsed)
+        ));
+        let cancelled = NativeFileImportOperation::new();
+        cancelled.cancel();
+        assert!(matches!(
+            cancelled.parse(serde_json::to_vec(&fixture).unwrap()),
+            Err(BridgeError::Cancelled)
+        ));
+        let failed = NativeFileImportOperation::new();
+        assert!(failed.parse(b"not JSON".to_vec()).is_err());
+        assert!(matches!(
+            failed.parse(Vec::new()),
+            Err(BridgeError::AlreadyUsed)
+        ));
+    }
 
     struct Accept {
         source: Arc<std::sync::Mutex<Option<Vec<u8>>>>,

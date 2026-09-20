@@ -12,7 +12,7 @@ mkdir -p "$OUT"
 SOURCE="$ROOT/native-vault-provider"
 BRIDGE="$(bash "$ROOT/scripts/build-native-vault-bridge.sh" "$ARCH")"
 SOURCES=()
-for file in NativeVaultCodec NativeVaultEnrollmentLifecycle NativeVaultState NativeVaultTransport NativeVaultPrivateSession NativeVaultSessionAccess NativeVaultPasskeyCodec NativeVaultIdentity NativeVaultExport NativeVaultExchangeHost; do
+for file in NativeVaultCodec NativeVaultEnrollmentLifecycle NativeVaultState NativeVaultTransport NativeVaultPrivateSession NativeVaultSessionAccess NativeVaultPasskeyCodec NativeVaultIdentity NativeVaultExport NativeVaultImportFile NativeVaultImportParser NativeVaultImportJournal NativeVaultImport NativeVaultImportTransport NativeVaultImportHost NativeVaultExchangeHost; do
   SOURCES+=("$SOURCE/$file.swift")
 done
 "$(xcrun --find swiftc)" -emit-library -static -parse-as-library \

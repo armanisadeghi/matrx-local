@@ -82,6 +82,19 @@ async def test_clear_device_organization_is_a_noop_when_nothing_is_stored():
     assert await org_module.get_device_organization(USER_A) is None
 
 
+@pytest.mark.anyio
+async def test_set_and_successful_clear_advance_the_device_selection_generation():
+    """Awaiting callers can fence the actual device selection mutation."""
+    before = org_module.device_organization_generation()
+
+    await org_module.set_device_organization("org-1", user_id=USER_A)
+    after_set = org_module.device_organization_generation()
+    await org_module.clear_device_organization(user_id=USER_A)
+
+    assert after_set == before + 1
+    assert org_module.device_organization_generation() == after_set + 1
+
+
 def test_forget_active_organization_route_requires_a_bearer():
     """The route's own auth gate — same shape as GET/PUT `_bearer()`."""
     from fastapi import HTTPException

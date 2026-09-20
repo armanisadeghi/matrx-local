@@ -1,0 +1,634 @@
+#[cfg(feature = "num-bigint")]
+use num_bigint::BigInt;
+#[cfg(feature = "num-bigint")]
+use num_traits::cast::ToPrimitive;
+#[cfg(feature = "python")]
+use pyo3::{IntoPyObject, IntoPyObjectRef};
+
+use std::ops::Range;
+
+use lexical_parse_float::{FromLexicalWithOptions, Options as ParseFloatOptions, format as lexical_format};
+
+use crate::{
+    JsonErrorType::FloatExpectingInt,
+    errors::{JsonError, JsonResult, json_err, json_error},
+    simd::{NumberChunk, decode_int_chunk_big, decode_int_chunk_small, decode_number_chunk, find_digit_run_end},
+};
+use lexical_format::JSON;
+
+pub trait AbstractNumberDecoder: Sized {
+    fn decode(data: &[u8], index: usize, first: u8, allow_inf_nan: bool) -> JsonResult<(Self, usize)>;
+}
+
+/// A number that can be either an [i64] or a [BigInt](num_bigint::BigInt)
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "python", derive(IntoPyObject, IntoPyObjectRef))]
+pub enum NumberInt {
+    Int(i64),
+    #[cfg(feature = "num-bigint")]
+    BigInt(BigInt),
+}
+
+impl From<NumberInt> for f64 {
+    fn from(num: NumberInt) -> Self {
+        match num {
+            NumberInt::Int(int) => int as f64,
+            #[cfg(feature = "num-bigint")]
+            NumberInt::BigInt(big_int) => big_int.to_f64().unwrap_or(f64::NAN),
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for NumberInt {
+    type Error = JsonError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_bytes(value)
+    }
+}
+
+impl NumberInt {
+    /// Parse `data` as a JSON integer, erroring if the input is not a valid integer,
+    /// is empty, or contains trailing bytes.
+    pub fn from_bytes(data: &[u8]) -> JsonResult<Self> {
+        let first = *data.first().ok_or_else(|| json_error!(InvalidNumber, 0))?;
+        match NumberInt::parse(data, 0, first) {
+            Ok((int, index)) if index == data.len() => Ok(int),
+            Ok((_, index))
+            | Err(JsonError {
+                error_type: FloatExpectingInt,
+                index,
+            }) => json_err!(InvalidNumber, index),
+            Err(other) => Err(other),
+        }
+    }
+}
+
+impl AbstractNumberDecoder for NumberInt {
+    fn decode(data: &[u8], index: usize, first: u8, _allow_inf_nan: bool) -> JsonResult<(Self, usize)> {
+        Self::parse(data, index, first)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NumberFloat(pub f64);
+
+impl From<NumberFloat> for f64 {
+    fn from(num: NumberFloat) -> Self {
+        num.0
+    }
+}
+
+impl NumberFloat {
+    /// Parse `data` as a JSON float, erroring if the input is empty or contains trailing bytes.
+    pub fn from_bytes(data: &[u8], allow_inf_nan: bool) -> JsonResult<Self> {
+        from_bytes_complete(data, allow_inf_nan)
+    }
+}
+
+impl AbstractNumberDecoder for NumberFloat {
+    fn decode(data: &[u8], mut index: usize, mut first: u8, allow_inf_nan: bool) -> JsonResult<(Self, usize)> {
+        let start = index;
+
+        let positive = match first {
+            b'N' => {
+                let (f, end) = consume_nan(data, index, allow_inf_nan)?;
+                return Ok((Self(f), end));
+            }
+            b'-' => {
+                index += 1;
+                first = *data
+                    .get(index)
+                    .ok_or_else(|| json_error!(EofWhileParsingValue, index))?;
+                false
+            }
+            _ => true,
+        };
+
+        match first {
+            b'0'..=b'9' => parse_json_float(data, start, allow_inf_nan).map(|(float, end)| (Self(float), end)),
+            b'I' => {
+                let (f, end) = consume_inf_f64(data, index, positive, allow_inf_nan)?;
+                Ok((Self(f), end))
+            }
+            _ => json_err!(InvalidNumber, index),
+        }
+    }
+}
+
+/// Parse a JSON float prefix, preserving jiter's error kinds and positions.
+#[inline(always)]
+fn parse_json_float(data: &[u8], start: usize, allow_inf_nan: bool) -> JsonResult<(f64, usize)> {
+    let options = ParseFloatOptions::new();
+    if let Ok((float, index)) = f64::from_lexical_partial_with_options::<JSON>(&data[start..], &options) {
+        Ok((float, index + start))
+    } else {
+        float_error(data, start, allow_inf_nan)
+    }
+}
+
+/// Recover a precise JSON error when lexical cannot parse a float.
+#[cold]
+#[inline(never)]
+fn float_error(data: &[u8], start: usize, allow_inf_nan: bool) -> JsonResult<(f64, usize)> {
+    let first = *data.get(start).expect("float_error called with empty slice");
+    match NumberRange::decode(data, start, first, allow_inf_nan) {
+        Err(e) => Err(e),
+        Ok(_) => unreachable!("NumberRange should return an error if lexical-parse-float did"),
+    }
+}
+
+/// A number that can be either a [NumberInt] or an [f64]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "python", derive(IntoPyObject, IntoPyObjectRef))]
+pub enum NumberAny {
+    Int(NumberInt),
+    Float(f64),
+}
+
+impl From<NumberAny> for f64 {
+    fn from(num: NumberAny) -> Self {
+        match num {
+            NumberAny::Int(int) => int.into(),
+            NumberAny::Float(f) => f,
+        }
+    }
+}
+
+impl NumberAny {
+    /// Parse `data` as a JSON number, erroring if the input is empty or contains trailing bytes.
+    pub fn from_bytes(data: &[u8], allow_inf_nan: bool) -> JsonResult<Self> {
+        from_bytes_complete(data, allow_inf_nan)
+    }
+}
+
+impl AbstractNumberDecoder for NumberAny {
+    /// Decode integers or dispatch floats to lexical's public parser without constructing a
+    /// speculative bigint.
+    fn decode(data: &[u8], mut index: usize, mut first: u8, allow_inf_nan: bool) -> JsonResult<(Self, usize)> {
+        let start = index;
+        let positive = match first {
+            b'N' => {
+                return consume_nan(data, index, allow_inf_nan).map(|(float, end)| (Self::Float(float), end));
+            }
+            b'-' => {
+                index += 1;
+                first = *data
+                    .get(index)
+                    .ok_or_else(|| json_error!(EofWhileParsingValue, index))?;
+                false
+            }
+            _ => true,
+        };
+
+        let digit_start = index;
+        let scan_digits = match first {
+            b'I' => {
+                return consume_inf_f64(data, index, positive, allow_inf_nan)
+                    .map(|(float, end)| (Self::Float(float), end));
+            }
+            b'0' => {
+                index += 1;
+                match data.get(index) {
+                    Some(digit) if digit.is_ascii_digit() => return json_err!(InvalidNumber, index),
+                    Some(b'.' | b'e' | b'E') => false,
+                    _ => return Ok((Self::Int(NumberInt::Int(0)), index)),
+                }
+            }
+            b'1'..=b'9' => match decode_number_chunk(data, digit_start) {
+                (NumberChunk::Int(magnitude), end) => {
+                    let int = if let Some(value) = signed_integer(magnitude, positive) {
+                        NumberInt::Int(value)
+                    } else {
+                        decode_bigint(data, digit_start, end, positive, Some(magnitude))?
+                    };
+                    return Ok((Self::Int(int), end));
+                }
+                (NumberChunk::Float, _) => false,
+                (NumberChunk::Ongoing, end) => {
+                    index = end;
+                    true
+                }
+            },
+            _ => return json_err!(InvalidNumber, index),
+        };
+
+        if scan_digits {
+            let limit = digit_start.saturating_add(4300);
+            index = find_digit_run_end(data, index, limit)
+                .ok_or_else(|| json_error!(NumberOutOfRange, digit_start + 4301))?;
+            if !matches!(data.get(index), Some(b'.' | b'e' | b'E')) {
+                let int = decode_bigint(data, digit_start, index, positive, None)?;
+                return Ok((Self::Int(int), index));
+            }
+        }
+
+        parse_json_float(data, start, allow_inf_nan).map(|(float, end)| (Self::Float(float), end))
+    }
+}
+
+fn signed_integer(magnitude: u64, positive: bool) -> Option<i64> {
+    let max_magnitude = if positive { i64::MAX as u64 } else { i64::MAX as u64 + 1 };
+    if magnitude > max_magnitude {
+        return None;
+    }
+    Some(if positive {
+        magnitude as i64
+    } else {
+        (magnitude as i64).wrapping_neg()
+    })
+}
+
+/// Convert a validated integer outside the signed i64 range, optionally using its decoded magnitude.
+#[cfg_attr(
+    feature = "num-bigint",
+    allow(clippy::unnecessary_wraps, reason = "conversion can fail without num-bigint")
+)]
+fn decode_bigint(
+    data: &[u8],
+    digit_start: usize,
+    end: usize,
+    positive: bool,
+    magnitude: Option<u64>,
+) -> JsonResult<NumberInt> {
+    #[cfg(not(feature = "num-bigint"))]
+    {
+        let _ = (data, end, positive, magnitude);
+        json_err!(NumberOutOfRange, digit_start + 1)
+    }
+
+    #[cfg(feature = "num-bigint")]
+    {
+        let (mut value, mut index) = if let Some(magnitude) = magnitude {
+            (BigInt::from(magnitude), end)
+        } else {
+            let first_chunk_len = (end - digit_start - 1) % 16 + 1;
+            let first_chunk_end = digit_start + first_chunk_len;
+            let first_chunk = data[digit_start..first_chunk_end]
+                .iter()
+                .fold(0u64, |value, digit| value * 10 + u64::from(digit & 0x0f));
+            (BigInt::from(first_chunk), first_chunk_end)
+        };
+        while index < end {
+            let (chunk, new_index) = decode_int_chunk_big(data, index);
+            let (chunk, multiplier) = match chunk {
+                IntChunk::Ongoing(value) => (value, crate::simd::ONGOING_CHUNK_MULTIPLIER),
+                IntChunk::Done(value) => (value, 10u64.pow((new_index - index) as u32)),
+                IntChunk::Float => unreachable!("known integer digit run to contain a float marker"),
+            };
+            value *= multiplier;
+            value += chunk;
+            index = new_index;
+        }
+        if !positive {
+            value = -value;
+        }
+        Ok(NumberInt::BigInt(value))
+    }
+}
+
+fn from_bytes_complete<D: AbstractNumberDecoder>(data: &[u8], allow_inf_nan: bool) -> JsonResult<D> {
+    let first = *data.first().ok_or_else(|| json_error!(InvalidNumber, 0))?;
+    let (output, index) = D::decode(data, 0, first, allow_inf_nan)?;
+    if index == data.len() {
+        Ok(output)
+    } else {
+        json_err!(InvalidNumber, index)
+    }
+}
+
+fn consume_inf(data: &[u8], index: usize, positive: bool, allow_inf_nan: bool) -> JsonResult<usize> {
+    if allow_inf_nan {
+        crate::parse::consume_infinity(data, index)
+    } else if positive {
+        json_err!(ExpectedSomeValue, index)
+    } else {
+        json_err!(InvalidNumber, index)
+    }
+}
+
+fn consume_inf_f64(data: &[u8], index: usize, positive: bool, allow_inf_nan: bool) -> JsonResult<(f64, usize)> {
+    let end = consume_inf(data, index, positive, allow_inf_nan)?;
+    if positive {
+        Ok((f64::INFINITY, end))
+    } else {
+        Ok((f64::NEG_INFINITY, end))
+    }
+}
+
+fn consume_nan(data: &[u8], index: usize, allow_inf_nan: bool) -> JsonResult<(f64, usize)> {
+    if allow_inf_nan {
+        let end = crate::parse::consume_nan(data, index)?;
+        Ok((f64::NAN, end))
+    } else {
+        json_err!(ExpectedSomeValue, index)
+    }
+}
+
+impl NumberInt {
+    fn parse(data: &[u8], mut index: usize, mut first: u8) -> JsonResult<(Self, usize)> {
+        let start = index;
+        let positive = match first {
+            b'N' => return json_err!(FloatExpectingInt, index),
+            b'-' => {
+                index += 1;
+                first = *data
+                    .get(index)
+                    .ok_or_else(|| json_error!(EofWhileParsingValue, index))?;
+                false
+            }
+            _ => true,
+        };
+        let first_value = match first {
+            b'0' => {
+                index += 1;
+                return match data.get(index) {
+                    Some(b'.') => json_err!(FloatExpectingInt, index),
+                    Some(b'e' | b'E') => json_err!(FloatExpectingInt, index),
+                    Some(digit) if digit.is_ascii_digit() => json_err!(InvalidNumber, index),
+                    _ => Ok((NumberInt::Int(0), index)),
+                };
+            }
+            b'I' => return json_err!(FloatExpectingInt, index),
+            digit @ b'1'..=b'9' => (digit & 0x0f) as u64,
+            _ => return json_err!(InvalidNumber, index),
+        };
+
+        index += 1;
+        let (chunk, new_index) = decode_int_chunk_small(data, index, first_value);
+
+        let ongoing: u64 = match chunk {
+            IntChunk::Ongoing(value) => value,
+            IntChunk::Done(value) => {
+                let mut value_i64 = value as i64;
+                if !positive {
+                    value_i64 = -value_i64;
+                }
+                return Ok((NumberInt::Int(value_i64), new_index));
+            }
+            IntChunk::Float => return json_err!(FloatExpectingInt, new_index),
+        };
+
+        // number is too big for i64, we need to use a BigInt,
+        // or error out if num-bigint is not enabled
+
+        #[cfg(not(feature = "num-bigint"))]
+        {
+            // silence unused variable warning
+            let _ = (ongoing, start);
+            json_err!(NumberOutOfRange, index)
+        }
+
+        #[cfg(feature = "num-bigint")]
+        {
+            use crate::simd::ONGOING_CHUNK_MULTIPLIER;
+
+            const POW_10: [u64; 18] = [
+                10u64.pow(0),
+                10u64.pow(1),
+                10u64.pow(2),
+                10u64.pow(3),
+                10u64.pow(4),
+                10u64.pow(5),
+                10u64.pow(6),
+                10u64.pow(7),
+                10u64.pow(8),
+                10u64.pow(9),
+                10u64.pow(10),
+                10u64.pow(11),
+                10u64.pow(12),
+                10u64.pow(13),
+                10u64.pow(14),
+                10u64.pow(15),
+                10u64.pow(16),
+                10u64.pow(17),
+            ];
+
+            let mut big_value: BigInt = ongoing.into();
+            index = new_index;
+
+            let digit_start = start + usize::from(!positive);
+            loop {
+                let (chunk, new_index) = decode_int_chunk_big(data, index);
+                if (new_index - digit_start) > 4300 {
+                    return json_err!(NumberOutOfRange, digit_start + 4301);
+                }
+                match chunk {
+                    IntChunk::Ongoing(value) => {
+                        big_value *= ONGOING_CHUNK_MULTIPLIER;
+                        big_value += value;
+                        index = new_index;
+                    }
+                    IntChunk::Done(value) => {
+                        big_value *= POW_10[new_index - index];
+                        big_value += value;
+                        if !positive {
+                            big_value = -big_value;
+                        }
+                        return Ok((NumberInt::BigInt(big_value), new_index));
+                    }
+                    IntChunk::Float => return json_err!(FloatExpectingInt, new_index),
+                }
+            }
+        }
+    }
+}
+
+pub(crate) enum IntChunk {
+    Ongoing(u64),
+    Done(u64),
+    Float,
+}
+
+pub(crate) static INT_CHAR_MAP: [bool; 256] = {
+    const NU: bool = true;
+    const __: bool = false;
+    [
+        //   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 0
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 1
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 2
+        NU, NU, NU, NU, NU, NU, NU, NU, NU, NU, __, __, __, __, __, __, // 3
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 4
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 5
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 6
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 7
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 8
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // 9
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // A
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // B
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // C
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // D
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // E
+        __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // F
+    ]
+};
+
+pub struct NumberRange {
+    pub range: Range<usize>,
+    // in some cfg configurations, this field is never read.
+    #[allow(dead_code)]
+    pub is_int: bool,
+}
+
+impl NumberRange {
+    fn int(data: Range<usize>) -> Self {
+        Self {
+            range: data,
+            is_int: true,
+        }
+    }
+
+    fn float(data: Range<usize>) -> Self {
+        Self {
+            range: data,
+            is_int: false,
+        }
+    }
+}
+
+impl AbstractNumberDecoder for NumberRange {
+    fn decode(data: &[u8], mut index: usize, mut first: u8, allow_inf_nan: bool) -> JsonResult<(Self, usize)> {
+        let start = index;
+
+        let positive = match first {
+            b'N' => {
+                let (_, end) = consume_nan(data, index, allow_inf_nan)?;
+                return Ok((Self::float(start..end), end));
+            }
+            b'-' => {
+                index += 1;
+                first = *data
+                    .get(index)
+                    .ok_or_else(|| json_error!(EofWhileParsingValue, index))?;
+                false
+            }
+            _ => true,
+        };
+
+        match first {
+            b'0' => {
+                // numbers start with zero must be floats, next char must be a dot
+                index += 1;
+                return match data.get(index) {
+                    Some(b'.') => {
+                        index += 1;
+                        let end = consume_decimal(data, index)?;
+                        Ok((Self::float(start..end), end))
+                    }
+                    Some(b'e' | b'E') => {
+                        index += 1;
+                        let end = consume_exponential(data, index)?;
+                        Ok((Self::float(start..end), end))
+                    }
+                    Some(digit) if digit.is_ascii_digit() => json_err!(InvalidNumber, index),
+                    _ => return Ok((Self::int(start..index), index)),
+                };
+            }
+            b'I' => {
+                let end = consume_inf(data, index, positive, allow_inf_nan)?;
+                return Ok((Self::float(start..end), end));
+            }
+            b'1'..=b'9' => (),
+            _ => return json_err!(InvalidNumber, index),
+        }
+
+        index += 1;
+        for _ in 0..18 {
+            if let Some(digit) = data.get(index) {
+                if INT_CHAR_MAP[*digit as usize] {
+                    index += 1;
+                    continue;
+                } else if matches!(digit, b'.') {
+                    index += 1;
+                    let end = consume_decimal(data, index)?;
+                    return Ok((Self::float(start..end), end));
+                } else if matches!(digit, b'e' | b'E') {
+                    index += 1;
+                    let end = consume_exponential(data, index)?;
+                    return Ok((Self::float(start..end), end));
+                }
+            }
+            return Ok((Self::int(start..index), index));
+        }
+        let digit_start = start + usize::from(!positive);
+        loop {
+            let (chunk, new_index) = decode_int_chunk_big(data, index);
+            if (new_index - digit_start) > 4300 {
+                return json_err!(NumberOutOfRange, digit_start + 4301);
+            }
+            #[allow(clippy::single_match_else)]
+            match chunk {
+                IntChunk::Ongoing(_) => {
+                    index = new_index;
+                }
+                IntChunk::Done(_) => return Ok((Self::int(start..new_index), new_index)),
+                IntChunk::Float => {
+                    return match data.get(new_index) {
+                        Some(b'.') => {
+                            index = new_index + 1;
+                            let end = consume_decimal(data, index)?;
+                            Ok((Self::float(start..end), end))
+                        }
+                        _ => {
+                            index = new_index + 1;
+                            let end = consume_exponential(data, index)?;
+                            Ok((Self::float(start..end), end))
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+fn consume_exponential(data: &[u8], mut index: usize) -> JsonResult<usize> {
+    match data.get(index) {
+        Some(b'-' | b'+') => {
+            index += 1;
+        }
+        Some(v) if v.is_ascii_digit() => (),
+        Some(_) => return json_err!(InvalidNumber, index),
+        None => return json_err!(EofWhileParsingValue, index),
+    }
+
+    match data.get(index) {
+        Some(v) if v.is_ascii_digit() => (),
+        Some(_) => return json_err!(InvalidNumber, index),
+        None => return json_err!(EofWhileParsingValue, index),
+    }
+    index += 1;
+
+    while let Some(next) = data.get(index) {
+        match next {
+            b'0'..=b'9' => (),
+            _ => break,
+        }
+        index += 1;
+    }
+
+    Ok(index)
+}
+
+fn consume_decimal(data: &[u8], mut index: usize) -> JsonResult<usize> {
+    match data.get(index) {
+        Some(v) if v.is_ascii_digit() => (),
+        Some(_) => return json_err!(InvalidNumber, index),
+        None => return json_err!(EofWhileParsingValue, index),
+    }
+    index += 1;
+
+    while let Some(next) = data.get(index) {
+        match next {
+            b'0'..=b'9' => (),
+            b'e' | b'E' => {
+                index += 1;
+                return consume_exponential(data, index);
+            }
+            _ => break,
+        }
+        index += 1;
+    }
+
+    Ok(index)
+}

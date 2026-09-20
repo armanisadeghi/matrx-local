@@ -231,12 +231,20 @@ mod platform {
         })
     }
 
-    fn selector_available(selector: objc2::runtime::Sel) -> bool {
-        AnyClass::get(c"ASSettingsHelper").is_some_and(|class| class.responds_to(selector))
+    fn class_selector_available(
+        class_name: &std::ffi::CStr,
+        selector: objc2::runtime::Sel,
+    ) -> bool {
+        // `responds_to` on an Objective-C class checks instance methods. These
+        // AuthenticationServices APIs are class methods, so query the metaclass.
+        AnyClass::get(class_name).is_some_and(|class| class.metaclass().responds_to(selector))
     }
-    fn identity_store_available() -> bool {
-        AnyClass::get(c"ASCredentialIdentityStore")
-            .is_some_and(|class| class.responds_to(sel!(sharedStore)))
+
+    fn selector_available(selector: objc2::runtime::Sel) -> bool {
+        class_selector_available(c"ASSettingsHelper", selector)
+    }
+    pub(super) fn identity_store_available() -> bool {
+        class_selector_available(c"ASCredentialIdentityStore", sel!(sharedStore))
     }
     fn settings_available() -> bool {
         selector_available(sel!(openCredentialProviderAppSettingsWithCompletionHandler:))
@@ -425,7 +433,11 @@ mod platform {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::platform::{await_completion, CompletionOnce, EnableCompletion, EnableOperation, ENABLE_COOLDOWN};
+    use super::platform::{
+        await_completion, identity_store_available, CompletionOnce, EnableCompletion,
+        EnableOperation, ENABLE_COOLDOWN,
+    };
+    use objc2::{runtime::AnyClass, sel};
     use std::{sync::{Arc, Mutex}, time::{Duration, Instant}};
     use tokio::sync::oneshot;
 
@@ -444,6 +456,25 @@ mod tests {
         assert_eq!(
             state.claim(now + Duration::from_secs(1) + ENABLE_COOLDOWN),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn class_method_capability_uses_the_objective_c_metaclass() {
+        // This is the actual AuthenticationServices runtime class, not a registered test double.
+        let class = AnyClass::get(c"ASCredentialIdentityStore")
+            .expect("macOS must provide ASCredentialIdentityStore");
+        assert!(
+            !class.responds_to(sel!(sharedStore)),
+            "the class does not report its class methods as instance methods"
+        );
+        assert!(
+            class.metaclass().responds_to(sel!(sharedStore)),
+            "the metaclass exposes ASCredentialIdentityStore.sharedStore"
+        );
+        assert!(
+            identity_store_available(),
+            "the production availability check must query the class-method owner"
         );
     }
 

@@ -32,6 +32,8 @@ mod error_outbox;
 mod native_vault;
 mod native_vault_settings;
 mod native_vault_exchange;
+mod native_vault_exchange_bridge;
+mod native_vault_file_import;
 mod tcc;
 
 mod transcription;
@@ -2563,6 +2565,7 @@ pub fn run() {
             running_app_version,
             native_vault_provider_status,
             native_vault_exchange::native_vault_exchange,
+            native_vault_file_import::native_vault_file_import,
             request_native_vault_provider_enable,
             open_native_vault_provider_settings,
             invalidate_native_vault_host_actor,

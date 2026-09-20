@@ -6,6 +6,8 @@ CORE="$ROOT/desktop/native-vault-provider/core"
 PROVENANCE="$CORE/provenance"
 ARCHIVE_SHA256='20bf5800e3f6287580da985fb88e678f37c078d62242cb536941c44d852ab37c'
 PATCH_SHA256='af3acb38c587a39728627e234120df48c836c545eeb607c5986e7080a68f259c'
+JITER_ARCHIVE_SHA256='bc2f2b4e673d798b3dbad0af24bc23b92013e680a6b9ad300b4e5e52fafe0586'
+JITER_PATCH_SHA256='d78a1a6b65c7086d0279c64037ace6ca33485c59d5bb57be914bde06c3242ee4'
 work="$(mktemp -d "${TMPDIR:-/tmp}/native-vault-core.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 check_sha256() {
@@ -31,9 +33,9 @@ import re, sys, tomllib
 manifest_text = Path(sys.argv[1]).read_text()
 manifest = tomllib.loads(manifest_text)
 patch = manifest.get('patch', {}).get('crates-io')
-expected = {'passkey-authenticator': {'path': 'vendor/passkey-authenticator'}}
+expected = {'jiter': {'path': 'vendor/jiter'}, 'passkey-authenticator': {'path': 'vendor/passkey-authenticator'}}
 if patch != expected:
-    raise SystemExit('manifest patch table is not exactly the approved authenticator path patch')
+    raise SystemExit('manifest patch table is not exactly the approved native-vault patches')
 def paths(value, where=''):
     if isinstance(value, dict):
         for key, item in value.items():
@@ -48,6 +50,7 @@ allowed_paths = [
     ('bin.path', 'src/bin/protocol-harness.rs'),
     ('bin.path', 'src/bin/native-vault-bindgen.rs'),
     ('bin.path', 'src/bin/source-export-harness.rs'),
+    ('patch.crates-io.jiter.path', 'vendor/jiter'),
     ('patch.crates-io.passkey-authenticator.path', 'vendor/passkey-authenticator'),
 ]
 if sorted(paths(manifest)) != sorted(allowed_paths):
@@ -65,6 +68,17 @@ diff -qr --exclude target "$work/reproduced" "$CORE/vendor/passkey-authenticator
 for tree in "$work/reproduced" "$CORE/vendor/passkey-authenticator"; do
   test "$(find "$tree" -type f ! -path '*/target/*' | wc -l | tr -d ' ')" = 25
 done
+
+jiter_archive="$work/jiter-0.17.0.crate"
+curl --fail --location --silent --show-error \
+  'https://static.crates.io/crates/jiter/jiter-0.17.0.crate' -o "$jiter_archive"
+check_sha256 "$JITER_ARCHIVE_SHA256" "$jiter_archive"
+check_sha256 "$JITER_PATCH_SHA256" "$PROVENANCE/jiter-0.17.0-native-vault.patch"
+mkdir "$work/jiter-upstream"
+tar -xzf "$jiter_archive" -C "$work/jiter-upstream" --strip-components=1
+git -C "$work/jiter-upstream" apply "$PROVENANCE/jiter-0.17.0-native-vault.patch"
+diff -qr --exclude target --exclude .cargo-ok "$work/jiter-upstream" "$CORE/vendor/jiter"
+cargo test --manifest-path "$work/jiter-upstream/Cargo.toml" tape_tests
 
 # The one source file is copied unchanged into both temporary root-lock graphs.
 for mode in pristine patched; do

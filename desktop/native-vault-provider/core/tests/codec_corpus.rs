@@ -128,7 +128,7 @@ async fn canonical_valid_source_rejects_each_json_and_bound_mutation() {
     let mut oversized_id = object(&source);
     oversized_id.insert(
         "credential_id".into(),
-        serde_json::Value::String(URL_SAFE_NO_PAD.encode([2_u8; 1024])),
+        serde_json::Value::String(URL_SAFE_NO_PAD.encode([2_u8; 1025])),
     );
     assert_eq!(
         canonical_source(&serde_json::to_vec(&oversized_id).unwrap(), 4096),

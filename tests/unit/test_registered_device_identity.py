@@ -44,6 +44,14 @@ def _request_context(owner):
     return value
 
 
+def _registration_context(owner, organization_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+    async def value(*, expected_owner=None):
+        assert expected_owner in (None, owner)
+        return owner, {"Authorization": "Bearer opaque", "X-Organization-Id": organization_id}, organization_id
+
+    return value
+
+
 def _install_response(monkeypatch, response_row, on_post=None):
     class Response:
         is_success = True
@@ -133,7 +141,7 @@ async def test_registration_response_rejects_wrong_identity(manager, monkeypatch
     assert manager.accept_registration_identity(
         _row(), expected_origin=ORIGIN, expected_user_id=USER
     )
-    monkeypatch.setattr(sync, "_request_context", _request_context(USER))
+    monkeypatch.setattr(sync, "_registration_context", _registration_context(USER))
 
     assert await sync.register_instance({"instance_id": INSTANCE_ID}) is None
     assert "registered_device" not in manager._instance_record()
@@ -181,7 +189,7 @@ async def test_same_owner_origin_change_during_http_cannot_accept_old_response(m
         _row(),
         on_post=lambda: sync.configure(OTHER_ORIGIN, "key", USER, INSTANCE_ID),
     )
-    monkeypatch.setattr(sync, "_request_context", _request_context(USER))
+    monkeypatch.setattr(sync, "_registration_context", _registration_context(USER))
 
     assert await sync.register_instance({"instance_id": INSTANCE_ID}) is None
     assert "registered_device" not in manager._instance_record()
@@ -198,14 +206,14 @@ async def test_late_old_account_response_cannot_persist_identity(manager, monkey
     sync.configure(ORIGIN, "key", USER, INSTANCE_ID)
     calls = 0
 
-    async def request_context(*, expected_owner=None):
+    async def registration_context(*, expected_owner=None):
         nonlocal calls
         calls += 1
         if calls == 1:
-            return USER, {"Authorization": "Bearer opaque"}
+            return USER, {"Authorization": "Bearer opaque", "X-Organization-Id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         raise RuntimeError("sync_daemon_owner_changed")
 
-    monkeypatch.setattr(sync, "_request_context", request_context)
+    monkeypatch.setattr(sync, "_registration_context", registration_context)
     assert await sync.register_instance({"instance_id": INSTANCE_ID}) is None
     assert "registered_device" not in manager._instance_record()
 

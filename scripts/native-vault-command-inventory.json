@@ -47,6 +47,7 @@
     "list_llm_models",
     "mute_wake_word",
     "native_vault_exchange::native_vault_exchange",
+    "native_vault_file_import::native_vault_file_import",
     "native_vault_provider_status",
     "open_native_vault_provider_settings",
     "proxy_fetch",

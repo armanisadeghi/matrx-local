@@ -48,13 +48,41 @@ import json
 import logging
 import time
 import shutil
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 logger = logging.getLogger(__name__)
 
 from app.config import MATRX_HOME_DIR  # noqa: E402
 LOCAL_SETTINGS_FILE = MATRX_HOME_DIR / "settings.json"
+
+
+@dataclass(frozen=True)
+class _RegistrationContext:
+    """One daemon-owner/org snapshot used for an instance registration.
+
+    It retains the historic three-value unpacking contract for focused tests
+    and callers while keeping the local organization-generation fence private
+    to the registration path.
+    """
+
+    owner: str
+    headers: dict[str, str]
+    organization_id: str
+    organization_generation: int
+
+    def __iter__(self):
+        yield self.owner
+        yield self.headers
+        yield self.organization_id
+
+
+def _registration_values(context: object) -> tuple[str, dict[str, str], str]:
+    """Read the private context while retaining old three-tuple test seams."""
+    if isinstance(context, _RegistrationContext):
+        return context.owner, context.headers, context.organization_id
+    return cast(tuple[str, dict[str, str], str], context)
 
 # Default settings — every possible setting with its default value.
 # This MUST stay in sync with DEFAULTS in desktop/src/lib/settings.ts.
@@ -567,7 +595,7 @@ class SettingsSync:
 
     async def _registration_context(
         self, *, expected_owner: str | None = None
-    ) -> tuple[str, dict[str, str], str]:
+    ) -> _RegistrationContext:
         """Bind an instance write to the daemon owner and this device's org.
 
         ``app_instances`` is organization-scoped.  Its registration must use
@@ -575,9 +603,16 @@ class SettingsSync:
         the organization selected on this device.  A caller-provided org is
         never accepted here.
         """
-        from app.services.aidream.organization import resolve_active_organization_id
+        from app.services.aidream.organization import (
+            device_organization_generation,
+            resolve_active_organization_id,
+        )
         from app.services.sync_client import get_sync_client
 
+        # Snapshot before any resolver await.  SET/clear advance this local
+        # generation once their settings mutation commits, giving the final
+        # synchronous check a stable answer without an endless read loop.
+        organization_generation = device_organization_generation()
         grant = await get_sync_client().access_grant()
         if grant is None:
             raise RuntimeError("sync_daemon_session_unavailable")
@@ -601,10 +636,17 @@ class SettingsSync:
         final_grant = await get_sync_client().access_grant()
         if final_grant is None or final_grant[1] != current_user_id:
             raise RuntimeError("sync_daemon_owner_changed")
-        return user_id, {
-            **self._headers(final_grant[0]),
-            "X-Organization-Id": current_organization_id,
-        }, current_organization_id
+        if device_organization_generation() != organization_generation:
+            raise RuntimeError("device_organization_changed")
+        return _RegistrationContext(
+            owner=user_id,
+            headers={
+                **self._headers(final_grant[0]),
+                "X-Organization-Id": current_organization_id,
+            },
+            organization_id=current_organization_id,
+            organization_generation=organization_generation,
+        )
 
     def _log_http_error(self, operation: str, resp: Any) -> str:
         """Log and return a descriptive error string from a non-2xx response."""
@@ -724,7 +766,18 @@ class SettingsSync:
         ):
             return None
         try:
-            user_id, headers, organization_id = await self._registration_context()
+            from app.services.aidream.organization import device_organization_generation
+
+            registration_context = await self._registration_context()
+            user_id, headers, organization_id = _registration_values(registration_context)
+            # Test collaborators which predate the private fence may retain
+            # the three-item tuple shape; production always returns the
+            # versioned context above.
+            registration_generation = getattr(
+                registration_context,
+                "organization_generation",
+                device_organization_generation(),
+            )
             owner = user_id
             if "organization_id" in registration or "user_id" in registration:
                 # The instance manager never supplies an organization. Reject
@@ -750,12 +803,26 @@ class SettingsSync:
                 resp = await client.post(url, json=payload, headers=headers)
                 # A daemon account switch during the HTTP request must not
                 # change this engine's A-owned registration state.
-                _, _, current_organization_id = await self._registration_context(
+                current_context = await self._registration_context(
                     expected_owner=owner
+                )
+                _, _, current_organization_id = _registration_values(current_context)
+                current_generation = getattr(
+                    current_context,
+                    "organization_generation",
+                    device_organization_generation(),
                 )
                 if registration_snapshot != self._registration_snapshot():
                     return None
                 if current_organization_id != organization_id:
+                    return None
+                # This is intentionally synchronous and adjacent to response
+                # acceptance: a SET/clear that completed during the final
+                # daemon-grant await makes an A-organization response stale.
+                if (
+                    current_generation != registration_generation
+                    or device_organization_generation() != registration_generation
+                ):
                     return None
                 if not resp.is_success:
                     err = self._log_http_error("register_instance", resp)

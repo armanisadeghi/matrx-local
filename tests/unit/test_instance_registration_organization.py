@@ -195,6 +195,71 @@ async def test_registration_discards_response_when_device_organization_changes_d
 
 
 @pytest.mark.anyio
+async def test_registration_refuses_late_device_switch_during_final_daemon_grant(
+    monkeypatch, tmp_path
+):
+    """The final grant await must not accept an already-resolved old org.
+
+    This switches the actual selected-device state after both post-response
+    organization resolutions have returned A, precisely while the sixth and
+    final daemon-grant await is in flight.  The pre-generation-fence code
+    persisted the server's A row here.
+    """
+    import app.services.aidream.organization as organization
+    import app.services.sync_client as sync_client
+    from app.services.local_db import repositories
+
+    class SettingsRepo:
+        values: dict[str, object] = {}
+
+        async def get(self, key, default=None):
+            return type(self).values.get(key, default)
+
+        async def set(self, key, value):
+            type(self).values[key] = value
+
+    sync = _sync()
+    sent = []
+    manager = InstanceManager()
+    manager._instance_id = INSTANCE
+    monkeypatch.setattr(instance_manager, "INSTANCE_FILE", tmp_path / "instance.json")
+    monkeypatch.setattr(
+        "app.services.cloud_sync.instance_manager.get_instance_manager", lambda: manager
+    )
+    monkeypatch.setattr(repositories, "AppSettingsRepo", SettingsRepo)
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(organization, "_clear_hold", lambda: _none())
+    organization.invalidate_organization_cache()
+    await organization.set_device_organization(ORG_A, user_id=USER)
+    _response(monkeypatch, sent)
+
+    calls = 0
+    switched = False
+
+    async def grant():
+        nonlocal calls, switched
+        calls += 1
+        if calls == 6:
+            await organization.set_device_organization(ORG_B, user_id=USER)
+            switched = True
+        return "daemon-token", USER
+
+    async def selected(_token):
+        return ORG_A
+
+    monkeypatch.setattr(sync_client, "get_sync_client", lambda: types.SimpleNamespace(access_grant=grant))
+    monkeypatch.setattr(organization, "resolve_active_organization_id", selected)
+
+    assert await sync.register_instance({"instance_id": INSTANCE}) is None
+    assert switched is True
+    assert len(sent) == 1
+    assert "registered_device" not in manager._instance_record()
+
+
+@pytest.mark.anyio
 async def test_wrong_response_organization_cannot_persist_registered_device(monkeypatch, tmp_path):
     sync = _sync()
     sent = []

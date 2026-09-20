@@ -54,6 +54,13 @@ from typing import Any
 # engine restart.
 _org_cache: dict[str, str] = {}
 
+# Changes to the selected organization are local, synchronous facts once the
+# settings write commits.  Callers that perform awaited work can snapshot this
+# counter before they start and reject a result if the user changed their
+# answer before it is consumed.  It deliberately is not an async read: a
+# sequence of extra reads would merely move the same race to its final await.
+_device_organization_generation = 0
+
 # The local app-settings key holding this device's set organization. Local
 # SQLite on purpose: this is a per-DEVICE choice, so it must never ride the
 # cloud settings sync (that would turn one device's pick into every device's
@@ -158,6 +165,8 @@ async def set_device_organization(organization_id: str, *, user_id: str) -> None
         DEVICE_ORGANIZATION_SETTING,
         {"organization_id": organization_id, "user_id": user_id},
     )
+    global _device_organization_generation
+    _device_organization_generation += 1
     _org_cache.clear()
     await _clear_hold()
 
@@ -180,12 +189,24 @@ async def clear_device_organization(*, user_id: str) -> None:
         if isinstance(owner, str) and owner and owner != user_id:
             return
     await repo.set(DEVICE_ORGANIZATION_SETTING, None)
+    global _device_organization_generation
+    _device_organization_generation += 1
     _org_cache.clear()
 
 
 def invalidate_organization_cache() -> None:
     """Drop the memoised answers — used by tests and by sign-out."""
     _org_cache.clear()
+
+
+def device_organization_generation() -> int:
+    """Return this device's synchronous organization-selection version.
+
+    It is a fence, not a resolver: callers must still resolve and verify the
+    selected organization normally.  The value changes only after a SET or
+    successful same-user clear commits to the device settings store.
+    """
+    return _device_organization_generation
 
 
 # ----------------------------------------------------------------------

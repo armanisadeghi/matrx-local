@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import shutil
 from datetime import datetime, timezone
@@ -566,6 +565,31 @@ class SettingsSync:
             raise RuntimeError("sync_daemon_owner_changed")
         return user_id, self._headers(access_token)
 
+    async def _registration_context(
+        self, *, expected_owner: str | None = None
+    ) -> tuple[str, dict[str, str], str]:
+        """Bind an instance write to the daemon owner and this device's org.
+
+        ``app_instances`` is organization-scoped.  Its registration must use
+        the same current daemon grant that identifies its owner, then resolve
+        the organization selected on this device.  A caller-provided org is
+        never accepted here.
+        """
+        from app.services.aidream.organization import resolve_active_organization_id
+        from app.services.sync_client import get_sync_client
+
+        grant = await get_sync_client().access_grant()
+        if grant is None:
+            raise RuntimeError("sync_daemon_session_unavailable")
+        access_token, user_id = grant
+        if expected_owner is not None and user_id != expected_owner:
+            raise RuntimeError("sync_daemon_owner_changed")
+        organization_id = await resolve_active_organization_id(access_token)
+        return user_id, {
+            **self._headers(access_token),
+            "X-Organization-Id": organization_id,
+        }, organization_id
+
     def _log_http_error(self, operation: str, resp: Any) -> str:
         """Log and return a descriptive error string from a non-2xx response."""
         try:
@@ -684,10 +708,17 @@ class SettingsSync:
         ):
             return None
         try:
-            user_id, headers = await self._request_context()
+            user_id, headers, organization_id = await self._registration_context()
             owner = user_id
+            if "organization_id" in registration:
+                # The instance manager never supplies an organization. Reject
+                # rather than let any caller smuggle a different tenant.
+                self._last_registration_result = "error:registration_org_spoof"
+                self._is_orphan = True
+                return None
             payload = {
                 "user_id": user_id,
+                "organization_id": organization_id,
                 **registration,
                 "is_active": True,
                 "last_seen": datetime.now(timezone.utc).isoformat(),
@@ -703,8 +734,12 @@ class SettingsSync:
                 resp = await client.post(url, json=payload, headers=headers)
                 # A daemon account switch during the HTTP request must not
                 # change this engine's A-owned registration state.
-                await self._request_context(expected_owner=owner)
+                _, _, current_organization_id = await self._registration_context(
+                    expected_owner=owner
+                )
                 if registration_snapshot != self._registration_snapshot():
+                    return None
+                if current_organization_id != organization_id:
                     return None
                 if not resp.is_success:
                     err = self._log_http_error("register_instance", resp)

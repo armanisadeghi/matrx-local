@@ -152,19 +152,19 @@ class MatrxFilesClient:
         """
         headers = {"Authorization": f"Bearer {self._jwt}"}
         from app.services.aidream.organization import (
-            OrganizationNotResolvedError,
             resolve_active_organization_id,
         )
 
-        try:
-            headers["X-Organization-Id"] = await resolve_active_organization_id(
-                self._jwt or ""
-            )
-        except OrganizationNotResolvedError as exc:
-            raise RuntimeError(
-                f"[file_sync] Cannot name an organization for this request: "
-                f"{exc} {exc.remedy}"
-            ) from exc
+        # The typed refusal travels AS ITSELF. Flattening it into a bare
+        # RuntimeError here is what made a held upload read as a generic
+        # failure upstream: `coding_sessions/artifacts.py` catches
+        # `OrganizationNotResolvedError` to raise a one-click blocker, and that
+        # handler could never fire because this line had already thrown the
+        # type — and `held`, and the remedy — away. `OrganizationNotResolvedError`
+        # IS a RuntimeError, so every existing caller still catches it.
+        headers["X-Organization-Id"] = await resolve_active_organization_id(
+            self._jwt or ""
+        )
         return headers
 
     async def auth_header(self) -> dict[str, str]:

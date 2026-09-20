@@ -93,7 +93,7 @@ Vault-supplied key.
 
 | Where | What |
 |---|---|
-| `client.py` | The four calls: `list_user_items` / `get_item` / `reveal` / `resolve`. Raises `VaultUnavailable(state, message)`. Every call sends `X-Organization-Id` — aidream's vault router requires it (fail-closed org-context backstop; missing header = HTTP 422, the 2026-08-30 startup symptom). The value is the caller's own active `iam.memberships` org, resolved once per user via the public `mbr_for_user` RPC (owner membership first, then oldest); no membership = the `no_organization` STATE, never an error. |
+| `client.py` | The four calls: `list_user_items` / `get_item` / `reveal` / `resolve`. Raises `VaultUnavailable(state, message)`. Every call sends `X-Organization-Id` — aidream's vault router requires it (fail-closed org-context backstop; missing header = HTTP 422, the 2026-08-30 startup symptom). The value comes from the ONE resolver (`aidream.organization.resolve_active_organization_id`): what the user SET on this Mac, then a sole active membership, otherwise HOLD and ask (Arman, 2026-09-19 — there is no saved-default rung and no owner-or-oldest guess). Nothing set but memberships exist = the `organization_required` STATE, which says "waiting for you to choose an organization" and carries the one-click picker; no membership at all = the `no_organization` STATE. Both are STATES with a prompt, never errors. |
 | `provider_keys.py` | Item → provider matching (`build_candidates`), `fetch_provider_snapshot`, `resolve_one`. |
 | `key_manager.refresh_vault_keys()` | Populates tier 2. Startup (fire-and-forget), sign-in (`POST /auth/token`), and the refresh route. |
 | `key_manager.clear_vault_keys()` | Sign-out (`DELETE /auth/token`). |

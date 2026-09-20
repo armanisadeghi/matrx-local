@@ -540,28 +540,41 @@ held 1,671 of those conversations:
   the pre-await announcement is removed).
 - **A pause is a banner with a button, never a count.** `publisher.blocker` on
   `GET /coding-session/status` names the one thing stopping ALL delivery
-  (`cloud_credentials_rejected`, or `organization_not_chosen` — see below) with its
-  remedy; the screen renders it above everything with the one-click door
-  (organization picker / sign-in) and "Retry delivery now" (`POST /coding-session/delivery/resume`).
+  (`cloud_credentials_rejected`, or `organization_required` — see below) with its
+  remedy; the screen renders it above everything with the one-click door and
+  "Retry delivery now" (`POST /coding-session/delivery/resume`). **The screen picks
+  the door off `blocker.action`, never off the blocker's `code`** — three surfaces
+  each matched their own code string, so the next lane's held refusal shipped with
+  no button at all.
 
 ### 🚨 THE ORGANIZATION PAUSE — a local refusal is never a server rejection
 
 The AI Dream client refuses to SEND when it cannot name the caller's organization
-(several memberships, no default chosen) — a synthetic `AIDreamError(400)` raised
-before any byte leaves the Mac. Found live 2026-09-08: 116,803 deliveries deferred
+(several memberships, nothing SET on this Mac) — a synthetic `AIDreamError(400)`
+raised before any byte leaves the Mac, carrying the canonical
+`AIDreamError.organization_refusal` payload. Found live 2026-09-08: 116,803 deliveries deferred
 for nine days behind it, each row's attempt counter walking toward the
 25-attempt quarantine threshold (six had reached 24), the log repeating the same
 line every 15s, and the screen saying "Uploading". Now (`service.py`):
 
-- the refusal sets a publisher-wide `organization_not_chosen` blocker and stops the
-  tick; **no attempt is charged** to the row (the server was never asked) and
-  `_is_terminal_rejection` can never quarantine it;
+- the refusal sets a publisher-wide blocker and stops the tick; **no attempt is
+  charged** to the row (the server was never asked) and `_is_terminal_rejection`
+  can never quarantine it. Both are decided BY TYPE — `_organization_refusal_of(exc)`
+  reads the payload the transport attached — never by matching the refusal's
+  sentence, which breaks the moment somebody improves the sentence;
+- a HELD refusal (`organization_required`) says "waiting for you to choose an
+  organization" and names the `choose_organization` action; a genuinely blocked one
+  (`no_organization` — no membership at all, or the lookup could not be made) says
+  what is wrong and offers no button, because there is nothing to click;
 - every tick re-resolves the organization first; the moment it resolves the pause
   lifts, rows that were deferred under it reset to `attempts=0`, and delivery
-  resumes without anyone clicking anything (the desktop's organization picker
-  writes the same `users.user_preferences` default the resolver reads);
-- `_safe_delivery_error` maps the text to `organization_not_chosen` with the remedy,
-  so a preserved-envelope row never shows a bare "cloud delivery failed".
+  resumes on its own. What the picker writes is **this device's SET organization**
+  (`PUT /organization/active` → the engine's local SQLite `active_organization`),
+  which is what the resolver reads. It is NOT a saved account-level default: that
+  rung was abolished (Arman, 2026-09-19) and nothing that builds a request may read
+  it;
+- `_safe_delivery_error` maps a preserved-envelope row's text back to the held code
+  with the remedy, so it never shows a bare "cloud delivery failed".
 
 Guard: `tests/unit/test_coding_session_bridge.py::test_unnamed_organization_pauses_delivery_without_charging_attempts`
 (fails against the pre-fix publisher) and `test_organization_refusal_is_never_a_terminal_rejection`.

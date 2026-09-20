@@ -209,18 +209,81 @@ async def _clear_hold() -> None:
         pass
 
 
-class OrganizationNotResolvedError(Exception):
+class OrganizationNotResolvedError(RuntimeError):
     """Raised when this device has no organization set — never a guess.
 
     Carries ``remedy``, a plain-language string a UI can show verbatim, and
     ``held``: True when the ask has been published and the operation is
     waiting on the user rather than broken.
+
+    It is a ``RuntimeError`` on purpose. Transport clients used to flatten it
+    into a bare ``RuntimeError`` to keep their own callers' ``except``
+    clauses working, and flattening threw away exactly the two facts a screen
+    needs — ``held`` and ``remedy`` — which is how a held operation ended up
+    reading as a generic failure. Sharing the base class means the typed error
+    can travel all the way to the surface without anyone losing their
+    handler.
     """
 
     def __init__(self, message: str, *, remedy: str, held: bool = False) -> None:
         super().__init__(message)
         self.remedy = remedy
         self.held = held
+
+
+#: A held operation is WAITING ON ONE CLICK, not broken. Two codes, because a
+#: screen that says the same thing about both teaches the person to distrust
+#: the one it can actually fix.
+ORGANIZATION_HELD_CODE = "organization_required"
+ORGANIZATION_BLOCKED_CODE = "no_organization"
+
+#: The action-needed handler the desktop registers for the picker. A refusal
+#: NAMES it rather than leaving each screen to match a code string: the three
+#: coding-session surfaces each hardcoded their own ``code ==`` branch, so a
+#: new lane's held refusal shipped with no button at all (law 4).
+CHOOSE_ORGANIZATION_ACTION = "choose_organization"
+
+_HELD_MESSAGE = (
+    "Waiting for you to choose an organization. Nobody has told this Mac "
+    "which organization to work in yet, and AI Matrx will not guess. Nothing "
+    "is lost — this continues by itself once you choose."
+)
+_HELD_REMEDY = (
+    "Choose your organization in Matrx Local. The work resumes on its own "
+    "within a few seconds."
+)
+
+
+def organization_refusal(exc: OrganizationNotResolvedError) -> dict[str, Any]:
+    """THE one description of an unresolved organization.
+
+    Every sidecar client renders its refusal from here, so a held operation
+    says the same sentence — and offers the same one-click action — whether it
+    came from file sync, the scraper, the Vault, delegation or the
+    coding-session lanes. A lane that writes its own text drifts out of one of
+    the two states, which is the census this helper exists to end.
+    """
+    if exc.held:
+        return {
+            "code": ORGANIZATION_HELD_CODE,
+            "message": _HELD_MESSAGE,
+            "remedy": _HELD_REMEDY,
+            "action": CHOOSE_ORGANIZATION_ACTION,
+            "held": True,
+        }
+    return {
+        "code": ORGANIZATION_BLOCKED_CODE,
+        "message": str(exc),
+        "remedy": exc.remedy,
+        "action": None,
+        "held": False,
+    }
+
+
+def organization_refusal_text(exc: OrganizationNotResolvedError) -> str:
+    """The same refusal as one sentence, for transports that carry only text."""
+    refusal = organization_refusal(exc)
+    return f"{refusal['message']} {refusal['remedy']}"
 
 
 async def resolve_active_organization_id(jwt_value: str) -> str:
@@ -236,9 +299,22 @@ async def resolve_active_organization_id(jwt_value: str) -> str:
         return cached
 
     user_id = _jwt_sub(jwt_value)
+
+    # READ THIS MAC'S ANSWER FIRST. The membership lookup is a network call,
+    # and a question the user has already answered on this device must not be
+    # re-asked because Supabase blinked: the SERVER is the referee on
+    # membership (it refuses an organization the caller is not in), so sending
+    # the set value and letting it verify is both safe and the only behaviour
+    # that does not throw a picker at somebody who already chose.
+    device_choice = await get_device_organization(user_id)
+
     try:
         memberships = await _active_memberships(jwt_value)
     except Exception as exc:  # noqa: BLE001 — mapped to a renderable state
+        if device_choice:
+            _org_cache[cache_key] = device_choice
+            await _clear_hold()
+            return device_choice
         raise OrganizationNotResolvedError(
             f"Could not resolve your organization membership ({exc}).",
             remedy="Check your connection and try again.",
@@ -252,8 +328,7 @@ async def resolve_active_organization_id(jwt_value: str) -> str:
 
     by_id = {str(row["container_id"]): row for row in memberships}
 
-    # 1. What the user SET on this device.
-    device_choice = await get_device_organization(user_id)
+    # 1. What the user SET on this device (read above, before the network).
     if device_choice and device_choice in by_id:
         _org_cache[cache_key] = device_choice
         await _clear_hold()

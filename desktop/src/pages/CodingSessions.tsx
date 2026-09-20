@@ -202,7 +202,7 @@ export function CodingSessions() {
                   {blocker.receipt_id ? ` · first delivery #${blocker.receipt_id}` : ""}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {blocker.code === "organization_not_chosen" && (
+                  {blocker.action === "choose_organization" && (
                     <Button size="sm" onClick={() => requestOrganizationPicker()}>
                       Choose organization
                     </Button>

@@ -965,8 +965,11 @@ async def test_unnamed_organization_pauses_delivery_without_charging_attempts(
 
     refusal = AIDreamError(
         400,
+        # The sentence an OLDER build stamped. Kept on purpose: this test is
+        # also the proof that a Mac upgrading into the new copy still
+        # recognises — and resumes — the rows it queued before.
         "[aidream_client] Cannot name an organization for this request: You "
-        "belong to more than one organization and haven't set a default. "
+        "belong to more than one organization and nothing is chosen on this Mac. "
         "Choose your organization in the desktop app, then try again.",
     )
     client = FakeClient([refusal])
@@ -984,30 +987,35 @@ async def test_unnamed_organization_pauses_delivery_without_charging_attempts(
     async def fake_resolve(_jwt: str) -> str:
         if not resolvable["value"]:
             raise organization_module.OrganizationNotResolvedError(
-                "You belong to more than one organization and haven't set a default.",
+                "You belong to more than one organization and nothing is chosen on this Mac.",
                 remedy="Choose your organization in the desktop app, then try again.",
+                held=True,
             )
         return "org-1"
 
     monkeypatch.setattr(organization_module, "resolve_active_organization_id", fake_resolve)
 
     first = await service.sync_pending()
-    assert first == {"sent": 0, "failed": 1, "blocked": "organization_not_chosen"}
+    assert first == {"sent": 0, "failed": 1, "blocked": "organization_required"}
     assert len(client.calls) == 1, "one refusal must stop cross-lane fan-out"
 
     rows = await bridge_db.fetchall(
         "SELECT id, attempts, last_error FROM coding_session_bridge_outbox ORDER BY id"
     )
     assert [int(row["attempts"]) for row in rows] == [0, 0], "no attempt is charged"
-    assert "Cannot name an organization" in str(rows[0]["last_error"])
+    # The row's own text says the person is being WAITED ON, not that something
+    # malfunctioned — and it carries the remedy (law 4).
+    assert "Waiting for you to choose an organization" in str(rows[0]["last_error"])
+    assert "Choose your organization" in str(rows[0]["last_error"])
 
     paused = await service.sync_pending()
-    assert paused == {"sent": 0, "failed": 0, "blocked": "organization_not_chosen"}
+    assert paused == {"sent": 0, "failed": 0, "blocked": "organization_required"}
     assert len(client.calls) == 1, "a paused publisher does not knock on the server"
 
     status = await service.delivery_status()
     blocker = status["publisher"]["blocker"]
-    assert blocker["code"] == "organization_not_chosen"
+    assert blocker["code"] == "organization_required"
+    assert blocker["action"] == "choose_organization"
     assert "Choose your organization" in blocker["remedy"]
     assert blocker["receipt_id"] == 1
 
@@ -1028,7 +1036,7 @@ def test_organization_refusal_is_never_a_terminal_rejection() -> None:
     refusal = AIDreamError(400, "[aidream_client] Cannot name an organization for this request: x")
     assert _is_terminal_rejection(refusal, attempts=10_000) is False
     mapped = _safe_delivery_error(str(refusal))
-    assert mapped is not None and mapped["code"] == "organization_not_chosen"
+    assert mapped is not None and mapped["code"] == "organization_required"
     assert "Choose your organization" in mapped["message"]
 
 

@@ -37,7 +37,17 @@ import {
   type MemberOrganization,
 } from "@/lib/org/active-org";
 
-export function OrganizationPickerDialog() {
+export interface OrganizationPickerDialogProps {
+  /**
+   * The engine's own connection state. The sidecar keeps a SEPARATE copy of
+   * this Mac's pick and cannot read this window's `localStorage`, so the
+   * answer has to be re-stated to it every time it becomes reachable — see
+   * `republishActiveOrganizationToEngine`.
+   */
+  engineStatus?: string;
+}
+
+export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDialogProps = {}) {
   const [open, setOpen] = useState(false);
   const [organizations, setOrganizations] = useState<MemberOrganization[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,16 +77,39 @@ export function OrganizationPickerDialog() {
     const unregister = registerActionNeededHandler("choose_organization", () =>
       requestOrganizationPicker(),
     );
-    // The engine keeps its own copy of this Mac's pick, and a fresh engine
-    // (reinstall, `dev.sh --fresh`) starts with none. Re-state what this
-    // window already knows so background work is not held on a question the
-    // user already answered.
-    void republishActiveOrganizationToEngine();
     return () => {
       window.removeEventListener(REQUEST_PICKER_EVENT, handler);
       unregister();
     };
   }, [load]);
+
+  // TELL THE ENGINE WHAT THIS MAC ALREADY ANSWERED — every time it is
+  // reachable, and keep trying until it takes it.
+  //
+  // The engine boots alongside (usually after) this window, so a single push
+  // at mount lands on nobody: the PUT fails, the engine stays empty, and the
+  // next background job HOLDS and publishes `organization_required` — asking
+  // the person a question they answered on this Mac days ago. Driving it off
+  // the engine's connection state, with a retry, is what makes the headless
+  // half of the app inherit the answer instead of re-asking for it.
+  useEffect(() => {
+    if (engineStatus !== undefined && engineStatus !== "connected") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (delayMs: number) => {
+      void republishActiveOrganizationToEngine().then((accepted) => {
+        if (cancelled || accepted) return;
+        // Not up, or not signed in yet. Back off, but never give up silently:
+        // giving up is what produced the double-ask.
+        timer = setTimeout(() => attempt(Math.min(delayMs * 2, 30_000)), delayMs);
+      });
+    };
+    attempt(2_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [engineStatus]);
 
   const choose = useCallback(async (organizationId: string) => {
     setSavingId(organizationId);

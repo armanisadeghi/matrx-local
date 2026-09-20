@@ -167,11 +167,12 @@ function writeStoredSelection(value: StoredActiveOrganization | null): void {
  * Imported lazily: `@/lib/api` is the app's heaviest module and pulls this
  * one back in transitively.
  */
-async function pushSelectionToEngine(organizationId: string | null): Promise<void> {
+async function pushSelectionToEngine(organizationId: string | null): Promise<boolean> {
   try {
     const { engine } = await import("@/lib/api");
     if (organizationId === null) await engine.delete("/organization/active");
     else await engine.put("/organization/active", { organization_id: organizationId });
+    return true;
   } catch (err) {
     // The engine may simply not be up yet. That is not a reason to fail the
     // user's choice — the desktop is still correct, and `App.tsx` re-pushes
@@ -181,6 +182,7 @@ async function pushSelectionToEngine(organizationId: string | null): Promise<voi
       "[active-org] the engine did not take this Mac's organization; background work will ask again until it does",
       err,
     );
+    return false;
   }
 }
 
@@ -192,14 +194,27 @@ async function persistSelection(org: MemberOrganization): Promise<void> {
 /**
  * Re-state this Mac's set organization to the engine.
  *
- * Called on engine (re)connect: the engine's copy lives in its own local
- * store, and a fresh engine, a reinstall, or a `--fresh` dev home starts with
- * nothing. Without this, background work would hold on a question the user
- * already answered in this window.
+ * ## The double-ask this closes
+ *
+ * The engine keeps its own copy of this Mac's pick, in its own local store; a
+ * fresh engine, a reinstall or a `--fresh` dev home starts with none. This used
+ * to run exactly ONCE, when `OrganizationPickerDialog` mounted — which is
+ * normally BEFORE the sidecar is reachable, so the push failed, warned to the
+ * console and was never tried again. Every background job on the Mac then held
+ * and published `organization_required`, asking a question the person had
+ * already answered here. (The comment in `pushSelectionToEngine` claiming
+ * `App.tsx` re-pushes on reconnect described something that did not exist.)
+ *
+ * So it is now driven by the engine's own connection state and retried until
+ * the engine takes it.
+ *
+ * @returns true when the engine accepted this Mac's answer (or there is
+ * nothing set yet, so there is nothing to re-state and no reason to retry).
  */
-export async function republishActiveOrganizationToEngine(): Promise<void> {
+export async function republishActiveOrganizationToEngine(): Promise<boolean> {
   const stored = readStoredSelection();
-  if (stored) await pushSelectionToEngine(stored.id);
+  if (!stored) return true;
+  return pushSelectionToEngine(stored.id);
 }
 
 /**

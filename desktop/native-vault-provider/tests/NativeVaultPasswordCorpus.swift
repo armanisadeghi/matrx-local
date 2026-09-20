@@ -49,9 +49,21 @@ struct NativeVaultPasswordCorpus {
         let subject = "11111111-1111-4111-8111-111111111111"
         let org = "22222222-2222-4222-8222-222222222222"
         let item = "33333333-3333-4333-8333-333333333333"
+        // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
         let report = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
         let decoded = try! NativePasswordCodec.organizations(report, subject: subject)
-        require(decoded.organizations.count == 1 && decoded.selected == org, "valid organization report must decode")
+        require(decoded.count == 1 && decoded[0].id == org, "valid organization report must decode")
+        // THE SAVED DEFAULT IS INERT (Arman, 2026-09-19). This report names an
+        // account-level default the user is not even a member of. The decoder
+        // must hand back the memberships and nothing else — it used to return
+        // that id as `selected`, and `selectOrganization` used to build the
+        // AutoFill request under it, which is a password read out of a tenant
+        // the person never chose on this Mac.
+        let strangerOrg = "44444444-4444-4444-8444-444444444444"
+        // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
+        let withStrangerDefault = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(strangerOrg)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        let ignoring = try! NativePasswordCodec.organizations(withStrangerDefault, subject: subject)
+        require(ignoring.count == 1 && ignoring[0].id == org, "the account-level default must not reach the caller")
         let match = "{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}".data(using: .utf8)!
         require((try! NativePasswordCodec.matches(match)).matches.first?.itemID == item, "value-free match must decode")
         rejects({ _ = try NativePasswordCodec.matches("{\"matches\":[],\"matches\":[],\"truncated\":false,\"reason\":null}".data(using: .utf8)!) }, "duplicate response keys must fail")
@@ -77,6 +89,7 @@ struct NativeVaultPasswordCorpus {
         require(NativePasswordStage.interactionRequiredCode == ASExtensionError.userInteractionRequired.rawValue, "modern no-interaction policy must require interaction")
         let response = { (json: String) in (json.data(using: .utf8)!, HTTPURLResponse(url: URL(string: "https://server.app.matrxserver.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!) }
         let transport = ScriptedPasswordTransport()
+        // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
         transport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         let controller = CredentialProviderViewController(); controller.nativePasswordKeyOverride = "public-build-key"; controller.nativePasswordTransport = transport; controller.nativePasswordAuthorize = { $0(true) }; controller.nativePasswordAcquire = { $0(.success(grant)) }; controller.nativePasswordCurrentState = { NativePasswordCurrentState(generation: "generation-a", subject: subject) }; controller.nativePasswordOrganizationChoice = { _ in 0 }; controller.nativePasswordMatchChoice = { _ in 0 }
         var completed: [(String, String)] = []; var cancellations: [NSError] = []

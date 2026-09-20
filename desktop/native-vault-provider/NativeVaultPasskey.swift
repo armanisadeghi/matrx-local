@@ -141,7 +141,7 @@ final class NativeVaultPasskeyCoordinator {
     private func organization(_ grant: NativeVaultSessionAccess.Grant, operation: NativePasskeyOperation, label: String?) async throws -> NativeOrganization {
         let (data, response) = try await checkedRequest("api/auth/organizations", grant: grant, operation: operation)
         guard response.statusCode == 200 else { throw EnrollmentError.message("Vault organizations are unavailable. Try again.") }
-        let values = try NativePasswordCodec.organizations(data, subject: grant.subject).organizations
+        let values = try NativePasswordCodec.organizations(data, subject: grant.subject)
         guard current(operation), !values.isEmpty else { throw EnrollmentError.message("Your account has no available organization.") }
         if let injectedOrganizationChoice { guard let index = injectedOrganizationChoice(values), values.indices.contains(index) else { throw EnrollmentError.message("Passkey selection was cancelled.") }; if let label { let entered = injectedLabel?(label) ?? label; guard !entered.isEmpty, entered.utf8.count <= 1024 else { throw EnrollmentError.message("Passkey registration was cancelled.") }; operationLabel[operation.id] = entered }; return values[index] }
         let alert = NSAlert(); operation.modal = alert; alert.messageText = label == nil ? "Choose the Vault organization" : "Save this passkey"

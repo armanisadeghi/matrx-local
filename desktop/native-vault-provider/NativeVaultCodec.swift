@@ -291,8 +291,18 @@ enum VaultEnvelopeCodec {
     }
 
     static func token(_ data: Data) throws -> Token {
-        let object = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["id_token", "scope"])
-        guard case let .string(access)? = object["access_token"], case let .string(kind)? = object["token_type"], case let .number(expiry)? = object["expires_in"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken, kind.lowercased() == "bearer", let expiresIn = Int(expiry), (1...86400).contains(expiresIn) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        let object = try StrictEnvelope.object(data, required: ["access_token", "token_type", "expires_in", "refresh_token"], optional: ["expires_at", "id_token", "scope", "user", "weak_password"])
+        // Supabase Auth constrains GOTRUE_JWT_EXP to one week (604_800 seconds).
+        guard case let .string(access)? = object["access_token"], case let .string(kind)? = object["token_type"], case let .number(expiry)? = object["expires_in"], case let .string(refresh)? = object["refresh_token"], access.validToken, refresh.validToken, kind.lowercased() == "bearer", let expiresIn = Int(expiry), (1...604_800).contains(expiresIn) else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        if let expiresAt = object["expires_at"] {
+            guard case let .number(value) = expiresAt, let timestamp = Int64(value), timestamp > 0 else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
+        if let user = object["user"] {
+            guard case .object = user else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
+        if let weakPassword = object["weak_password"] {
+            guard case .null = weakPassword else { throw EnrollmentError.message("Account response was rejected. Try again.") }
+        }
         let scope: String?
         if let scopeValue = object["scope"] {
             guard case let .string(value) = scopeValue, Set(["openid", "email", "offline_access"]).isSubset(of: Set(value.split(whereSeparator: { $0.isWhitespace }).map(String.init))) else { throw EnrollmentError.message("Account response was rejected. Try again.") }

@@ -72,14 +72,27 @@ struct NativeVaultCodecCorpus {
         let valid = #"{"access_token":"access","token_type":"Bearer","expires_in":3600,"refresh_token":"refresh","scope":"openid email offline_access"}"#
         try accepts { _ = try VaultEnvelopeCodec.token(data(valid)) }
         try accepts { _ = try VaultEnvelopeCodec.token(data(#"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh"}"#)) }
+        // Shape observed from a live authorized Auth token response. The native grant
+        // still derives its subject only from the separately validated userinfo
+        // response; these serializer metadata fields are never persisted.
+        let liveSerializerShape = #"{"access_token":"access","token_type":"bearer","expires_in":3600,"expires_at":1790000000,"refresh_token":"refresh","user":{"id":"11111111-1111-4111-8111-111111111111"},"weak_password":null}"#
+        try accepts { _ = try VaultEnvelopeCodec.token(data(liveSerializerShape)) }
+        // Supabase OAuth authorization-code grant with the documented maximum
+        // GOTRUE_JWT_EXP of seven days. This failed against the former 86_400 cap.
+        let oauthCodeGrantSevenDays = #"{"access_token":"access","token_type":"bearer","expires_in":604800,"refresh_token":"refresh","scope":"openid email offline_access","id_token":"id-token"}"#
+        try accepts { _ = try VaultEnvelopeCodec.token(data(oauthCodeGrantSevenDays)) }
         for invalid in [
             #"{"token_type":"bearer","expires_in":1,"refresh_token":"refresh"}"#,
             #"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh","extra":true}"#,
             #"{"access_token":"access","token_type":"bearer","expires_in":1.5,"refresh_token":"refresh"}"#,
             #"{"access_token":"access","token_type":"bearer","expires_in":0,"refresh_token":"refresh"}"#,
+            #"{"access_token":"access","token_type":"bearer","expires_in":604801,"refresh_token":"refresh"}"#,
             #"{"access_token":"access","token_type":"basic","expires_in":1,"refresh_token":"refresh"}"#,
             #"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh","scope":"openid email"}"#,
             #"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh","id_token":false}"#,
+            #"{"access_token":"access","token_type":"bearer","expires_in":1,"expires_at":"1790000000","refresh_token":"refresh"}"#,
+            #"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh","user":false}"#,
+            #"{"access_token":"access","token_type":"bearer","expires_in":1,"refresh_token":"refresh","weak_password":false}"#,
         ] { try rejects { _ = try VaultEnvelopeCodec.token(data(invalid)) } }
         let huge = String(repeating: "a", count: 16 * 1024 + 1)
         try rejects { _ = try VaultEnvelopeCodec.token(data(#"{"access_token":"\#(huge)","token_type":"bearer","expires_in":1,"refresh_token":"refresh"}"#)) }

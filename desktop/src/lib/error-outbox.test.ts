@@ -7,6 +7,7 @@ import {
   createErrorOutboxController,
   enqueueDurableClientError,
   setErrorOutboxCaptureContext,
+  sourceFeatureForRoute,
   uploadIdentityBoundErrorBatch,
   type DurableErrorEvent,
   type ErrorOutboxBridge,
@@ -240,5 +241,23 @@ describe("durable renderer error outbox", () => {
 
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(acknowledged).toEqual([]);
+  });
+});
+
+describe("sourceFeatureForRoute", () => {
+  it("maps a known route", () => {
+    expect(sourceFeatureForRoute("/chat")).toBe("chat");
+  });
+
+  it("maps a nested route by its first segment", () => {
+    expect(sourceFeatureForRoute("/browser/tauri")).toBe("scraper");
+  });
+
+  it("falls back to client-unmapped for an empty route", () => {
+    expect(sourceFeatureForRoute("")).toBe("client-unmapped");
+  });
+
+  it("falls back to client-unmapped for an unregistered route", () => {
+    expect(sourceFeatureForRoute("/not-a-real-route")).toBe("client-unmapped");
   });
 });

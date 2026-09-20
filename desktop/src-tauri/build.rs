@@ -24,6 +24,14 @@ fn build_native_vault_exchange() {
         .unwrap()
         .join("scripts/check-native-vault-custody.py");
     println!("cargo:rerun-if-changed={}", custody_guard.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        desktop
+            .parent()
+            .expect("repo root")
+            .join("scripts/native-vault-command-inventory.json")
+            .display()
+    );
     for path in ["src", "src-tauri/src"] {
         println!("cargo:rerun-if-changed={}", desktop.join(path).display());
     }

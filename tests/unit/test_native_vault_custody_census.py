@@ -66,3 +66,26 @@ def test_unprefixed_swift_c_export_fails():
     path = 'desktop/native-vault-provider/NativeVaultExchangeHost.swift'
     sources[path] += '\n@_cdecl("read_private")\nfunc leak() {}'
     assert module.census(sources)
+
+
+@pytest.mark.parametrize(('path', 'before', 'after', 'diagnostic'), [
+    ('desktop/src-tauri/src/native_vault_exchange.rs', 'pub enum Phase {',
+     'pub enum Phase {\n    PrivateReady,', 'Phase'),
+    ('desktop/src/lib/native-vault-exchange.ts', 'export interface NativeVaultExchangeStatus {',
+     'export interface NativeVaultExchangeStatus {\n  source?: string;', 'TypeScript status'),
+    ('desktop/src/lib/native-vault-exchange.ts', 'item_ids: string[];',
+     'source?: string; item_ids: string[];', 'TypeScript request'),
+])
+def test_new_public_contract_member_fails(path, before, after, diagnostic):
+    sources = module.collect(ROOT)
+    assert before in sources[path]
+    sources[path] = sources[path].replace(before, after, 1)
+    assert any(diagnostic in error for error in module.census(sources))
+
+
+def test_shipped_command_without_vault_prefix_requires_review():
+    sources = module.collect(ROOT)
+    path = 'desktop/src-tauri/src/lib.rs'
+    sources[path] += '\n#[tauri::command]\nasync fn reveal_session() {}'
+    sources[path] = sources[path].replace('tauri::generate_handler![', 'tauri::generate_handler![reveal_session,', 1)
+    assert any('command registration' in error for error in module.census(sources))

@@ -54,13 +54,15 @@ final class NativeVaultExportController {
     private let apple: NativeVaultExportAppleManaging
     private let key: () -> String?
     private let evaluate: (LAContext, @escaping (Bool) -> Void) -> Void
+    private let contextFactory: () throws -> LAContext
     private let current: (NativeVaultSessionAccess.Grant) -> Bool
+    private let acquireOverride: ((LAContext, NativeVaultRequestLifetime) async throws -> NativeVaultSessionAccess.Grant)?
     private var active: Operation?
     private var statuses: [UUID: NativeVaultExportStatus] = [:]
 
     private final class Operation {
         let id = UUID(); let ids: [UUID]; let organization: UUID; let lifetime = NativeVaultRequestLifetime()
-        var task: Task<Void, Never>?; var context: LAContext?
+        var task: Task<Void, Never>?; var context: LAContext?; var eligible = 0; var unsupported = 0
         init(ids: [UUID], organization: UUID) { self.ids = ids; self.organization = organization }
     }
 
@@ -70,12 +72,14 @@ final class NativeVaultExportController {
          apple: NativeVaultExportAppleManaging? = nil,
          key: @escaping () -> String? = { Bundle.main.object(forInfoDictionaryKey: "MatrxVaultSupabasePublishableKey") as? String },
          evaluate: @escaping (LAContext, @escaping (Bool) -> Void) -> Void = { context, done in context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Export selected passkeys") { ok, _ in done(ok) } },
+         contextFactory: @escaping () throws -> LAContext = { try NativeVaultPrivateSession().authenticatedContext(reason: "Export selected passkeys") },
+         acquire: ((LAContext, NativeVaultRequestLifetime) async throws -> NativeVaultSessionAccess.Grant)? = nil,
          current: @escaping (NativeVaultSessionAccess.Grant) -> Bool = { grant in
              (try? ProviderStore(mode: .providerAccess).locked { $0.generation == grant.generation && $0.provider_subject == grant.subject }) ?? false
          }) {
         self.sessionAccess = sessionAccess; self.transport = transport
         self.apple = apple ?? NativeVaultSystemExportManager(anchor: presentationAnchor)
-        self.key = key; self.evaluate = evaluate; self.current = current
+        self.key = key; self.evaluate = evaluate; self.contextFactory = contextFactory; self.acquireOverride = acquire; self.current = current
     }
 
     func beginExport(itemIDs: [UUID], organizationID: UUID) -> UUID {
@@ -98,31 +102,36 @@ final class NativeVaultExportController {
     private func run(_ operation: Operation) async {
         do {
             guard isCurrent(operation) else { throw ExportFailure.cancelled }
-            let context = try NativeVaultPrivateSession().authenticatedContext(reason: "Export selected passkeys")
+            let context = try contextFactory()
             operation.context = context
             guard await verified(context), isCurrent(operation), let key = key(), !key.isEmpty else { throw ExportFailure.cancelled }
-            let grant = try await acquire(key: key, context: context, lifetime: operation.lifetime)
+            let grant: NativeVaultSessionAccess.Grant
+            if let acquireOverride { grant = try await acquireOverride(context, operation.lifetime) }
+            else { grant = try await acquire(key: key, context: context, lifetime: operation.lifetime) }
             guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
             set(operation, .choosing_destination)
             let options = try await apple.requestExport(providerID: Self.providerID)
             guard options.formatVersion == .v1, isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
             var entries: [ASImportableItem] = []; var retained = 0
             for id in operation.ids {
-                guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
-                set(operation, .preflighting)
-                let revision = try await preflight(id, grant: grant, operation: operation)
-                guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
-                set(operation, .exporting)
-                let source = try await materialize(id, revision: revision, grant: grant, operation: operation)
-                retained += source.count; guard retained <= Self.maximumAggregate else { throw ExportFailure.refused }
-                let converted = try nativeExportSourcePkcs8(source: source, maxSourceBytes: 65_536)
-                guard valid(converted) else { throw ExportFailure.refused }
-                let title = converted.displayName ?? converted.username ?? "Passkey"
-                let passkey = ASImportableCredential.Passkey(credentialID: converted.credentialId, relyingPartyIdentifier: converted.rpId, userName: converted.username ?? "", userDisplayName: converted.displayName ?? "", userHandle: converted.userHandle, key: converted.pkcs8Der)
-                let now = Date()
-                entries.append(ASImportableItem(id: id.data, created: now, lastModified: now, title: title, credentials: [.passkey(passkey)]))
+                do {
+                    guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
+                    set(operation, .preflighting)
+                    let revision = try await preflight(id, grant: grant, operation: operation)
+                    guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
+                    set(operation, .exporting)
+                    let source = try await materialize(id, revision: revision, grant: grant, operation: operation)
+                    retained += source.count; guard retained <= Self.maximumAggregate else { throw ExportFailure.refused }
+                    let converted = try nativeExportSourcePkcs8(source: source, maxSourceBytes: 65_536)
+                    guard valid(converted) else { throw ExportFailure.refused }
+                    let title = converted.displayName ?? converted.username ?? "Passkey"
+                    let passkey = ASImportableCredential.Passkey(credentialID: converted.credentialId, relyingPartyIdentifier: converted.rpId, userName: converted.username ?? "", userDisplayName: converted.displayName ?? "", userHandle: converted.userHandle, key: converted.pkcs8Der)
+                    let now = Date(); entries.append(ASImportableItem(id: id.data, created: now, lastModified: now, title: title, credentials: [.passkey(passkey)]))
+                    operation.eligible += 1
+                } catch ExportFailure.cancelled { throw ExportFailure.cancelled
+                } catch { operation.unsupported += 1; set(operation, .preflighting) }
             }
-            guard entries.count == operation.ids.count, isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
+            guard !entries.isEmpty, isCurrent(operation), current(grant) else { throw ExportFailure.refused }
             set(operation, .exporting)
             let account = ASImportableAccount(id: Data(grant.subject.utf8), userName: grant.subject, email: "", collections: [], items: entries)
             try await apple.export(ASExportedCredentialData(accounts: [account], formatVersion: .v1, exporterRelyingPartyIdentifier: "com.aimatrx.desktop", exporterDisplayName: "AI Matrx", timestamp: Date()))
@@ -157,8 +166,8 @@ final class NativeVaultExportController {
         return try NativeVaultPasskeyCodec.materialize(await request("api/vault/native/passkeys/\(id.uuidString.lowercased())/export", method: "POST", body: body, grant: grant, operation: operation), maxSourceBytes: 65_536)
     }
     private func isCurrent(_ operation: Operation) -> Bool { active === operation && operation.lifetime.isCurrent && !Task.isCancelled }
-    private func set(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase) { statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.ids.count, unsupported: 0, handed_off: 0, message: "") }
-    private func finish(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase, handed: Int = 0, message: String) { guard active === operation else { return }; statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.ids.count, unsupported: 0, handed_off: handed, message: message); active = nil }
+    private func set(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase) { statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: 0, message: "") }
+    private func finish(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase, handed: Int = 0, message: String) { guard active === operation else { return }; statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: handed, message: message); active = nil }
 }
 
 @available(macOS 26.0, *)

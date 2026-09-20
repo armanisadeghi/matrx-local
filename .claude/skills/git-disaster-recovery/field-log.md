@@ -3,7 +3,7 @@ type: Reference
 title: "git-disaster-recovery — field log"
 description: "Dated observations from live recoveries. A row here is not law until it is folded into SKILL.md. Read only when you have a unique finding, or when you are editing the skill."
 tags: [operations, git, recovery]
-timestamp: 2026-09-19T00:00:00Z
+timestamp: 2026-09-20T00:00:00Z
 ---
 
 # Field log
@@ -13,12 +13,6 @@ session. Leave a one-off here with the repo and the date.
 
 | When | Repo | What we thought | What was true | Folded into SKILL.md? |
 |---|---|---|---|---|
-| 2026-09-20 | matrx-local | Stage 2 helper used `local path=` in zsh | `path` is PATH. Git vanished inside the function. Use another name | Stage 2 |
-| 2026-09-20 | matrx-local | `git branch -d` would delete A leftovers | It refused: not merged into stale local `main`. Cherry unique=0 vs `origin/main` is the proof; then `-D` | Stage 2 |
-| 2026-09-20 | matrx-local | 33 ahead meant 33 unique local commits | Cherry: 2 unique, 31 already on GitHub. One of the two was the same-message org commit GitHub landed 29 seconds later, then extended with two fixes. Cherry `+` was J, not newer product | Stage 1a |
-| 2026-09-20 | matrx-local | Dirty `tauri.conf.json` was uncommitted new work | It rewound the app version from GitHub's 1.4.179 to 1.4.168 | Stage 1b |
-| 2026-09-20 | matrx-local | `git cherry HEAD origin/main` would finish the other half of the split | It hung past two minutes on the 82-behind side. The unique-local direction finished in seconds | Stage 0 |
-| 2026-09-20 | sibling census | A folder named builder-blind-trial looked like a new Size 2 pile (43 worktrees, 28 local branches) | It is a worktree of the frontend repo already assigned; common-dir pointed at that repo's git | Stage 1d / Stage 5 |
 | 2026-09-19 | aidream | 149 ahead / 433 behind was a second product line | 129 of 149 local commits were already on GitHub as the same patch; ~10 unique; GitHub half of the split was real | Stage 1a |
 | 2026-09-19 | aidream | 76 worktrees were unique leftover work | 56 already pointed at commits on GitHub; 12 had unique patches | Stage 2 |
 | 2026-09-19 | aidream | Untracked files were new work | 46 of 67 already existed on `origin/main`; local `main` was stale | Stage 1b |
@@ -54,3 +48,13 @@ session. Leave a one-off here with the repo and the date.
 | 2026-09-19 | aidream + frontend | Type errors after a release are a separate project | They are a Stage 8 fan-out. Use the frontend `type-safety` skill. One file per small agent, no agent-side tsc, ≤6 at a time. Tonight: 29 frontend errors / 15 files; shared packages clean except two install misses | Stage 8 type-error army |
 | 2026-09-19 | frontend | `pnpm db-types` is the fix for three missing RPCs | The three names already existed on `origin/main`. Full regen on a tip 284 behind origin turned 3 errors into 134. Splicing the three function entries from origin/live gen brought `pnpm type-check` to 0 | Stage 8 + type-safety "when type errors appear" |
 | 2026-09-19 | frontend | Type-fix agents can report and leave the diff uncommitted | Uncommitted type fixes miss the next build. Each agent commits exclusive files locally as it finishes; the orchestrator commits type syncs the same turn | Stage 8 type-error army + type-safety batch |
+| 2026-09-20 | matrx-extend | Second-repo run would be another Size 2 disaster | Shared folder already *was* GitHub `main` (0/0, one worktree, no PRs, no stashes). Two leftover branches: one already landed later and tighter (B), one rejected private-transport prototype GitHub had already sealed (J). Size 2 stood down after Stage 1 | Stage 0 stand-down after Stage 1 |
+| 2026-09-20 | matrx-extend | `HEAD == origin/main` means leftover branches are empty | Cherry still found unique commits on both leftover branches. Do not stand down at the Stage 0 count | Stage 1a leftover-branch cherry |
+| 2026-09-20 | matrx-extend | Skill file on GitHub means the skill landed | `SKILL.md` was committed; `evals.md` / `field-log.md` / `owner-park.md` were left untracked. Sync writes the whole directory; the follow-up commit missed the companions | Stage 1b sync-commit miss |
+| 2026-09-20 | matrx-local | 33 ahead meant 33 unique local commits | Cherry: 2 unique, 31 already on GitHub. One of the two was the same-message org commit GitHub landed 29 seconds later, then extended with two fixes. Cherry `+` was J, not newer product | Stage 1a |
+| 2026-09-20 | matrx-local | Dirty `tauri.conf.json` was uncommitted new work | It rewound the app version from GitHub's 1.4.179 to 1.4.168 | Stage 1b |
+| 2026-09-20 | matrx-local | `git cherry HEAD origin/main` would finish the other half of the split | It hung past two minutes on the 82-behind side. The unique-local direction finished in seconds | Stage 0 |
+| 2026-09-20 | sibling census | A folder named builder-blind-trial looked like a new Size 2 pile | It is a worktree of the frontend repo already assigned; common-dir pointed at that repo | Stage 1d / Stage 5 |
+| 2026-09-20 | common-docs | Two mains same SHA and leftover worktrees already on GitHub meant stand down | Unique untracked files still existed. `log.md` and Integration Maintainer already named Unmerged work intake; the file was never on GitHub | Stage 0 / 1b |
+| 2026-09-20 | common-docs | Stash board rows already on GitHub, so drop the stash | Two disaster-recovery log lines in that stash were still unique | Stage 2 mixed stash |
+| 2026-09-20 | common-docs | Dirty skill files were this recovery's notes to commit | They were matrx-local's rewrite and would have unwound the extend stand-down already on GitHub | Bucket J, two-recovery skill |

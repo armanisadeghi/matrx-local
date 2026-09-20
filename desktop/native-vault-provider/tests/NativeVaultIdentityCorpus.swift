@@ -60,6 +60,17 @@ private extension NativeVaultIdentityCorpus {
         let sync = NativeVaultIdentitySynchronizer(store: apple, stateStore: { try ProviderStore(testRoot: root, mode: .providerAccess) })
         let row = "{\"item_id\":\"55555555-5555-4555-8555-555555555555\",\"kind\":\"password\",\"service\":{\"type\":\"url\",\"identifier\":\"https://example.com/Case\"},\"user\":\"test\"}"
         func response(_ request: URLRequest, _ status: Int) -> HTTPURLResponse { HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)! }
+        let expectedRefreshMessages: [(Int, NativeVaultSuggestionRefreshFailure, String)] = [
+            (401, .reconnect, "Vault connection needs reconnect."),
+            (403, .organizationAccess, "Your account cannot use this organization. Choose another organization."),
+            (404, .serviceUpdate, "Vault suggestion service needs an update. Try again later."),
+            (409, .changed, "Vault suggestions changed while refreshing. Try again."),
+            (429, .wait, "Vault suggestions are busy. Wait a moment and try again."),
+            (500, .unavailable, "Vault suggestions are temporarily unavailable. Try again."),
+            (502, .unavailable, "Vault suggestions are temporarily unavailable. Try again."),
+            (503, .unavailable, "Vault suggestions are temporarily unavailable. Try again."),
+            (504, .unavailable, "Vault suggestions are temporarily unavailable. Try again.")
+        ]
         var calls = 0
         var outcome: Result<PublicState, Error>?
         sync.refresh(accessToken: "disposable-test-token", subject: subject, generation: initial.generation, organization: org, send: { request, done in
@@ -76,6 +87,46 @@ private extension NativeVaultIdentityCorpus {
         let ready = try outcome!.get()
         guard calls == 3, apple.installed.count == 1, apple.installed[0].count == 1, ready.suggestions.count == 1, try disk.read().suggestions.revision == ready.suggestions.revision else { throw IdentityFailure.expected }
         print("Passed: complete paging")
+        // Each user-facing status comes from the actual refresh callback, with
+        // no response body rendered and no replacement of the prior Apple list.
+        func expectRefreshFailure(_ expected: NativeVaultSuggestionRefreshFailure, message: String, send: @escaping (URLRequest, @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> Void) throws {
+            try disk.write(ready)
+            let installs = apple.installed.count
+            outcome = nil
+            sync.refresh(accessToken: "test", subject: subject, generation: initial.generation, organization: org, send: send, isCurrent: { true }, completion: { outcome = $0 })
+            try wait { outcome != nil }
+            guard case let .failure(error) = outcome!, error as? NativeVaultSuggestionRefreshFailure == expected,
+                  NativeVaultSuggestionRefreshFailure.presentationMessage(for: error) == message,
+                  apple.installed.count == installs,
+                  try disk.read().suggestions.status == "stale",
+                  try disk.read().suggestions.revision == ready.suggestions.revision else { throw IdentityFailure.expected }
+        }
+        for (status, expected, message) in expectedRefreshMessages {
+            try expectRefreshFailure(expected, message: message, send: { request, done in done(.success((Data(), response(request, status)))) })
+        }
+        try expectRefreshFailure(.malformedMetadata, message: "Vault suggestion metadata was rejected. Refresh suggestions.", send: { request, done in done(.success((Data("not-json".utf8), response(request, 200)))) })
+        try expectRefreshFailure(.connectivity, message: "Can't reach AI Matrx Vault. Check your connection and try again.", send: { _, done in done(.failure(URLError(.timedOut))) })
+        // A valid body returned after the aggregate deadline is a connectivity
+        // timeout, not malformed server metadata, and cannot replace entries.
+        try disk.write(ready)
+        let clockLock = NSLock(); let started = Date(); var currentTime = started
+        let testClock: () -> Date = { clockLock.lock(); defer { clockLock.unlock() }; return currentTime }
+        let lateSync = NativeVaultIdentitySynchronizer(store: apple, stateStore: { try ProviderStore(testRoot: root, mode: .providerAccess) }, now: testClock)
+        let installsBeforeLateReply = apple.installed.count
+        var lateRequest: URLRequest?; var lateReply: ((Result<(Data, HTTPURLResponse), Error>) -> Void)?; outcome = nil
+        lateSync.refresh(accessToken: "test", subject: subject, generation: initial.generation, organization: org, send: { request, done in lateRequest = request; lateReply = done }, isCurrent: { true }, completion: { outcome = $0 })
+        try wait { lateReply != nil }
+        clockLock.lock(); currentTime = started.addingTimeInterval(61); clockLock.unlock()
+        lateReply!(.success((page("[]"), response(lateRequest!, 200))))
+        try wait { outcome != nil }
+        guard case let .failure(error) = outcome!, error as? NativeVaultSuggestionRefreshFailure == .connectivity,
+              NativeVaultSuggestionRefreshFailure.presentationMessage(for: error) == "Can't reach AI Matrx Vault. Check your connection and try again.",
+              apple.installed.count == installsBeforeLateReply,
+              try disk.read().suggestions.status == "stale",
+              try disk.read().suggestions.revision == ready.suggestions.revision else { throw IdentityFailure.expected }
+        guard NativeVaultSuggestionRefreshFailure.presentationMessage(for: NativeIdentityStoreFailure.disabled) == "Enable AI Matrx in Password AutoFill settings to show suggestions.",
+              NativeVaultSuggestionRefreshFailure.presentationMessage(for: NativeIdentityStoreFailure.busy) == "Apple's suggestion store is busy. Try again." else { throw IdentityFailure.expected }
+        print("Passed: closed refresh error presentation")
         // Block filesystem access for the stale transition: failure cannot
         // become visible until that transition has completed durably.
         let staleEntered = DispatchSemaphore(value: 0)

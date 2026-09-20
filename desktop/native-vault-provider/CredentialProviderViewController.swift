@@ -364,7 +364,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 self.nativeIdentitySynchronizer.refresh(accessToken: grant.accessToken, subject: grant.subject, generation: grant.generation, organization: selected.id, send: self.nativePasswordTransport.send, isCurrent: { lifetime.isCurrent }) { result in
                     switch result {
                     case let .success(state): self.setConnectionStatus("Suggestions updated: \(state.suggestions.count) installed, \(state.suggestions.unsupported_count) unavailable.")
-                    case .failure: self.setConnectionStatus("Suggestion scope could not be changed. Try again.")
+                    case let .failure(error): self.setConnectionStatus(NativeVaultSuggestionRefreshFailure.presentationMessage(for: error))
                     }
                 }
             } catch { self.setConnectionStatus("Vault organizations are unavailable. Try again.") }
@@ -400,7 +400,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 guard let organization = choose else { self.setConnectionStatus("Choose an organization before refreshing suggestions."); return }
                 self.setConnectionStatus("Refreshing suggestions…")
                 self.nativeIdentitySynchronizer.refresh(accessToken: grant.accessToken, subject: grant.subject, generation: grant.generation, organization: organization, send: self.nativePasswordTransport.send, isCurrent: { lifetime.isCurrent }) { result in
-                    switch result { case let .success(state): self.setConnectionStatus("Suggestions updated: \(state.suggestions.count) installed, \(state.suggestions.unsupported_count) unavailable."); case .failure: self.setConnectionStatus("Suggestions could not be refreshed. Try again.") }
+                    switch result { case let .success(state): self.setConnectionStatus("Suggestions updated: \(state.suggestions.count) installed, \(state.suggestions.unsupported_count) unavailable."); case let .failure(error): self.setConnectionStatus(NativeVaultSuggestionRefreshFailure.presentationMessage(for: error)) }
                 }
             } }
         }

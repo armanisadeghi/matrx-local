@@ -11,8 +11,55 @@ struct NativeVaultIndexedIdentity: Equatable {
 }
 struct NativeVaultIdentityPage { let snapshotID: String; let identities: [NativeVaultIndexedIdentity]; let nextAfter: String?; let complete: Bool; let unsupportedCount: Int }
 
+/// The refresh boundary only exposes this closed, value-free failure set to
+/// configuration UI.  In particular, it never renders an HTTP body or a
+/// transport/Apple diagnostic, which may contain account or service details.
+enum NativeVaultSuggestionRefreshFailure: Error, LocalizedError, Equatable {
+    case reconnect, organizationAccess, changed, wait, serviceUpdate, unavailable, rejected, malformedMetadata, limitExceeded, connectivity
+
+    static func http(_ status: Int) -> Self {
+        switch status {
+        case 401: return .reconnect
+        case 403: return .organizationAccess
+        case 404: return .serviceUpdate
+        case 409: return .changed
+        case 429: return .wait
+        case 500...599: return .unavailable
+        default: return .rejected
+        }
+    }
+
+    static func transport(_ error: Error) -> Self {
+        // Deliberately classify all URL and transport diagnostics together;
+        // neither their localized text nor an underlying server error is safe
+        // to show in this privileged extension.
+        .connectivity
+    }
+
+    static func presentationMessage(for error: Error) -> String {
+        if let failure = error as? NativeVaultSuggestionRefreshFailure { return failure.errorDescription! }
+        if let failure = error as? NativeIdentityStoreFailure { return failure.errorDescription! }
+        return "Vault suggestions could not be refreshed. Try again."
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .reconnect: return "Vault connection needs reconnect."
+        case .organizationAccess: return "Your account cannot use this organization. Choose another organization."
+        case .changed: return "Vault suggestions changed while refreshing. Try again."
+        case .wait: return "Vault suggestions are busy. Wait a moment and try again."
+        case .serviceUpdate: return "Vault suggestion service needs an update. Try again later."
+        case .unavailable: return "Vault suggestions are temporarily unavailable. Try again."
+        case .rejected: return "Vault suggestions were rejected. Try again."
+        case .malformedMetadata: return "Vault suggestion metadata was rejected. Refresh suggestions."
+        case .limitExceeded: return "Vault suggestion refresh exceeded its limit. Try again."
+        case .connectivity: return "Can't reach AI Matrx Vault. Check your connection and try again."
+        }
+    }
+}
+
 enum NativeVaultIdentityCodec {
-    private static func rejected() -> Error { EnrollmentError.message("Vault suggestion metadata was rejected. Refresh suggestions.") }
+    private static func rejected() -> Error { NativeVaultSuggestionRefreshFailure.malformedMetadata }
     private static func uuid(_ value: JSONValue?) -> String? { guard case let .string(value)? = value, value.canonicalUUID else { return nil }; return value }
     private static func text(_ value: JSONValue?, max: Int = 1024) -> String? { guard case let .string(value)? = value, !value.isEmpty, value.utf8.count <= max else { return nil }; return value }
     static func page(_ data: Data) throws -> NativeVaultIdentityPage {
@@ -76,8 +123,9 @@ final class NativeVaultIdentityStore: NativeVaultIdentityStoring, @unchecked Sen
 final class NativeVaultIdentitySynchronizer {
     private let store: NativeVaultIdentityStoring
     private let stateStore: () throws -> ProviderStore
+    private let now: () -> Date
     private let lock = NSLock(); private var active = UUID()
-    init(store: NativeVaultIdentityStoring = NativeVaultIdentityStore(), stateStore: @escaping () throws -> ProviderStore = { try ProviderStore(mode: .providerAccess) }) { self.store = store; self.stateStore = stateStore }
+    init(store: NativeVaultIdentityStoring = NativeVaultIdentityStore(), stateStore: @escaping () throws -> ProviderStore = { try ProviderStore(mode: .providerAccess) }, now: @escaping () -> Date = Date.init) { self.store = store; self.stateStore = stateStore; self.now = now }
     func cancel() { lock.lock(); active = UUID(); lock.unlock() }
     private func isActive(_ request: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return active == request }
     private func begin() -> UUID { lock.lock(); defer { lock.unlock() }; active = UUID(); return active }
@@ -116,7 +164,7 @@ final class NativeVaultIdentitySynchronizer {
     func refresh(accessToken: String, subject: String, generation: String, organization: String, send: @escaping (URLRequest, @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) -> Void, isCurrent: @escaping () -> Bool, completion: @escaping (Result<PublicState, Error>) -> Void) {
         let requestID = begin()
         let queue = DispatchQueue(label: "com.aimatrx.vault.identity-refresh")
-        let deadline = Date().addingTimeInterval(60)
+        let deadline = now().addingTimeInterval(60)
         store.state { enabled, error in
             queue.async {
                 guard self.isActive(requestID), isCurrent() else { return }
@@ -148,9 +196,9 @@ final class NativeVaultIdentitySynchronizer {
                     }
                     func next(authorityCheck: Bool = false) {
                         guard self.isActive(requestID), isCurrent() else { finished = true; return }
-                        guard !finished, Date() < deadline, requests < 4004, bytes <= 16 * 1024 * 1024 else {
-                            fail(EnrollmentError.message("Vault suggestion refresh exceeded its limit. Try again.")); return
-                        }
+                        guard !finished else { return }
+                        guard self.now() < deadline else { fail(NativeVaultSuggestionRefreshFailure.connectivity); return }
+                        guard requests < 4004, bytes <= 16 * 1024 * 1024 else { fail(NativeVaultSuggestionRefreshFailure.limitExceeded); return }
                         requests += 1
                         let nonce = UUID(); pending = nonce
                         do {
@@ -164,35 +212,40 @@ final class NativeVaultIdentitySynchronizer {
                             send(request) { result in queue.async {
                                 guard !finished, pending == nonce, self.isActive(requestID), isCurrent() else { return }
                                 pending = UUID()
-                                do {
-                                    let (data, response) = try result.get()
-                                    guard Date() < deadline, data.count <= 96 * 1024 else { throw EnrollmentError.message("Vault suggestion response exceeded its limit.") }
+                                switch result {
+                                case let .failure(error):
+                                    fail(NativeVaultSuggestionRefreshFailure.transport(error))
+                                case let .success((data, response)):
+                                    do {
+                                    guard self.now() < deadline else { throw NativeVaultSuggestionRefreshFailure.connectivity }
+                                    guard data.count <= 96 * 1024 else { throw NativeVaultSuggestionRefreshFailure.malformedMetadata }
                                     bytes += data.count
-                                    guard bytes <= 16 * 1024 * 1024 else { throw EnrollmentError.message("Vault suggestion refresh exceeded its limit.") }
+                                    guard bytes <= 16 * 1024 * 1024 else { throw NativeVaultSuggestionRefreshFailure.limitExceeded }
                                     if response.statusCode == 409, retries == 0 {
                                         retries = 1; collected.removeAll(); keys.removeAll(); cursors.removeAll()
                                         snapshot = nil; after = nil; unsupported = nil; next(); return
                                     }
-                                    guard response.statusCode == 200 else { throw EnrollmentError.message(response.statusCode == 409 ? "Vault suggestions changed while refreshing. Try again." : "Vault suggestions are temporarily unavailable. Try again.") }
+                                    guard response.statusCode == 200 else { throw NativeVaultSuggestionRefreshFailure.http(response.statusCode) }
                                     let page = try NativeVaultIdentityCodec.page(data)
-                                    guard snapshot == nil || snapshot == page.snapshotID, unsupported == nil || unsupported == page.unsupportedCount else { throw EnrollmentError.message("Vault suggestions changed while refreshing. Try again.") }
+                                    guard snapshot == nil || snapshot == page.snapshotID, unsupported == nil || unsupported == page.unsupportedCount else { throw NativeVaultSuggestionRefreshFailure.changed }
                                     if authorityCheck {
                                         finished = true
-                                        self.replaceComplete(request: requestID, values: collected, organization: organization, expected: expected, unsupported: page.unsupportedCount, isCurrent: { self.isActive(requestID) && isCurrent() && Date() < deadline }, completion: completion)
+                                        self.replaceComplete(request: requestID, values: collected, organization: organization, expected: expected, unsupported: page.unsupportedCount, isCurrent: { self.isActive(requestID) && isCurrent() && self.now() < deadline }, completion: completion)
                                         return
                                     }
-                                    guard collected.count + page.identities.count + page.unsupportedCount <= 2000 else { throw EnrollmentError.message("Vault suggestion inventory exceeded its limit.") }
+                                    guard collected.count + page.identities.count + page.unsupportedCount <= 2000 else { throw NativeVaultSuggestionRefreshFailure.malformedMetadata }
                                     for value in page.identities {
                                         let key = value.kind == .password ? "password|\(value.itemID)|\(value.serviceType!)|\(value.serviceIdentifier!)" : "passkey|\(value.itemID)|\(value.passkeyID!)"
-                                        guard keys.insert(key).inserted else { throw EnrollmentError.message("Vault suggestion inventory repeated an account.") }
+                                        guard keys.insert(key).inserted else { throw NativeVaultSuggestionRefreshFailure.malformedMetadata }
                                     }
-                                    if let cursor = page.nextAfter { guard cursors.insert(cursor).inserted else { throw EnrollmentError.message("Vault suggestion inventory did not advance.") } }
+                                    if let cursor = page.nextAfter { guard cursors.insert(cursor).inserted else { throw NativeVaultSuggestionRefreshFailure.malformedMetadata } }
                                     snapshot = page.snapshotID; unsupported = page.unsupportedCount
                                     collected += page.identities; after = page.nextAfter
                                     next(authorityCheck: page.complete)
-                                } catch { fail(error) }
+                                    } catch { fail(error is NativeVaultSuggestionRefreshFailure ? error : NativeVaultSuggestionRefreshFailure.malformedMetadata) }
+                                }
                             } }
-                        } catch { fail(error) }
+                        } catch { fail(error is NativeVaultSuggestionRefreshFailure ? error : NativeVaultSuggestionRefreshFailure.rejected) }
                     }
                     next()
                 } catch { DispatchQueue.main.async { completion(.failure(error)) } }

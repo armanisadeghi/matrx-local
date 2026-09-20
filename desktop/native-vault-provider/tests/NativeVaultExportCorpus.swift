@@ -124,6 +124,8 @@ private final class Server: NativeVaultExportTransporting {
         precondition(successApple.events.isEmpty && successServer.materialize == 0)
         precondition(successServer.requests == ["/api/vault/native/passkeys/\(item.uuidString.lowercased())/export/preflight"])
         success.confirm(operationID: successID)
+        // A duplicate confirmation before the task receives its next turn is idempotent.
+        success.confirm(operationID: successID)
         await wait { success.status(operationID: successID).phase == .handed_to_destination }
         let successStatus = success.status(operationID: successID)
         precondition(successStatus.total == 1 && successStatus.eligible == 1 && successStatus.unsupported == 0 && successStatus.handed_off == 1)
@@ -170,6 +172,9 @@ private final class Server: NativeVaultExportTransporting {
         await awaitConfirmation(cancelled, cancelledID)
         cancelled.confirm(operationID: cancelledID)
         await wait { cancelApple.held != nil }
+        // A late duplicate while the OS chooser is active cannot overwrite the running status.
+        cancelled.confirm(operationID: cancelledID)
+        precondition(cancelled.status(operationID: cancelledID).phase == .choosing_destination)
         cancelled.cancel(operationID: cancelledID); cancelApple.release()
         await wait { cancelled.status(operationID: cancelledID).phase == .cancelled }
         precondition(cancelServer.materialize == 0 && cancelApple.handed == 0)
@@ -184,6 +189,17 @@ private final class Server: NativeVaultExportTransporting {
         await wait { materializeFailure.status(operationID: materializeID).phase == .failed }
         precondition(materializeApple.events == ["chooser:com.aimatrx.desktop.vault-provider"] && materializeApple.handed == 0)
         precondition(materializeServer.materialize == 2, "the failed second read must prevent partial handoff")
+
+        // Replacing an operation makes historical status IDs unavailable instead
+        // of retaining an unbounded status dictionary.
+        let replacementApple = Apple(); let replacementServer = Server(source: canonicalSource)
+        let replacement = controller(apple: replacementApple, server: replacementServer, current: { true })
+        let first = replacement.beginExport(itemIDs: [item], organizationID: organization)
+        await awaitConfirmation(replacement, first)
+        let second = replacement.beginExport(itemIDs: [item], organizationID: organization)
+        precondition(replacement.status(operationID: first).phase == .unavailable)
+        await awaitConfirmation(replacement, second)
+        replacement.cancel(operationID: second)
 
         print("PASS native export controller corpus")
     }

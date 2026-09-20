@@ -85,6 +85,9 @@ final class NativeVaultExportController {
 
     func beginExport(itemIDs: [UUID], organizationID: UUID) -> UUID {
         if let active { cancel(operationID: active.id) }
+        // A host can query only the current or most recently settled operation.
+        // Never retain historical operation identifiers indefinitely.
+        statuses.removeAll(keepingCapacity: true)
         let unique = Array(NSOrderedSet(array: itemIDs)) as? [UUID] ?? []
         let operation = Operation(ids: unique, organization: organizationID); active = operation
         guard !unique.isEmpty, unique.count <= Self.maximumItems else { finish(operation, .failed, message: "Selected passkeys exceed the export limit."); return operation.id }
@@ -100,11 +103,14 @@ final class NativeVaultExportController {
     /// A host confirmation can only continue a locally authenticated, current
     /// metadata selection. It carries no source bytes or authority material.
     func confirm(operationID: UUID) {
-        guard let operation = active, operation.id == operationID,
-              statuses[operationID]?.phase == .awaiting_confirmation,
+        guard let operation = active, operation.id == operationID else { return }
+        // Repeated host confirmations race naturally with the actor task. Once
+        // transfer has begun they are an idempotent no-op, never a cancellation.
+        guard statuses[operationID]?.phase == .awaiting_confirmation else { return }
+        guard
               let grant = operation.grant,
               isCurrent(operation), current(grant) else {
-            if let operation = active, operation.id == operationID { finish(operation, .cancelled, message: "Export cancelled.") }
+            finish(operation, .cancelled, message: "Export cancelled.")
             return
         }
         set(operation, .choosing_destination)
@@ -191,8 +197,16 @@ final class NativeVaultExportController {
         return try NativeVaultPasskeyCodec.materialize(await request("api/vault/native/passkeys/\(id.uuidString.lowercased())/export", method: "POST", body: body, grant: grant, operation: operation), maxSourceBytes: 65_536)
     }
     private func isCurrent(_ operation: Operation) -> Bool { active === operation && operation.lifetime.isCurrent && !Task.isCancelled }
-    private func set(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase) { statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: 0, message: "") }
-    private func finish(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase, handed: Int = 0, message: String) { guard active === operation else { return }; statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: handed, message: message); active = nil }
+    private func set(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase) {
+        statuses.removeAll(keepingCapacity: true)
+        statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: 0, message: "")
+    }
+    private func finish(_ operation: Operation, _ phase: NativeVaultExportStatus.Phase, handed: Int = 0, message: String) {
+        guard active === operation else { return }
+        statuses.removeAll(keepingCapacity: true)
+        statuses[operation.id] = .init(operation_id: operation.id.uuidString.lowercased(), phase: phase, total: operation.ids.count, eligible: operation.eligible, unsupported: operation.unsupported, handed_off: handed, message: message)
+        active = nil
+    }
 }
 
 @available(macOS 26.0, *)

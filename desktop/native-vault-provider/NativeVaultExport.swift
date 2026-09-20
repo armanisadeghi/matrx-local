@@ -5,7 +5,7 @@ import Foundation
 
 @available(macOS 26.0, *)
 struct NativeVaultExportStatus: Codable, Equatable {
-    enum Phase: String, Codable { case idle, authorizing, preflighting, choosing_destination, exporting, handed_to_destination, cancelled, failed, unavailable }
+    enum Phase: String, Codable { case idle, authorizing, preflighting, awaiting_confirmation, choosing_destination, exporting, handed_to_destination, cancelled, failed, unavailable }
     let operation_id: String
     let phase: Phase
     let total: Int
@@ -62,7 +62,8 @@ final class NativeVaultExportController {
 
     private final class Operation {
         let id = UUID(); let ids: [UUID]; let organization: UUID; let lifetime = NativeVaultRequestLifetime()
-        var task: Task<Void, Never>?; var context: LAContext?; var eligible = 0; var unsupported = 0
+        var task: Task<Void, Never>?; var context: LAContext?; var grant: NativeVaultSessionAccess.Grant?
+        var revisions: [UUID: String] = [:]; var eligible = 0; var unsupported = 0
         init(ids: [UUID], organization: UUID) { self.ids = ids; self.organization = organization }
     }
 
@@ -96,6 +97,22 @@ final class NativeVaultExportController {
         operation.lifetime.cancel(); operation.context?.invalidate(); operation.task?.cancel(); transport.cancel(); sessionAccess.cancel()
         finish(operation, .cancelled, message: "Export cancelled.")
     }
+    /// A host confirmation can only continue a locally authenticated, current
+    /// metadata selection. It carries no source bytes or authority material.
+    func confirm(operationID: UUID) {
+        guard let operation = active, operation.id == operationID,
+              statuses[operationID]?.phase == .awaiting_confirmation,
+              let grant = operation.grant,
+              isCurrent(operation), current(grant) else {
+            if let operation = active, operation.id == operationID { finish(operation, .cancelled, message: "Export cancelled.") }
+            return
+        }
+        set(operation, .choosing_destination)
+        operation.task = Task { [weak self, weak operation] in
+            guard let self, let operation else { return }
+            await self.transfer(operation, grant: grant)
+        }
+    }
     func invalidate() { if let active { cancel(operationID: active.id) }; statuses.removeAll() }
     func status(operationID: UUID) -> NativeVaultExportStatus { statuses[operationID] ?? .init(operation_id: operationID.uuidString.lowercased(), phase: .unavailable, total: 0, eligible: 0, unsupported: 0, handed_off: 0, message: "Export is unavailable.") }
 
@@ -109,29 +126,37 @@ final class NativeVaultExportController {
             if let acquireOverride { grant = try await acquireOverride(context, operation.lifetime) }
             else { grant = try await acquire(key: key, context: context, lifetime: operation.lifetime) }
             guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
-            set(operation, .choosing_destination)
+            for id in operation.ids {
+                guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
+                set(operation, .preflighting)
+                operation.revisions[id] = try await preflight(id, grant: grant, operation: operation)
+            }
+            guard operation.revisions.count == operation.ids.count, isCurrent(operation), current(grant) else { throw ExportFailure.refused }
+            operation.grant = grant; operation.eligible = operation.ids.count
+            set(operation, .awaiting_confirmation)
+        } catch is CancellationError { finish(operation, .cancelled, message: "Export cancelled.")
+        } catch ExportFailure.cancelled { finish(operation, .cancelled, message: "Export cancelled.")
+        } catch { finish(operation, .failed, message: "Selected passkeys are unavailable for export.") }
+    }
+
+    private func transfer(_ operation: Operation, grant: NativeVaultSessionAccess.Grant) async {
+        do {
+            guard isCurrent(operation), current(grant), operation.revisions.count == operation.ids.count else { throw ExportFailure.cancelled }
             let options = try await apple.requestExport(providerID: Self.providerID)
             guard options.formatVersion == .v1, isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
             var entries: [ASImportableItem] = []; var retained = 0
             for id in operation.ids {
-                do {
-                    guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
-                    set(operation, .preflighting)
-                    let revision = try await preflight(id, grant: grant, operation: operation)
-                    guard isCurrent(operation), current(grant) else { throw ExportFailure.cancelled }
-                    set(operation, .exporting)
-                    let source = try await materialize(id, revision: revision, grant: grant, operation: operation)
-                    retained += source.count; guard retained <= Self.maximumAggregate else { throw ExportFailure.refused }
-                    let converted = try nativeExportSourcePkcs8(source: source, maxSourceBytes: 65_536)
-                    guard valid(converted) else { throw ExportFailure.refused }
-                    let title = converted.displayName ?? converted.username ?? "Passkey"
-                    let passkey = ASImportableCredential.Passkey(credentialID: converted.credentialId, relyingPartyIdentifier: converted.rpId, userName: converted.username ?? "", userDisplayName: converted.displayName ?? "", userHandle: converted.userHandle, key: converted.pkcs8Der)
-                    let now = Date(); entries.append(ASImportableItem(id: id.data, created: now, lastModified: now, title: title, credentials: [.passkey(passkey)]))
-                    operation.eligible += 1
-                } catch ExportFailure.cancelled { throw ExportFailure.cancelled
-                } catch { operation.unsupported += 1; set(operation, .preflighting) }
+                guard isCurrent(operation), current(grant), let revision = operation.revisions[id] else { throw ExportFailure.cancelled }
+                set(operation, .exporting)
+                let source = try await materialize(id, revision: revision, grant: grant, operation: operation)
+                retained += source.count; guard retained <= Self.maximumAggregate else { throw ExportFailure.refused }
+                let converted = try nativeExportSourcePkcs8(source: source, maxSourceBytes: 65_536)
+                guard valid(converted) else { throw ExportFailure.refused }
+                let title = converted.displayName ?? converted.username ?? "Passkey"
+                let passkey = ASImportableCredential.Passkey(credentialID: converted.credentialId, relyingPartyIdentifier: converted.rpId, userName: converted.username ?? "", userDisplayName: converted.displayName ?? "", userHandle: converted.userHandle, key: converted.pkcs8Der)
+                let now = Date(); entries.append(ASImportableItem(id: id.data, created: now, lastModified: now, title: title, credentials: [.passkey(passkey)]))
             }
-            guard !entries.isEmpty, isCurrent(operation), current(grant) else { throw ExportFailure.refused }
+            guard entries.count == operation.ids.count, isCurrent(operation), current(grant) else { throw ExportFailure.refused }
             set(operation, .exporting)
             let account = ASImportableAccount(id: Data(grant.subject.utf8), userName: grant.subject, email: "", collections: [], items: entries)
             try await apple.export(ASExportedCredentialData(accounts: [account], formatVersion: .v1, exporterRelyingPartyIdentifier: "com.aimatrx.desktop", exporterDisplayName: "AI Matrx", timestamp: Date()))

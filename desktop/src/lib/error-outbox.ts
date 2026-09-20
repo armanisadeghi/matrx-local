@@ -1,4 +1,5 @@
 import { invokeTauri, isTauri } from "@/lib/sidecar";
+import type { SourceFeature } from "@/types/python-generated/source-attribution";
 
 export type DurableErrorLevel = "warn" | "error";
 
@@ -42,6 +43,7 @@ export interface ErrorOutboxRpcResult {
 
 export type ErrorOutboxRpc = (args: {
   p_source_app: "matrx-local";
+  p_source_feature: SourceFeature;
   p_source: string;
   p_message: string;
   p_code: DurableErrorLevel;
@@ -53,6 +55,71 @@ export type ErrorOutboxRpc = (args: {
   };
   p_organization_id: string;
 }) => PromiseLike<ErrorOutboxRpcResult>;
+
+/**
+ * Map a route (a hash/pathname route like `/chat` or `/browser/tauri`) to its
+ * registered `source_feature` slug, matched on the route's first path
+ * segment after stripping a trailing slash and query.
+ *
+ * `client-unmapped` is the LOUD fallback: it means this client could not map
+ * the failing route to a feature. It is NEVER a silent default — seeing it in
+ * the error dashboard means this map needs a new entry for that route.
+ */
+export function sourceFeatureForRoute(route: string): SourceFeature {
+  if (!route) return "client-unmapped";
+  const withoutQuery = route.split("?")[0] ?? "";
+  const normalized =
+    withoutQuery.length > 1 ? withoutQuery.replace(/\/+$/, "") : withoutQuery;
+  const segments = normalized.split("/").filter(Boolean);
+  const firstSegment = segments.length === 0 ? "/" : "/" + segments[0];
+
+  switch (firstSegment) {
+    case "/":
+      return "system";
+    case "/chat":
+      return "chat";
+    case "/cloud-chat":
+      return "chat";
+    case "/notes":
+      return "notes";
+    case "/files":
+      return "files";
+    case "/scraping":
+      return "scraper";
+    case "/tools":
+      return "tool-testing";
+    case "/activity":
+      return "system";
+    case "/ports":
+      return "system";
+    case "/devices":
+      return "system";
+    case "/voice":
+      return "voice-agent";
+    case "/tts":
+      return "voice-agent";
+    case "/local-models":
+      return "system";
+    case "/media-generation":
+      return "image-studio";
+    case "/system-prompts":
+      return "prompt";
+    case "/aimatrx":
+      return "system";
+    case "/browser":
+      return "scraper";
+    case "/configurations":
+      return "system";
+    case "/coding-sessions":
+      return "coding_session_native";
+    case "/bridge-test":
+      return "system";
+    case "/settings":
+      return "system";
+    default:
+      return "client-unmapped";
+  }
+}
 
 const FLUSH_BATCH_SIZE = 20;
 const FLUSH_SCAN_SIZE = 1_000;
@@ -244,6 +311,7 @@ export async function uploadIdentityBoundErrorBatch(
     if (!isIdentityCurrent()) break;
     const { error } = await rpc({
       p_source_app: "matrx-local",
+      p_source_feature: sourceFeatureForRoute(event.route),
       p_source: event.source,
       p_message: event.message,
       p_code: event.level,

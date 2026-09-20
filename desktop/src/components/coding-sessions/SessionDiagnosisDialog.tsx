@@ -248,7 +248,7 @@ export function SessionDiagnosisDialog({
               {view.verdict.remedy && (
                 <p className="mt-1 text-muted-foreground">{view.verdict.remedy}</p>
               )}
-              {blocker?.code === "organization_not_chosen" && (
+              {blocker?.action === "choose_organization" && (
                 <Button size="sm" className="mt-2" onClick={() => requestOrganizationPicker()}>
                   Choose organization
                 </Button>

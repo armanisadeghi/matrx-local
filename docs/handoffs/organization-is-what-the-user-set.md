@@ -39,7 +39,38 @@ user sets one, and the request proceeds. It never fails with "no default organiz
   cleared itself, and a second account inherited nothing. Route probed on a source engine:
   401 with no bearer, `{"organization_id": null}` with nothing set, refusal on a non-membership.
 
-## Left behind
+## Adversarial review + finish (2026-09-19, second pass)
+
+The review attacked the claim rather than the file list, and it did not hold as
+written. What changed:
+
+| Where | What |
+|---|---|
+| `desktop/native-vault-provider/NativeVaultPassword.swift` | **A surviving read of the account-level default.** The macOS AutoFill credential provider decoded `default_organization_id` out of `GET /api/auth/organizations` and used it to pick the organization that built the Vault `matches` and `materialize` requests — a saved password handed out of a tenant nobody chose on this Mac. The rung is deleted; the ladder is now device pick → sole membership → ask. |
+| `desktop/scripts/check-org-default-ban.mjs` | Scanned only `.ts/.tsx/.js/.jsx/.mjs/.cjs/.py`, which is why the Swift read was invisible. Now scans `.swift` and `.rs` too. Proven RED on a planted Swift rung, GREEN after. |
+| `app/services/aidream/organization.py` | `OrganizationNotResolvedError` is now a `RuntimeError`, and `organization_refusal()` / `organization_refusal_text()` are THE one description of an unresolved organization (`code`/`message`/`remedy`/`action`/`held`). The device's choice is read BEFORE the membership network call and is honoured when that call fails — the server verifies membership anyway, so a Supabase blink no longer re-asks an answered question. |
+| The six clients (`file_sync`, `delegation`, `scraper`, `credential_vault`, `coding_sessions/service`, `coding_sessions/artifacts`) + `aidream/client.py` | All render their refusal from `organization_refusal()`. A held operation says "waiting for you to choose an organization" and carries the `choose_organization` action; a genuinely blocked one keeps its own words and offers no button. |
+| `app/services/file_sync/client.py` | Stopped flattening the typed error into a bare `RuntimeError`. That flattening made `coding_sessions/artifacts.py`'s `except OrganizationNotResolvedError` **unreachable**: a held upload fell to the generic handler, set no blocker, and burned an upload attempt toward `MAX_UPLOAD_ATTEMPTS` every tick. |
+| `app/services/coding_sessions/service.py` | Recognises the refusal BY TYPE (`AIDreamError.organization_refusal`), not by matching the sentence `"Cannot name an organization for this request"`. |
+| `desktop/src/pages/CodingSessions.tsx`, `components/coding-sessions/SessionDiagnosisDialog.tsx`, `components/coding-sessions/tabs/SettingsTab.tsx`, `pages/Settings.tsx` | The "Choose organization" button is rendered off `blocker.action`, not off a hardcoded `code ===` branch. Three surfaces each matched their own string, so the next lane's held refusal would have shipped with no button. The Vault card in Settings gained the held state and its button. |
+| `desktop/src/lib/org/active-org.ts` + `features/org/OrganizationPickerDialog.tsx` + `App.tsx` | **The boot double-ask.** `republishActiveOrganizationToEngine()` ran once, at dialog mount — normally before the sidecar is reachable. The PUT failed, warned to the console, and was never retried, so the engine stayed empty and every background job held and published `organization_required`. (The comment claiming `App.tsx` re-pushed on reconnect described something that did not exist.) It now reports whether the engine took it and is driven off `engineStatus`, retried with backoff until it lands. |
+| `app/services/credential_vault/FEATURE.md`, `app/services/coding_sessions/FEATURE.md` | Both still documented abolished ladders ("owner membership first, then oldest"; "the picker writes the same `users.user_preferences` default the resolver reads"). Rewritten. |
+
+### Verified this pass
+
+- `desktop/scripts/check-org-default-ban.mjs`: self-test 16/16 PASS; RED on a planted Swift `default_organization_id` rung in `NativeVaultPassword.swift`, GREEN after removing it.
+- `tests/unit/test_organization_held_refusals.py` (10) — proven forcing: restoring file_sync's `RuntimeError` flattening and the Vault's old `no_organization` mapping turns 2 of them RED.
+- `tests/unit/test_organization_resolver.py` (8, two new) — a blinking membership lookup with a device choice set no longer asks; with nothing set it is NOT held (a network problem is not a question).
+- `desktop/src/lib/org/active-org.test.ts` (13, three new) — proven forcing: making `republishActiveOrganizationToEngine()` swallow the failure again turns one RED.
+- `desktop/scripts/test-native-vault-password.sh`: the Swift corpus passes, including a new case proving a report whose `default_organization_id` names a non-membership decodes to the memberships and nothing else.
+
+### Still left behind
+
+1. **No desktop UI click-through** (unchanged from the first pass). Everything is engine-live plus unit-level; the Tauri window was never opened. The picker rising from a real held request, and the new "Choose organization" buttons on the coding-session and Vault cards, are unproven by a human eye.
+2. **`matrx-extend` scans `src/`, `scripts/` and `tests/`** after this pass (it scanned only `src/`), and its guard is now an explicit blocking step in `release.sh` — it previously rode only in the `prebuild`/`prezip` hooks, and `pnpm zip:store` fires no `prezip`, so the store artifact was already built before anything checked.
+3. **aidream (the server) is out of scope here and still describes a banned shape.** `app/services/aidream/client.py` records that the owner-scoped coding-session routes "resolve the organization INSIDE the handler from the signed-in user's own default/personal organization" (`coding_session_bridge/ownership.py`). If that is still true on the server, the ruling has an unclosed door one repo over.
+
+## Left behind (first pass — items 2 and 4 are now DONE; see above)
 
 1. **No desktop UI click-through.** Everything above is engine-live plus unit-level; the Tauri
    window was never opened (Arman's screen is not ours to take). `desktop/src/features/org/OrganizationPickerDialog.tsx`

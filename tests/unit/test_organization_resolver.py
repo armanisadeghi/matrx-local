@@ -211,6 +211,52 @@ async def test_no_membership_at_all_is_a_different_answer(_isolate):
 
 
 @pytest.mark.anyio
+async def test_a_blinking_membership_lookup_never_re_asks_an_answered_question(
+    _isolate, monkeypatch
+):
+    """THE DOUBLE-ASK. This Mac has already been told which organization to
+    work in. The membership lookup is a NETWORK call, and a background job that
+    runs while Supabase is unreachable must not throw a picker at somebody who
+    already chose: the SERVER is the referee on membership (it refuses an
+    organization the caller is not in), so sending the set value and letting it
+    verify is both safe and the only behaviour that does not re-ask.
+    """
+
+    class _Unreachable(_FakeAsyncClient):
+        async def post(self, url, **kwargs):
+            raise RuntimeError("connection refused")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Unreachable)
+    monkeypatch.setattr(org_module, "get_device_organization", _device(ORG_B))
+
+    assert await resolve_active_organization_id(_jwt()) == ORG_B
+    assert _isolate == [], "the user was asked a question they had answered"
+
+
+@pytest.mark.anyio
+async def test_an_unreachable_lookup_with_nothing_set_is_NOT_held(_isolate, monkeypatch):
+    """The other half: with nothing set, an unreachable lookup is a connection
+    problem, not a question. Calling it HELD would put a picker in front of
+    somebody whose real problem is their network."""
+
+    class _Unreachable(_FakeAsyncClient):
+        async def post(self, url, **kwargs):
+            raise RuntimeError("connection refused")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Unreachable)
+
+    with pytest.raises(OrganizationNotResolvedError) as excinfo:
+        await resolve_active_organization_id(_jwt())
+    assert excinfo.value.held is False
+    assert "connection" in excinfo.value.remedy.lower()
+    assert _isolate == []
+
+
+@pytest.mark.anyio
 async def test_the_deleted_rungs_are_gone_from_the_module():
     """A resolver can be rewritten to call these again; this says plainly
     that today it cannot, because they do not exist."""

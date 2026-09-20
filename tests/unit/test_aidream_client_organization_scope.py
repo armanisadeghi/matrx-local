@@ -28,7 +28,7 @@ async def test_bridge_headers_are_built_without_resolving_an_organization(
 
     async def refuse(_jwt: str) -> str:
         raise organization_module.OrganizationNotResolvedError(
-            "several memberships", remedy="choose one"
+            "several memberships", remedy="choose one", held=True
         )
 
     monkeypatch.setattr(organization_module, "resolve_active_organization_id", refuse)
@@ -45,6 +45,13 @@ async def test_bridge_headers_are_built_without_resolving_an_organization(
     assert stated["X-Organization-Id"] == "org-1"
 
     # Every other route keeps the refusal: the server would 400 without it.
+    # And the refusal is HELD — waiting on one click, not a malfunction — and it
+    # carries the canonical payload so the publisher can tell the difference
+    # without reading the sentence.
     with pytest.raises(client_module.AIDreamError) as excinfo:
         await client._build_headers({}, "jwt", None, path="/agents")
-    assert "Cannot name an organization" in str(excinfo.value)
+    assert "Waiting for you to choose an organization" in str(excinfo.value)
+    refusal = excinfo.value.organization_refusal
+    assert refusal is not None
+    assert refusal["held"] is True
+    assert refusal["action"] == "choose_organization"

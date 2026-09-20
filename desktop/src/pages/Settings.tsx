@@ -86,6 +86,7 @@ import {
   type NativeVaultProviderStatus,
 } from "@/lib/sidecar";
 import { createNativeVaultActionCoordinator } from "@/lib/native-vault-action-coordinator";
+import { requestOrganizationPicker } from "@/lib/org/active-org";
 import { systemPrompts, builtinPrompts } from "@/lib/system-prompts";
 import type {
   AutoUpdateState,
@@ -206,6 +207,7 @@ interface VaultSourceStatus {
     | "unconfigured"
     | "offline"
     | "denied"
+    | "organization_required"
     | "no_organization"
     | "error";
   message: string;
@@ -2347,6 +2349,23 @@ export function Settings({
                         onClick={() => void auth.signInWithOAuth()}
                       >
                         Sign in
+                      </Button>
+                    </div>
+                  ) : vaultSource.state === "organization_required" ? (
+                    /* WAITING ON ONE CLICK, not broken — so it gets the click,
+                       the same shape the "no_session" state above gets. A
+                       screen that states a fix it does not offer is the dead
+                       control this codebase outlaws. */
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        {vaultSource.message}
+                      </span>
+                      <Button
+                        size="sm"
+                        className="h-7 px-2 text-xs shrink-0"
+                        onClick={() => requestOrganizationPicker()}
+                      >
+                        Choose organization
                       </Button>
                     </div>
                   ) : vaultSource.state !== "ready" ? (

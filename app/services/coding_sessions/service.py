@@ -29,6 +29,11 @@ from pydantic import ValidationError
 
 from app.common.system_logger import get_logger
 from app.services.cloud_sync.settings_sync import get_settings_sync
+from app.services.aidream.organization import (
+    ORGANIZATION_HELD_CODE,
+    OrganizationNotResolvedError,
+    organization_refusal,
+)
 from app.services.aidream.client import (
     AIDreamClient,
     AIDreamError,
@@ -109,17 +114,17 @@ _QUARANTINE_AFTER_ATTEMPTS = 25
 # quarantined — while it stands. (2026-08-30 → 2026-09-08: 116,803 envelopes
 # sat behind exactly this, each row silently deferred 24 times toward the
 # quarantine threshold, and the screen said "Uploading".)
-_ORGANIZATION_UNRESOLVED_MARKER = "Cannot name an organization for this request"
-_ORGANIZATION_BLOCKER_CODE = "organization_not_chosen"
-_ORGANIZATION_BLOCKER_MESSAGE = (
-    "Delivery is paused: nobody has told this Mac which organization to work "
-    "in yet, and AI Matrx needs to know which one your coding sessions belong "
-    "to. Nothing is lost — every event stays queued here."
-)
-_ORGANIZATION_BLOCKER_REMEDY = (
-    "Choose your organization in Matrx Local (the organization picker). "
-    "Delivery resumes on its own within a few seconds."
-)
+# The transport tags its synthetic refusal with the canonical
+# ``organization_refusal`` payload (``AIDreamError.organization_refusal``), so
+# this publisher recognises it BY TYPE. The marker below stays only for the
+# `last_error` text written on the envelope and for rows written by an older
+# build — a publisher that can only recognise a refusal by its sentence breaks
+# the moment somebody improves the sentence.
+_ORGANIZATION_UNRESOLVED_MARKER = "Waiting for you to choose an organization"
+# What an envelope written by an OLDER build carries in `last_error`. Kept so a
+# row queued before this change is still recognised rather than quarantined.
+_LEGACY_ORGANIZATION_MARKER = "Cannot name an organization for this request"
+_ORGANIZATION_BLOCKER_CODE = ORGANIZATION_HELD_CODE
 
 
 @dataclass(frozen=True)
@@ -412,10 +417,22 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
             "code": "invalid_cloud_acknowledgement",
             "message": "The cloud response did not prove that the queued event was stored.",
         }
-    if _ORGANIZATION_UNRESOLVED_MARKER in raw_error:
+    if (
+        _ORGANIZATION_UNRESOLVED_MARKER in raw_error
+        or _LEGACY_ORGANIZATION_MARKER in raw_error
+    ):
+        # The CURRENT sentence, even for a row stamped by an older build: a
+        # preserved envelope must not teach the person yesterday's copy.
+        held = organization_refusal(
+            OrganizationNotResolvedError(
+                "This Mac has no organization chosen yet.",
+                remedy="Choose your organization in Matrx Local.",
+                held=True,
+            )
+        )
         return {
-            "code": _ORGANIZATION_BLOCKER_CODE,
-            "message": f"{_ORGANIZATION_BLOCKER_MESSAGE} {_ORGANIZATION_BLOCKER_REMEDY}",
+            "code": held["code"],
+            "message": f"{held['message']} {held['remedy']}",
         }
     # The server's own refusal codes, each with what it means and what to do.
     # A bare "HTTP 409" told nobody anything (2026-09-08).
@@ -467,6 +484,35 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
     }
 
 
+def _organization_refusal_of(exc: Exception) -> dict[str, Any] | None:
+    """The canonical organization refusal this exception carries, or None.
+
+    BY TYPE, never by sentence: the transport tags its synthetic 400 with the
+    payload, and only that payload says whether the operation is HELD (waiting
+    on one click) or genuinely blocked.
+    """
+    payload = getattr(exc, "organization_refusal", None)
+    if isinstance(payload, dict):
+        return payload
+    # BACKSTOP, never the primary path: an error raised by an older build (or a
+    # row requeued from one) carries only the sentence. Recognising it is what
+    # keeps a purely LOCAL refusal from ever being quarantined — the failure
+    # that deferred 116,803 envelopes for nine days.
+    message = str(exc)
+    if (
+        _ORGANIZATION_UNRESOLVED_MARKER in message
+        or _LEGACY_ORGANIZATION_MARKER in message
+    ):
+        return organization_refusal(
+            OrganizationNotResolvedError(
+                "This Mac has no organization chosen yet.",
+                remedy="Choose your organization in Matrx Local.",
+                held=True,
+            )
+        )
+    return None
+
+
 def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
     """True when retrying this exact envelope can never succeed.
 
@@ -476,10 +522,10 @@ def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
     """
     if isinstance(exc, AIDreamOfflineError) or not isinstance(exc, AIDreamError):
         return False
-    message = str(exc)
-    if _ORGANIZATION_UNRESOLVED_MARKER in message:
+    if _organization_refusal_of(exc) is not None:
         # Raised locally before the request was sent — the server refused nothing.
         return False
+    message = str(exc)
     if any(f'"{code}"' in message for code in _TERMINAL_ERROR_CODES):
         return True
     return exc.status in _TERMINAL_STATUSES and attempts >= _QUARANTINE_AFTER_ATTEMPTS
@@ -754,7 +800,6 @@ class CodingSessionBridgeOutbox:
 
     async def _organization_resolves(self, access_token: str) -> bool:
         from app.services.aidream.organization import (
-            OrganizationNotResolvedError,
             resolve_active_organization_id,
         )
 
@@ -769,18 +814,37 @@ class CodingSessionBridgeOutbox:
             return False
         return True
 
-    async def _set_organization_blocker(self, row: Any, provider: str) -> None:
+    async def _set_organization_blocker(
+        self, row: Any, provider: str, refusal: dict[str, Any] | None = None
+    ) -> None:
+        """Pause delivery on the refusal the transport actually raised.
+
+        ``refusal`` is the canonical payload from
+        ``aidream.organization.organization_refusal``: a HELD pause says
+        "waiting for you to choose" and names the ``choose_organization``
+        action the screen turns into one button; a genuinely blocked one (no
+        membership at all, an unreadable lookup) says what IS wrong and offers
+        no button, because there is nothing for the person to click.
+        """
+        payload = refusal or organization_refusal(
+            OrganizationNotResolvedError(
+                "This Mac has no organization chosen yet.",
+                remedy="Choose your organization in Matrx Local.",
+                held=True,
+            )
+        )
         if self._organization_blocker is None:
             logger.warning(
                 "[coding_session_bridge] delivery PAUSED: %s %s (first envelope id=%s)",
-                _ORGANIZATION_BLOCKER_MESSAGE,
-                _ORGANIZATION_BLOCKER_REMEDY,
+                payload["message"],
+                payload["remedy"],
                 int(row["id"]),
             )
         self._organization_blocker = {
-            "code": _ORGANIZATION_BLOCKER_CODE,
-            "message": _ORGANIZATION_BLOCKER_MESSAGE,
-            "remedy": _ORGANIZATION_BLOCKER_REMEDY,
+            "code": payload["code"],
+            "message": payload["message"],
+            "remedy": payload["remedy"],
+            "action": payload["action"],
             "http_status": None,
             "receipt_id": int(row["id"]),
             "provider": provider,
@@ -796,7 +860,8 @@ class CodingSessionBridgeOutbox:
                     """UPDATE coding_session_bridge_outbox
                        SET last_error=?, updated_at=datetime('now') WHERE id=?""",
                     (
-                        f"[aidream_client] {_ORGANIZATION_UNRESOLVED_MARKER}"[:1000],
+                        f"[aidream_client] {_ORGANIZATION_UNRESOLVED_MARKER}. "
+                        f"{payload['remedy']}"[:1000],
                         int(row["id"]),
                     ),
                 )
@@ -817,10 +882,14 @@ class CodingSessionBridgeOutbox:
         await self._durable_writes(
             [
                 (
+                    # BOTH markers: a Mac that upgrades into this build still
+                    # holds rows stamped with the older sentence, and a row that
+                    # is not matched here is a row that never resumes.
                     f"""UPDATE coding_session_bridge_outbox
                         SET attempts=0, next_attempt_at=0, last_error=NULL,
                             updated_at=datetime('now')
-                        WHERE last_error LIKE '%{_ORGANIZATION_UNRESOLVED_MARKER}%'""",
+                        WHERE last_error LIKE '%{_ORGANIZATION_UNRESOLVED_MARKER}%'
+                           OR last_error LIKE '%{_LEGACY_ORGANIZATION_MARKER}%'""",
                     (),
                 )
             ]
@@ -841,6 +910,7 @@ class CodingSessionBridgeOutbox:
             rows = await self._db.fetchall(
                 f"""SELECT id FROM coding_session_bridge_quarantine
                     WHERE last_error LIKE '%{_ORGANIZATION_UNRESOLVED_MARKER}%'
+                       OR last_error LIKE '%{_LEGACY_ORGANIZATION_MARKER}%'
                     ORDER BY id"""
             )
         except Exception:
@@ -2188,18 +2258,18 @@ class CodingSessionBridgeOutbox:
                                     int(row["id"]),
                                 )
                             continue
-                        if (
-                            isinstance(exc, AIDreamError)
-                            and _ORGANIZATION_UNRESOLVED_MARKER in str(exc)
-                        ):
+                        org_refusal = _organization_refusal_of(exc)
+                        if org_refusal is not None:
                             failed += 1
                             if organization_refused:
                                 continue
                             organization_refused = True
                             if blocked is None:
-                                blocked = _ORGANIZATION_BLOCKER_CODE
+                                blocked = org_refusal["code"]
                             try:
-                                await self._set_organization_blocker(row, provider)
+                                await self._set_organization_blocker(
+                                    row, provider, org_refusal
+                                )
                             except Exception:
                                 logger.exception(
                                     "[coding_session_bridge] could not record the "

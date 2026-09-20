@@ -271,3 +271,42 @@ describe("requireActiveOrganizationId — the hold", () => {
     expect(fakeWindow.seen).not.toContain(mod.REQUEST_PICKER_EVENT);
   });
 });
+
+/**
+ * THE HEADLESS-FIRST BOOT DOUBLE-ASK.
+ *
+ * The Python sidecar keeps its OWN copy of this Mac's pick and cannot read this
+ * window's `localStorage`. The re-statement used to run exactly once, when the
+ * picker dialog mounted — which is normally BEFORE the engine is reachable. The
+ * PUT failed, warned to the console, and was never retried, so the engine stayed
+ * empty and the next background job HELD and published `organization_required`:
+ * a question the person had already answered on this Mac.
+ */
+describe("republishActiveOrganizationToEngine — the engine inherits this Mac's answer", () => {
+  it("re-states this device's SET organization to the engine", async () => {
+    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-7", name: "Chosen" }));
+
+    const mod = await import("./active-org");
+    await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(true);
+    expect(enginePut).toHaveBeenCalledWith("/organization/active", {
+      organization_id: "org-7",
+    });
+  });
+
+  it("REPORTS that the engine did not take it, so the caller can retry", async () => {
+    // The engine is not up yet — the normal case at boot. Swallowing this is
+    // what left the sidecar empty and produced the double-ask.
+    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-7", name: "Chosen" }));
+    enginePut.mockRejectedValue(new Error("engine not reachable"));
+
+    const mod = await import("./active-org");
+    await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(false);
+  });
+
+  it("has nothing to re-state when this device never chose — and says so", async () => {
+    const mod = await import("./active-org");
+    await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(true);
+    expect(enginePut).not.toHaveBeenCalled();
+  });
+});
+

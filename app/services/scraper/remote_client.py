@@ -111,14 +111,27 @@ HEALTH_PATH = "/health/ready"
 class RemoteScraperOrganizationError(Exception):
     """No organization could be named for a user-scoped scraper call.
 
-    Permanent for this user until they are given (or choose) an organization —
-    never a transient failure to retry forever. Carries ``remedy``, a
-    plain-language sentence a UI or a registry state can show verbatim.
+    Not a transient failure to retry forever. Carries the canonical refusal
+    (``aidream.organization.organization_refusal``): ``remedy`` is the
+    plain-language sentence a UI shows verbatim, ``held`` says whether this is
+    waiting on ONE CLICK rather than broken, and ``action`` names the handler
+    the screen renders as that click.
     """
 
-    def __init__(self, message: str, *, remedy: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        remedy: str,
+        code: str = "no_organization",
+        action: str | None = None,
+        held: bool = False,
+    ) -> None:
         super().__init__(message)
         self.remedy = remedy
+        self.code = code
+        self.action = action
+        self.held = held
 
 
 class RemoteScraperClient:
@@ -198,6 +211,7 @@ class RemoteScraperClient:
 
         from app.services.aidream.organization import (
             OrganizationNotResolvedError,
+            organization_refusal,
             resolve_active_organization_id,
         )
 
@@ -206,9 +220,16 @@ class RemoteScraperClient:
                 auth_token
             )
         except OrganizationNotResolvedError as exc:
+            # The one shared refusal: a HELD scrape is waiting for the person
+            # to choose, not malfunctioning, and it carries the action a screen
+            # turns into one button.
+            refusal = organization_refusal(exc)
             raise RemoteScraperOrganizationError(
-                f"Cannot name an organization for this scraper request: {exc}",
-                remedy=exc.remedy,
+                refusal["message"],
+                remedy=refusal["remedy"],
+                code=refusal["code"],
+                action=refusal["action"],
+                held=refusal["held"],
             ) from exc
         return headers
 

@@ -38,11 +38,26 @@ class AIDreamTimeoutError(AIDreamOfflineError):
 
 
 class AIDreamError(Exception):
-    """Raised when the AIDream server returns a non-2xx HTTP response."""
+    """Raised when the AIDream server returns a non-2xx HTTP response.
 
-    def __init__(self, status: int, message: str) -> None:
+    ``organization_refusal`` is set ONLY on the synthetic 400 this transport
+    raises before a byte reaches the server, when this Mac has no organization
+    set. It carries the canonical refusal (code / message / remedy / action /
+    held) so a publisher can tell "waiting on one click" from "the server
+    refused you" WITHOUT matching on error text. Text matching is how the
+    distinction was lost the first time.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        organization_refusal: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.organization_refusal = organization_refusal
 
 
 # Owner-scoped coding-session routes. The server exempts them from the
@@ -198,10 +213,13 @@ class AIDreamClient:
         try:
             merged["X-Organization-Id"] = await resolve_active_organization_id(jwt)
         except OrganizationNotResolvedError as exc:
+            from app.services.aidream.organization import organization_refusal
+
+            refusal = organization_refusal(exc)
             raise AIDreamError(
                 400,
-                f"[aidream_client] Cannot name an organization for this request: "
-                f"{exc} {exc.remedy}",
+                f"[aidream_client] {refusal['message']} {refusal['remedy']}",
+                organization_refusal=refusal,
             ) from exc
         return merged
 

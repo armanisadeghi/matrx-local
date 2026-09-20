@@ -139,17 +139,19 @@ class DelegationApiClient:
         """
         from app.services.aidream.organization import (
             OrganizationNotResolvedError,
+            organization_refusal_text,
             resolve_active_organization_id,
         )
 
         try:
             organization_id = await resolve_active_organization_id(jwt)
         except OrganizationNotResolvedError as exc:
-            raise DelegationApiError(
-                400,
-                f"[delegation] Cannot name an organization for this request: "
-                f"{exc} {exc.remedy}",
-            ) from exc
+            # A HELD call is waiting on one click, not broken, and it says so
+            # in the one sentence every lane shares
+            # (`aidream.organization.organization_refusal`). The old text —
+            # "Cannot name an organization for this request" — read as a
+            # malfunction for a question nobody had been asked yet.
+            raise DelegationApiError(400, organization_refusal_text(exc)) from exc
         return {
             "Authorization": f"Bearer {jwt}",
             "Accept": "application/json",

@@ -58,7 +58,16 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const SCAN = /\.(ts|tsx|js|jsx|mjs|cjs|py)$/;
+/**
+ * Every language this repo builds a request in. `.swift` and `.rs` were
+ * missing, and that is not hypothetical: the macOS AutoFill credential
+ * provider (`desktop/native-vault-provider/NativeVaultPassword.swift`) read
+ * `default_organization_id` out of the organizations report and built the
+ * Vault matches + materialize requests under it, which is a saved password
+ * handed out of a tenant nobody chose on this Mac. A guard that only reads the
+ * languages the last regression happened in is a guard for that regression.
+ */
+const SCAN = /\.(ts|tsx|js|jsx|mjs|cjs|py|swift|rs)$/;
 const SKIP =
   /(^|\/)(node_modules|dist|build|\.venv|venv|__pycache__|target|src-tauri\/gen)\//;
 
@@ -84,7 +93,11 @@ function dropExempt(text) {
     .join("\n");
 }
 
-/** Strip comments and Python docstrings — a comment reads nothing. */
+/**
+ * Strip comments and Python docstrings — a comment reads nothing. Swift and
+ * Rust use the same `//` and comment syntax as TS, so they take the same
+ * branch.
+ */
 function codeOnly(text, isPython) {
   if (isPython) {
     return text
@@ -208,6 +221,18 @@ function selfTest() {
       "declared exemption on the line above",
     ],
     ['BANNED = ("current_personal_org_id",)  # org-default-exempt: short', "x.py", 1, "exemption with no real reason"],
+    [
+      'if let preferred, let match = organizations.first(where: { $0.id == preferred }) { return match }\nlet id = object["default_organization_id"]',
+      "desktop/native-vault-provider/NativeVaultPassword.swift",
+      1,
+      "the AutoFill provider reading the account default (Swift)",
+    ],
+    [
+      'let organization_id = row.default_organization_id.clone();',
+      "desktop/src-tauri/src/syncd.rs",
+      1,
+      "the Rust side reading the account default",
+    ],
   ];
   let bad = 0;
   for (const [src, file, expected, label] of cases) {

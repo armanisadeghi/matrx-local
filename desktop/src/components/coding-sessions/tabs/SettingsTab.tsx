@@ -254,7 +254,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
                     {snapshot.artifacts.blocker.code}
                     {snapshot.artifacts.blocker.since ? ` · since ${formatStamp(snapshot.artifacts.blocker.since)}` : ""}
                   </p>
-                  {snapshot.artifacts.blocker.code === "no_organization" && (
+                  {snapshot.artifacts.blocker.action === "choose_organization" && (
                     <div className="mt-3">
                       <Button size="sm" onClick={() => requestOrganizationPicker()}>
                         Choose organization

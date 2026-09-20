@@ -680,6 +680,9 @@ export interface CodingSessionBridgeStatus {
       code: string;
       message: string;
       remedy?: string;
+      /** See `CodingSessionArtifactsBlocker.action` — the one-click way out. */
+      action?: string | null;
+      held?: boolean;
       since?: string;
       http_status?: number | null;
       receipt_id?: number;
@@ -1375,6 +1378,14 @@ export interface CodingSessionArtifactsBlocker {
   code: string;
   message: string;
   remedy?: string;
+  /**
+   * The action-needed handler that CLEARS this blocker, when one click can.
+   * The screen renders the button off THIS, never off a hardcoded `code ===`
+   * branch: three surfaces each matched their own code string, so the next
+   * lane's held refusal shipped with no button at all.
+   */
+  action?: string | null;
+  held?: boolean;
   since?: string | null;
   lane?: string;
 }

@@ -46,6 +46,7 @@ private final class Server: NativeVaultPasskeyTransporting {
         var response = Response.ok
         var object: [String: Any]
         if path == "/api/auth/organizations" {
+            // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
             object = ["authenticated": true, "user_id": "subject", "organizations": [["id": "00000000-0000-4000-8000-000000000001", "name": "Personal", "is_personal": true, "abbreviation": NSNull()]], "default_organization_id": NSNull(), "default_preference_status": "unset", "warnings": [], "missing_organization_count": 0]
         } else if path.hasSuffix("/capabilities") {
             object = ["protocol_version": 1, "activation_revision": 1, "max_source_bytes": 65536, "max_credential_ids": 128, "max_request_body_bytes": maximumBodyBytes, "algorithms": [-7]]

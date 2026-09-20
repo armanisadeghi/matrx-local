@@ -43,9 +43,13 @@ logger = get_logger()
 # ``unconfigured``— no aidream server URL resolved from app config
 # ``offline``     — the server could not be reached
 # ``denied``      — the server answered 401/403 for this session
+# ``organization_required`` — this Mac has memberships but nobody has chosen
+#                   one yet. WAITING ON ONE CLICK, not broken: the picker is
+#                   already asking, and the call resumes once it is answered.
 # ``no_organization`` — the signed-in user has no resolvable active
-#                   organization membership, so the required
-#                   ``X-Organization-Id`` context header cannot be sent
+#                   organization membership (or the lookup could not be made),
+#                   so the required ``X-Organization-Id`` header cannot be
+#                   sent and there is nothing for the person to click
 # ``error``       — any other non-2xx
 VaultState = Literal[
     "ready",
@@ -53,6 +57,7 @@ VaultState = Literal[
     "unconfigured",
     "offline",
     "denied",
+    "organization_required",
     "no_organization",
     "error",
 ]
@@ -99,24 +104,36 @@ async def _session_jwt() -> str:
 # for a Vault request" the startup vault warm logged on 2026-08-30.
 #
 # The org is resolved through the ONE Python-side resolver
-# (``app.services.aidream.organization.resolve_active_organization_id``):
-# the user's durable default-organization preference, then a sole active
-# membership, otherwise refuse. It does NOT pick "owner-or-oldest" — that
-# was a guess, and a guess is exactly the defect class
-# common-docs/projects/no-db-assigned-org exists to end.
+# (``app.services.aidream.organization.resolve_active_organization_id``): what
+# the user SET on this Mac, then a sole active membership, otherwise HOLD and
+# ask (Arman, 2026-09-19). There is no saved-preference rung and no
+# personal-org fallback — both were guesses, and a guess is exactly the defect
+# class common-docs/projects/no-db-assigned-org exists to end.
 
 
 async def _organization_id(jwt_value: str) -> str:
     """The org id to send as ``X-Organization-Id``."""
     from app.services.aidream.organization import (
         OrganizationNotResolvedError,
+        organization_refusal,
+    )
+    from app.services.aidream.organization import (
         resolve_active_organization_id,
     )
 
     try:
         return await resolve_active_organization_id(jwt_value)
     except OrganizationNotResolvedError as exc:
-        raise VaultUnavailable("no_organization", f"{exc} {exc.remedy}") from exc
+        # A HELD Vault call is a STATE with a prompt, not an error: it says
+        # "waiting for you to choose an organization" and names the one-click
+        # action, exactly as a missing key does. Its own state code
+        # distinguishes it from the genuinely blocked case (no membership at
+        # all), which offers no button because there is nothing to click.
+        refusal = organization_refusal(exc)
+        raise VaultUnavailable(
+            refusal["code"],
+            f"{refusal['message']} {refusal['remedy']}",
+        ) from exc
 
 
 async def _org_headers(jwt_value: str) -> dict[str, str]:

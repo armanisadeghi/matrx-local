@@ -762,7 +762,7 @@ function AppInner() {
           <UpdateDialog state={updateState} actions={updateActions} />
           <DownloadManagerModal />
           <DevTerminalPanel />
-          <OrganizationPickerDialog />
+          <OrganizationPickerDialog engineStatus={status} />
           {/* One host owns every imperative confirmation in this window. */}
           <ConfirmDialogHost />
         </HashRouter>

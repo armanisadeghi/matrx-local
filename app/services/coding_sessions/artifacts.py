@@ -84,7 +84,10 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from app.common.system_logger import get_logger
-from app.services.aidream.organization import OrganizationNotResolvedError
+from app.services.aidream.organization import (
+    OrganizationNotResolvedError,
+    organization_refusal,
+)
 from app.services.file_sync.client import FileSyncHTTPError, MatrxFilesClient
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
@@ -914,11 +917,16 @@ class CodingSessionArtifactsLane:
                     self._blocker = None
                     self._session_blocker_since = None
                 except OrganizationNotResolvedError as exc:
-                    self._blocker = {
-                        "code": "no_organization",
-                        "message": str(exc),
-                        "remedy": exc.remedy,
-                    }
+                    # A HELD upload is waiting on one click, and it says so in
+                    # the sentence every lane shares — with the
+                    # `choose_organization` action the screen turns into a
+                    # button. It also charges NO upload attempt: the server was
+                    # never asked, so this entry is not one step closer to the
+                    # MAX_UPLOAD_ATTEMPTS stop. (Reachable at all only since
+                    # file_sync stopped flattening this error into a bare
+                    # RuntimeError, which sent it to the generic handler below
+                    # and burned an attempt per tick.)
+                    self._blocker = organization_refusal(exc)
                     halt.set()
                 except FileSyncHTTPError as exc:
                     if exc.is_auth:

@@ -69,7 +69,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         sessionAccess.cancel()
         _ = finishOperation()
         finishConnectionOperation()
-        window?.close(); window = nil
+        // The extension host owns this window; never close it ourselves.
+        window = nil
         connectionStatus = nil; connectButton = nil; retryButton = nil
     }
     func ownNativeContext(_ context: LAContext) { nativeRequest.own { context.invalidate() } }
@@ -87,7 +88,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     private var retryButton: NSButton?
 
     override func prepareInterfaceForExtensionConfiguration() { replaceNativeRequest(); showConfiguration() }
-    override func loadView() { view = NSView() }
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 440))
+        preferredContentSize = view.frame.size
+    }
     override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
         beginPasswordRequest(serviceIdentifiers)
     }
@@ -129,15 +133,23 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
 
     private func showConfiguration() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let content = view
+        content.subviews.forEach { $0.removeFromSuperview() }
         let title = NSTextField(labelWithString: "Connect AI Matrx Vault"); title.font = .systemFont(ofSize: 18, weight: .semibold)
-        let text = NSTextField(wrappingLabelWithString: "Connect your AI Matrx account to configure this credential provider. This does not enable credential filling yet."); text.textColor = .secondaryLabelColor
+        let text = NSTextField(wrappingLabelWithString: "Connect your AI Matrx account, then choose which organization supplies password and passkey suggestions on this Mac."); text.textColor = .secondaryLabelColor
         let status = NSTextField(wrappingLabelWithString: "Checking the current provider connection…"); status.textColor = .secondaryLabelColor
         let connect = NSButton(title: "Connect account", target: self, action: #selector(begin)); let scope = NSButton(title: "Show suggestions from…", target: self, action: #selector(selectSuggestionScope)); let retry = NSButton(title: "Refresh suggestions", target: self, action: #selector(refreshSuggestions)); let disconnect = NSButton(title: "Disconnect", target: self, action: #selector(disconnect)); let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         let stack = NSStackView(views: [title, text, status, connect, scope, retry, disconnect, cancelButton]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView(); content.addSubview(stack); window.contentView = content
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.centerYAnchor.constraint(equalTo: content.centerYAnchor)])
-        self.window = window; self.connectionStatus = status; self.connectButton = connect; self.retryButton = retry; window.makeKeyAndOrderFront(nil)
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
+            text.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        self.connectionStatus = status; self.connectButton = connect; self.retryButton = retry
         loadCurrentConnection()
     }
     @objc private func begin() {
@@ -179,7 +191,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
             activeOperation = operation
             let challenge = NativeVaultEnrollmentLifecycle.pkceChallenge(verifier: transaction.verifier)
             var components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)!; components.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: clientID), URLQueryItem(name: "redirect_uri", value: callback.absoluteString), URLQueryItem(name: "state", value: transaction.state), URLQueryItem(name: "code_challenge", value: challenge), URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "scope", value: "openid email offline_access")]
-            guard let url = components.url, window != nil else { throw EnrollmentError.message("Vault setup needs an active provider window. Try again.") }
+            guard let url = components.url, let anchor = view.window else { throw EnrollmentError.message("Vault setup needs an active provider window. Try again.") }
+            window = anchor
             let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callback.scheme!) { [weak self, operationID = operation.id] url, error in
                 Task { @MainActor in self?.complete(operationID: operationID, url: url, error: error, key: key) }
             }

@@ -78,6 +78,236 @@ def test_closed_json_rejects_duplicate_nested_and_oversized_grants():
         transport._bounded_json((b"[" * 16_000) + (b"]" * 16_000))
 
 
+def test_approve_requires_exact_command_bytes_and_forbids_them_on_lifecycle():
+    command = '{"operation":"inspect_login"}'
+    assert transport._bounded_json(
+        json.dumps(
+            {"grant": "x", "operation": "approve", "command_json": command}
+        ).encode()
+    ) == {"grant": "x", "operation": "approve", "command_json": command}
+    with pytest.raises(transport.TransportRefusal):
+        transport._bounded_json(b'{"grant":"x","operation":"approve"}')
+    with pytest.raises(transport.TransportRefusal):
+        transport._bounded_json(
+            b'{"grant":"x","operation":"renew","command_json":"{}"}'
+        )
+
+
+@pytest.mark.anyio
+async def test_approve_verify_forwards_exact_command_and_rejects_wrong_digest(
+    monkeypatch,
+):
+    command = '{"operation":"inspect_login"}'
+    payload = {
+        "status": "accepted",
+        "operation": "approve",
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "app_instance_id": "00000000-0000-0000-0000-000000000002",
+        "controller_revision": 7,
+        "jti": "00000000-0000-0000-0000-000000000003",
+        "expires_at_ms": 4_000_000_000_000,
+        "extension_generation": "00000000-0000-0000-0000-000000000004",
+        "connection_id": "00000000-0000-0000-0000-000000000005",
+        "actor_id": "00000000-0000-0000-0000-000000000006",
+        "organization_id": "00000000-0000-0000-0000-000000000007",
+        "profile_id": "00000000-0000-0000-0000-000000000008",
+        "admission_id": "00000000-0000-0000-0000-000000000009",
+        "command_id": "00000000-0000-0000-0000-000000000010",
+        "sequence": 1,
+        "command_digest": transport._command_digest(command),
+        "approval_id": "00000000-0000-0000-0000-000000000003",
+        "deadline_ms": 4_000_000_000_000,
+    }
+    seen = {}
+
+    class Response:
+        status_code = 200
+        headers = {"cache-control": "no-store"}
+
+        async def aiter_bytes(self):
+            yield json.dumps(payload).encode()
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        @asynccontextmanager
+        async def stream(self, _method, _url, json):
+            seen.update(json)
+            yield Response()
+
+    monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(
+        transport, "get_aidream_server_url", lambda: "https://server.example"
+    )
+    fresh = FreshContext(
+        BrowserContext("boot", 1, "org"), ("user", "session"), "daemon"
+    )
+    registration = type(
+        "Registration",
+        (),
+        {
+            "extension_generation": payload["extension_generation"],
+            "connection_id": payload["connection_id"],
+        },
+    )()
+    assert (
+        await transport._verify(
+            fresh,
+            payload["app_instance_id"],
+            registration,
+            {"grant": "opaque", "operation": "approve", "command_json": command},
+        )
+    )["approval_id"] == payload["jti"]
+    assert seen["command_json"] == command
+    payload["command_digest"] = "0" * 64
+    with pytest.raises(transport.TransportRefusal):
+        await transport._verify(
+            fresh,
+            payload["app_instance_id"],
+            registration,
+            {"grant": "opaque", "operation": "approve", "command_json": command},
+        )
+
+
+def test_closed_terminal_receipt_refuses_secret_bearing_unknown_data() -> None:
+    malicious = {
+        "command_id": "00000000-0000-4000-8000-000000000002",
+        "operation": "inspect_login",
+        "outcome": "completed",
+        "reason": "none",
+        "data": {"secret": "raw-injection-value"},
+    }
+    assert not transport.valid_terminal_receipt(malicious)
+    assert (
+        transport._approve_result(
+            {
+                "status": "acknowledged",
+                "operation": "approve",
+                "terminal_receipt": malicious,
+            },
+            inspect=True,
+        )
+        is None
+    )
+
+
+def test_closed_terminal_receipt_refuses_malformed_origin_without_raising() -> None:
+    receipt = {
+        "command_id": "00000000-0000-4000-8000-000000000002",
+        "operation": "navigate",
+        "outcome": "completed",
+        "reason": "none",
+        "data": {"origin": "https://["},
+    }
+    assert transport.valid_terminal_receipt(receipt) is False
+    assert (
+        transport._document({"url": "https://[", "document_id": receipt["command_id"]})
+        is None
+    )
+
+
+def test_authenticator_receipt_requires_real_verification_outcome() -> None:
+    receipt = {
+        "command_id": "00000000-0000-4000-8000-000000000002",
+        "operation": "authenticator",
+        "outcome": "completed",
+        "reason": "none",
+        "data": {"filled": True, "submitted": True, "challenge_detected": False},
+    }
+    assert transport.valid_terminal_receipt(receipt) is False
+    receipt["data"]["verification"] = "verified"
+    assert transport.valid_terminal_receipt(receipt) is True
+    receipt["data"]["verification"] = "made_up"
+    assert transport.valid_terminal_receipt(receipt) is False
+
+
+@pytest.mark.anyio
+async def test_approve_dispatch_forwards_exact_bytes_and_inspect_document_once(
+    monkeypatch,
+):
+    command = '{"operation":"inspect_login"}'
+    future = asyncio.get_running_loop().create_future()
+    future.set_result(
+        {
+            "status": "acknowledged",
+            "operation": "approve",
+            "terminal_receipt": {
+                "command_id": "00000000-0000-4000-8000-000000000002",
+                "operation": "inspect_login",
+                "outcome": "completed",
+                "reason": "none",
+                "data": {
+                    "origin": "https://example.com",
+                    "form": "login",
+                    "challenge": "none",
+                },
+            },
+            "document": {
+                "url": "https://example.com/login",
+                "document_id": "00000000-0000-4000-8000-000000000001",
+            },
+        }
+    )
+    sent = {}
+    monkeypatch.setattr(transport, "create_local_browser_future", lambda *_: future)
+
+    async def send(_registration, frame):
+        sent.update(frame)
+        return True
+
+    monkeypatch.setattr(transport, "send_local_browser_execute", send)
+    monkeypatch.setattr(transport, "drop_local_browser_future", lambda *_: None)
+    entry = transport._ReplayEntry(
+        b"digest",
+        transport._ReplayIdentity(("u", "s"), "b", 1, "o", "d", "g", "c", 1),
+        4_000_000_000_000,
+        asyncio.get_running_loop().create_future(),
+        inspect=True,
+    )
+    result = await transport._dispatch(
+        object(),
+        {"grant": "opaque", "operation": "approve", "command_json": command},
+        entry,
+    )
+    assert sent["command_json"] == command
+    assert result["document"]["url"] == "https://example.com/login"
+
+
+@pytest.mark.anyio
+async def test_inspect_tombstone_precedes_publish_and_never_retains_document():
+    table = transport._ReplayTable()
+    identity = transport._ReplayIdentity(
+        ("u", "s"), "boot", 1, "org", "device", "gen", "conn", 1
+    )
+    entry, creator = await table.join_or_create(
+        jti="00000000-0000-0000-0000-000000000001",
+        raw=b'{"operation":"inspect_login"}',
+        identity=identity,
+        expires_at_ms=4_000_000_000_000,
+        inspect=True,
+    )
+    assert creator
+    await table.consume_inspect(entry)
+    assert table._entries == {}  # noqa: SLF001 - prove no completed future remains reachable
+    assert len(table._inspect_tombstones) == 1  # noqa: SLF001 - identity-only tombstone
+    with pytest.raises(transport.TransportRefusal) as replay:
+        await table.join_or_create(
+            jti="00000000-0000-0000-0000-000000000001",
+            raw=b'{"operation":"inspect_login"}',
+            identity=identity,
+            expires_at_ms=4_000_000_000_000,
+            inspect=True,
+        )
+    assert replay.value.reason == "discovery_refresh_required"
+
+
 @pytest.mark.anyio
 async def test_server_callback_uses_actual_closed_contract_and_streams_limit(
     monkeypatch,

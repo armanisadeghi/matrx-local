@@ -38,7 +38,9 @@ from app.services.local_browser_context import (
 _MAX_BODY = 32 * 1024
 _MAX_GRANT = 8 * 1024
 _MAX_REPLY = 4 * 1024
-_OPERATIONS = frozenset({"discover", "admit", "renew", "cleanup"})
+_MAX_INSPECT_REPLY = 8 * 1024
+_MAX_COMMAND = 16 * 1024
+_OPERATIONS = frozenset({"discover", "admit", "approve", "renew", "cleanup"})
 _REASONS = frozenset(
     {
         "context_unavailable",
@@ -49,6 +51,23 @@ _REASONS = frozenset(
         "binding_changed",
         "invalid_request",
         "retry_conflict",
+        "discovery_refresh_required",
+    }
+)
+_RESULT_REASONS = frozenset(
+    {
+        "none",
+        "unsafe_destination",
+        "no_matching_login",
+        "field_unavailable",
+        "form_changed",
+        "needs_mfa",
+        "captcha_or_takeover",
+        "credentials_rejected",
+        "deadline_exceeded",
+        "binding_changed",
+        "tab_lost",
+        "configuration_error",
     }
 )
 _RECEIPTS = {
@@ -89,7 +108,7 @@ def _bounded_json(raw: bytes) -> dict[str, str]:
         json.JSONDecodeError,
     ) as exc:
         raise TransportRefusal("invalid_request", 400) from exc
-    if not isinstance(value, dict) or set(value) != {"grant", "operation"}:
+    if not isinstance(value, dict) or _depth(value) > 8:
         raise TransportRefusal("invalid_request", 400)
     grant, operation = value.get("grant"), value.get("operation")
     if (
@@ -102,6 +121,22 @@ def _bounded_json(raw: bytes) -> dict[str, str]:
         raise TransportRefusal("invalid_request", 400)
     if not grant or len(grant.encode("utf-8")) > _MAX_GRANT:
         raise TransportRefusal("invalid_request", 400)
+    if operation == "approve":
+        command_json = value.get("command_json")
+        if set(value) != {"grant", "operation", "command_json"} or not isinstance(
+            command_json, str
+        ):
+            raise TransportRefusal("invalid_request", 400)
+        if (
+            any(0xD800 <= ord(char) <= 0xDFFF for char in command_json)
+            or not command_json
+        ):
+            raise TransportRefusal("invalid_request", 400)
+        if len(command_json.encode("utf-8")) > _MAX_COMMAND:
+            raise TransportRefusal("invalid_request", 400)
+        return {"grant": grant, "operation": operation, "command_json": command_json}
+    if set(value) != {"grant", "operation"}:
+        raise TransportRefusal("invalid_request", 400)
     return {"grant": grant, "operation": operation}
 
 
@@ -112,6 +147,22 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate key")
         output[key] = value
     return output
+
+
+def _depth(value: Any, current: int = 0) -> int:
+    if not isinstance(value, (dict, list)):
+        return current
+    if not value:
+        return current + 1
+    return (
+        max(
+            _depth(child, current + 1)
+            for child in value.values()
+            if isinstance(value, dict)
+        )
+        if isinstance(value, dict)
+        else max(_depth(child, current + 1) for child in value)
+    )
 
 
 @dataclass
@@ -372,6 +423,16 @@ def _uuid(value: object) -> str | None:
     return canonical if canonical == value else None
 
 
+def _safe_urlsplit(value: object):  # noqa: ANN201
+    """Parse an untrusted URL without letting malformed IPv6 escape this boundary."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return urlsplit(value)
+    except ValueError:
+        return None
+
+
 def _strict_response_json(raw: bytes) -> dict[str, Any]:
     try:
         value = json.loads(
@@ -408,6 +469,8 @@ async def _verify(
         "operation": request["operation"],
         "app_instance_id": device_id,
     }
+    if request["operation"] == "approve":
+        payload["command_json"] = request["command_json"]
     headers = {
         "Authorization": f"Bearer {fresh.daemon_jwt}",
         "X-Organization-Id": fresh.context.organization_id or "",
@@ -453,6 +516,18 @@ async def _verify(
     }
     if request["operation"] != "discover":
         required |= {"extension_generation", "connection_id"}
+    if request["operation"] == "approve":
+        required |= {
+            "actor_id",
+            "organization_id",
+            "profile_id",
+            "admission_id",
+            "command_id",
+            "sequence",
+            "command_digest",
+            "approval_id",
+            "deadline_ms",
+        }
     if (
         set(value) != required
         or value.get("status") != "accepted"
@@ -481,6 +556,32 @@ async def _verify(
         or value.get("connection_id") != registration.connection_id
     ):
         raise TransportRefusal("binding_changed", 409)
+    if request["operation"] == "approve":
+        if any(
+            _uuid(value.get(name)) is None
+            for name in (
+                "actor_id",
+                "organization_id",
+                "profile_id",
+                "admission_id",
+                "command_id",
+                "approval_id",
+            )
+        ):
+            raise TransportRefusal("authority_refused", 403)
+        if (
+            value.get("approval_id") != value.get("jti")
+            or value.get("deadline_ms") != expiry
+        ):
+            raise TransportRefusal("authority_refused", 403)
+        if type(value.get("sequence")) is not int or value["sequence"] < 1:
+            raise TransportRefusal("authority_refused", 403)
+        digest = value.get("command_digest")
+        if (
+            not isinstance(digest, str)
+            or _command_digest(request["command_json"]) != digest
+        ):
+            raise TransportRefusal("authority_refused", 403)
     return value
 
 
@@ -515,16 +616,31 @@ class _ReplayEntry:
     raw_digest: bytes
     identity: _ReplayIdentity
     expires_at_ms: int
-    future: asyncio.Future[dict[str, str]]
+    future: asyncio.Future[dict[str, Any]]
+    inspect: bool = False
+
+
+@dataclass(frozen=True)
+class _InspectTombstone:
+    raw_digest: bytes
+    identity: _ReplayIdentity
+    expires_at_ms: int
 
 
 class _ReplayTable:
     def __init__(self) -> None:
         self._entries: dict[str, _ReplayEntry] = {}
+        self._inspect_tombstones: dict[str, _InspectTombstone] = {}
         self._lock = asyncio.Lock()
 
     async def join_or_create(
-        self, *, jti: str, raw: bytes, identity: _ReplayIdentity, expires_at_ms: int
+        self,
+        *,
+        jti: str,
+        raw: bytes,
+        identity: _ReplayIdentity,
+        expires_at_ms: int,
+        inspect: bool = False,
     ) -> tuple[_ReplayEntry, bool]:
         digest = hashlib.sha256(raw).digest()
         now = int(time.time() * 1000)
@@ -532,21 +648,54 @@ class _ReplayTable:
             for stale_jti, entry in list(self._entries.items()):
                 if entry.expires_at_ms <= now:
                     self._entries.pop(stale_jti, None)
+            for stale_jti, entry in list(self._inspect_tombstones.items()):
+                if entry.expires_at_ms <= now:
+                    self._inspect_tombstones.pop(stale_jti, None)
+            tombstone = self._inspect_tombstones.get(jti)
+            if tombstone is not None:
+                if (
+                    tombstone.raw_digest != digest
+                    or tombstone.identity != identity
+                    or tombstone.expires_at_ms != expires_at_ms
+                ):
+                    raise TransportRefusal("retry_conflict", 409)
+                raise TransportRefusal("discovery_refresh_required", 409)
             existing = self._entries.get(jti)
             if existing is not None:
                 if (
                     existing.raw_digest != digest
                     or existing.identity != identity
                     or existing.expires_at_ms != expires_at_ms
+                    or existing.inspect != inspect
                 ):
                     raise TransportRefusal("retry_conflict", 409)
                 return existing, False
-            future: asyncio.Future[dict[str, str]] = (
+            future: asyncio.Future[dict[str, Any]] = (
                 asyncio.get_running_loop().create_future()
             )
-            entry = _ReplayEntry(digest, identity, expires_at_ms, future)
+            entry = _ReplayEntry(
+                digest, identity, expires_at_ms, future, inspect=inspect
+            )
             self._entries[jti] = entry
             return entry, True
+
+    async def consume_inspect(self, entry: _ReplayEntry) -> None:
+        """Tombstone before publishing a one-shot inspect result."""
+        async with self._lock:
+            for jti, candidate in list(self._entries.items()):
+                if candidate is entry:
+                    self._entries.pop(jti, None)
+                    self._inspect_tombstones[jti] = _InspectTombstone(
+                        entry.raw_digest, entry.identity, entry.expires_at_ms
+                    )
+                    break
+
+    async def discard(self, entry: _ReplayEntry) -> None:
+        async with self._lock:
+            for jti, candidate in list(self._entries.items()):
+                if candidate is entry:
+                    self._entries.pop(jti, None)
+                    break
 
 
 _REPLAYS = _ReplayTable()
@@ -596,25 +745,184 @@ async def _assert_current(
         raise TransportRefusal("binding_changed", 409)
 
 
+def _inspect_command(command_json: str) -> bool:
+    try:
+        value = json.loads(command_json, object_pairs_hook=_no_duplicates)
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, dict)
+        and set(value) == {"operation"}
+        and value.get("operation") == "inspect_login"
+    )
+
+
+def _document(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict) or set(value) != {"url", "document_id"}:
+        return None
+    url, document_id = value.get("url"), value.get("document_id")
+    if (
+        not isinstance(url, str)
+        or not isinstance(document_id, str)
+        or _uuid(document_id) is None
+    ):
+        return None
+    parsed = _safe_urlsplit(url)
+    if (
+        parsed is None
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return {"url": url, "document_id": document_id}
+
+
+def _command_digest(command_json: str) -> str:
+    return hashlib.sha256(
+        b"matrx.local-browser.command.v1\n" + command_json.encode("utf-8")
+    ).hexdigest()
+
+
+def valid_terminal_receipt(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {"command_id", "operation", "outcome", "reason"} | (
+        {"data"} if "data" in value else set()
+    )
+    if set(value) != required or _uuid(value.get("command_id")) is None:
+        return False
+    operation, outcome, reason = (
+        value.get("operation"),
+        value.get("outcome"),
+        value.get("reason"),
+    )
+    if (
+        operation not in {"navigate", "inspect_login", "vault_login", "authenticator"}
+        or outcome not in {"completed", "refused", "cancelled", "outcome_unknown"}
+        or reason not in _RESULT_REASONS
+    ):
+        return False
+    if outcome != "completed":
+        return "data" not in value
+    data = value.get("data")
+    shapes = {
+        "navigate": {"origin"},
+        "inspect_login": {"origin", "form", "challenge"},
+        "vault_login": {"filled", "submitted", "verification"},
+        "authenticator": {"filled", "submitted", "challenge_detected", "verification"},
+    }
+    if reason != "none" or not isinstance(data, dict) or set(data) != shapes[operation]:
+        return False
+    if operation in {"navigate", "inspect_login"}:
+        origin = data.get("origin")
+        parsed = _safe_urlsplit(origin)
+        if (
+            parsed is None
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+    if operation == "inspect_login":
+        return data.get("form") in {
+            "login",
+            "username_first",
+            "password_change",
+            "none",
+            "ambiguous",
+        } and data.get("challenge") in {"none", "mfa", "captcha", "unknown"}
+    if operation == "vault_login":
+        return (
+            type(data.get("filled")) is bool
+            and type(data.get("submitted")) is bool
+            and data.get("verification")
+            in {
+                "unverified",
+                "verified",
+                "needs_mfa",
+                "credentials_rejected",
+                "captcha_or_takeover",
+            }
+        )
+    return operation != "authenticator" or (
+        all(
+            type(data.get(key)) is bool
+            for key in {"filled", "submitted", "challenge_detected"}
+        )
+        and data.get("verification")
+        in {
+            "unverified",
+            "verified",
+            "needs_mfa",
+            "credentials_rejected",
+            "captcha_or_takeover",
+        }
+    )
+
+
+def _approve_result(result: object, *, inspect: bool) -> dict[str, Any] | None:
+    if not isinstance(result, dict) or result.get("operation") != "approve":
+        return None
+    if (
+        result.get("status") == "refused"
+        and set(result) == {"status", "operation", "reason"}
+        and result.get("reason") in _REASONS
+    ):
+        return {"status": "refused", "operation": "approve", "reason": result["reason"]}
+    if result.get("status") != "acknowledged" or "terminal_receipt" not in result:
+        return None
+    allowed = {"status", "operation", "terminal_receipt"}
+    document = result.get("document")
+    if document is not None:
+        allowed.add("document")
+    if set(result) != allowed or not valid_terminal_receipt(result["terminal_receipt"]):
+        return None
+    if inspect:
+        clean_document = _document(document)
+        if clean_document is None:
+            return None
+        return {
+            "status": "acknowledged",
+            "operation": "approve",
+            "terminal_receipt": result["terminal_receipt"],
+            "document": clean_document,
+        }
+    if document is not None:
+        return None
+    return {
+        "status": "acknowledged",
+        "operation": "approve",
+        "terminal_receipt": result["terminal_receipt"],
+    }
+
+
 async def _dispatch(
     registration: Any, request: dict[str, str], entry: _ReplayEntry
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if _remaining_seconds(entry.expires_at_ms) <= 0:
         raise TransportRefusal("authority_refused", 403)
     call_id = str(uuid.uuid4())
     future = create_local_browser_future(registration, call_id)
     if future is None:
         raise TransportRefusal("binding_changed", 409)
-    sent = await send_local_browser_execute(
-        registration,
-        {
-            "type": "local_browser.execute",
-            "version": 1,
-            "call_id": call_id,
-            "operation": request["operation"],
-            "grant": request["grant"],
-        },
-    )
+    frame: dict[str, Any] = {
+        "type": "local_browser.execute",
+        "version": 1,
+        "call_id": call_id,
+        "operation": request["operation"],
+        "grant": request["grant"],
+    }
+    if request["operation"] == "approve":
+        frame["command_json"] = request["command_json"]
+    sent = await send_local_browser_execute(registration, frame)
     if not sent:
         drop_local_browser_future(call_id)
         raise TransportRefusal("binding_changed", 409)
@@ -629,6 +937,16 @@ async def _dispatch(
         drop_local_browser_future(call_id)
     if not isinstance(result, dict) or result.get("operation") != request["operation"]:
         raise TransportRefusal("transport_unavailable", 503)
+    if request["operation"] == "approve":
+        approved = _approve_result(result, inspect=entry.inspect)
+        if approved is None:
+            raise TransportRefusal("transport_unavailable", 503)
+        encoded = json.dumps(
+            approved, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        if len(encoded) > (_MAX_INSPECT_REPLY if entry.inspect else _MAX_REPLY):
+            raise TransportRefusal("transport_unavailable", 503)
+        return approved
     if (
         result.get("status") == "acknowledged"
         and result.get("receipt") in _RECEIPTS[request["operation"]]
@@ -682,16 +1000,21 @@ async def _run_replay(
     try:
         result = await _dispatch(registration, request, entry)
         await _assert_current(fresh, device_id, registration, entry.expires_at_ms)
+        if entry.inspect:
+            await _REPLAYS.consume_inspect(entry)
         if not entry.future.done():
             entry.future.set_result(result)
     except asyncio.CancelledError:
+        await _REPLAYS.discard(entry)
         _settle_failure(entry)
         raise
     except TransportRefusal as refusal:
+        await _REPLAYS.discard(entry)
         if not entry.future.done():
             entry.future.set_exception(refusal)
             entry.future.exception()
     except BaseException:
+        await _REPLAYS.discard(entry)
         _settle_failure(entry)
     finally:
         capacity.release()
@@ -739,6 +1062,8 @@ async def execute_lifecycle(
                 accepted["controller_revision"],
             ),
             expires_at_ms=accepted["expires_at_ms"],
+            inspect=request["operation"] == "approve"
+            and _inspect_command(request["command_json"]),
         )
         if not creator:
             capacity.release()

@@ -25,6 +25,7 @@ import json
 import time
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
@@ -47,6 +48,7 @@ from app.api.extension_ws_manager import (
     send_to_extension_session,
     unregister_session,
 )
+from app.services.local_browser_transport import valid_terminal_receipt
 from app.api.routes import _APP_VERSION
 from app.common.system_logger import get_logger
 from app.tools.dispatcher import tool_catalog_hash
@@ -199,7 +201,9 @@ async def extension_pair(req: Request) -> PairResponse:
     token = get_or_create_pair_token()
     await record_metric("pair", 0.0, ok=True)
     publish_event("pair", "in", {"method": req.method})
-    logger.info("[extension_routes] pairing token issued over loopback (%s)", req.method)
+    logger.info(
+        "[extension_routes] pairing token issued over loopback (%s)", req.method
+    )
     return PairResponse(pair_token=token, engine_version=_APP_VERSION)
 
 
@@ -232,7 +236,9 @@ def _build_pong(client_timestamp: Any) -> Dict[str, Any]:
     return {
         "type": "pong",
         "timestamp": _now_ms(),
-        "client_timestamp": client_timestamp if isinstance(client_timestamp, (int, float)) else None,
+        "client_timestamp": client_timestamp
+        if isinstance(client_timestamp, (int, float))
+        else None,
         "engine_version": _APP_VERSION,
         "tool_catalog_hash": tool_catalog_hash(),
     }
@@ -356,9 +362,7 @@ async def extension_websocket(websocket: WebSocket) -> None:
             exc_info=True,
         )
     finally:
-        connection_duration_ms = (
-            (time.perf_counter() - connection_started) * 1000.0
-        )
+        connection_duration_ms = (time.perf_counter() - connection_started) * 1000.0
         await record_metric(
             "ws:disconnect",
             connection_duration_ms,
@@ -377,27 +381,54 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
     msg_type = msg.get("type")
 
     if msg_type == "local_browser.ready":
-        if set(msg) != {"type", "version"} or type(msg.get("version")) is not int or msg.get("version") != 1:
+        if (
+            set(msg) != {"type", "version"}
+            or type(msg.get("version")) is not int
+            or msg.get("version") != 1
+        ):
             return True
         session = get_registry().get(session_id)
         if session is None:
             return False
         from app.services.local_browser_context import get_local_browser_context
+
         fresh = await get_local_browser_context().refresh()
         if fresh is None or fresh.context.organization_id is None:
-            await session.send({"type": "local_browser.register_required", "version": 1, "status": "refused", "reason": "context_unavailable"})
+            await session.send(
+                {
+                    "type": "local_browser.register_required",
+                    "version": 1,
+                    "status": "refused",
+                    "reason": "context_unavailable",
+                }
+            )
             return True
         # A delayed ready cannot advertise a subsequently retired context.
         final = await get_local_browser_context().refresh()
-        if final is None or final.context != fresh.context or final.owner != fresh.owner:
+        if (
+            final is None
+            or final.context != fresh.context
+            or final.owner != fresh.owner
+        ):
             return True
-        return await session.send({
-            "type": "local_browser.register_required", "version": 1,
-            "engine_boot_id": final.context.engine_boot_id, "revision": final.context.revision,
-        })
+        return await session.send(
+            {
+                "type": "local_browser.register_required",
+                "version": 1,
+                "engine_boot_id": final.context.engine_boot_id,
+                "revision": final.context.revision,
+            }
+        )
 
     if msg_type == "local_browser.register":
-        required = {"type", "version", "engine_boot_id", "expected_revision", "extension_generation", "connection_id"}
+        required = {
+            "type",
+            "version",
+            "engine_boot_id",
+            "expected_revision",
+            "extension_generation",
+            "connection_id",
+        }
         engine_boot_id = _canonical_uuid(msg.get("engine_boot_id"))
         expected_revision = msg.get("expected_revision")
         if (
@@ -425,15 +456,19 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
             session = get_registry().get(session_id)
             if session is None:
                 return False
-            return await session.send({
-                "type": "local_browser.registration", "version": 1,
-                "status": "acknowledged" if accepted else "refused",
-                **reply_fields,
-                **({} if accepted else {"reason": "registration_unavailable"}),
-            })
+            return await session.send(
+                {
+                    "type": "local_browser.registration",
+                    "version": 1,
+                    "status": "acknowledged" if accepted else "refused",
+                    **reply_fields,
+                    **({} if accepted else {"reason": "registration_unavailable"}),
+                }
+            )
 
         from app.services.cloud_sync.instance_manager import get_instance_manager
         from app.services.local_browser_context import get_local_browser_context
+
         registry = get_registry()
         original_session = registry.get(session_id)
         authority_revision = registry.local_authority_revision
@@ -448,17 +483,27 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
             registry.local_authority_revision != authority_revision
             or registry.get(session_id) is not original_session
             or original_session is None
-            or identity is None or verified_identity is None or verified_identity != identity
-            or final is None or freshest is None
-            or final.context != first.context or final.owner != first.owner
-            or freshest.context != first.context or freshest.owner != first.owner
-            or engine_boot_id != freshest.context.engine_boot_id or expected_revision != freshest.context.revision
+            or identity is None
+            or verified_identity is None
+            or verified_identity != identity
+            or final is None
+            or freshest is None
+            or final.context != first.context
+            or final.owner != first.owner
+            or freshest.context != first.context
+            or freshest.owner != first.owner
+            or engine_boot_id != freshest.context.engine_boot_id
+            or expected_revision != freshest.context.revision
         ):
             return await reply(accepted=False)
         accepted = register_local_browser_session(
-            session_id, engine_boot_id=freshest.context.engine_boot_id, revision=freshest.context.revision,
-            owner=freshest.owner, organization_id=freshest.context.organization_id,
-            device_id=verified_identity.app_instance_id, extension_generation=extension_generation,
+            session_id,
+            engine_boot_id=freshest.context.engine_boot_id,
+            revision=freshest.context.revision,
+            owner=freshest.owner,
+            organization_id=freshest.context.organization_id,
+            device_id=verified_identity.app_instance_id,
+            extension_generation=extension_generation,
             connection_id=connection_id,
         )
         return await reply(accepted=accepted)
@@ -467,19 +512,77 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         operation = msg.get("operation")
         status = msg.get("status")
         required = {"type", "version", "call_id", "operation", "status"}
-        if status == "acknowledged":
+        if status == "acknowledged" and operation == "approve":
+            required.add("terminal_receipt")
+            if "document" in msg:
+                required.add("document")
+            receipt = msg.get("terminal_receipt")
+            document = msg.get("document")
+            receipt_ok = valid_terminal_receipt(receipt)
+            if document is not None:
+                parsed = (
+                    urlsplit(document.get("url", ""))
+                    if isinstance(document, dict)
+                    else None
+                )
+                receipt_ok = bool(
+                    receipt_ok
+                    and isinstance(document, dict)
+                    and set(document) == {"url", "document_id"}
+                    and isinstance(document.get("url"), str)
+                    and _canonical_uuid(document.get("document_id")) is not None
+                    and parsed is not None
+                    and parsed.scheme in {"http", "https"}
+                    and parsed.netloc
+                    and not parsed.username
+                    and not parsed.password
+                    and not parsed.query
+                    and not parsed.fragment
+                )
+        elif status == "acknowledged":
             required.add("receipt")
             valid = {
-                "discover": {"accepted"}, "admit": {"created", "cancelled", "failed"},
-                "renew": {"accepted"}, "cleanup": {"closed", "already_absent", "unconfirmed"},
+                "discover": {"accepted"},
+                "admit": {"created", "cancelled", "failed"},
+                "renew": {"accepted"},
+                "cleanup": {"closed", "already_absent", "unconfirmed"},
             }
-            receipt_ok = msg.get("receipt") in valid.get(operation, set())
+            receipt_ok = msg.get("receipt") in valid.get(
+                operation if isinstance(operation, str) else "", set()
+            )
         elif status == "refused":
             required.add("reason")
-            receipt_ok = isinstance(msg.get("reason"), str) and msg["reason"] in {"context_unavailable", "registration_unavailable", "authority_refused", "rate_limited", "transport_unavailable", "binding_changed", "invalid_request", "retry_conflict"}
+            receipt_ok = isinstance(msg.get("reason"), str) and msg["reason"] in {
+                "context_unavailable",
+                "registration_unavailable",
+                "authority_refused",
+                "rate_limited",
+                "transport_unavailable",
+                "binding_changed",
+                "invalid_request",
+                "retry_conflict",
+                "discovery_refresh_required",
+            }
         else:
             receipt_ok = False
-        if set(msg) != required or type(msg.get("version")) is not int or msg.get("version") != 1 or _canonical_uuid(msg.get("call_id")) is None or operation not in {"discover", "admit", "renew", "cleanup"} or not receipt_ok:
+        max_size = (
+            8 * 1024 if operation == "approve" and "document" in msg else 4 * 1024
+        )
+        try:
+            encoded = json.dumps(msg, separators=(",", ":"), ensure_ascii=False).encode(
+                "utf-8"
+            )
+        except (TypeError, ValueError, UnicodeError):
+            return True
+        if (
+            len(encoded) > max_size
+            or set(msg) != required
+            or type(msg.get("version")) is not int
+            or msg.get("version") != 1
+            or _canonical_uuid(msg.get("call_id")) is None
+            or operation not in {"discover", "admit", "approve", "renew", "cleanup"}
+            or not receipt_ok
+        ):
             return True
         session = get_registry().get(session_id)
         if session is None:
@@ -543,6 +646,9 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
                 "[extension_ws] invalid extension.identify session=%s", session_id
             )
             return True
+        assert isinstance(extension_id, str)
+        assert isinstance(extension_version, str)
+        assert isinstance(extension_name, str)
         identified = identify_session(
             session_id,
             extension_id=extension_id,

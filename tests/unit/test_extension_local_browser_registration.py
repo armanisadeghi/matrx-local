@@ -320,7 +320,7 @@ async def test_approve_result_accepts_only_closed_receipt_and_sanitized_inspect_
         },
         "document": {
             "url": "https://example.com/login",
-            "document_id": "00000000-0000-4000-8000-000000000098",
+            "document_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         },
     }
     assert await routes._handle_extension_message(session.session_id, frame)
@@ -340,7 +340,7 @@ async def test_approve_result_accepts_only_closed_receipt_and_sanitized_inspect_
     assert len(received) == 1
     frame["document"] = {
         "url": "https://example.com/login?secret=never-relayed",
-        "document_id": "00000000-0000-4000-8000-000000000098",
+        "document_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     }
     assert await routes._handle_extension_message(session.session_id, frame)
     assert len(received) == 1

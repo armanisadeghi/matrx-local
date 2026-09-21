@@ -447,6 +447,106 @@ impl Journal {
         self.op(id)
     }
 
+    /// Take a lease on ONE named op, whatever its position in the queue.
+    ///
+    /// [`Journal::lease_next_op`] is the queue drainer; this is what the executor uses when it is
+    /// applying a plan whose ops it already knows, and what makes an enqueue-then-act sequence
+    /// idempotent: an op that is already `done` is returned unchanged and **not** re-leased, so a
+    /// replay after a crash re-finds the completed work instead of doing it twice (I5).
+    ///
+    /// Returns the row as it now stands. A caller must check `state`: `leased` by `owner` means
+    /// the lease was taken, `done` means there is nothing left to do.
+    pub fn lease_op(
+        &self,
+        id: i64,
+        owner: &str,
+        now: &str,
+        lease_expires_at: &str,
+    ) -> Result<Option<OpRow>> {
+        self.conn.execute(
+            "UPDATE ops SET state='leased', lease_owner=?2, lease_expires_at=?3,
+                            attempts=attempts+1, updated_at=?4
+             WHERE id = ?1 AND state IN ('ready','leased','failed')",
+            params![id, owner, lease_expires_at, now],
+        )?;
+        self.op(id)
+    }
+
+    /// Retire a leased op that has **no `tree_synced` effect at all**.
+    ///
+    /// Two ops in the vocabulary change the world without changing the synced tree: a conflict
+    /// copy (D7 — the copy is a brand-new local file with no cloud counterpart yet) and a recorded
+    /// conflict. Marking them `failed` to get them out of the queue would be a lie on the surface
+    /// the user reads, and confirming them through [`Journal::confirm_op`] is impossible because
+    /// there is nothing to confirm.
+    ///
+    /// This door writes `ops` and nothing else. It cannot reach `tree_synced`: that table is
+    /// reachable only through the private `GuardRaised` token in `journal::confirm`, which this
+    /// function has no way to obtain.
+    pub fn retire_op(&self, id: i64, owner: &str, note: &str, now: &str) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE ops SET state='done', lease_owner=NULL, lease_expires_at=NULL,
+                            error_code=NULL, error_detail=?3, updated_at=?4
+             WHERE id = ?1 AND state='leased' AND lease_owner = ?2",
+            params![id, owner, note, now],
+        )?;
+        if changed == 0 {
+            return Err(SyncError::SyncedWriteRefused(format!(
+                "op {id} is not leased by {owner:?}; it cannot be retired"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Release every lease this owner holds on a mapping, back to `ready`.
+    ///
+    /// Called on start-up: a lease that did not survive a crash must not keep its op out of the
+    /// queue until the TTL expires. The op keeps its `expected_*` pre-image, so the retake is the
+    /// same op against the same precondition (I3, I5).
+    pub fn release_leases(&self, mapping_id: &str, now: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE ops SET state='ready', lease_owner=NULL, lease_expires_at=NULL, updated_at=?2
+             WHERE mapping_id = ?1 AND state = 'leased'",
+            params![mapping_id, now],
+        )?)
+    }
+
+    /// Write the daemon-owned honest state of a mapping row (C3, C4).
+    ///
+    /// `desired_state` is the user's field and is never touched here.
+    pub fn set_mapping_state(
+        &self,
+        mapping_id: &str,
+        state: &str,
+        detail: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
+        let legal = matches!(
+            crate::states::HonestState::get(state),
+            Some(s) if s.allows(crate::states::Scope::Mapping)
+        );
+        if !legal {
+            return Err(SyncError::Decode(format!(
+                "'{state}' is not a mapping-scoped honest state; the vocabulary is \
+                 contracts/honest_states.json and nothing may invent a value (C3)"
+            )));
+        }
+        self.conn.execute(
+            "UPDATE mappings SET state = ?2, state_detail = ?3, updated_at = ?4 WHERE id = ?1",
+            params![mapping_id, state, detail, now],
+        )?;
+        Ok(())
+    }
+
+    /// The highest `seq` this mapping's queue has used, so a new plan appends after it.
+    pub fn max_op_seq(&self, mapping_id: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM ops WHERE mapping_id = ?1",
+            params![mapping_id],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Read one op row.
     pub fn op(&self, id: i64) -> Result<Option<OpRow>> {
         let row = self

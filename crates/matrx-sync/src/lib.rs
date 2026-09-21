@@ -13,6 +13,7 @@
 //! | [`custody`] | FS-C5. Credential custody: PKCE in the daemon, the keychain item, rotation, the session state. **The one module here that speaks HTTP and reads a clock** — every such seam is a trait. |
 //! | [`sim`] | FS-C4. The deterministic simulation harness. **A mock — never product evidence.** |
 //! | [`scan`] | FS-L1. The real-filesystem scanner: identity, the size/mtime fast path, the walk. The first module here that touches a disk. |
+//! | [`exec`] | FS-L1. The executor: a plan applied to the disk and the cloud, op by op, under the journal's double-confirmation discipline. The first module that can destroy a user's file. |
 //! | [`feed`] | FS-L1. The remote side: the change feed is the only truth; Realtime is only a trigger. |
 //! | [`watch`] | FS-L1. Local change detection: the watcher is an optimisation, the periodic rescan is the mechanism. |
 //! | [`planner`] | FS-C3. `plan()` — a pure function of three trees, a direction and knobs. No IO, no clock, no randomness. |
@@ -40,6 +41,7 @@
 
 pub mod custody;
 pub mod error;
+pub mod exec;
 pub mod feed;
 pub mod journal;
 pub mod knobs;
@@ -53,6 +55,7 @@ pub mod states;
 
 pub use custody::{Custodian, CustodyConfig, CustodyError, SessionState, World};
 pub use error::{Result, SyncError};
+pub use exec::{ExecContext, ExecError, ExecReport, Executor, LocalIo, RemoteIo};
 pub use knobs::Knobs;
 pub use model::{Direction, LocalTree, RemoteTree, SyncedTree};
 pub use planner::{plan, Plan, PlanContext, PlanOp};

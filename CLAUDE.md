@@ -65,6 +65,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 
 ## Platform laws (canonical bodies in common-docs; one-liners only here)
 
+- **The Platform List is Arman's alone.** At session start read `common-docs/operations/platform-list/LIST.md` if it is on this machine; if any row's Start date is today or past, tell Arman in your first reply (he snoozes by naming a new date). Only Arman adds, kills, or removes a row. Agents suggest in plain English and never write copies, histories, or "deleted" notes anywhere. Skill: `platform-list`.
 - **Clients consume, never reimplement.** No agent UUID, prompt, resolution ladder, or
   rebuilt server-owned record in this repo; ask the platform by name. Sole exception:
   the offline local-model path ("does it run with the platform unreachable?"). →

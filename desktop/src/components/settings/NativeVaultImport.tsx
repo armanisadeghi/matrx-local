@@ -218,7 +218,7 @@ export function NativeVaultImport() {
 
   refreshRef.current = refresh;
 
-  const confirm = useCallback(async () => {
+  const confirmImport = useCallback(async () => {
     if (screen.kind !== "preview") return;
     const active = operation.current;
     if (!active || !active.organizationId || active.id !== screen.preview.operation_id) return;
@@ -363,7 +363,7 @@ export function NativeVaultImport() {
       <p className="font-medium">Review before importing</p>
       <p className="mt-1 text-muted-foreground">Only the {preview.slots.filter((slot) => slot.disposition === "eligible").length} compatible passkey{preview.slots.filter((slot) => slot.disposition === "eligible").length === 1 ? "" : "s"} in this complete file preview will be imported. Import goes to the organization currently selected on this device.</p>
       <ul className="mt-3 space-y-2" aria-label="Passkey file preview">{preview.slots.map((slot) => <li key={slot.slot_id} className="flex items-start justify-between gap-3 rounded border border-border/70 px-2.5 py-2"><span className="min-w-0 truncate font-medium">{slot.title ?? "Unnamed passkey"}</span><span className={slot.disposition === "eligible" ? "shrink-0 text-emerald-700 dark:text-emerald-400" : "shrink-0 text-amber-800 dark:text-amber-300"}>{nativeVaultImportDispositionLabel(slot.disposition)}{slot.reason ? `: ${slot.reason}` : ""}</span></li>)}</ul>
-      <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" onClick={() => void confirm()} disabled={busy || !canConfirm}><CheckCircle2 className="h-3.5 w-3.5" />Confirm import</Button><Button size="sm" variant="outline" onClick={() => void cancel()} disabled={busy}>Cancel</Button></div>
+      <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" onClick={() => void confirmImport()} disabled={busy || !canConfirm}><CheckCircle2 className="h-3.5 w-3.5" />Confirm import</Button><Button size="sm" variant="outline" onClick={() => void cancel()} disabled={busy}>Cancel</Button></div>
     </div>}
   </section>;
 }

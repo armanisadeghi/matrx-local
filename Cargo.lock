@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "aimatrx-desktop"
-version = "1.4.180"
+version = "1.4.182"
 dependencies = [
  "audioadapter-buffers",
  "base64 0.22.1",

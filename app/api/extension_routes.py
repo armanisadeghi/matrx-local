@@ -48,7 +48,10 @@ from app.api.extension_ws_manager import (
     send_to_extension_session,
     unregister_session,
 )
-from app.services.local_browser_transport import valid_terminal_receipt
+from app.services.local_browser_transport import (
+    valid_local_browser_document_id,
+    valid_terminal_receipt,
+)
 from app.api.routes import _APP_VERSION
 from app.common.system_logger import get_logger
 from app.tools.dispatcher import tool_catalog_hash
@@ -530,7 +533,7 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
                     and isinstance(document, dict)
                     and set(document) == {"url", "document_id"}
                     and isinstance(document.get("url"), str)
-                    and _canonical_uuid(document.get("document_id")) is not None
+                    and valid_local_browser_document_id(document.get("document_id"))
                     and parsed is not None
                     and parsed.scheme in {"http", "https"}
                     and parsed.netloc

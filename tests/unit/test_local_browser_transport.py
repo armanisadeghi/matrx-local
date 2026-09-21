@@ -213,6 +213,16 @@ def test_closed_terminal_receipt_refuses_malformed_origin_without_raising() -> N
     )
 
 
+def test_document_id_is_opaque_but_utf8_bounded() -> None:
+    document = {"url": "https://example.com/login", "document_id": "A" * 32}
+    assert transport._document(document) == document
+    assert transport._document({**document, "document_id": ""}) is None
+    assert transport._document({**document, "document_id": "x" * 129}) is None
+    assert transport._document({**document, "document_id": "€" * 43}) is None
+    assert transport._document({**document, "document_id": "\ud800"}) is None
+    assert transport._document({**document, "document_id": 1}) is None
+
+
 def test_authenticator_receipt_requires_real_verification_outcome() -> None:
     receipt = {
         "command_id": "00000000-0000-4000-8000-000000000002",

@@ -423,6 +423,16 @@ def _uuid(value: object) -> str | None:
     return canonical if canonical == value else None
 
 
+def valid_local_browser_document_id(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+    return 0 < size <= 128
+
+
 def _safe_urlsplit(value: object):  # noqa: ANN201
     """Parse an untrusted URL without letting malformed IPv6 escape this boundary."""
     if not isinstance(value, str):
@@ -763,8 +773,7 @@ def _document(value: object) -> dict[str, str] | None:
     url, document_id = value.get("url"), value.get("document_id")
     if (
         not isinstance(url, str)
-        or not isinstance(document_id, str)
-        or _uuid(document_id) is None
+        or not valid_local_browser_document_id(document_id)
     ):
         return None
     parsed = _safe_urlsplit(url)

@@ -10,6 +10,7 @@
 //! | [`error`] | Every failure as a named honest state with a remedy — never a panic, never a silent skip. |
 //! | [`io`] | The two seams, [`io::LocalIo`] and [`io::RemoteIo`], so the decisions are testable without a disk that can fill up or a server that must be asked to return 412. |
 //! | [`order`] | Dependency order: dirs before files, moves before the creates that reuse their paths, deletes last and deepest-first. |
+//! | [`local`] | The production disk: atomic writes through `.matrx-sync/tmp`, NFC/NFD and case resolution (I8), preserved mtimes, the OS trash. |
 //! | [`engine`] | The executor itself: enqueue, act, confirm — and re-plan rather than retry when the world moved. |
 //! | [`fakes`] | A **test seam**: fault-injectable stand-ins for both. Never product evidence. |
 //!
@@ -21,8 +22,10 @@ pub mod engine;
 pub mod error;
 pub mod fakes;
 pub mod io;
+pub mod local;
 pub mod order;
 
+pub use local::RealLocalIo;
 pub use engine::{ExecContext, ExecEvent, ExecReport, Executor, OpOutcome};
 pub use error::{ExecError, ExecResult, Precondition};
 pub use io::{

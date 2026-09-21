@@ -420,6 +420,18 @@ impl<'a> Executor<'a> {
 
     fn record_failure(&mut self, path: &str, e: &ExecError) -> ExecResult<OpOutcome> {
         let now = self.now();
+        // I8: a key two on-disk files both claim is not a retryable error, it is a decision only
+        // the user can make. It becomes a conflict row, which puts the path into
+        // `open_conflicts` — so the planner proposes nothing further for it and the mapping says
+        // `needs_conflict_resolution` instead of failing the same op forever.
+        if let ExecError::NameCollision { kind, .. } = e {
+            self.do_record_conflict(path, *kind, &e.to_string())?;
+            return Ok(OpOutcome::Deferred {
+                code: e.code(),
+                detail: e.to_string(),
+                retry_at: None,
+            });
+        }
         if let Some(state) = e.honest_state() {
             if e.suspends() {
                 return Ok(OpOutcome::Halted {

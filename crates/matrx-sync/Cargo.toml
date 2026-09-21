@@ -27,6 +27,12 @@ unicode-normalization = "0.1"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 file-id = "0.2.3"
+# FS-L1 unit 4b. Two knobs in SPEC-ENGINE section 2 are promises about the real filesystem that
+# std cannot keep: `sync.trash_local_deletes` (default true) needs the OS trash on all three
+# platforms, and a preserved mtime is what keeps the scanner's size/mtime fast path working on
+# every file sync itself wrote. Declared here because every import is declared (Hard Rule 5).
+filetime = "0.2.27"
+trash = "5.2.3"
 
 # ---- FS-C5 custody (SPEC-CUSTODY). The planner, the journal and the harness stay pure; `custody`
 # is the one module in this crate that speaks HTTP, reads a clock and touches the OS keychain, and
@@ -56,6 +62,8 @@ notify-rust = "4.12.0"
 
 [dev-dependencies]
 proptest = "1.11.0"
+sha2 = "0.10.9"
+unicode-normalization = "0.1"
 tempfile = "3"
 # The FS-C5 battery lives in tests/custody.rs, which sees only the public API plus these.
 tokio = { workspace = true }

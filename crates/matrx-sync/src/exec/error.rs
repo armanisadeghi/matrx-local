@@ -104,6 +104,15 @@ pub enum ExecError {
         /// What they actually hashed to.
         found: String,
     },
+    /// Two on-disk names normalise or case-fold to one tree key, so acting on the key would pick
+    /// one of the user's files and destroy the other. Never a silent pick: it becomes a conflict
+    /// row and the path waits for a human (invariant I8).
+    NameCollision {
+        /// The mapping-relative key in dispute.
+        path: String,
+        /// Which class — `case_collision` or `unicode_collision`.
+        kind: crate::model::ConflictKind,
+    },
     /// The direction forbids this op. **A defect, not a state**: the planner must never emit an
     /// op its own direction forbids, so this is reported loudly and the op is refused.
     DirectionRefused {
@@ -169,6 +178,7 @@ impl ExecError {
             ExecError::SignInNeeded { .. } => "sign_in_needed",
             ExecError::OrganizationRefused { .. } => "organization_refused",
             ExecError::ChecksumMismatch { .. } => "checksum_mismatch",
+            ExecError::NameCollision { .. } => "name_collision",
             ExecError::DirectionRefused { .. } => "direction_refused",
             ExecError::Refused(_) => "journal_refused",
             ExecError::Io { .. } => "io_error",
@@ -290,6 +300,12 @@ impl fmt::Display for ExecError {
                 f,
                 "the bytes downloaded for {path} hashed to {found}, not {expected}; they were \
                  discarded"
+            ),
+            ExecError::NameCollision { path, kind } => write!(
+                f,
+                "two files on this disk both claim the name {path} ({}); choosing one would \
+                 destroy the other",
+                kind.as_str()
             ),
             ExecError::DirectionRefused { direction, op, path } => write!(
                 f,

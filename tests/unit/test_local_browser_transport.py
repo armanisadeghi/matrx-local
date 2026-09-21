@@ -218,6 +218,8 @@ def test_document_id_is_opaque_but_utf8_bounded() -> None:
     assert transport._document(document) == document
     assert transport._document({**document, "document_id": ""}) is None
     assert transport._document({**document, "document_id": "x" * 129}) is None
+    assert transport._document({**document, "document_id": "€" * 43}) is None
+    assert transport._document({**document, "document_id": "\ud800"}) is None
     assert transport._document({**document, "document_id": 1}) is None
 
 

@@ -424,7 +424,13 @@ def _uuid(value: object) -> str | None:
 
 
 def valid_local_browser_document_id(value: object) -> bool:
-    return isinstance(value, str) and 0 < len(value.encode("utf-8")) <= 128
+    if not isinstance(value, str):
+        return False
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+    return 0 < size <= 128
 
 
 def _safe_urlsplit(value: object):  # noqa: ANN201

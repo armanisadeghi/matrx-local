@@ -556,6 +556,8 @@ async def test_dispatch_propagates_only_the_exact_extension_receipt(
 
 @pytest.mark.anyio
 async def test_dispatch_refuses_unknown_extension_receipt(monkeypatch):
+    diagnostics = []
+    monkeypatch.setattr(transport, "_lifecycle_diagnostic", diagnostics.append)
     future = asyncio.get_running_loop().create_future()
     future.set_result(
         {"status": "acknowledged", "operation": "cleanup", "receipt": "invented"}
@@ -577,6 +579,36 @@ async def test_dispatch_refuses_unknown_extension_receipt(monkeypatch):
         await transport._dispatch(
             object(), {"grant": "opaque", "operation": "cleanup"}, entry
         )
+    assert diagnostics == ["dispatch_result_shape"]
+
+
+@pytest.mark.anyio
+async def test_dispatch_logs_closed_label_for_invalid_approve_result(monkeypatch):
+    diagnostics = []
+    monkeypatch.setattr(transport, "_lifecycle_diagnostic", diagnostics.append)
+    future = asyncio.get_running_loop().create_future()
+    future.set_result({"status": "acknowledged", "operation": "approve"})
+    monkeypatch.setattr(transport, "create_local_browser_future", lambda *_: future)
+
+    async def sent(*_):
+        return True
+
+    monkeypatch.setattr(transport, "send_local_browser_execute", sent)
+    monkeypatch.setattr(transport, "drop_local_browser_future", lambda *_: None)
+    entry = transport._ReplayEntry(
+        b"digest",
+        transport._ReplayIdentity(("u", "s"), "b", 1, "o", "d", "g", "c", 1),
+        4_000_000_000_000,
+        asyncio.get_running_loop().create_future(),
+    )
+    with pytest.raises(transport.TransportRefusal) as refused:
+        await transport._dispatch(
+            object(),
+            {"grant": "opaque", "operation": "approve", "command_json": "{}"},
+            entry,
+        )
+    assert refused.value.status_code == 503
+    assert diagnostics == ["dispatch_approve_result"]
 
 
 @pytest.mark.anyio

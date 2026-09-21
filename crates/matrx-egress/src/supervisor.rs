@@ -29,11 +29,19 @@ pub enum Command {
     Resume,
     /// Remove this computer from the account and forget its token.
     SignOut,
-    /// Open the account's computers page in the browser.
+    /// Open the account's computers page in the browser. Only the tray menu (macOS/Windows)
+    /// constructs this; there is no CLI or web equivalent, so it is legitimately unconstructed
+    /// outside its own tests on a platform with no tray.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     OpenComputersPage,
-    /// Open the page that confirms removing this computer.
+    /// Open the page that confirms removing this computer. Tray-only, same reasoning as
+    /// `OpenComputersPage`.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     ConfirmRemovalInBrowser,
-    /// Stop the helper. The account keeps the computer; it is simply not running.
+    /// Stop the helper. The account keeps the computer; it is simply not running. Tray-only: a
+    /// process with no tray is stopped by SIGTERM/Ctrl-C ([`wait_for_shutdown`]), not this
+    /// command.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     Quit,
 }
 
@@ -305,7 +313,9 @@ impl Supervisor {
     }
 
     /// Whether the helper is trying to stay connected right now — what the tray's Pause/Resume
-    /// item reads to know which word to wear.
+    /// item reads to know which word to wear. Tray-only; legitimately unused outside its own
+    /// tests on a platform with no tray.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub fn is_paused(&self) -> bool {
         *self.desired.borrow() == Desired::Paused
     }
@@ -404,7 +414,9 @@ impl Supervisor {
     }
 }
 
-/// A sender the tray and the control server both hold.
+/// A sender the tray and the control server both hold. Only the tray (macOS/Windows) names this
+/// alias; the control server holds the same channel through its own signature.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub type Commands = UnboundedSender<Command>;
 
 /// Wait for the signals that end the process: SIGTERM, Ctrl-C, and — in engine mode — stdin EOF.

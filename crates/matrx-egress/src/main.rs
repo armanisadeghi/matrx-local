@@ -25,6 +25,7 @@ mod control;
 mod fake_gateway;
 mod frame;
 mod http;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod icon;
 mod identity;
 mod install;

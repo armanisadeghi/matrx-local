@@ -39,6 +39,7 @@ import {
   indexNotice as readIndexNotice,
 } from "@/lib/coding-sessions/index-state";
 import { requestOrganizationPicker } from "@/lib/org/active-org";
+import { ActionNeededCard, useActionNeeded } from "@/features/action-needed";
 import { laneBlockerTone } from "@/lib/lane-blocker";
 
 export function CodingSessions() {
@@ -95,6 +96,11 @@ export function CodingSessions() {
   const totals = snapshot.overview?.totals;
   const cloud = snapshot.overview?.cloud;
   const blocker = snapshot.bridge?.publisher.blocker ?? null;
+  const actionNeeded = useActionNeeded();
+  const codingSessionOrganizationCard =
+    actionNeeded.find(
+      (item) => item.fingerprint === "coding-session:organization:required",
+    ) ?? null;
   const indexNotice = readIndexNotice(snapshot.overview);
   // The engine refreshing its index behind an answer is work in progress too,
   // so the header's Refresh wears the same announced-refresh state it wears
@@ -201,6 +207,18 @@ export function CodingSessions() {
                   {blocker.since ? ` · since ${formatStamp(blocker.since)}` : ""}
                   {blocker.receipt_id ? ` · first delivery #${blocker.receipt_id}` : ""}
                 </p>
+                {blocker.action === "choose_coding_session_organization" &&
+                  codingSessionOrganizationCard && (
+                    // THE SERVER's question ("which organization are these
+                    // sessions FILED in") is answered on the same card the app
+                    // banner shows — one button per membership — rendered here
+                    // too so the person who came to this page for the pause
+                    // is not sent to look for it elsewhere.
+                    <ActionNeededCard
+                      item={codingSessionOrganizationCard}
+                      className="mt-3"
+                    />
+                  )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {blocker.action === "choose_organization" && (
                     <Button size="sm" onClick={() => requestOrganizationPicker()}>

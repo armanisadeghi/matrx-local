@@ -1,7 +1,7 @@
 import { isFullWindow } from "@/lib/window-role";
 import { invokeTauri, isTauri } from "@/lib/sidecar";
 
-import type { ActionNeeded, ActionNeededAction } from "./types";
+import type { ActionNeeded, ActionNeededAction, ActionNeededChoice } from "./types";
 
 type ActionHandler = (item: ActionNeeded) => void | Promise<void>;
 const handlers = new Map<string, ActionHandler>();
@@ -108,6 +108,42 @@ async function dispatchBuiltIn(
     return true;
   }
   return false;
+}
+
+/** How a chosen option reaches the engine. Injectable for tests. */
+export interface ChoiceTransport {
+  put: (route: string, body: unknown) => Promise<unknown>;
+}
+
+async function defaultChoiceTransport(): Promise<ChoiceTransport> {
+  // Lazy: `@/lib/api` is the app's heaviest module.
+  const { engine } = await import("@/lib/api");
+  return { put: (route, body) => engine.put(route, body) };
+}
+
+/**
+ * Submit the person's pick for an item that carries `action.choices`.
+ *
+ * ONE transport for every choice-shaped item: PUT `{ choice: id }` to the
+ * item's `choice_route` on the engine. The engine route is owned by the
+ * source that raised the item (it stores the answer wherever it belongs and
+ * withdraws the card on the next snapshot), so nothing here knows what the
+ * choice means. A refusal is thrown with the engine's own sentence so the
+ * card can show it verbatim.
+ */
+export async function submitActionNeededChoice(
+  item: ActionNeeded,
+  choice: ActionNeededChoice,
+  transport?: ChoiceTransport,
+): Promise<void> {
+  const route = item.action.choice_route;
+  if (!route) {
+    throw new Error(
+      `[action-needed] ${item.fingerprint} offers choices but names no choice_route`,
+    );
+  }
+  const engine = transport ?? (await defaultChoiceTransport());
+  await engine.put(route, { choice: choice.id });
 }
 
 export async function dispatchActionNeeded(

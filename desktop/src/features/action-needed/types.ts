@@ -8,6 +8,13 @@ export type ActionNeededKind =
 
 export type ActionNeededStatus = "active" | "checking" | "resolved";
 
+/** One option the person can pick to resolve an item — a picker row. */
+export interface ActionNeededChoice {
+  id: string;
+  label: string;
+  description?: string | null;
+}
+
 /** Mirrors app/services/action_needed/models.py. */
 export interface ActionNeededAction {
   kind: string;
@@ -17,6 +24,16 @@ export interface ActionNeededAction {
   route?: string | null;
   url?: string | null;
   resource_ids?: string[] | null;
+  /**
+   * A CHOICE the person makes to resolve the item, carried by the primitive
+   * so any source can ask one (which organization, which account, which
+   * folder) without a one-off dialog. The card renders one button per choice
+   * and PUTs `{ choice: id }` to `choice_route` on the engine; the source that
+   * raised the item owns what happens next and withdraws it once the choice
+   * took.
+   */
+  choices?: ActionNeededChoice[] | null;
+  choice_route?: string | null;
 }
 
 /** A source-owned, user-fixable state. It is not a transient toast. */

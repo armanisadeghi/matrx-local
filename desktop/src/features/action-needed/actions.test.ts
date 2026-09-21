@@ -91,3 +91,62 @@ describe("action-needed navigation", () => {
     );
   });
 });
+
+describe("action-needed choices", () => {
+  const withChoices: ActionNeeded = {
+    fingerprint: "coding-session:organization:required",
+    code: "organization_required",
+    kind: "organization",
+    feature: "Coding sessions",
+    title: "Your Claude Code sessions are waiting for an organization",
+    message: "Pick an organization and delivery resumes by itself.",
+    action: {
+      kind: "choose_coding_session_organization",
+      label: "Choose organization",
+      route: "/coding-sessions",
+      choices: [
+        { id: "org-a", label: "All Green", description: "AG" },
+        { id: "org-b", label: "AI Matrx", description: "AM" },
+      ],
+      choice_route: "/coding-session/connection/organization",
+    },
+    source: "coding_session_bridge",
+    status: "active",
+  };
+  const [orgA, orgB] = withChoices.action.choices as [
+    NonNullable<ActionNeeded["action"]["choices"]>[number],
+    NonNullable<ActionNeeded["action"]["choices"]>[number],
+  ];
+
+  it("PUTs the chosen id to the item's choice_route on the engine", async () => {
+    const { submitActionNeededChoice } = await import("./actions");
+    const put = vi.fn(async () => ({}));
+    await submitActionNeededChoice(withChoices, orgB, { put });
+    expect(put).toHaveBeenCalledWith("/coding-session/connection/organization", {
+      choice: "org-b",
+    });
+  });
+
+  it("refuses to guess a route for a choice-shaped item that names none", async () => {
+    const { submitActionNeededChoice } = await import("./actions");
+    const put = vi.fn(async () => ({}));
+    const routeless: ActionNeeded = {
+      ...withChoices,
+      action: { ...withChoices.action, choice_route: null },
+    };
+    await expect(
+      submitActionNeededChoice(routeless, orgA, { put }),
+    ).rejects.toThrow(/choice_route/);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("lets the engine's refusal reach the caller verbatim", async () => {
+    const { submitActionNeededChoice } = await import("./actions");
+    const put = vi.fn(async () => {
+      throw new Error("Organization x is not one of your memberships.");
+    });
+    await expect(
+      submitActionNeededChoice(withChoices, orgA, { put }),
+    ).rejects.toThrow("not one of your memberships");
+  });
+});

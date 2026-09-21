@@ -580,6 +580,35 @@ Guard: `tests/unit/test_coding_session_bridge.py::test_unnamed_organization_paus
 (fails against the pre-fix publisher) and `test_organization_refusal_is_never_a_terminal_rejection`.
 State rules: `tests/unit/test_claude_overview_state.py`.
 
+### 🚨 THE SERVER'S OWN HOLD — a different question, with its own door (D1, 2026-09-20)
+
+`/coding-sessions/bridge` is exempt from this Mac's pre-send organization check; aidream
+resolves the organization ITSELF from what the account's coding-session connection was
+deliberately configured with (`connection_organization_id(user, "coding_session")`) and answers
+409 `organization_required` — with the ONE hold envelope (`details.organizations`,
+`set_on: "coding_session"`) — when nothing was configured. That is NOT the device question.
+Measured live 2026-09-20: the publisher recognised the 409 as a hold but resumed on the DEVICE
+check (which passed), retried, was held again — 320 uploads at attempt 16+, 0 sent, and no
+card, because nothing on this Mac (or anywhere) could set the server's value. Now:
+
+- `_server_hold_refusal` reads the hold's envelope (`AIDreamError.body`), scopes the refusal
+  `coding_session`, names the `choose_coding_session_organization` action and carries the
+  memberships. **A paused publisher asks the SERVER** (`GET
+  /coding-sessions/connection/organization`) whether the value is set now — never this Mac.
+- The hold registers exactly ONE action-needed card, "Your Claude Code sessions are waiting for
+  an organization", with the memberships as the primitive's `choices` and
+  `choice_route=/coding-session/connection/organization`. The desktop renders one button per
+  membership (`ActionNeededCard`), in the app banner and inside the Coding Sessions pause.
+- Engine `PUT /coding-session/connection/organization {choice|organization_id}` →
+  `set_connection_organization` PUTs it through the server's door (membership-verified there;
+  the server never picks), clears the card, lifts the pause and wakes the publisher; the next
+  tick sends. A refused choice (422 `not_a_membership`) keeps the card and shows the server's
+  sentence verbatim. `GET` on the same engine route reports the server's value + choices.
+
+Guard: `tests/unit/test_coding_session_organization_door.py` (RED against the pre-fix
+publisher: no card, resumes on the device check). Server half: aidream
+`aidream/api/tests/test_coding_session_bridge_router.py` (held → PUT → filed where chosen).
+
 ### 🚨 THE SESSION PAUSE — the engine asks for a fresh session, never mints one
 
 Found live 2026-09-11: at startup the desktop pushed its persisted, already-expired

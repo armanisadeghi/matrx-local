@@ -587,7 +587,16 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
         session = get_registry().get(session_id)
         if session is None:
             return False
-        resolve_local_browser_result(session_id, session.websocket, msg["call_id"], msg)
+        # The envelope authenticates and correlates this WebSocket reply; transport
+        # receipt validators consume only the already-validated result payload.
+        result_payload = {
+            key: value
+            for key, value in msg.items()
+            if key not in {"type", "version", "call_id"}
+        }
+        resolve_local_browser_result(
+            session_id, session.websocket, msg["call_id"], result_payload
+        )
         return True
 
     if msg_type == "extension.result":

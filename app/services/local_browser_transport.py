@@ -26,6 +26,7 @@ from app.api.extension_ws_manager import (
     send_local_browser_execute,
     send_to_extension_session,
 )
+from app.common.system_logger import get_logger
 from app.services.app_config import get_aidream_server_url
 from app.services.cloud_sync.instance_manager import get_instance_manager
 from app.services.local_browser_context import (
@@ -76,11 +77,17 @@ _RECEIPTS = {
     "renew": frozenset({"accepted"}),
     "cleanup": frozenset({"closed", "already_absent", "unconfirmed"}),
 }
+logger = get_logger()
 
 
 class TransportRefusal(Exception):
     def __init__(self, reason: str, status_code: int = 403) -> None:
         self.reason, self.status_code = reason, status_code
+
+
+def _lifecycle_diagnostic(stage: str) -> None:
+    """Emit only a fixed transport-stage label; lifecycle material is private."""
+    logger.warning("[local_browser_transport] lifecycle_diagnostic stage=%s", stage)
 
 
 def private_path(path: str) -> bool:
@@ -940,20 +947,27 @@ async def _dispatch(
         if remaining <= 0:
             raise TransportRefusal("authority_refused", 403)
         result = await asyncio.wait_for(future, timeout=remaining)
-    except (asyncio.TimeoutError, ConnectionError) as exc:
+    except asyncio.TimeoutError as exc:
+        _lifecycle_diagnostic("dispatch_wait_timeout")
+        raise TransportRefusal("transport_unavailable", 503) from exc
+    except ConnectionError as exc:
+        _lifecycle_diagnostic("dispatch_wait_connection")
         raise TransportRefusal("transport_unavailable", 503) from exc
     finally:
         drop_local_browser_future(call_id)
     if not isinstance(result, dict) or result.get("operation") != request["operation"]:
+        _lifecycle_diagnostic("dispatch_result_envelope")
         raise TransportRefusal("transport_unavailable", 503)
     if request["operation"] == "approve":
         approved = _approve_result(result, inspect=entry.inspect)
         if approved is None:
+            _lifecycle_diagnostic("dispatch_approve_result")
             raise TransportRefusal("transport_unavailable", 503)
         encoded = json.dumps(
             approved, separators=(",", ":"), ensure_ascii=False
         ).encode("utf-8")
         if len(encoded) > (_MAX_INSPECT_REPLY if entry.inspect else _MAX_REPLY):
+            _lifecycle_diagnostic("dispatch_reply_oversize")
             raise TransportRefusal("transport_unavailable", 503)
         return approved
     if (
@@ -971,6 +985,7 @@ async def _dispatch(
             "operation": request["operation"],
             "reason": result["reason"],
         }
+    _lifecycle_diagnostic("dispatch_result_shape")
     raise TransportRefusal("transport_unavailable", 503)
 
 
@@ -1023,6 +1038,7 @@ async def _run_replay(
             entry.future.set_exception(refusal)
             entry.future.exception()
     except BaseException:
+        _lifecycle_diagnostic("replay_unexpected")
         await _REPLAYS.discard(entry)
         _settle_failure(entry)
     finally:

@@ -434,6 +434,23 @@ jobs:
         if: matrix.platform == 'macos-15'
         run: brew install tesseract
 
+      - name: Select an Xcode whose SDK knows the native Vault APIs
+        if: matrix.platform == 'macos-15'
+        # The native Vault exchange (desktop/native-vault-provider/*.swift) calls
+        # AuthenticationServices credential-exchange APIs that exist only in the
+        # macOS 26 SDK, behind @available(macOS 26.0, *). The runner's default
+        # Xcode 16 ships the macOS 15 SDK, where those symbols do not exist at all,
+        # so v1.4.181's Mac builds died on "cannot infer contextual base".
+        # Pick the newest Xcode 26+ on the image; refuse loudly if there is none.
+        run: |
+          newest="$(ls -d /Applications/Xcode_2[6-9]*.app /Applications/Xcode_[3-9][0-9]*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$newest" ]; then
+            echo "::error::No Xcode 26+ on this runner image; the native Vault exchange needs the macOS 26 SDK. Installed: $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"
+            exit 1
+          fi
+          sudo xcode-select -s "$newest"
+          echo "Using $newest — SDK $(xcrun --sdk macosx --show-sdk-version)"
+
       - name: Install Windows system dependencies
         if: matrix.platform == 'windows-latest'
         run: |

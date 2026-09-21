@@ -40,6 +40,11 @@ from app.services.aidream.client import (
     AIDreamOfflineError,
     get_aidream_client,
 )
+from app.services.action_needed.models import (
+    CODING_SESSION_ORGANIZATION_ACTION,
+    CODING_SESSION_ORGANIZATION_FINGERPRINT,
+    coding_session_organization_needed,
+)
 from app.services.coding_sessions.models import (
     BridgeProvider,
     BridgeRequest,
@@ -140,6 +145,19 @@ _ORGANIZATION_BLOCKER_CODE = ORGANIZATION_HELD_CODE
 # failure that eventually gets quarantined (409 is a `_TERMINAL_STATUSES`
 # member) instead of pausing with a remedy.
 _SERVER_ORGANIZATION_REQUIRED_MARKER = '"organization_required"'
+#: The server-side door out of that hold (aidream `GET/PUT
+#: /coding-sessions/connection/organization`): GET reports what this account's
+#: coding sessions are filed in plus the memberships; PUT records the person's
+#: choice. The publisher resumes on its own once GET reports one.
+_SERVER_CONNECTION_ORGANIZATION_PATH = "/coding-sessions/connection/organization"
+#: `organization_refusal` payload key that says WHICH question a hold asks:
+#: "device" = this Mac's own organization (the desktop picker), "coding_session"
+#: = the server's per-connection one (the choice card). Two questions, two
+#: answers; a screen that offers the device picker for the server's hold sends
+#: the person to answer the wrong one — exactly the loop measured on
+#: 2026-09-20 (320 uploads, attempt 16+, no card).
+_HOLD_SCOPE_KEY = "scope"
+_HOLD_SCOPE_CODING_SESSION = "coding_session"
 
 
 @dataclass(frozen=True)
@@ -530,23 +548,53 @@ def _organization_refusal_of(exc: Exception) -> dict[str, Any] | None:
     # anything raised locally. Scoped to AIDreamError + 409 so an unrelated
     # payload that happens to quote the same JSON key is never mistaken for
     # a hold.
-    if (
-        isinstance(exc, AIDreamError)
-        and exc.status == 409
-        and _SERVER_ORGANIZATION_REQUIRED_MARKER in message
-    ):
-        return organization_refusal(
-            OrganizationNotResolvedError(
-                "This coding session has not been told which organization it "
-                "belongs to.",
-                remedy=(
-                    "Choose the organization for this coding session, then "
-                    "try again."
-                ),
-                held=True,
-            )
-        )
+    if isinstance(exc, AIDreamError) and exc.status == 409:
+        body = exc.body if isinstance(exc.body, dict) else {}
+        # BY THE ENVELOPE first (`error`/`code` == organization_required — the
+        # transport parses it into `AIDreamError.body`); the text marker stays
+        # only as the backstop for a client that could not parse the body.
+        if (
+            body.get("error") == "organization_required"
+            or body.get("code") == "organization_required"
+            or _SERVER_ORGANIZATION_REQUIRED_MARKER in message
+        ):
+            return _server_hold_refusal(exc)
     return None
+
+
+def _server_hold_refusal(exc: AIDreamError) -> dict[str, Any]:
+    """The server's own hold as a refusal, WITH the memberships it carried.
+
+    Not the device-organization refusal: that one's remedy (the desktop
+    picker) answers a different question and its resume check (`this Mac has
+    an organization`) passes while the server keeps holding — so the publisher
+    cleared the pause, retried, was held again, forever. This refusal names
+    the server's question, carries the hold's `details.organizations` so the
+    card can offer them, and is scoped `coding_session` so the resume check
+    asks the SERVER.
+    """
+    body = exc.body if isinstance(exc.body, dict) else {}
+    details = body.get("details") if isinstance(body.get("details"), dict) else {}
+    organizations = details.get("organizations")
+    return {
+        "code": ORGANIZATION_HELD_CODE,
+        "message": (
+            "Waiting for you to choose an organization. AI Matrx needs to know "
+            "which organization to file your coding sessions in, and it will "
+            "not guess. Nothing is lost — delivery continues by itself once "
+            "you choose."
+        ),
+        "remedy": (
+            "Choose the organization for your coding sessions on the card "
+            "Matrx Local is showing you (Your Claude Code sessions are waiting "
+            "for an organization). Delivery resumes on its own within a few "
+            "seconds."
+        ),
+        "action": CODING_SESSION_ORGANIZATION_ACTION,
+        "held": True,
+        _HOLD_SCOPE_KEY: _HOLD_SCOPE_CODING_SESSION,
+        "organizations": organizations if isinstance(organizations, list) else None,
+    }
 
 
 def _is_terminal_rejection(exc: Exception, attempts: int) -> bool:
@@ -839,6 +887,9 @@ class CodingSessionBridgeOutbox:
             resolve_active_organization_id,
         )
 
+        if self._hold_is_the_servers():
+            return await self._server_connection_organization_set(access_token)
+
         try:
             await resolve_active_organization_id(access_token)
         except OrganizationNotResolvedError:
@@ -849,6 +900,79 @@ class CodingSessionBridgeOutbox:
             )
             return False
         return True
+
+    def _hold_is_the_servers(self) -> bool:
+        blocker = self._organization_blocker
+        return (
+            blocker is not None
+            and blocker.get(_HOLD_SCOPE_KEY) == _HOLD_SCOPE_CODING_SESSION
+        )
+
+    async def _server_connection_organization_set(self, access_token: str) -> bool:
+        """Ask the SERVER whether this account's coding sessions have an
+        organization now. Only the server can answer its own hold; this Mac's
+        device organization says nothing about it."""
+        client = self._client or self._client_factory()
+        if client is None:
+            return False
+        try:
+            report = await client.get(_SERVER_CONNECTION_ORGANIZATION_PATH, jwt=access_token)
+        except Exception:  # noqa: BLE001 — a transient failure keeps the pause
+            logger.exception(
+                "[coding_session_bridge] could not ask the server whether the "
+                "coding-session organization is set; delivery stays paused"
+            )
+            return False
+        return bool(isinstance(report, dict) and report.get("organization_id"))
+
+    async def set_connection_organization(
+        self, organization_id: str
+    ) -> dict[str, Any]:
+        """The person's answer to the server's hold: file coding sessions HERE.
+
+        PUTs the choice through the server's door (membership-verified there;
+        the server never picks), lifts the pause, clears the card and wakes the
+        publisher so the next tick sends. Raises ``AIDreamError`` with the
+        server's own sentence when the choice is refused (not a membership).
+        """
+        token_row = await self._tokens.get()
+        access_token = str(token_row.get("access_token") or "") if token_row else ""
+        if not access_token:
+            raise AIDreamError(
+                401, "Sign in to Matrx Local before choosing an organization."
+            )
+        client = self._client or self._client_factory()
+        if client is None:
+            raise AIDreamError(
+                503, "No AI Dream server is configured on this Mac."
+            )
+        report = await client.put(
+            _SERVER_CONNECTION_ORGANIZATION_PATH,
+            {"organization_id": organization_id},
+            jwt=access_token,
+        )
+        if self._hold_is_the_servers():
+            await self._clear_organization_blocker()
+        self.wake()
+        return {
+            "organization_id": (
+                report.get("organization_id") if isinstance(report, dict) else organization_id
+            ),
+            "blocker": self.publisher_blocker,
+        }
+
+    async def connection_organization_report(self) -> dict[str, Any]:
+        """What the server says this account's coding sessions are filed in,
+        plus the choices — for the desktop to show before any hold."""
+        token_row = await self._tokens.get()
+        access_token = str(token_row.get("access_token") or "") if token_row else ""
+        if not access_token:
+            raise AIDreamError(401, "Sign in to Matrx Local first.")
+        client = self._client or self._client_factory()
+        if client is None:
+            raise AIDreamError(503, "No AI Dream server is configured on this Mac.")
+        report = await client.get(_SERVER_CONNECTION_ORGANIZATION_PATH, jwt=access_token)
+        return dict(report) if isinstance(report, dict) else {"organization_id": None}
 
     async def _set_organization_blocker(
         self, row: Any, provider: str, refusal: dict[str, Any] | None = None
@@ -888,6 +1012,14 @@ class CodingSessionBridgeOutbox:
             if self._organization_blocker is not None
             else _utc_now_iso(),
         }
+        if payload.get(_HOLD_SCOPE_KEY) == _HOLD_SCOPE_CODING_SESSION:
+            self._organization_blocker[_HOLD_SCOPE_KEY] = _HOLD_SCOPE_CODING_SESSION
+            self._organization_blocker["organizations"] = payload.get("organizations")
+            # THE CARD. The sidecar cannot show UI; the desktop renders this
+            # item with one button per membership (the primitive's `choices`),
+            # PUTs the pick to /coding-session/connection/organization on this
+            # engine, and `set_connection_organization` lifts the pause.
+            await self._register_server_hold_card(payload.get("organizations"))
         # Visible on the envelope itself, but NO attempt is charged: the server
         # was never asked, so this row is not one step closer to quarantine.
         await self._durable_writes(
@@ -915,6 +1047,7 @@ class CodingSessionBridgeOutbox:
         way, because nothing about them was ever terminal.
         """
         self._organization_blocker = None
+        await self._clear_server_hold_card()
         await self._durable_writes(
             [
                 (
@@ -935,6 +1068,38 @@ class CodingSessionBridgeOutbox:
             "[coding_session_bridge] organization resolved; delivery resumed (%s preserved rows requeued)",
             restored,
         )
+
+    async def _register_server_hold_card(
+        self, organizations: list[dict[str, Any]] | None
+    ) -> None:
+        try:
+            from app.services.action_needed.registry import get_action_needed_registry
+
+            held = await self.pending_count()
+            await get_action_needed_registry().reconcile_operation(
+                CODING_SESSION_ORGANIZATION_FINGERPRINT,
+                coding_session_organization_needed(
+                    source="coding_session_bridge",
+                    organizations=organizations,
+                    held_uploads=held,
+                ),
+            )
+        except Exception:  # noqa: BLE001 — the pause itself still carries the remedy
+            logger.exception(
+                "[coding_session_bridge] could not register the organization card"
+            )
+
+    async def _clear_server_hold_card(self) -> None:
+        try:
+            from app.services.action_needed.registry import get_action_needed_registry
+
+            await get_action_needed_registry().reconcile_operation(
+                CODING_SESSION_ORGANIZATION_FINGERPRINT, None
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[coding_session_bridge] could not clear the organization card"
+            )
 
     async def requeue_organization_quarantine(self) -> int:
         """Return every envelope quarantined for the organization refusal.

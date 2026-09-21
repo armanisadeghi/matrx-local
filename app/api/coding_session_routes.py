@@ -5,6 +5,9 @@ from __future__ import annotations
 import ipaddress
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict
+
+from app.services.aidream.client import AIDreamError
 
 from app.api.remote_auth import headers_indicate_tunnel
 from app.services.coding_sessions.artifacts import (
@@ -447,6 +450,71 @@ async def claude_session_reconcile(session_id: str) -> dict[str, object]:
             ),
         )
     return result
+
+
+class ConnectionOrganizationChoice(BaseModel):
+    """The person's pick from the organization card.
+
+    ``choice`` is what the action-needed primitive PUTs (``{"choice": <id>}``);
+    ``organization_id`` is the same thing by its real name for any other caller.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    choice: str | None = None
+    organization_id: str | None = None
+
+    def chosen(self) -> str:
+        value = (self.organization_id or self.choice or "").strip()
+        if not value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Pick an organization first.",
+            )
+        return value
+
+
+@router.get("/connection/organization")
+async def read_connection_organization() -> dict[str, object]:
+    """Which organization this account's coding sessions are filed in on AI
+    Matrx (the SERVER's setting, not this Mac's), plus the memberships."""
+    try:
+        return await get_coding_session_bridge_outbox().connection_organization_report()
+    except AIDreamError as exc:
+        raise HTTPException(
+            status_code=exc.status if 400 <= exc.status < 600 else 502,
+            detail=_server_sentence(exc),
+        ) from exc
+
+
+@router.put("/connection/organization")
+async def write_connection_organization(
+    body: ConnectionOrganizationChoice,
+) -> dict[str, object]:
+    """The answer to "Your Claude Code sessions are waiting for an organization".
+
+    Stores the choice on the server (membership-verified there; the server
+    never picks), clears the card and resumes delivery on the next tick.
+    """
+    try:
+        return await get_coding_session_bridge_outbox().set_connection_organization(
+            body.chosen()
+        )
+    except AIDreamError as exc:
+        raise HTTPException(
+            status_code=exc.status if 400 <= exc.status < 600 else 502,
+            detail=_server_sentence(exc),
+        ) from exc
+
+
+def _server_sentence(exc: AIDreamError) -> str:
+    """The server's own user-facing sentence when it sent one, else ours."""
+    body = exc.body if isinstance(exc.body, dict) else {}
+    for key in ("user_message", "message"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return str(exc)
 
 
 @router.post("/delivery/resume")

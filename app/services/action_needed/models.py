@@ -31,6 +31,14 @@ class ActionNeededStatus(str, Enum):
     RESOLVED = "resolved"
 
 
+class ActionNeededChoice(BaseModel):
+    """One option the person can pick to resolve an item — a picker row."""
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    description: str | None = None
+
+
 class ActionNeededAction(BaseModel):
     kind: str = Field(description="Stable dispatcher action kind")
     label: str
@@ -39,6 +47,14 @@ class ActionNeededAction(BaseModel):
     route: str | None = None
     url: str | None = None
     resource_ids: list[str] | None = None
+    #: A CHOICE the person makes to resolve the item, carried BY THE PRIMITIVE
+    #: so any source can ask one (which organization, which account, which
+    #: folder) without a one-off dialog. The desktop renders one button per
+    #: choice and PUTs ``{"choice": <id>}`` to ``choice_route`` on the engine;
+    #: the source that raised the item owns what happens next and stops
+    #: returning the item once the choice took. ``None`` = no choice to make.
+    choices: list[ActionNeededChoice] | None = None
+    choice_route: str | None = None
 
 
 class ActionNeeded(BaseModel):
@@ -132,6 +148,86 @@ def organization_required_needed(
         ),
         source=source,
         details={"user_id": user_id} if user_id else None,
+    )
+
+
+#: The one operation key + fingerprint the coding-session hold reconciles under.
+CODING_SESSION_ORGANIZATION_FINGERPRINT = "coding-session:organization:required"
+CODING_SESSION_ORGANIZATION_ACTION = "choose_coding_session_organization"
+CODING_SESSION_ORGANIZATION_ROUTE = "/coding-session/connection/organization"
+
+
+def coding_session_organization_needed(
+    *,
+    source: str,
+    organizations: list[dict[str, Any]] | None,
+    held_uploads: int | None = None,
+) -> ActionNeeded:
+    """The SERVER's hold on this account's coding sessions — a different
+    question from ``organization_required_needed``.
+
+    That one asks which organization THIS MAC works in. This one asks which
+    organization the account's Claude Code / Codex sessions are FILED in on
+    AI Matrx: the bridge carries no organization on the wire, so the server
+    holds every upload (409 ``organization_required``) until the person sets
+    it on the coding-session connection — and the server never picks (Arman,
+    2026-09-19). Until 2026-09-20 there was no way to set it: Matrx Local
+    retried every upload forever and registered no card (D1).
+
+    ``organizations`` is the membership list the hold itself carried (the ONE
+    hold shape: ``{id, name, abbreviation}``) and becomes the card's choices;
+    ``None`` means the server could not read the list, and the card then says
+    so and offers the retry instead of an empty picker.
+    """
+
+    choices = [
+        ActionNeededChoice(
+            id=str(org["id"]),
+            label=str(org.get("name") or org["id"]),
+            description=str(org["abbreviation"]) if org.get("abbreviation") else None,
+        )
+        for org in (organizations or [])
+        if isinstance(org, dict) and org.get("id")
+    ]
+    waiting = (
+        f"{held_uploads} upload{'s' if held_uploads != 1 else ''} are waiting"
+        if held_uploads
+        else "Every upload is waiting"
+    )
+    if choices:
+        message = (
+            f"AI Matrx needs to know which organization to file your coding "
+            f"sessions in, and it will not guess. {waiting} on this Mac and "
+            "nothing is lost. Pick an organization and delivery resumes by itself."
+        )
+        label = "Choose organization"
+    else:
+        message = (
+            f"AI Matrx needs to know which organization to file your coding "
+            f"sessions in, and it will not guess. {waiting} on this Mac and "
+            "nothing is lost — but your organizations could not be listed just "
+            "now. Retry delivery to ask again."
+        )
+        label = "Retry delivery"
+    return ActionNeeded(
+        fingerprint=CODING_SESSION_ORGANIZATION_FINGERPRINT,
+        code="organization_required",
+        kind=ActionNeededKind.ORGANIZATION,
+        feature="Coding sessions",
+        title="Your Claude Code sessions are waiting for an organization",
+        message=message,
+        action=ActionNeededAction(
+            kind=CODING_SESSION_ORGANIZATION_ACTION,
+            label=label,
+            route="/coding-sessions",
+            choices=choices or None,
+            choice_route=CODING_SESSION_ORGANIZATION_ROUTE if choices else None,
+        ),
+        source=source,
+        details={
+            "set_on": "coding_session",
+            "held_uploads": held_uploads,
+        },
     )
 
 

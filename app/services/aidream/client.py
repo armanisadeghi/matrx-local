@@ -54,10 +54,25 @@ class AIDreamError(Exception):
         message: str,
         *,
         organization_refusal: dict[str, Any] | None = None,
+        body: Any = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.organization_refusal = organization_refusal
+        #: The server's PARSED JSON envelope when the response carried one
+        #: (``{"error", "message", "details": {...}}``), else ``None``. A
+        #: structured refusal — the coding-session hold's membership list, for
+        #: one — must be read from here, never scraped back out of ``message``.
+        self.body = body
+
+
+def _json_body_or_none(resp: httpx.Response) -> Any:
+    """The response's JSON object, or ``None`` when it is not one."""
+    try:
+        parsed = resp.json()
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # Owner-scoped coding-session routes. The server exempts them from the
@@ -130,6 +145,11 @@ def wire_retry_stats() -> dict[str, int]:
 _ORGANIZATION_SELF_RESOLVED_PATHS: tuple[str, ...] = (
     "/coding-sessions/bridge",
     "/coding-sessions/sessions",
+    # The door OUT of the bridge's hold: which organization this account's
+    # coding sessions are filed in (GET reports it + the choices, PUT sets
+    # it). Owner-scoped on the JWT — the route exists because no organization
+    # is known yet, so demanding one here would be the hold with no exit.
+    "/coding-sessions/connection/organization",
 )
 
 
@@ -240,7 +260,7 @@ class AIDreamClient:
 
     @staticmethod
     def _is_replay_safe(method: str, path: str) -> bool:
-        if method == "GET":
+        if method in ("GET", "PUT"):
             return True
         return any(path.startswith(safe) for safe in _REPLAY_SAFE_POST_PATHS)
 
@@ -383,6 +403,44 @@ class AIDreamClient:
             raise AIDreamError(
                 resp.status_code,
                 f"[aidream_client] {path} → HTTP {resp.status_code}: {detail}",
+                body=_json_body_or_none(resp),
+            )
+
+        return resp.json()
+
+    async def put(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        jwt: Optional[str] = None,
+        timeout: float = _REQUEST_TIMEOUT,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
+        """Perform an authenticated JSON PUT to ``/api{path}``.
+
+        Same transport, same header assembly, same error contract as ``post``.
+        A PUT is idempotent by definition, so unlike a POST it is always
+        replay-safe on a wire-level failure.
+        """
+        url = f"{self._base_url}/api{path}"
+        headers = await self._build_headers(
+            {"Accept": "application/json", "Content-Type": "application/json"},
+            jwt,
+            headers,
+            path=path,
+        )
+
+        resp = await self._send(
+            "PUT", url, path=path, headers=headers, timeout=timeout, json=payload
+        )
+
+        if not resp.is_success:
+            detail = resp.text[:1000]
+            raise AIDreamError(
+                resp.status_code,
+                f"[aidream_client] {path} → HTTP {resp.status_code}: {detail}",
+                body=_json_body_or_none(resp),
             )
 
         return resp.json()

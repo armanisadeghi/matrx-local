@@ -181,6 +181,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # macos-15 still defaults to Xcode 16.4 even though the image includes
+      # Xcode 26.3. The native Credential Export API is a macOS 26 SDK API, so
+      # selecting the installed Xcode 26 toolchain is part of the build
+      # contract rather than an optional runner preference.
+      - name: Select Xcode 26 toolchain
+        if: matrix.platform == 'macos-15'
+        run: |
+          DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          export DEVELOPER_DIR
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+
       # ---- Python sidecar build ----
       - name: Install uv
         uses: astral-sh/setup-uv@v5

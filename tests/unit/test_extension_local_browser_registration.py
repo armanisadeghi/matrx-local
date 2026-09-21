@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,7 @@ import app.api.extension_routes as routes
 import app.api.extension_ws_manager as manager
 import app.services.cloud_sync.instance_manager as instance_manager
 import app.services.local_browser_context as context_module
+import app.services.local_browser_transport as transport
 from app.services.local_browser_context import BrowserContext, FreshContext
 
 BOOT = "00000000-0000-0000-0000-000000000001"
@@ -322,7 +324,14 @@ async def test_approve_result_accepts_only_closed_receipt_and_sanitized_inspect_
         },
     }
     assert await routes._handle_extension_message(session.session_id, frame)
-    assert received == [frame]
+    assert received == [
+        {
+            "operation": "approve",
+            "status": "acknowledged",
+            "terminal_receipt": frame["terminal_receipt"],
+            "document": frame["document"],
+        }
+    ]
     malicious_receipt = {
         **frame,
         "terminal_receipt": {"secret": "raw-injection-value"},
@@ -335,3 +344,125 @@ async def test_approve_result_accepts_only_closed_receipt_and_sanitized_inspect_
     }
     assert await routes._handle_extension_message(session.session_id, frame)
     assert len(received) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "result", "inspect", "expected"),
+    [
+        (
+            "approve",
+            {
+                "status": "acknowledged",
+                "terminal_receipt": {
+                    "command_id": "00000000-0000-4000-8000-000000000097",
+                    "operation": "inspect_login",
+                    "outcome": "completed",
+                    "reason": "none",
+                    "data": {
+                        "origin": "https://example.com",
+                        "form": "login",
+                        "challenge": "none",
+                    },
+                },
+            },
+            False,
+            {
+                "status": "acknowledged",
+                "operation": "approve",
+                "terminal_receipt": {
+                    "command_id": "00000000-0000-4000-8000-000000000097",
+                    "operation": "inspect_login",
+                    "outcome": "completed",
+                    "reason": "none",
+                    "data": {
+                        "origin": "https://example.com",
+                        "form": "login",
+                        "challenge": "none",
+                    },
+                },
+            },
+        ),
+        (
+            "approve",
+            {"status": "refused", "reason": "authority_refused"},
+            False,
+            {
+                "status": "refused",
+                "operation": "approve",
+                "reason": "authority_refused",
+            },
+        ),
+        (
+            "admit",
+            {"status": "acknowledged", "receipt": "created"},
+            False,
+            {"status": "acknowledged", "operation": "admit", "receipt": "created"},
+        ),
+    ],
+)
+async def test_validated_result_envelope_reaches_dispatch_as_exact_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    result: dict[str, object],
+    inspect: bool,
+    expected: dict[str, object],
+) -> None:
+    """Regression: wire envelope fields must not reach payload-only receipt checks."""
+    registry = manager.ExtensionSessionRegistry()
+    socket = Socket()
+    session = registry.register(socket)  # type: ignore[arg-type]
+    registration = manager.LocalBrowserRegistration(
+        session_id=session.session_id,
+        websocket=socket,  # type: ignore[arg-type]
+        engine_boot_id=BOOT,
+        revision=4,
+        owner=("user", "session"),
+        organization_id="organization",
+        device_id=DEVICE,
+        extension_generation=GENERATION,
+        connection_id=CONNECTION,
+    )
+    monkeypatch.setattr(routes, "get_registry", lambda: registry)
+    monkeypatch.setattr(manager, "_REGISTRY", registry)
+    monkeypatch.setattr(
+        transport,
+        "create_local_browser_future",
+        lambda _registration, call_id: registry.create_local_result(
+            registration, call_id
+        ),
+    )
+    monkeypatch.setattr(transport, "drop_local_browser_future", lambda _call_id: None)
+
+    async def send(_registration: object, frame: dict[str, object]) -> bool:
+        envelope = {
+            "type": "local_browser.result",
+            "version": 1,
+            "call_id": frame["call_id"],
+            "operation": operation,
+            **result,
+        }
+        assert await routes._handle_extension_message(session.session_id, envelope)
+        return True
+
+    monkeypatch.setattr(transport, "send_local_browser_execute", send)
+    entry = transport._ReplayEntry(
+        b"digest",
+        transport._ReplayIdentity(
+            ("user", "session"),
+            BOOT,
+            4,
+            "organization",
+            DEVICE,
+            GENERATION,
+            CONNECTION,
+            1,
+        ),
+        4_000_000_000_000,
+        asyncio.get_running_loop().create_future(),
+        inspect=inspect,
+    )
+    request = {"grant": "opaque", "operation": operation}
+    if operation == "approve":
+        request["command_json"] = '{"operation":"inspect_login"}'
+    assert await transport._dispatch(registration, request, entry) == expected

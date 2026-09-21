@@ -1029,3 +1029,219 @@ async fn the_harness_door_is_refused_in_the_live_world() {
     let refused = rig.custodian.token().await.expect_err("no token in the live world either");
     assert_eq!(refused.state, SessionState::SignedOut);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C5b-1 — a session the daemon did not create through its OWN OAuth flow must survive a restart,
+// and a refusal must never wear the "check your internet" sentence.
+//
+// These four run against a REAL HTTP server (a scripted stand-in for GoTrue's two token
+// endpoints) rather than `FakeAuthServer`, because the defect lived in which endpoint the
+// request went to and what the answer was turned into — neither of which a scripted mock can
+// see. It is still a stand-in and is never cited as product evidence.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GoTrue's verbatim answer when a non-OAuth refresh token is presented to `/auth/v1/oauth/token`.
+const NOT_AN_OAUTH_SESSION: &str = r#"{"code":400,"error_code":"validation_failed","msg":"Client authentication not allowed for non-OAuth session"}"#;
+
+/// A scripted stand-in for the two Supabase token endpoints. Returns its base URL.
+///
+/// `oauth` and `classic` are `(status, body)` for `/auth/v1/oauth/token` and
+/// `/auth/v1/token?grant_type=refresh_token`. Every answer is `application/json`, which is what
+/// the captive-portal guard looks at.
+async fn scripted_gotrue(
+    oauth: (u16, String),
+    classic: (u16, String),
+) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a loopback port");
+    let port = listener.local_addr().expect("addr").port();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let oauth = oauth.clone();
+            let classic = classic.clone();
+            let recorded = Arc::clone(&recorded);
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = vec![0u8; 8192];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let target = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                recorded.lock().expect("seen").push(target.clone());
+                let (status, body) = if target.starts_with("/auth/v1/oauth/token") {
+                    oauth
+                } else {
+                    classic
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+fn token_body(user: &str) -> String {
+    format!(
+        r#"{{"access_token":"{}","refresh_token":"rotated-1","expires_in":3600}}"#,
+        jwt(user, "admin@admin.com")
+    )
+}
+
+#[tokio::test]
+async fn a_session_the_daemon_did_not_create_is_still_renewable_after_a_restart() {
+    use matrx_sync::custody::OAuthProvider;
+
+    // The OAuth endpoint refuses it — this is exactly what a restarted daemon met for every
+    // adopted, harness or pre-cutover session, and it is why "relaunch keeps the session" was
+    // false.
+    let (base, seen) = scripted_gotrue(
+        (400, NOT_AN_OAUTH_SESSION.to_string()),
+        (200, token_body("user-adopted")),
+    )
+    .await;
+    let provider =
+        matrx_sync::custody::SupabaseOAuth::new(&base, DESKTOP_CLIENT_ID, "sb_publishable_test")
+            .expect("provider");
+
+    let renewed = provider
+        .refresh("legacy-refresh-token")
+        .await
+        .expect("a non-OAuth session must still be renewable");
+    assert_eq!(renewed.refresh_token.as_deref(), Some("rotated-1"));
+    assert_eq!(
+        provider.remembered_lane(),
+        Some(matrx_sync::custody::RefreshLane::Classic),
+        "the lane that worked is remembered, so the probe costs one request per daemon start"
+    );
+
+    // And the remembered lane is used first from then on: no second probe.
+    provider.refresh("legacy-refresh-token").await.expect("again");
+    let paths = seen.lock().expect("seen").clone();
+    assert_eq!(
+        paths,
+        vec![
+            "/auth/v1/oauth/token".to_string(),
+            "/auth/v1/token?grant_type=refresh_token".to_string(),
+            "/auth/v1/token?grant_type=refresh_token".to_string(),
+        ],
+        "probe once, then stay in the lane that worked: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_oauth_created_session_still_refreshes_on_the_oauth_endpoint() {
+    use matrx_sync::custody::OAuthProvider;
+
+    let (base, seen) = scripted_gotrue(
+        (200, token_body("user-oauth")),
+        (400, r#"{"error":"invalid_grant"}"#.to_string()),
+    )
+    .await;
+    let provider =
+        matrx_sync::custody::SupabaseOAuth::new(&base, DESKTOP_CLIENT_ID, "sb_publishable_test")
+            .expect("provider");
+    provider.refresh("oauth-refresh-token").await.expect("renewed");
+    assert_eq!(
+        provider.remembered_lane(),
+        Some(matrx_sync::custody::RefreshLane::OAuth)
+    );
+    assert_eq!(
+        seen.lock().expect("seen").clone(),
+        vec!["/auth/v1/oauth/token".to_string()],
+        "the OAuth lane answers first and nothing else is asked"
+    );
+}
+
+#[tokio::test]
+async fn a_server_that_answered_is_never_rendered_as_an_absent_network() {
+    use matrx_sync::custody::OAuthProvider;
+
+    // Both lanes refuse with an unrecognised 4xx: the session really is gone.
+    let (base, _) = scripted_gotrue(
+        (400, NOT_AN_OAUTH_SESSION.to_string()),
+        (400, NOT_AN_OAUTH_SESSION.to_string()),
+    )
+    .await;
+    let provider =
+        matrx_sync::custody::SupabaseOAuth::new(&base, DESKTOP_CLIENT_ID, "sb_publishable_test")
+            .expect("provider");
+    let error = provider
+        .refresh("dead-token")
+        .await
+        .expect_err("both lanes refused");
+
+    assert!(
+        matches!(error, CustodyError::AuthServerRefused { status: 400, .. }),
+        "got {error:?}"
+    );
+    assert_eq!(error.code(), "sign_in_needed");
+    assert!(!error.retryable(), "a refusal is not retried forever");
+    assert!(
+        !error.remedy().to_lowercase().contains("internet"),
+        "the remedy must not blame the network of an online machine: {}",
+        error.remedy()
+    );
+    assert!(
+        error.to_string().contains("refused this device's session"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_rate_limit_or_a_5xx_is_still_retryable() {
+    use matrx_sync::custody::OAuthProvider;
+
+    for status in [429u16, 503] {
+        let (base, _) = scripted_gotrue(
+            (status, r#"{"msg":"slow down"}"#.to_string()),
+            (status, r#"{"msg":"slow down"}"#.to_string()),
+        )
+        .await;
+        let provider = matrx_sync::custody::SupabaseOAuth::new(
+            &base,
+            DESKTOP_CLIENT_ID,
+            "sb_publishable_test",
+        )
+        .expect("provider");
+        let error = provider.refresh("token").await.expect_err("refused");
+        assert!(
+            error.retryable(),
+            "{status} must stay retryable, got {error:?}"
+        );
+        assert_eq!(error.code(), "offline");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_session_lands_in_sign_in_needed_with_the_honest_sentence() {
+    // The daemon's own state machine, end to end: signed in, the next rotation is refused by a
+    // reachable auth server, and the screen must say so rather than "check your internet".
+    let rig = Rig::new();
+    rig.sign_in("user-refused", "admin@admin.com", "refresh-1", 3600).await;
+    rig.auth.push_err(FakeFailure::SessionRefused);
+    rig.clock.advance(Duration::from_secs(3600));
+    let _ = rig.custodian.force_refresh().await;
+
+    let row = rig.row();
+    assert_eq!(row.state, SessionState::SignInNeeded);
+    let reason = row.state_reason.unwrap_or_default();
+    assert!(
+        !reason.to_lowercase().contains("internet"),
+        "an auth-server refusal must not be dressed as an offline machine: {reason}"
+    );
+}

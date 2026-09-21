@@ -32,6 +32,19 @@ pub enum CustodyError {
         /// The server's `error_description`, when it sent one.
         description: Option<String>,
     },
+    /// The authorization server was REACHED and refused this device's session with a 4xx that is
+    /// not one of the named grant refusals — for example GoTrue's
+    /// `Client authentication not allowed for non-OAuth session`.
+    ///
+    /// A server that answered is not an absent network (law 4): this is never rendered as
+    /// "check this computer's internet connection", and it is not retried forever. It is only
+    /// raised after **every** token endpoint this device can use has refused the same token.
+    AuthServerRefused {
+        /// HTTP status observed.
+        status: u16,
+        /// The server's own words, or the closest thing it sent.
+        detail: String,
+    },
     /// The authorization server answered with something that is not a token response — a
     /// captive-portal HTML 200, a proxy 407, a 5xx. Retryable, never treated as a revocation.
     AmbiguousResponse {
@@ -91,7 +104,9 @@ impl CustodyError {
         match self {
             CustodyError::CredentialStore { .. } => "credential_store_unavailable",
             CustodyError::Transport { .. } | CustodyError::AmbiguousResponse { .. } => "offline",
-            CustodyError::GrantRefused { .. } => "sign_in_needed",
+            CustodyError::GrantRefused { .. } | CustodyError::AuthServerRefused { .. } => {
+                "sign_in_needed"
+            }
             CustodyError::UnknownTransaction => "unknown_transaction",
             CustodyError::NotSignedIn => "signed_out",
             CustodyError::LoopbackPortUnavailable { .. } => "loopback_port_unavailable",
@@ -131,7 +146,9 @@ impl CustodyError {
             CustodyError::Transport { .. } | CustodyError::AmbiguousResponse { .. } => {
                 "Check this computer's internet connection; sync retries on its own."
             }
-            CustodyError::GrantRefused { .. } => "Sign in again on this computer.",
+            CustodyError::GrantRefused { .. } | CustodyError::AuthServerRefused { .. } => {
+                "Sign in again on this computer."
+            }
             CustodyError::UnknownTransaction => {
                 "That sign-in link belongs to a different copy of AI Matrx (or has expired) — \
                  start sign-in again from the app you want to sign in to."
@@ -183,6 +200,10 @@ impl fmt::Display for CustodyError {
                 Some(d) => write!(f, "the sign-in was refused ({error}): {d}"),
                 None => write!(f, "the sign-in was refused ({error})"),
             },
+            CustodyError::AuthServerRefused { status, detail } => write!(
+                f,
+                "the sign-in service refused this device's session (HTTP {status}): {detail}"
+            ),
             CustodyError::AmbiguousResponse { status, detail } => write!(
                 f,
                 "the sign-in server answered {status} with something that is not a token: {detail}"

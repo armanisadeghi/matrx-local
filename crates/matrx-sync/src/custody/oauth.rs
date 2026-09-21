@@ -12,6 +12,7 @@ use super::error::{CustodyError, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -92,17 +93,69 @@ pub trait OAuthProvider: Send + Sync + std::fmt::Debug {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse>;
 }
 
+/// Which of Supabase's two token endpoints renewed this device's session.
+///
+/// A Supabase session has an origin: one created by the OAuth 2.1 authorization-code grant is
+/// renewed at `/auth/v1/oauth/token`, and one created any other way — a password sign-in, the
+/// pre-cutover app's own session, the dev harness door — is renewed at
+/// `/auth/v1/token?grant_type=refresh_token`. Presenting a non-OAuth refresh token to the OAuth
+/// endpoint is answered `400 Client authentication not allowed for non-OAuth session`, which is
+/// how every adopted session died at its first refresh (FS-C5b finding C5b-1).
+///
+/// The daemon does not know a session's origin after a restart — the keychain holds a token, not
+/// a provenance — so it probes: the first refresh tries a lane, and the other lane is tried when
+/// the first refuses. The lane that worked is remembered for this process, so the probe costs at
+/// most one extra request per daemon start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshLane {
+    /// `/auth/v1/oauth/token`, `client_id` included — an OAuth-created session.
+    OAuth,
+    /// `/auth/v1/token?grant_type=refresh_token`, `apikey` header, no `client_id`.
+    Classic,
+}
+
+impl RefreshLane {
+    const fn other(self) -> Self {
+        match self {
+            RefreshLane::OAuth => RefreshLane::Classic,
+            RefreshLane::Classic => RefreshLane::OAuth,
+        }
+    }
+
+    const fn as_u8(self) -> u8 {
+        match self {
+            RefreshLane::OAuth => 1,
+            RefreshLane::Classic => 2,
+        }
+    }
+
+    const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(RefreshLane::OAuth),
+            2 => Some(RefreshLane::Classic),
+            _ => None,
+        }
+    }
+}
+
 /// The real Supabase OAuth 2.1 server.
 #[derive(Debug)]
 pub struct SupabaseOAuth {
     token_url: String,
+    classic_token_url: String,
     client_id: String,
+    publishable_key: String,
     http: reqwest::Client,
+    /// The lane that last renewed a token in this process; 0 = not yet known.
+    lane: AtomicU8,
 }
 
 impl SupabaseOAuth {
     /// Build a provider against `supabase_url` for the registered public client `client_id`.
-    pub fn new(supabase_url: &str, client_id: &str) -> Result<Self> {
+    ///
+    /// `publishable_key` is the `apikey` header the non-OAuth token endpoint requires. It is not
+    /// a secret (it is the anon key every client already ships).
+    pub fn new(supabase_url: &str, client_id: &str, publishable_key: &str) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -110,18 +163,60 @@ impl SupabaseOAuth {
                 setting: "http client",
                 detail: e.to_string(),
             })?;
+        let base = supabase_url.trim_end_matches('/');
         Ok(SupabaseOAuth {
-            token_url: format!("{}/auth/v1/oauth/token", supabase_url.trim_end_matches('/')),
+            token_url: format!("{base}/auth/v1/oauth/token"),
+            classic_token_url: format!("{base}/auth/v1/token?grant_type=refresh_token"),
             client_id: client_id.to_string(),
+            publishable_key: publishable_key.to_string(),
             http,
+            lane: AtomicU8::new(0),
         })
     }
 
+    /// The lane remembered for this process, if one has worked yet.
+    pub fn remembered_lane(&self) -> Option<RefreshLane> {
+        RefreshLane::from_u8(self.lane.load(Ordering::Relaxed))
+    }
+
+    fn remember(&self, lane: RefreshLane) {
+        self.lane.store(lane.as_u8(), Ordering::Relaxed);
+    }
+
+    /// One refresh attempt down one lane.
+    async fn refresh_on(&self, lane: RefreshLane, refresh_token: &str) -> Result<TokenResponse> {
+        match lane {
+            RefreshLane::OAuth => {
+                self.post(vec![
+                    ("grant_type", "refresh_token".into()),
+                    ("client_id", self.client_id.clone()),
+                    ("refresh_token", refresh_token.to_string()),
+                ])
+                .await
+            }
+            RefreshLane::Classic => {
+                self.interpret(
+                    self.http
+                        .post(&self.classic_token_url)
+                        .header("apikey", &self.publishable_key)
+                        .header(
+                            reqwest::header::AUTHORIZATION,
+                            format!("Bearer {}", self.publishable_key),
+                        )
+                        .json(&serde_json::json!({ "refresh_token": refresh_token })),
+                )
+                .await
+            }
+        }
+    }
+
     async fn post(&self, form: Vec<(&str, String)>) -> Result<TokenResponse> {
-        let response = self
-            .http
-            .post(&self.token_url)
-            .form(&form)
+        self.interpret(self.http.post(&self.token_url).form(&form))
+            .await
+    }
+
+    async fn interpret(&self, request: reqwest::RequestBuilder) -> Result<TokenResponse> {
+        let response = request
             .send()
             .await
             .map_err(|e| CustodyError::Transport {
@@ -208,8 +303,7 @@ impl SupabaseOAuth {
 
         // 400/401 known grant refusals are terminal: revoked, reused, or the user revoked the
         // grant from the web. Supabase reports rotating-token exhaustion as `error_code`, not
-        // the standard OAuth `error`. Everything else — including unknown 400s, 5xx and 429 —
-        // remains retryable (§5); a bad proxy response must not erase a valid local session.
+        // the standard OAuth `error`.
         let terminal = (status.as_u16() == 400 || status.as_u16() == 401)
             && matches!(
                 code.as_str(),
@@ -221,18 +315,31 @@ impl SupabaseOAuth {
                     | "session_expired"
             );
         if terminal {
-            Err(CustodyError::GrantRefused {
+            return Err(CustodyError::GrantRefused {
                 error: code,
                 description: parsed.error_description.or(parsed.msg),
-            })
-        } else {
-            Err(CustodyError::AmbiguousResponse {
-                status: status.as_u16(),
-                detail: parsed
-                    .error_description
-                    .unwrap_or_else(|| format!("the sign-in service answered {code}")),
-            })
+            });
         }
+
+        let detail = parsed
+            .error_description
+            .or(parsed.msg)
+            .unwrap_or_else(|| format!("the sign-in service answered {code}"));
+
+        // A server that ANSWERED is not an absent network (law 4). An unrecognised 400/401/403
+        // from a reachable auth server is a refusal of this device's session, not "check your
+        // internet" repeated forever — the caller only surfaces it after every lane has refused.
+        // 408, 429 and 5xx stay ambiguous and retryable: they are "try again", not "you are out".
+        if matches!(status.as_u16(), 400 | 401 | 403) {
+            return Err(CustodyError::AuthServerRefused {
+                status: status.as_u16(),
+                detail,
+            });
+        }
+        Err(CustodyError::AmbiguousResponse {
+            status: status.as_u16(),
+            detail,
+        })
     }
 }
 
@@ -255,13 +362,47 @@ impl OAuthProvider for SupabaseOAuth {
     }
 
     async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse> {
-        self.post(vec![
-            ("grant_type", "refresh_token".into()),
-            ("client_id", self.client_id.clone()),
-            ("refresh_token", refresh_token.to_string()),
-        ])
-        .await
+        // Probe, then remember. A session's origin is not recorded anywhere that survives a
+        // restart, so the daemon asks the server rather than assuming — and never lets one
+        // endpoint's "that is not my kind of session" end a renewable session (C5b-1).
+        let first = self.remembered_lane().unwrap_or(RefreshLane::OAuth);
+        let first_error = match self.refresh_on(first, refresh_token).await {
+            Ok(response) => {
+                self.remember(first);
+                return Ok(response);
+            }
+            // The network is down. Trying the other lane can only produce the same failure with a
+            // different URL in it, and a retryable state is already the honest answer.
+            Err(e @ CustodyError::Transport { .. }) => return Err(e),
+            Err(e) => e,
+        };
+
+        let second = first.other();
+        match self.refresh_on(second, refresh_token).await {
+            Ok(response) => {
+                self.remember(second);
+                Ok(response)
+            }
+            Err(second_error) => Err(both_lanes_refused(first_error, second_error)),
+        }
     }
+}
+
+/// Both token endpoints refused the same token: pick the answer that tells the user the most.
+///
+/// A named grant refusal is the most informative thing either lane can say; after that, a
+/// reachable server's refusal beats a transport failure on the second URL.
+fn both_lanes_refused(first: CustodyError, second: CustodyError) -> CustodyError {
+    if matches!(second, CustodyError::GrantRefused { .. }) {
+        return second;
+    }
+    if matches!(first, CustodyError::GrantRefused { .. }) {
+        return first;
+    }
+    if matches!(second, CustodyError::Transport { .. }) {
+        return first;
+    }
+    second
 }
 
 /// `FakeAuthServer` (§13): a scripted stand-in for `/auth/v1/oauth/{authorize,token}`.
@@ -290,6 +431,9 @@ pub enum FakeFailure {
     CaptivePortal,
     /// The network was unreachable.
     Offline,
+    /// A reachable auth server refused this device's session with an unrecognised 4xx — GoTrue's
+    /// `Client authentication not allowed for non-OAuth session` is the observed one (C5b-1).
+    SessionRefused,
 }
 
 impl FakeFailure {
@@ -310,6 +454,10 @@ impl FakeFailure {
             FakeFailure::CaptivePortal => CustodyError::AmbiguousResponse {
                 status: 200,
                 detail: "the response content type was text/html, not JSON".into(),
+            },
+            FakeFailure::SessionRefused => CustodyError::AuthServerRefused {
+                status: 400,
+                detail: "Client authentication not allowed for non-OAuth session".into(),
             },
             FakeFailure::Offline => CustodyError::Transport {
                 endpoint: "the AI Matrx sign-in service",
@@ -457,11 +605,8 @@ mod tests {
                 .expect("write response");
         });
 
-        let provider = SupabaseOAuth {
-            token_url: format!("http://{address}/auth/v1/oauth/token"),
-            client_id: "test-client".into(),
-            http: reqwest::Client::new(),
-        };
+        let provider = SupabaseOAuth::new(&format!("http://{address}"), "test-client", "anon-key")
+            .expect("provider");
         let error = provider.refresh("exhausted-token").await.expect_err("terminal refusal");
         assert!(matches!(
             error,

@@ -40,7 +40,9 @@ pub use cloud::{CloudStateWriter, CloudWriteOutcome, FakeCloudStateWriter, Postg
 pub use error::{CustodyError, Result};
 pub use loopback::{parse_deep_link, LoopbackCallback, LoopbackListener};
 pub use notify::{Notifier, OsNotifier, RecordingNotifier};
-pub use oauth::{FakeAuthServer, FakeFailure, OAuthProvider, SupabaseOAuth, TokenResponse};
+pub use oauth::{
+    FakeAuthServer, FakeFailure, OAuthProvider, RefreshLane, SupabaseOAuth, TokenResponse,
+};
 pub use pkce::{RedirectKind, Transaction};
 pub use session::{SessionRow, SessionState, SessionStore};
 pub use store::{CredentialStore, FakeKeychain, KeyringStore, StoredCredential};
@@ -377,7 +379,11 @@ impl Custodian {
         journal: Arc<StdMutex<Journal>>,
     ) -> Result<Self> {
         config.validate()?;
-        let oauth = Arc::new(SupabaseOAuth::new(&config.supabase_url, &config.client_id)?);
+        let oauth = Arc::new(SupabaseOAuth::new(
+            &config.supabase_url,
+            &config.client_id,
+            &config.publishable_key,
+        )?);
         let store = Arc::new(KeyringStore::new(config.world));
         let cloud = Arc::new(PostgrestCloudStateWriter::new(
             &config.supabase_url,
@@ -1604,7 +1610,11 @@ fn backoff_for(failures: i64) -> Duration {
 fn state_for(error: &CustodyError) -> SessionState {
     match error {
         CustodyError::CredentialStore { .. } => SessionState::CredentialStoreUnavailable,
-        CustodyError::GrantRefused { .. } => SessionState::SignInNeeded,
+        // A reachable auth server that refused this device's session is a sign-in, never an
+        // "offline — check your internet" that retries forever (law 4, C5b-1).
+        CustodyError::GrantRefused { .. } | CustodyError::AuthServerRefused { .. } => {
+            SessionState::SignInNeeded
+        }
         CustodyError::NotSignedIn => SessionState::SignedOut,
         _ => SessionState::Offline,
     }
@@ -1684,5 +1694,16 @@ mod tests {
             SessionState::CredentialStoreUnavailable
         );
         assert_eq!(state_for(&CustodyError::NotSignedIn), SessionState::SignedOut);
+        // The class C5b-1 named: an auth server that ANSWERED must never be rendered as an
+        // absent network.
+        let refused = CustodyError::AuthServerRefused {
+            status: 400,
+            detail: "Client authentication not allowed for non-OAuth session".into(),
+        };
+        assert_eq!(state_for(&refused), SessionState::SignInNeeded);
+        assert!(!refused.retryable());
+        assert_eq!(refused.code(), "sign_in_needed");
+        assert!(!refused.remedy().contains("internet"));
+        assert!(refused.to_string().contains("refused this device's session"));
     }
 }

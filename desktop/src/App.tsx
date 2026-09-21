@@ -1,4 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { HashRouter, Navigate, Routes, Route } from "react-router-dom";
 import { ConfirmDialogHost, TooltipProvider } from "@ai-matrx/design-system";
 import { formatDurationSeconds } from "@ai-matrx/kit/format";
@@ -105,6 +112,10 @@ import {
   getActiveOrganizationId,
 } from "@/lib/org/active-org";
 import { isWindowLeader } from "@/lib/window-role";
+import {
+  engineSupervisor,
+  resolveEngineLifecyclePresentation,
+} from "@/lib/engine-supervisor";
 import {
   ActionNeededNavigationBridge,
   ActionNeededSources,
@@ -489,18 +500,25 @@ function AppInner() {
 
   // Engine Monitor
   const [monitorOpen, setMonitorOpen] = useState(false);
-  const prevStatusRef = useRef(status);
+  const supervisor = useSyncExternalStore(
+    engineSupervisor.subscribe,
+    engineSupervisor.getSnapshot,
+    engineSupervisor.getSnapshot,
+  );
+  const lifecycle = resolveEngineLifecyclePresentation(status, supervisor);
+  const prevLifecycleKindRef = useRef<"ready" | "loading" | "terminal">("ready");
 
   useEffect(() => {
     if (
       auth.isAuthenticated &&
-      status === "error" &&
-      prevStatusRef.current !== "error"
+      lifecycle.kind === "terminal" &&
+      prevLifecycleKindRef.current !== "terminal" &&
+      (status === "error" || supervisor.phase === "failed")
     ) {
       setMonitorOpen(true);
     }
-    prevStatusRef.current = status;
-  }, [status, auth.isAuthenticated]);
+    prevLifecycleKindRef.current = lifecycle.kind;
+  }, [auth.isAuthenticated, lifecycle.kind, status, supervisor.phase]);
 
   const handleOpenMonitor = useCallback(() => setMonitorOpen(true), []);
 
@@ -624,12 +642,11 @@ function AppInner() {
     );
   }
 
-  const isEngineStarting =
-    auth.isAuthenticated &&
-    (status === "discovering" || status === "starting") &&
-    !isCallbackRoute;
-
-  if ((auth.loading && !isCallbackRoute) || isEngineStarting) {
+  // Authentication still owns a blocking gate because the shell cannot know
+  // which user's workspace to render. Engine startup does not: authenticated
+  // users enter the shell immediately and the lifecycle banner communicates
+  // local loading/recovery while cloud and already-loaded work stays usable.
+  if (auth.loading && !isCallbackRoute) {
     return <StartupScreen authLoading={auth.loading} engineStatus={status} />;
   }
 

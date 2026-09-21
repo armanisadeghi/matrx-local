@@ -70,7 +70,7 @@ export function ScrapeSyncBanner() {
     try {
       setStatus(await engine.getScrapeSyncStatus());
     } catch {
-      // The engine being down is already surfaced by EngineDownBanner —
+      // The engine being down is already surfaced by EngineLifecycleBanner —
       // don't stack a second complaint about the same thing.
       setStatus(null);
     }

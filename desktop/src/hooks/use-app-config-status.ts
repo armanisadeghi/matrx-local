@@ -35,7 +35,7 @@ export function useAppConfigStatus(engineStatus: EngineStatus): AppConfigStatus 
       }
     } catch {
       // Engine unreachable or older engine without app_config — keep the
-      // last-known status; the EngineDownBanner owns the outage story.
+      // last-known status; the EngineLifecycleBanner owns the outage story.
     }
   }, []);
 

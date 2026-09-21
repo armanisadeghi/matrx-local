@@ -42,7 +42,7 @@ describe("ScrapeSyncStrip", () => {
     ).toBe("");
   });
 
-  it("stays silent when the engine is unreachable — EngineDownBanner owns that", () => {
+  it("stays silent when the engine is unreachable — EngineLifecycleBanner owns that", () => {
     expect(render(null)).toBe("");
   });
 

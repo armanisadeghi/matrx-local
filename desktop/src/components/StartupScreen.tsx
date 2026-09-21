@@ -1,7 +1,7 @@
 /**
- * StartupScreen — Full-screen branded loading screen shown during:
- *   1. auth.loading (checking session from local storage)
- *   2. engineStatus "discovering" | "starting" (engine starting up)
+ * StartupScreen — Full-screen branded loading screen shown only while the
+ * authenticated workspace identity is unknown. Engine startup no longer
+ * blocks the shell; EngineLifecycleBanner owns that progress state.
  *
  * Layout:
  *   LEFT  — Phase checklist driven by [phase:X] prefixed stdout lines.

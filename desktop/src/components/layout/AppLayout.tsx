@@ -4,8 +4,7 @@ import { AppSidebar } from "./AppSidebar";
 import { StatusBar } from "./StatusBar";
 import { QuickActionBar } from "./QuickActionBar";
 import { AppActionBanner } from "./AppActionBanner";
-import { EngineDownBanner } from "@/components/EngineDownBanner";
-import { EngineSupervisorBanner } from "@/components/recovery/EngineSupervisorBanner";
+import { EngineLifecycleBanner } from "@/components/EngineLifecycleBanner";
 import { AccountConnectionBanner } from "@/components/AccountConnectionBanner";
 import { AppConfigBanner } from "@/components/AppConfigBanner";
 import { useAppConfigStatus } from "@/hooks/use-app-config-status";
@@ -148,12 +147,11 @@ export function AppLayout({
           onDismissNotification={onDismissNotification}
           onClearAllNotifications={onClearAllNotifications}
         />
-        <EngineDownBanner
+        <EngineLifecycleBanner
           engineStatus={engineStatus}
           onRestartEngine={onRestartEngine}
           onOpenMonitor={onOpenMonitor ?? NOOP}
         />
-        <EngineSupervisorBanner onOpenMonitor={onOpenMonitor ?? NOOP} />
         <AppConfigBanner
           appConfig={appConfig}
           updateState={updateState}

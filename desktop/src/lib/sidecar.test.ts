@@ -53,7 +53,7 @@ describe("owned engine startup wait", () => {
     });
   });
 
-  it("fails immediately when the owned child exits", async () => {
+  it("fails immediately only after native recovery is terminal", async () => {
     let probes = 0;
     const result = await waitForOwnedEngineProbe(
       async () => {
@@ -66,6 +66,35 @@ describe("owned engine startup wait", () => {
 
     expect(result).toEqual({ outcome: "exited", url: null });
     expect(probes).toBe(1);
+  });
+
+  it("waits across the empty child slot between automatic restart generations", async () => {
+    const outcomes = [
+      { outcome: "recovering" as const, url: null },
+      { outcome: "running" as const, url: null },
+      { outcome: "ready" as const, url: "http://127.0.0.1:22140" },
+    ];
+
+    await expect(
+      waitForOwnedEngineProbe(async () => outcomes.shift()!, 5, 0),
+    ).resolves.toEqual({ outcome: "ready", url: "http://127.0.0.1:22140" });
+  });
+
+  it("does not treat a transient no-child observation as terminal", async () => {
+    let probes = 0;
+    const result = await waitForOwnedEngineProbe(
+      async () => {
+        probes += 1;
+        return probes === 1
+          ? { outcome: "recovering" as const, url: null }
+          : { outcome: "exited" as const, url: null };
+      },
+      3,
+      0,
+    );
+
+    expect(result).toEqual({ outcome: "exited", url: null });
+    expect(probes).toBe(2);
   });
 
   it("reports a timeout only after every live-process probe", async () => {

@@ -17,6 +17,7 @@
 
 import { invokeTauri, isTauri } from "@/lib/sidecar";
 import { enqueueDurableClientError } from "@/lib/error-outbox";
+import type { EngineStatus } from "@/hooks/use-engine";
 
 /** `ok` — nothing wrong. `restarting` — an automatic attempt is in flight.
  *  `failed` — the bound is spent and the user has to act. */
@@ -45,6 +46,51 @@ export const ENGINE_SUPERVISOR_OK: EngineSupervisorStatus = {
   exitSignal: null,
   updatedAtMs: 0,
 };
+
+export type EngineLifecyclePresentation =
+  | { kind: "ready" }
+  | { kind: "loading"; detail: string }
+  | { kind: "terminal"; detail: string; supervisorFailed: boolean };
+
+/**
+ * Compose process ownership and renderer reachability into the one lifecycle
+ * truth shown by the shell. Rust recovery wins over a transient React error;
+ * a confirmed healthy connection wins over the supervisor's deliberately
+ * conservative 60-second stability window.
+ */
+export function resolveEngineLifecyclePresentation(
+  engineStatus: EngineStatus,
+  supervisor: EngineSupervisorStatus,
+): EngineLifecyclePresentation {
+  if (engineStatus === "connected") return { kind: "ready" };
+  if (supervisor.phase === "restarting") {
+    const attempt = supervisor.attempt > 0
+      ? ` Automatic recovery ${supervisor.attempt} of ${supervisor.maxAttempts} is in progress.`
+      : " Automatic recovery is in progress.";
+    return {
+      kind: "loading",
+      detail: `The local engine is restarting.${attempt}`,
+    };
+  }
+  if (engineStatus === "discovering" || engineStatus === "starting") {
+    return {
+      kind: "loading",
+      detail: "Local services are starting. You can keep using anything that is already available.",
+    };
+  }
+  if (supervisor.phase === "failed") {
+    return {
+      kind: "terminal",
+      detail: engineSupervisorHeadline(supervisor),
+      supervisorFailed: true,
+    };
+  }
+  return {
+    kind: "terminal",
+    detail: "Models, media, files and tools cannot load until the local engine is back.",
+    supervisorFailed: false,
+  };
+}
 
 /**
  * The one sentence the user reads. Never "something went wrong": it carries
@@ -121,7 +167,7 @@ export class EngineSupervisorFeed {
       this.push(await invokeTauri<EngineSupervisorStatus>("engine_supervisor_status"));
     } catch {
       // A desktop build without the command is simply silent here — the
-      // EngineDownBanner still covers a down engine.
+      // unified lifecycle banner still covers a down engine.
     }
     try {
       const { listen } = await import("@tauri-apps/api/event");

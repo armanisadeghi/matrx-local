@@ -1,8 +1,9 @@
 /**
  * Persistent but non-disruptive update notification banner.
  *
- * Appears when an update is available or ready to restart. Background downloads
- * do not show a progress bar here until the user taps Install / View progress.
+ * Appears when an update is available or an older install is already waiting
+ * for restart. New updates never mutate the bundle in the background: Install
+ * downloads, stops the frozen engine, applies the update, and relaunches.
  *
  * Two different things are on screen here, and only one of them is a
  * notification. "Update available" / "Downloading" are notifications: the user
@@ -151,7 +152,7 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
           )}
           {showAsAvailable && !isDownloadingUi && !isInstalled && (
             <p className="text-xs text-muted-foreground mt-1">
-              Download runs in the background — choose Install when you&apos;re ready.
+              Choose Install when you&apos;re ready. AI Matrx will download the update and restart safely.
             </p>
           )}
         </div>
@@ -244,4 +245,3 @@ export function UpdateBanner({ state, actions }: UpdateBannerProps) {
     </div>
   );
 }
-

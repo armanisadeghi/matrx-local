@@ -62,7 +62,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
       : "A newer build is installed on disk. AI Matrx keeps running the previous build until it restarts."
     : isDownloadingUi
       ? "Downloading the update…"
-      : "A new version of AI Matrx is available. If you already checked for updates, the download may be running in the background — tap Install to see progress or finish setup.";
+      : "A new version of AI Matrx is available. Install downloads it, safely stops the local engine, and restarts AI Matrx on the new build.";
 
   return (
     <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open && !restarting) actions.dismiss(); }}>
@@ -159,7 +159,7 @@ export function UpdateDialog({ state, actions }: UpdateDialogProps) {
                 ) : (
                   <Download className="h-4 w-4" />
                 )}
-                Download & Install
+                Install & Restart
               </Button>
             </>
           )}

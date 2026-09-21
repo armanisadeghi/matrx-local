@@ -6,6 +6,7 @@
  */
 
 import { ENGINE_PORT_BASE, enginePortList } from "@/lib/engine-ports";
+import type { EngineSupervisorStatus } from "@/lib/engine-supervisor";
 
 type TauriInvoke = <T>(
   cmd: string,
@@ -217,12 +218,18 @@ export async function reloadRenderer(): Promise<void> {
   await invokeTauri<void>("reload_renderer");
 }
 
-/** Get sidecar process status from Rust (Tauri only). */
-export async function getSidecarStatus(): Promise<{ running: boolean; port: number } | null> {
+export interface SidecarStatus {
+  running: boolean;
+  port: number;
+  supervisor: EngineSupervisorStatus;
+}
+
+/** Get the native owner's process and recovery status (Tauri only). */
+export async function getSidecarStatus(): Promise<SidecarStatus | null> {
   const inv = await loadTauriInvoke();
   if (!inv) return null;
   try {
-    return (await inv("sidecar_status")) as { running: boolean; port: number };
+    return (await inv("sidecar_status")) as SidecarStatus;
   } catch {
     return null;
   }
@@ -248,10 +255,7 @@ export async function getOwnedEngineUrl(): Promise<string | null> {
   const inv = await loadTauriInvoke();
   if (!inv) return null; // dev / browser — no Rust-owned sidecar
   try {
-    const status = (await inv("sidecar_status")) as {
-      running: boolean;
-      port: number;
-    } | null;
+    const status = (await inv("sidecar_status")) as SidecarStatus | null;
     if (!status?.running) return null;
     const port = status.port ?? ENGINE_PORT_BASE;
     const healthy = (await inv("check_engine_health", { port })) as boolean;
@@ -270,7 +274,7 @@ export type OwnedEngineStartupResult =
 
 type OwnedEngineStartupProbe = () => Promise<
   | { outcome: "ready"; url: string }
-  | { outcome: "running" | "exited"; url: null }
+  | { outcome: "running" | "recovering" | "exited"; url: null }
 >;
 
 /**
@@ -311,11 +315,13 @@ export async function waitForOwnedEngine(
 
   return waitForOwnedEngineProbe(async () => {
     try {
-      const status = (await inv("sidecar_status")) as {
-        running: boolean;
-        port: number;
-      };
-      if (!status.running) return { outcome: "exited" as const, url: null };
+      const status = (await inv("sidecar_status")) as SidecarStatus;
+      if (!status.running) {
+        return {
+          outcome: status.supervisor.phase === "failed" ? "exited" as const : "recovering" as const,
+          url: null,
+        };
+      }
 
       const healthy = (await inv("check_engine_health", {
         port: status.port,

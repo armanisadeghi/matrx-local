@@ -14,7 +14,7 @@
  *    level|title|body persisted in localStorage), styled by level, with an
  *    optional "Learn more" link.
  *
- * Rendered by AppLayout next to EngineDownBanner / AppActionBanner.
+ * Rendered by AppLayout next to EngineLifecycleBanner / AppActionBanner.
  */
 
 import { useState } from "react";

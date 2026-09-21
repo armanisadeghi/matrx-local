@@ -3,22 +3,16 @@
  *
  * Flow:
  *   1. After startup delay, silently check for updates (no dialog).
- *   2. If an update is available, begin downloading in the background immediately.
- *      Progress is tracked internally but NOT shown until the user opens the
- *      install flow (dialog / banner install / About "Install Update").
- *   3. When a background download completes, status becomes "installed" —
- *      the banner can offer "Restart" without the user ever seeing a progress bar.
- *   4. The last fully downloaded version is stored in localStorage so we skip
- *      re-downloading the same build after navigating away or restarting the app
- *      (until a newer version appears or the app version catches up).
+ *   2. If an update is available, show it without mutating the running bundle.
+ *   3. Install is explicit. Native Rust downloads first, stops the frozen
+ *      engine, installs, and relaunches as one transaction; a PyInstaller
+ *      process must never import from an executable being replaced in place.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { isTauri, checkForUpdates, restartApp, type UpdateStatus } from "@/lib/sidecar";
 import { loadSettings } from "@/lib/settings";
 import { useWindowLeader } from "@/hooks/use-window-leader";
-
-import { APP_VERSION } from "@/lib/app-version";
 
 export interface AutoUpdateState {
   /** Current status of the update system */
@@ -44,9 +38,7 @@ export interface AutoUpdateActions {
    * update is found (without showing download progress until Install is used).
    */
   check: (opts?: { showResult?: boolean }) => Promise<void>;
-  /**
-   * Open the install/restart dialog, surfacing download progress if a download is active.
-   */
+  /** Download, safely install, and relaunch the complete app. */
   install: () => Promise<void>;
   /** Restart the app after update is installed */
   restart: () => Promise<void>;
@@ -57,33 +49,7 @@ export interface AutoUpdateActions {
 }
 
 const DISMISSED_VERSION_KEY = "matrx-update-dismissed-version";
-/** Persisted when a background download completes — skip redundant downloads for this version. */
-const PREPARED_UPDATE_VERSION_KEY = "matrx-update-prepared-version";
 const STARTUP_DELAY_MS = 15_000;
-
-function getPreparedUpdateVersion(): string | null {
-  try {
-    return localStorage.getItem(PREPARED_UPDATE_VERSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setPreparedUpdateVersion(v: string): void {
-  try {
-    localStorage.setItem(PREPARED_UPDATE_VERSION_KEY, v);
-  } catch {
-    /* ignore */
-  }
-}
-
-function clearPreparedUpdateVersion(): void {
-  try {
-    localStorage.removeItem(PREPARED_UPDATE_VERSION_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -95,20 +61,6 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const [restarting, setRestarting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
-  const preDownloadInProgressRef = useRef(false);
-
-  // Drop stale "prepared" record if we're already running that version
-  useEffect(() => {
-    if (!isTauri()) return;
-    try {
-      const p = localStorage.getItem(PREPARED_UPDATE_VERSION_KEY);
-      if (p && p === APP_VERSION) {
-        localStorage.removeItem(PREPARED_UPDATE_VERSION_KEY);
-      }
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   // Listen for real-time download progress events from Rust
   useEffect(() => {
@@ -132,11 +84,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
             setProgress(pct);
           } else if (payload.status === "installed") {
             setProgress(100);
-            if (payload.version) {
-              setPreparedUpdateVersion(payload.version);
-            }
             setShowDownloadProgress(false);
-            preDownloadInProgressRef.current = false;
           }
         });
         if (!cancelled) {
@@ -156,29 +104,6 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
     };
   }, []);
 
-  const startSilentPreDownload = useCallback(async (forVersion: string) => {
-    if (!isTauri() || preDownloadInProgressRef.current) return;
-    if (getPreparedUpdateVersion() === forVersion) return;
-
-    preDownloadInProgressRef.current = true;
-    setProgress(0);
-    try {
-      const result = await checkForUpdates(true);
-      setStatus(result);
-      if (result.status === "installed") {
-        setProgress(100);
-        if (result.version) {
-          setPreparedUpdateVersion(result.version);
-        }
-      }
-    } catch (err) {
-      console.error("[auto-update] Background pre-download failed:", err);
-      clearPreparedUpdateVersion();
-    } finally {
-      preDownloadInProgressRef.current = false;
-    }
-  }, []);
-
   const check = useCallback(
     async (opts?: { showResult?: boolean }) => {
       if (!isTauri() || busy) return;
@@ -188,23 +113,12 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
         const result = await checkForUpdates(false);
 
         if (result.status === "up_to_date") {
-          clearPreparedUpdateVersion();
           setStatus(result);
         } else if (result.status === "available" && result.version) {
-          if (getPreparedUpdateVersion() === result.version) {
-            setStatus({
-              status: "installed",
-              version: result.version,
-              ...(result.body !== undefined ? { body: result.body } : {}),
-            });
-            setProgress(100);
-          } else {
-            setStatus(result);
-            if (opts?.showResult) {
-              setDialogOpen(true);
-              setDismissed(false);
-            }
-            void startSilentPreDownload(result.version);
+          setStatus(result);
+          if (opts?.showResult) {
+            setDialogOpen(true);
+            setDismissed(false);
           }
         } else {
           setStatus(result);
@@ -215,11 +129,11 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
         setBusy(false);
       }
     },
-    [busy, startSilentPreDownload],
+    [busy],
   );
 
   const install = useCallback(async () => {
-    if (!isTauri()) return;
+    if (!isTauri() || busy) return;
 
     if (status?.status === "installed") {
       setShowDownloadProgress(false);
@@ -227,7 +141,7 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
       return;
     }
 
-    if (preDownloadInProgressRef.current || status?.status === "downloading") {
+    if (status?.status === "downloading") {
       setShowDownloadProgress(true);
       setDialogOpen(true);
       return;
@@ -235,25 +149,22 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
 
     setDialogOpen(true);
     setShowDownloadProgress(true);
-    preDownloadInProgressRef.current = true;
     setProgress(0);
+    setBusy(true);
     try {
       const result = await checkForUpdates(true);
       setStatus(result);
       if (result.status === "installed") {
         setProgress(100);
-        if (result.version) {
-          setPreparedUpdateVersion(result.version);
-        }
         setShowDownloadProgress(false);
       }
     } catch (err) {
       console.error("[auto-update] Install failed:", err);
-      clearPreparedUpdateVersion();
+      setShowDownloadProgress(false);
     } finally {
-      preDownloadInProgressRef.current = false;
+      setBusy(false);
     }
-  }, [status?.status]);
+  }, [busy, status?.status]);
 
   const restart = useCallback(async () => {
     setRestarting(true);
@@ -276,14 +187,14 @@ export function useAutoUpdate(): [AutoUpdateState, AutoUpdateActions] {
   const openDialog = useCallback(() => {
     setDialogOpen(true);
     setDismissed(false);
-    if (status?.status === "downloading" || preDownloadInProgressRef.current) {
+    if (status?.status === "downloading") {
       setShowDownloadProgress(true);
     }
   }, [status?.status]);
 
   // Startup check + periodic polling — LEADER window only. Two windows
-  // silently pre-downloading the same update is a corruption risk; manual
-  // checks (user-clicked) remain available from any window. Gating on
+  // issuing the same update check is needless traffic; manual checks
+  // (user-clicked) remain available from any window. Gating on
   // isLeader also handles promotion: the effect re-runs and starts polling
   // when a surviving window inherits leadership.
   const isLeader = useWindowLeader();

@@ -13,7 +13,7 @@
  *   3. Logs   — live sidecar stdout/stderr
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +50,7 @@ import {
 import { getPlatformSnapshot } from "@/lib/platformCtx";
 import { ENGINE_PORT_RANGE_LABEL, enginePortList } from "@/lib/engine-ports";
 import type { EngineStatus } from "@/hooks/use-engine";
+import { engineSupervisor } from "@/lib/engine-supervisor";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -90,6 +91,15 @@ export function EngineMonitor({
   onRestartEngine,
   onRefresh,
 }: EngineMonitorProps) {
+  const supervisor = useSyncExternalStore(
+    engineSupervisor.subscribe,
+    engineSupervisor.getSnapshot,
+    engineSupervisor.getSnapshot,
+  );
+  const isRecovering =
+    engineStatus === "discovering" ||
+    engineStatus === "starting" ||
+    supervisor.phase === "restarting";
   const [activeTab, setActiveTab] = useState<MonitorTab>("status");
   const [steps, setSteps] = useState<DiagnosticStep[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
@@ -189,13 +199,20 @@ export function EngineMonitor({
 
     // Step 2
     updateStep(1, { status: "running" });
+    let nativeRecoveryInProgress = false;
     if (inTauri) {
       const info = await getSidecarStatus();
       if (info) {
+        nativeRecoveryInProgress =
+          info.supervisor.phase === "restarting" ||
+          engineStatus === "discovering" ||
+          engineStatus === "starting";
         updateStep(1, {
-          status: info.running ? "pass" : "fail",
+          status: info.running ? "pass" : nativeRecoveryInProgress ? "running" : "fail",
           detail: info.running
             ? `Running (port config: ${info.port})`
+            : nativeRecoveryInProgress
+              ? "Automatic startup recovery is in progress"
             : "Not running",
         });
       } else {
@@ -210,6 +227,13 @@ export function EngineMonitor({
       }
     } else {
       updateStep(1, { status: "skip", detail: "Not in Tauri" });
+    }
+
+    if (nativeRecoveryInProgress) {
+      updateStep(2, { status: "running", detail: "Waiting for the engine to bind a port" });
+      updateStep(3, { status: "pending", detail: "Health will be checked when the engine is reachable" });
+      addLog("Engine startup recovery is in progress; diagnostics are waiting for the next generation.");
+      return;
     }
 
     // Step 3
@@ -515,14 +539,16 @@ export function EngineMonitor({
             <div className="flex items-center gap-2 pr-8">
               <Badge
                 variant={
-                  engineStatus === "connected"
+                  isRecovering
+                    ? "secondary"
+                    : engineStatus === "connected"
                     ? "success"
                     : engineStatus === "error"
                       ? "destructive"
                       : "secondary"
                 }
               >
-                {engineStatus}
+                {isRecovering ? "syncing" : engineStatus}
               </Badge>
             </div>
           </div>
@@ -532,7 +558,7 @@ export function EngineMonitor({
         </DialogHeader>
 
         {/* Error banner */}
-        {engineError && (
+        {engineError && !isRecovering && (
           <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-400">
             <AlertTriangle className="mr-1.5 inline h-4 w-4" />
             {engineError}
@@ -596,8 +622,8 @@ export function EngineMonitor({
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="space-y-2">
+            {/* Action Buttons are terminal controls, never startup controls. */}
+            {!isRecovering ? <div className="space-y-2">
               <h3 className="text-sm font-medium">Actions</h3>
               <div className="grid grid-cols-2 gap-2">
                 {isInTauri && (
@@ -640,7 +666,12 @@ export function EngineMonitor({
                   <code className="text-xs">uv run python run.py</code>
                 </p>
               )}
-            </div>
+            </div> : (
+              <div role="status" className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                Loading and syncing your data. Recovery controls will appear only if startup cannot recover automatically.
+              </div>
+            )}
 
             {/* Copy buttons */}
             <div className="flex gap-2">

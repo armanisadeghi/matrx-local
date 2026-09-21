@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@ai-matrx/design-system";
 import { LifeBuoy, RefreshCw } from "lucide-react";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { TerminalToggleButton } from "@/components/DevTerminalPanel";
 import { AppVersion } from "@/lib/app-version";
+import {
+  engineSupervisor,
+  resolveEngineLifecyclePresentation,
+} from "@/lib/engine-supervisor";
 
 interface StatusBarProps {
   engineStatus: EngineStatus;
@@ -36,6 +40,12 @@ const statusText: Record<EngineStatus, string> = {
 
 export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, onOpenMonitor, onOpenRecovery }: StatusBarProps) {
   const [spinning, setSpinning] = useState(false);
+  const supervisor = useSyncExternalStore(
+    engineSupervisor.subscribe,
+    engineSupervisor.getSnapshot,
+    engineSupervisor.getSnapshot,
+  );
+  const lifecycle = resolveEngineLifecyclePresentation(engineStatus, supervisor);
 
   const handleRefresh = async () => {
     if (!onRefresh || spinning) return;
@@ -44,7 +54,9 @@ export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, o
     setTimeout(() => setSpinning(false), 1500);
   };
 
-  const notConnected = engineStatus !== "connected";
+  const loading = lifecycle.kind === "loading";
+  const terminal = lifecycle.kind === "terminal";
+  const renderedStatus = loading ? "starting" : engineStatus;
 
   return (
     <footer className="no-select glass flex h-8 items-center justify-between border-t px-4">
@@ -57,15 +69,15 @@ export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, o
         <div
           className={cn(
             "h-1.5 w-1.5 rounded-full",
-            engineStatus === "connected" && "bg-emerald-500",
-            engineStatus === "disconnected" && "bg-zinc-500",
-            engineStatus === "error" && "bg-red-500",
-            (engineStatus === "discovering" || engineStatus === "starting") &&
+            renderedStatus === "connected" && "bg-emerald-500",
+            renderedStatus === "disconnected" && "bg-zinc-500",
+            renderedStatus === "error" && "bg-red-500",
+            (renderedStatus === "discovering" || renderedStatus === "starting") &&
               "bg-amber-500 animate-pulse-subtle"
           )}
         />
-        <Badge variant={statusVariants[engineStatus]} className="h-5 text-[10px] px-1.5">
-          {statusText[engineStatus]}
+        <Badge variant={statusVariants[renderedStatus]} className="h-5 text-[10px] px-1.5">
+          {loading ? "Syncing…" : statusText[renderedStatus]}
         </Badge>
         {engineUrl && (
           <span className="text-[10px] text-muted-foreground font-mono">
@@ -84,7 +96,7 @@ export function StatusBar({ engineStatus, engineUrl, engineVersion, onRefresh, o
             Engine v{engineVersion}
           </span>
         )}
-        {notConnected && onRefresh && (
+        {terminal && onRefresh && (
           <button
             onClick={handleRefresh}
             title="Reconnect engine"

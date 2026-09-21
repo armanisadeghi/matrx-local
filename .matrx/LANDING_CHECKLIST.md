@@ -60,7 +60,7 @@ production regression, not a hypothetical.
     `supervise_engine_exit`), and the user must SEE it with the engine's own
     cause — never a silent dead engine, never a spinner, never a bare
     "something went wrong". Guards: `engine_supervisor_tests` (Rust) +
-    `desktop/src/components/recovery/EngineSupervisorBanner.test.tsx`.
+    `desktop/src/components/EngineLifecycleBanner.test.tsx`.
 12. **Anything that decides whether a browser/model/binary is "installed"?** →
     presence means the exact build THIS process resolves, not "a directory
     exists": a complete install of the wrong revision is unlaunchable, and

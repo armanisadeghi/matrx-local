@@ -597,6 +597,70 @@ struct SidecarLogs {
 /// Controls whether window close hides to tray or quits the app.
 struct CloseToTray(AtomicBool);
 
+/// Serializes the one operation allowed to replace the running app bundle.
+/// Every window shares this native state, so renderer-local button guards
+/// cannot accidentally start competing installers.
+#[derive(Default)]
+struct UpdateInstallState {
+    installing: AtomicBool,
+}
+
+struct UpdateInstallGuard<'a> {
+    state: &'a UpdateInstallState,
+    reset_on_drop: bool,
+}
+
+impl UpdateInstallState {
+    fn try_begin(&self) -> Result<UpdateInstallGuard<'_>, String> {
+        self.installing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "An update installation is already in progress.".to_string())?;
+        Ok(UpdateInstallGuard {
+            state: self,
+            reset_on_drop: true,
+        })
+    }
+}
+
+impl UpdateInstallGuard<'_> {
+    /// The process is committed to relaunching, so keep the gate closed until
+    /// this process exits instead of allowing another window into the updater.
+    fn hold_until_exit(&mut self) {
+        self.reset_on_drop = false;
+    }
+}
+
+impl Drop for UpdateInstallGuard<'_> {
+    fn drop(&mut self) {
+        if self.reset_on_drop {
+            self.state.installing.store(false, Ordering::Release);
+        }
+    }
+}
+
+#[cfg(test)]
+mod update_install_state_tests {
+    use super::*;
+
+    #[test]
+    fn update_installation_is_process_wide_and_released_after_safe_failure() {
+        let state = UpdateInstallState::default();
+        let first = state.try_begin().expect("first installer owns the gate");
+        assert!(state.try_begin().is_err());
+        drop(first);
+        assert!(state.try_begin().is_ok());
+    }
+
+    #[test]
+    fn update_gate_stays_closed_once_relaunch_is_committed() {
+        let state = UpdateInstallState::default();
+        let mut guard = state.try_begin().expect("installer owns the gate");
+        guard.hold_until_exit();
+        drop(guard);
+        assert!(state.try_begin().is_err());
+    }
+}
+
 /// Holds a pending OAuth deep-link URL that arrived before the frontend
 /// mounted its listener. The frontend polls this via get_pending_oauth_url
 /// and clears it after consuming.
@@ -606,6 +670,7 @@ struct PendingOAuthUrl(Mutex<Option<String>>);
 struct SidecarStatus {
     running: bool,
     port: u16,
+    supervisor: EngineSupervisorStatus,
 }
 
 /// Resolve the path to the Helper-app engine binary on macOS production builds.
@@ -1007,21 +1072,12 @@ async fn start_sidecar(
                         lines.push(msg.clone());
                     }
                     let _ = app_handle.emit("sidecar-log", msg);
-                    // The receiver belongs to exactly one spawn. Clear the
-                    // handle only if it still names that PID; a delayed
-                    // Terminated event from generation N must never erase a
-                    // newly spawned generation N+1. This is also the Windows
-                    // stale-handle liveness mechanism.
+                    // Establish the supervisor truth before exposing an empty
+                    // child slot. Startup polling must never mistake the gap
+                    // between retry generations for a terminal exit.
                     let we_asked_for_it = {
-                        let mut child = sidecar_state.child.lock().unwrap();
+                        let child = sidecar_state.child.lock().unwrap();
                         let ours = child.as_ref().map(|current| current.pid()) == Some(spawned_pid);
-                        if ours {
-                            lifecycle_log::log(&format!(
-                                "[engine-exit] clearing terminated owned handle for pid {}",
-                                spawned_pid
-                            ));
-                            *child = None;
-                        }
                         // The handle was already taken (stop_sidecar,
                         // restart_sidecar, the shutdown path) or belongs to a
                         // newer generation — either way, nobody is waiting on
@@ -1035,6 +1091,16 @@ async fn start_sidecar(
                         status.signal,
                         we_asked_for_it,
                     );
+                    {
+                        let mut child = sidecar_state.child.lock().unwrap();
+                        if child.as_ref().map(|current| current.pid()) == Some(spawned_pid) {
+                            lifecycle_log::log(&format!(
+                                "[engine-exit] clearing terminated owned handle for pid {}",
+                                spawned_pid
+                            ));
+                            *child = None;
+                        }
+                    }
                     break;
                 }
                 _ => {}
@@ -1923,22 +1989,25 @@ fn reload_renderer(window: tauri::WebviewWindow) -> Result<(), String> {
 
 /// Get sidecar status.
 ///
-/// On Unix, cross-checks the stored PID with the OS to detect stale handles
-/// (process died without going through stop_sidecar). On Windows we trust the
-/// handle — a held handle means the process is alive.
+/// On Unix, cross-checks the stored PID with the OS. This observer never
+/// clears ownership: the process event handler owns exits/recovery, and
+/// start_sidecar owns stale-handle repair.
 #[tauri::command]
-async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<SidecarStatus, String> {
-    #[allow(unused_mut)]
-    let mut guard = state.child.lock().unwrap();
+async fn sidecar_status(
+    state: tauri::State<'_, SidecarState>,
+    supervisor: tauri::State<'_, EngineSupervisorState>,
+) -> Result<SidecarStatus, String> {
+    let guard = state.child.lock().unwrap();
     let running = if let Some(ref child) = *guard {
         #[cfg(unix)]
         {
             let pid = child.pid();
             let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
             if !alive {
-                // Clear the stale handle so start_sidecar() can respawn.
-                eprintln!("[sidecar] sidecar_status: pid={} is gone, clearing stale handle", pid);
-                *guard = None;
+                eprintln!(
+                    "[sidecar] sidecar_status: pid={} is gone; awaiting lifecycle owner",
+                    pid
+                );
                 false
             } else {
                 true
@@ -1959,6 +2028,7 @@ async fn sidecar_status(state: tauri::State<'_, SidecarState>) -> Result<Sidecar
         // auto-scans base..base+20, so hardcoding lied whenever the base
         // port was already taken.
         port: read_engine_port_from_discovery().unwrap_or_else(engine_port_base),
+        supervisor: supervisor.status.lock().unwrap().clone(),
     })
 }
 
@@ -2128,11 +2198,28 @@ struct UpdateProgress {
 
 /// Check for app updates and optionally install them.
 ///
-/// When `install` is true, downloads and installs the update, emitting
-/// `update-progress` events with cumulative byte counts so the frontend
-/// can render an accurate progress bar.
+/// When `install` is true, download first, then stop the frozen Python engine
+/// before replacing the app bundle. PyInstaller lazily reopens its executable
+/// for imports; swapping that executable under a live engine produces random
+/// `zlib.error: incorrect header check` failures. Installation is therefore a
+/// restart transaction, never background file mutation under a live process.
 #[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<UpdateProgress, String> {
+async fn check_for_updates(
+    app: tauri::AppHandle,
+    install: bool,
+    update_install_state: tauri::State<'_, UpdateInstallState>,
+    sidecar_state: tauri::State<'_, SidecarState>,
+    transcription_state: tauri::State<'_, TranscriptionState>,
+    llm_process: tauri::State<'_, llm::commands::LlmProcessHandle>,
+    llm_server_state: tauri::State<'_, llm::commands::LlmServerState>,
+    wake_word_state: tauri::State<'_, WakeWordAppState>,
+    recording_state: tauri::State<'_, RecordingState>,
+) -> Result<UpdateProgress, String> {
+    let mut install_guard = if install {
+        Some(update_install_state.try_begin()?)
+    } else {
+        None
+    };
     let updater = app
         .updater()
         .map_err(|e| format!("Updater not available: {}", e))?;
@@ -2153,8 +2240,8 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
                 let total_downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let dl = total_downloaded.clone();
 
-                update
-                    .download_and_install(
+                let bytes = update
+                    .download(
                         move |chunk_length, content_length| {
                             let cumulative = dl.fetch_add(
                                 chunk_length as u64,
@@ -2174,9 +2261,40 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
                         || {},
                     )
                     .await
-                    .map_err(|e| format!("Update install failed: {}", e))?;
+                    .map_err(|e| format!("Update download failed: {}", e))?;
 
                 let final_downloaded = total_downloaded.load(std::sync::atomic::Ordering::Relaxed);
+
+                // Stop every process owned by this host before install(). On
+                // Windows the updater exits this process from inside install,
+                // so cleanup after that call is unreachable. On every OS the
+                // frozen engine must be gone before its embedded PYZ archive
+                // is replaced on disk.
+                graceful_shutdown_sync(
+                    "auto-updater is about to replace the app bundle",
+                    &sidecar_state,
+                    &transcription_state,
+                    &llm_process,
+                    Some(&llm_server_state),
+                    Some(&wake_word_state),
+                    Some(&recording_state),
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                if let Err(error) = update.install(bytes) {
+                    let message = format!("Update install failed: {error}");
+                    lifecycle_log::log(&format!(
+                        "[update] {message}; relaunching the current installation after cleanup"
+                    ));
+                    if let Some(guard) = install_guard.as_mut() {
+                        guard.hold_until_exit();
+                    }
+                    // Cleanup has already stopped the engine and other owned
+                    // services. Relaunch even on failure so the current intact
+                    // installation comes back instead of stranding the UI.
+                    app.request_restart();
+                    return Err(message);
+                }
 
                 let result = UpdateProgress {
                     status: "installed".to_string(),
@@ -2186,16 +2304,21 @@ async fn check_for_updates(app: tauri::AppHandle, install: bool) -> Result<Updat
                     downloaded: final_downloaded,
                 };
 
-                // The files on disk have just been swapped under us. Nothing
-                // about this process changed, so every surface that reports a
-                // version is now reporting the OLD build — announce it at the
-                // moment it becomes true, and say the remedy.
+                // The files on disk have just been swapped under us. Relaunch
+                // immediately so no process continues with a mixed host/engine
+                // build and no user has to discover a required restart later.
                 lifecycle_log::log(&format!(
-                    "[update] installed v{version} on disk; this process still runs v{} — \
-                     remedy: restart AI Matrx (Settings → About → Restart, or the update banner)",
+                    "[update] installed v{version} on disk; safely relaunching from running v{}",
                     app.package_info().version
                 ));
                 let _ = app.emit("update-progress", result.clone());
+                if let Some(guard) = install_guard.as_mut() {
+                    guard.hold_until_exit();
+                }
+                // All owned children were stopped before install. A direct
+                // request here avoids a second shutdown pass on platforms
+                // where install returns; Windows exits from install itself.
+                app.request_restart();
                 Ok(result)
             } else {
                 Ok(UpdateProgress {
@@ -2520,6 +2643,7 @@ pub fn run() {
             lines: Arc::new(Mutex::new(Vec::new())),
         })
         .manage(EngineSupervisorState::default())
+        .manage(UpdateInstallState::default())
         .manage(CloseToTray(AtomicBool::new(true)))
         .manage(windows::WindowRegistry::default())
         .manage(PendingOAuthUrl(Mutex::new(None)))
@@ -4066,8 +4190,8 @@ mod installed_version_tests {
 #[cfg(test)]
 mod engine_supervisor_tests {
     use super::{
-        engine_failure_cause, supervise_engine_exit, EngineExit, SupervisorAction,
-        ENGINE_HEALTHY_UPTIME_MS, ENGINE_MAX_AUTO_RESTARTS,
+        engine_failure_cause, supervise_engine_exit, EngineExit, EngineSupervisorStatus,
+        SidecarStatus, SupervisorAction, ENGINE_HEALTHY_UPTIME_MS, ENGINE_MAX_AUTO_RESTARTS,
     };
 
     fn crashed_at_spawn(consecutive_failures: u32) -> EngineExit {
@@ -4079,6 +4203,31 @@ mod engine_supervisor_tests {
             app_is_quitting: false,
             consecutive_failures,
         }
+    }
+
+    #[test]
+    fn sidecar_status_serializes_the_complete_supervisor_snapshot() {
+        let serialized = serde_json::to_value(SidecarStatus {
+            running: false,
+            port: 22_140,
+            supervisor: EngineSupervisorStatus {
+                phase: "restarting".into(),
+                attempt: 2,
+                max_attempts: 3,
+                cause: Some("boot failed".into()),
+                remedy: Some("retrying".into()),
+                exit_code: Some(1),
+                exit_signal: None,
+                updated_at_ms: 42,
+            },
+        })
+        .expect("sidecar status should serialize");
+
+        assert_eq!(serialized["running"], false);
+        assert_eq!(serialized["port"], 22_140);
+        assert_eq!(serialized["supervisor"]["phase"], "restarting");
+        assert_eq!(serialized["supervisor"]["maxAttempts"], 3);
+        assert_eq!(serialized["supervisor"]["exitCode"], 1);
     }
 
     /// THE GUARD. An engine that dies seconds after spawn must be brought back

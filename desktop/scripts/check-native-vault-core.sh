@@ -48,6 +48,7 @@ def paths(value, where=''):
             yield from paths(item, where)
 allowed_paths = [
     ('bin.path', 'src/bin/protocol-harness.rs'),
+    ('bin.path', 'src/bin/import-rp-proof-harness.rs'),
     ('bin.path', 'src/bin/native-vault-bindgen.rs'),
     ('bin.path', 'src/bin/source-export-harness.rs'),
     ('patch.crates-io.jiter.path', 'vendor/jiter'),

@@ -45,7 +45,7 @@ needle = 'passkey-authenticator = { path = "vendor/passkey-authenticator" }\n'
 assert s.count(needle) == 1
 p.write_text(s.replace(needle, needle + 'extra-registry-source = "0.5.0"\n'))
 PY
-  must_refuse extra_registry_patch 'manifest patch table is not exactly the approved authenticator path patch'
+  must_refuse extra_registry_patch 'manifest patch table is not exactly the approved native-vault patches'
 }
 
 path_census_refusal() {

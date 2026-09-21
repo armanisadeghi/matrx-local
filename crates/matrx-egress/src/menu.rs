@@ -19,16 +19,23 @@ use crate::supervisor::{Command, Terminal};
 
 /// How wide a detail line may be before it wraps. Menus grow to their widest item, so this is the
 /// width of the menu itself — wide enough for a sentence, narrow enough not to span the screen.
+///
+/// Only the tray (macOS/Windows) draws a menu, but the decision of what it says stays compiled
+/// and tested on every platform (see the module doc) — so on a platform with no tray this is
+/// legitimately unused outside its own tests, not a mistake.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 const WRAP: usize = 46;
 
 /// How long the reason in the title may be before it is cut at a word.
 const TITLE_REASON: usize = 52;
 
 /// At most this many detail lines. A menu is not a log.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 const MAX_DETAIL_LINES: usize = 6;
 
 /// One thing the person can choose, and what it does.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub struct Action {
     /// What the item says.
     pub label: String,
@@ -38,6 +45,7 @@ pub struct Action {
 
 /// The whole menu, decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub struct MenuModel {
     /// The first line: not clickable, says what the helper is doing.
     pub title: String,
@@ -47,6 +55,7 @@ pub struct MenuModel {
     pub actions: Vec<Action>,
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn action(label: &str, command: Command) -> Action {
     Action {
         label: label.to_string(),
@@ -59,6 +68,7 @@ fn action(label: &str, command: Command) -> Action {
 /// `terminal` is `Some` once a session ended in a way that cannot be retried — the account removed
 /// this computer (`4401`) or another copy took over (`4409`). In either case the connection will
 /// not come back by itself, so Pause/Resume is replaced by the one action that is true.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub fn model(status: &Status, terminal: Option<Terminal>, paused: bool) -> MenuModel {
     let title = status.title_line();
     let details = detail_lines(status);
@@ -108,6 +118,7 @@ pub fn model(status: &Status, terminal: Option<Terminal>, paused: bool) -> MenuM
 ///
 /// The remedy is shown whenever there is one, even without a sentence before it: "what to do" is
 /// never withheld because "what happened" happens to be absent.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub fn detail_lines(status: &Status) -> Vec<String> {
     let mut text = String::new();
     if let Some(error) = status.last_error.as_deref() {
@@ -170,6 +181,7 @@ pub fn short_reason(last_error: &str) -> Option<String> {
 }
 
 /// Greedy word wrap. A word longer than the width gets its own line rather than being cut in half.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();

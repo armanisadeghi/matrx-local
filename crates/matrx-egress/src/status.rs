@@ -146,7 +146,9 @@ impl StatusHandle {
     }
 
     /// How many state changes have happened — what the tray compares against to know it must
-    /// redraw without diffing a whole document.
+    /// redraw without diffing a whole document. Only the tray (macOS/Windows) reads it; on a
+    /// platform with no tray it is legitimately unused outside its own tests.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub fn revision(&self) -> u64 {
         self.revision.load(Ordering::SeqCst)
     }

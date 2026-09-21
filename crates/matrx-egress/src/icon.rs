@@ -69,7 +69,7 @@ mod tests {
         let icon = tray_icon().expect("icon");
         let mut opaque = 0usize;
         let mut transparent = 0usize;
-        for pixel in icon.bytes.chunks_exact(4) {
+        for pixel in icon.bytes.as_chunks::<4>().0 {
             let [r, g, b, a] = [pixel[0], pixel[1], pixel[2], pixel[3]];
             assert_eq!((r, g, b), (0, 0, 0), "a coloured pixel in a template image");
             if a == 0 {

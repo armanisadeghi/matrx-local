@@ -16,7 +16,9 @@
 use std::io;
 use std::path::PathBuf;
 
-/// The macOS launch-agent label and the Windows Run value, one name in one place.
+/// The macOS launch-agent label. Only the macOS branches read it; it is declared unconditionally
+/// so the one name lives in one place and the test below can assert it on every platform.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SERVICE_LABEL: &str = "com.aimatrx.home-connection";
 /// What the Windows registry value is called, and what Task Manager shows. Only the Windows
 /// branches read it; it is declared unconditionally so the one name lives in one place and the

@@ -258,3 +258,8 @@ massaged in host code, never left edited-unpublished. **THE CATCH-UP RULE:** wor
 refresh `@ai-matrx/*` to latest and reconcile per each package's CHANGELOG `Consumer action`s
 before this repo's next release. Both: same policy, § THE SAME-SESSION LAW + § THE CATCH-UP
 RULE.
+
+Put all work directly on main--no worktrees, local branches or anything else!
+- Commit often (Locally)
+- We have agents who handle a twice hourly release of the main repos so get your work committed and it will be live since we're pre-launch and need to move fast.
+- Focus on writing code that is going to do stuff and is going to get us to production! Do not waste time or we will lose the opportunity to go to production forever.

@@ -10,9 +10,15 @@ These exercise app/api/auth.py AuthMiddleware + app/api/remote_auth.py:
     permissive over direct loopback.
   * Always-public routes stay public regardless of how they arrive.
 
-The tunnel-rejection tests assert 401 — that holds whether or not the test
-environment can reach the Supabase auth server (an unreachable issuer fails
-closed, which is exactly the behaviour we want to guarantee).
+The tunnel-rejection tests send ``not-a-real-jwt`` and assert 401: that is not
+a JWT at all, so it is rejected on its own, with no issuer involved. Session
+verification is local now (``remote_auth`` checks the ES256 signature against
+the project's published key set) and it keeps the two outcomes apart: a token
+that FAILS verification is 401, while a session this machine could not CHECK —
+the key set out of reach — is refused with 503
+``session_verification_unavailable``, which still fails closed but never tells
+a signed-in user their credentials are invalid. Contract:
+``common-docs/systems/platform/proxy-identity/FEATURE.md``.
 
 We deliberately do NOT hit /admin/shutdown here (a pass-through would kill the
 shared test engine); /settings and /tools/invoke are sufficient witnesses.

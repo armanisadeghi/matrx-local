@@ -1,20 +1,24 @@
 /**
- * The "choose your organization" prompt — the surfaced side of
- * `OrganizationNotSelectedError`. aidream refuses to guess an organization
- * for a caller, and this app refuses to invent one either, so when
- * resolution comes back empty the ONLY correct move is to ask the user.
+ * The "choose your organization" prompt for a request that is WAITING — the
+ * surfaced side of `OrganizationNotSelectedError`. aidream refuses to guess an
+ * organization for a caller, and this app refuses to invent one either, so
+ * when resolution comes back empty the ONLY correct move is to ask the user.
  *
- * Mount ONCE near the app root. `requireActiveOrganizationId()` raises this
- * dialog (via `requestOrganizationPicker()` / `REQUEST_PICKER_EVENT`) and
- * then WAITS: the request that needed an organization is held open, and it
- * proceeds the moment the user picks here. The Python sidecar reaches the
- * same dialog through its `organization_required` action-needed item, whose
- * `choose_organization` handler is registered below.
+ * Same store, same list, same write as the top-bar `OrganizationSwitcher`:
+ * this is that control in a modal, raised by `requireActiveOrganizationId()`
+ * (via `requestOrganizationPicker()` / `REQUEST_PICKER_EVENT`), which then
+ * WAITS — the held request proceeds the moment the user picks here.
  *
- * It loads the user's real memberships via `listMemberOrganizations` — the
- * picker never guesses either, it only lists actual memberships from the
- * canonical `mbr_for_user` RPC. There is no "default" to offer and no
- * pre-selected row: the user SETS one (Arman, 2026-09-19).
+ * Mount ONCE near the app root. It also owns the two ways THE ENGINE's copy
+ * of this Mac's answer is kept equal to this store's:
+ *
+ *   - every time the engine becomes reachable, the store's value is re-stated
+ *     to it (retried until it takes it);
+ *   - when the engine publishes its own `organization_required` ask (its copy
+ *     is empty — a fresh engine, a reinstall, a `--fresh` dev home) while this
+ *     device already has an answer, the answer is re-sent and the person is
+ *     NOT asked again. Only when this device has no answer either does the
+ *     picker open.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -27,17 +31,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@ai-matrx/design-system";
-import { registerActionNeededHandler } from "@/features/action-needed/actions";
+import { registerActionNeededHandler, useActionNeeded } from "@/features/action-needed";
 import { getAppRuntimeConfig } from "@/lib/app-config";
 import { openExternal } from "@/lib/open-external";
 import {
   REQUEST_PICKER_EVENT,
-  listMemberOrganizations,
+  getActiveOrganizationSnapshot,
   republishActiveOrganizationToEngine,
   requestOrganizationPicker,
-  setActiveOrganization,
-  type MemberOrganization,
 } from "@/lib/org/active-org";
+import { useActiveOrganization } from "@/lib/org/use-active-organization";
+
+/** The engine's own ask (`app/services/action_needed/models.py`). */
+export const ENGINE_ORGANIZATION_ASK_FINGERPRINT = "organization:required";
 
 export interface OrganizationPickerDialogProps {
   /**
@@ -51,39 +57,47 @@ export interface OrganizationPickerDialogProps {
 
 export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDialogProps = {}) {
   const [open, setOpen] = useState(false);
-  const [organizations, setOrganizations] = useState<MemberOrganization[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    setError(null);
-    setOrganizations(null);
-    listMemberOrganizations()
-      .then(setOrganizations)
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not load your organizations.");
-        setOrganizations([]);
-      });
-  }, []);
+  const { organization, organizations, loading, error: loadError, userId, choose, reload } =
+    useActiveOrganization({ load: false });
+  const actionNeeded = useActionNeeded();
 
   useEffect(() => {
     const handler = () => {
       setOpen(true);
-      load();
+      setError(null);
+      void reload();
     };
     window.addEventListener(REQUEST_PICKER_EVENT, handler);
     // The sidecar's own ask. It cannot open a dialog, so it publishes an
-    // `organization_required` action-needed item; acting on that item is what
-    // brings this picker up, and the held background work retries with the
-    // value the user sets.
-    const unregister = registerActionNeededHandler("choose_organization", () =>
-      requestOrganizationPicker(),
-    );
+    // `organization_required` action-needed item. Acting on that item answers
+    // it from THIS store when there is an answer, and only otherwise asks.
+    const unregister = registerActionNeededHandler("choose_organization", async () => {
+      if (getActiveOrganizationSnapshot().organization) {
+        const accepted = await republishActiveOrganizationToEngine();
+        if (accepted) return;
+      }
+      requestOrganizationPicker();
+    });
     return () => {
       window.removeEventListener(REQUEST_PICKER_EVENT, handler);
       unregister();
     };
-  }, [load]);
+  }, [reload]);
+
+  // THE ENGINE ASKED A QUESTION THIS DEVICE ALREADY ANSWERED. Its card is
+  // the "separate warning" a person sees while the top bar shows an
+  // organization — the engine's copy lagged (push failed while it was
+  // booting, a fresh engine home). Answer it from the store the moment it
+  // appears; the engine withdraws the card when it takes the value.
+  const engineAsking = actionNeeded.some(
+    (item) => item.fingerprint === ENGINE_ORGANIZATION_ASK_FINGERPRINT,
+  );
+  useEffect(() => {
+    if (!engineAsking || !organization) return;
+    void republishActiveOrganizationToEngine();
+  }, [engineAsking, organization]);
 
   // TELL THE ENGINE WHAT THIS MAC ALREADY ANSWERED — every time it is
   // reachable, and keep trying until it takes it.
@@ -94,8 +108,12 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
   // the person a question they answered on this Mac days ago. Driving it off
   // the engine's connection state, with a retry, is what makes the headless
   // half of the app inherit the answer instead of re-asking for it.
+  //
+  // Also re-run on a sign-in / account switch: the engine's copy is scoped to
+  // the user who set it, so the returning account's answer must be re-sent.
   useEffect(() => {
     if (engineStatus !== undefined && engineStatus !== "connected") return;
+    if (!userId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const attempt = (delayMs: number) => {
@@ -111,19 +129,25 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [engineStatus]);
+  }, [engineStatus, userId]);
 
-  const choose = useCallback(async (organizationId: string) => {
-    setSavingId(organizationId);
-    try {
-      await setActiveOrganization(organizationId);
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not select that organization.");
-    } finally {
-      setSavingId(null);
-    }
-  }, []);
+  const pick = useCallback(
+    async (organizationId: string) => {
+      setSavingId(organizationId);
+      setError(null);
+      try {
+        await choose(organizationId);
+        setOpen(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not select that organization.");
+      } finally {
+        setSavingId(null);
+      }
+    },
+    [choose],
+  );
+
+  const shownError = error ?? loadError;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -133,13 +157,13 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
           <DialogDescription>
             Every request needs to know which organization it acts in, and
             nothing picks one for you. Choose one and whatever was waiting will
-            continue. You can change it whenever you like.
+            continue. You can change it any time from the top bar.
           </DialogDescription>
         </DialogHeader>
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        {organizations === null && !error ? (
+        {shownError && <p className="text-sm text-destructive">{shownError}</p>}
+        {organizations === null && loading ? (
           <p className="text-sm text-muted-foreground">Loading your organizations…</p>
-        ) : organizations && organizations.length === 0 && !error ? (
+        ) : organizations && organizations.length === 0 && !shownError ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               You don&apos;t belong to any organization yet, so there is nothing to pick. Any
@@ -161,15 +185,20 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
             {(organizations ?? []).map((org) => (
               <Button
                 key={org.id}
-                variant="outline"
+                variant={org.id === organization?.id ? "default" : "outline"}
                 className="justify-start"
                 disabled={savingId !== null}
-                onClick={() => void choose(org.id)}
+                onClick={() => void pick(org.id)}
               >
                 {savingId === org.id ? "Selecting…" : org.name}
                 {org.isPersonal ? " (personal)" : ""}
               </Button>
             ))}
+            {shownError && organizations === null && (
+              <Button size="sm" variant="outline" onClick={() => void reload()}>
+                Try again
+              </Button>
+            )}
           </div>
         )}
       </DialogContent>

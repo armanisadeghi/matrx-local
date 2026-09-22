@@ -196,14 +196,20 @@ async def test_the_servers_hold_registers_one_card_with_the_choices_and_choosing
 ) -> None:
     from app.services.aidream import organization as organization_module
 
-    # This Mac HAS a device organization — the exact situation measured live.
-    # The old resume check passed on it and the publisher looped forever.
+    # This Mac resolves a device organization (the sole-membership rule) but
+    # the user has SET none — so there is nothing to answer the server with,
+    # and the card is the honest next step. (The old resume check passed on
+    # the resolved value and the publisher looped forever.)
     async def device_org_resolves(_jwt: str) -> str:
         return ORG_A["id"]
+
+    async def nothing_set(_user_id: str | None = None) -> str | None:
+        return None
 
     monkeypatch.setattr(
         organization_module, "resolve_active_organization_id", device_org_resolves
     )
+    monkeypatch.setattr(organization_module, "get_device_organization", nothing_set)
 
     server = HoldingServer()
     service = CodingSessionBridgeOutbox(
@@ -357,3 +363,74 @@ async def test_a_hold_without_a_membership_list_still_registers_an_honest_card(
     assert cards[0]["action"].get("choice_route") is None
     assert "could not be listed" in cards[0]["message"]
     assert cards[0]["action"]["label"] == "Retry delivery"
+
+
+@pytest.mark.anyio
+async def test_a_mac_with_an_organization_set_answers_the_servers_hold_itself_no_second_card(
+    bridge_db: LocalDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ONE organization per Mac (Arman, 2026-09-21).
+
+    The user set an organization in the top bar; the server then held coding
+    sessions asking "file them where?". That is the same question, already
+    answered — so the publisher answers it from the device value through the
+    server's own door, registers NO card, and the next tick sends.
+    """
+    from app.services.aidream import organization as organization_module
+
+    async def the_one_value(_user_id: str | None = None) -> str | None:
+        return ORG_B["id"]
+
+    monkeypatch.setattr(organization_module, "get_device_organization", the_one_value)
+
+    server = HoldingServer()
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=server,  # type: ignore[arg-type]
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook(stable_id="a-1", provider_session_id="session-a"))
+    await service.enqueue(_hook(stable_id="b-1", provider_session_id="session-b"))
+
+    first = await service.sync_pending()
+    assert first["blocked"] == "organization_required"
+    # The hold was answered with THE value this Mac holds — through the
+    # server's membership-verified door — and nobody was asked again.
+    assert server.puts == [
+        ("/coding-sessions/connection/organization", {"organization_id": ORG_B["id"]})
+    ]
+    assert server.connection_organization == ORG_B["id"]
+    assert await _cards() == [], "no second card for a question already answered"
+    assert (await service.delivery_status())["publisher"]["blocker"] is None
+
+    resumed = await service.sync_pending()
+    assert resumed == {"sent": 2, "failed": 0, "blocked": None}
+
+
+@pytest.mark.anyio
+async def test_a_set_organization_the_server_did_not_offer_falls_back_to_the_card(
+    bridge_db: LocalDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The device value answers the hold only when it is one of the hold's own
+    choices; otherwise the card asks, rather than the publisher sending an
+    organization the server will refuse."""
+    from app.services.aidream import organization as organization_module
+
+    async def not_offered(_user_id: str | None = None) -> str | None:
+        return "99999999-9999-4999-8999-999999999999"
+
+    monkeypatch.setattr(organization_module, "get_device_organization", not_offered)
+
+    server = HoldingServer()
+    service = CodingSessionBridgeOutbox(
+        db=bridge_db,
+        client=server,  # type: ignore[arg-type]
+        token_repo=FakeTokenRepo(),  # type: ignore[arg-type]
+        cloud_enabled=True,
+    )
+    await service.enqueue(_hook(stable_id="a-1", provider_session_id="session-a"))
+    await service.sync_pending()
+    assert server.puts == []
+    cards = await _cards()
+    assert [c["fingerprint"] for c in cards] == [CODING_SESSION_ORGANIZATION_FINGERPRINT]

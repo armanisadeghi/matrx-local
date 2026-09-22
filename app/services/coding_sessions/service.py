@@ -1012,9 +1012,15 @@ class CodingSessionBridgeOutbox:
             if self._organization_blocker is not None
             else _utc_now_iso(),
         }
-        if payload.get(_HOLD_SCOPE_KEY) == _HOLD_SCOPE_CODING_SESSION:
+        servers_hold = payload.get(_HOLD_SCOPE_KEY) == _HOLD_SCOPE_CODING_SESSION
+        if servers_hold:
             self._organization_blocker[_HOLD_SCOPE_KEY] = _HOLD_SCOPE_CODING_SESSION
             self._organization_blocker["organizations"] = payload.get("organizations")
+            # THE ONE ANSWER FIRST. This Mac may already have an organization
+            # set (the top-bar switcher); the server's question is answered
+            # from it, and the card below is only for a Mac with no answer.
+            if await self._answer_server_hold_from_device(payload.get("organizations")):
+                return
             # THE CARD. The sidecar cannot show UI; the desktop renders this
             # item with one button per membership (the primitive's `choices`),
             # PUTs the pick to /coding-session/connection/organization on this
@@ -1068,6 +1074,66 @@ class CodingSessionBridgeOutbox:
             "[coding_session_bridge] organization resolved; delivery resumed (%s preserved rows requeued)",
             restored,
         )
+
+    async def _answer_server_hold_from_device(
+        self, organizations: list[dict[str, Any]] | None
+    ) -> bool:
+        """Answer the server's "file coding sessions where?" from THE ONE value
+        this Mac already holds.
+
+        There is one organization on this Mac — the one the user set in the
+        top bar, mirrored to this engine by ``PUT /organization/active``. When
+        the server holds coding-session uploads for want of a filing
+        organization and this Mac has one, the hold is a question the person
+        already answered, so it is answered here (through the server's own
+        membership-verified door) instead of a second card in different words.
+
+        Returns True when the server took it (the pause is lifted and the
+        publisher woken by ``set_connection_organization``). False when this
+        Mac has nothing set, the set organization is not among the choices the
+        hold itself listed, or the server refused — and then the card is the
+        honest next step.
+        """
+        token_row = await self._tokens.get()
+        access_token = str(token_row.get("access_token") or "") if token_row else ""
+        if not access_token:
+            return False
+        from app.services.aidream.organization import (
+            get_device_organization,
+            jwt_user_id,
+        )
+
+        device_choice = await get_device_organization(jwt_user_id(access_token))
+        if not device_choice:
+            return False
+        if isinstance(organizations, list) and organizations:
+            offered = {
+                str(org.get("id"))
+                for org in organizations
+                if isinstance(org, dict) and org.get("id")
+            }
+            if offered and device_choice not in offered:
+                logger.warning(
+                    "[coding_session_bridge] this Mac's organization %s is not one "
+                    "the server offered for coding sessions; asking instead",
+                    device_choice,
+                )
+                return False
+        try:
+            await self.set_connection_organization(device_choice)
+        except Exception as exc:  # noqa: BLE001 — the card is the fallback
+            logger.warning(
+                "[coding_session_bridge] the server did not take this Mac's "
+                "organization for coding sessions (%s); asking instead",
+                exc,
+            )
+            return False
+        logger.info(
+            "[coding_session_bridge] coding sessions now file in this Mac's "
+            "organization %s — the server's hold was answered without asking again",
+            device_choice,
+        )
+        return True
 
     async def _register_server_hold_card(
         self, organizations: list[dict[str, Any]] | None

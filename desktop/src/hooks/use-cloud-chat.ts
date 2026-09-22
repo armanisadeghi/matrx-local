@@ -1195,15 +1195,22 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   useEffect(() => {
     localToolsRunningRef.current = localToolsRunning;
   }, [localToolsRunning]);
-  const liveTurnRef = useRef(liveTurn);
+
+  // The follower keeps watching a detached turn even after the person moves on
+  // — its reply still belongs in its own conversation — but the hold and the
+  // sentence belong ONLY to the conversation that is open.
+  const liveTurnIsOpen =
+    liveTurn != null && liveTurn.cloudConversationId === activeCloudConversationId;
+
+  const liveTurnRef = useRef(false);
   useEffect(() => {
-    liveTurnRef.current = liveTurn;
-  }, [liveTurn]);
+    liveTurnRef.current = liveTurnIsOpen;
+  }, [liveTurnIsOpen]);
 
   const localToolsRunningReason =
     localToolsRunning.length > 0
       ? `Running on this computer: ${localToolsRunning.join(", ")} — the agent continues on its own when it finishes.`
-      : liveTurn
+      : liveTurnIsOpen
         ? "This turn is still running — the reply appears here as soon as it lands."
         : null;
 

@@ -356,3 +356,39 @@ async def test_codex_capture_kill_switch_is_reported_and_a_stale_one_self_repair
     )
     capture = (await facade().status({"providers": {}}))["providers"]["codex"]["capture"]
     assert capture["runtime_disabled"] and capture["blocker"]["code"] == "codex_hook_runtime_disabled"
+
+
+@pytest.mark.anyio
+async def test_codex_hooks_switched_off_is_the_capture_blocker_with_its_own_remedy(
+    tmp_path: Path,
+) -> None:
+    """Lane CS-35. Every kill switch this facade knew about lived inside the
+    plugin's own data directory, so a host that dispatches NO hook left it
+    empty and read as "unknown" with nothing to do. `features.hooks = false`
+    in the Codex config is that host, and it is now named with the one command
+    that fixes it."""
+    home = tmp_path / "home"
+    codex = home / ".codex"
+    (codex / "plugins/data/matrx-codex-plugin-ai-matrx/coding-session-bridge").mkdir(
+        parents=True
+    )
+    (codex / "config.toml").write_text("[features]\nhooks = false\n")
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+
+    async def versions(executable: str) -> str | None:
+        return None
+
+    facade = ProviderReadinessFacade(
+        home=home,
+        matrx_home=tmp_path / "matrx",
+        applications=tmp_path / "Applications",
+        process_probe=lambda: set(),
+        which_probe=lambda name: None,
+        version_probe=versions,
+        now=lambda: now,
+    )
+    capture = (await facade.status({"providers": {}}))["providers"]["codex"]["capture"]
+    assert capture["state"] == "blocked"
+    assert capture["blocker"]["code"] == "codex_hooks_feature_disabled"
+    assert "codex features enable hooks" in capture["blocker"]["remedy"]
+    assert capture["dispatch"]["dispatches"] is False

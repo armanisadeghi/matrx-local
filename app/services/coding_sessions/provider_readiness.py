@@ -24,6 +24,7 @@ import psutil
 
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
+from app.services.coding_sessions.codex_hooks import CODE_DISABLED, hook_dispatch_state
 
 logger = get_logger()
 
@@ -220,6 +221,14 @@ def _spool_status(roots: Iterable[Path], now: datetime) -> dict[str, Any]:
     }
 
 
+def _dispatch_blocker(dispatch: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": dispatch["code"],
+        "message": dispatch["message"],
+        "remedy": dispatch["remedy"],
+    }
+
+
 def _no_spool() -> dict[str, Any]:
     return {
         "supported": False,
@@ -315,6 +324,13 @@ class ProviderReadinessFacade:
         says so; a fresh one is reported as the blocker it is.
         """
         data = self._home / ".codex/plugins/data"
+        # Lane CS-35: the kill switches below all live INSIDE the plugin's own
+        # data directory, so every one of them assumes Codex dispatched the
+        # hook at least once. A host that dispatches no hook at all — the
+        # `hooks` feature switched off, or a hook that has never run — leaves
+        # this directory empty and used to read as "unknown" with nothing to
+        # do about it. That state is named first, with its own remedy.
+        dispatch = hook_dispatch_state(self._home / ".codex")
         result: dict[str, Any] = {
             "state": "unknown",
             "launch_failed_marker": None,
@@ -322,12 +338,23 @@ class ProviderReadinessFacade:
             "runtime_disabled": False,
             "repaired": [],
             "blocker": None,
+            "dispatch": dispatch,
         }
+        if dispatch["code"] == CODE_DISABLED:
+            # Nothing below can be true on a host that dispatches no hook.
+            result["state"] = "blocked"
+            result["blocker"] = _dispatch_blocker(dispatch)
+            return result
         try:
             roots = [p for p in data.glob("matrx-codex-plugin-*") if p.is_dir()] if data.is_dir() else []
         except OSError:
             roots = []
         if not roots:
+            # An empty plugin data directory means the hook never wrote one,
+            # which the dispatch read can usually explain by name.
+            if dispatch["dispatches"] is False:
+                result["state"] = "blocked"
+                result["blocker"] = _dispatch_blocker(dispatch)
             return result
         result["state"] = "ok"
         for root in roots:
@@ -370,6 +397,12 @@ class ProviderReadinessFacade:
             logger.warning(
                 "[provider_readiness] codex capture self-repair: %s", "; ".join(result["repaired"])
             )
+        # A marker is stronger evidence than the dispatch read — it PROVES the
+        # hook ran — so the dispatch explanation only fills a silence nothing
+        # else accounted for.
+        if result["blocker"] is None and dispatch["dispatches"] is False:
+            result["state"] = "blocked"
+            result["blocker"] = _dispatch_blocker(dispatch)
         return result
 
     def _cursor_adapter(self) -> dict[str, Any]:

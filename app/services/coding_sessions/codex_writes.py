@@ -58,6 +58,7 @@ from typing import Any
 
 from app.common.system_logger import get_logger
 from app.services.coding_sessions.artifacts import DiscoveredSession
+from app.services.coding_sessions.codex_hooks import hook_dispatch_state
 
 logger = get_logger()
 
@@ -563,6 +564,14 @@ class CodexRolloutSessionSource:
         ``apply_patch`` — true, and useless to the person looking at it. An
         absent plugin is a DIFFERENT fact from a plugin that ran and found
         nothing, and the screen says which.
+
+        **And a plugin that CANNOT run is a third fact** (lane CS-35). The
+        capture runs inside a Codex hook, so a host with hook dispatch switched
+        off, or one whose hook has never executed, produces the same emptiness
+        — and the old sentence told the person to install a plugin they had
+        already installed. The host state is read first
+        (:mod:`app.services.coding_sessions.codex_hooks`) and its own remedy is
+        what the screen shows.
         """
         messages: list[str] = []
         scan = self._last_scan
@@ -572,9 +581,16 @@ class CodexRolloutSessionSource:
                 "No Codex session on this Mac has a hook-time write record yet. Codex itself "
                 "only names a file it changed through apply_patch, which current Codex versions "
                 "do not use, so artifacts are captured by the AI Matrx plugin for Codex as each "
-                "turn finishes. Install or update that plugin and run one Codex turn, and the "
-                "files that turn writes will appear here."
+                "turn finishes."
             )
+            dispatch = hook_dispatch_state(self.home)
+            messages.append(dispatch["message"])
+            if dispatch["remedy"]:
+                messages.append(dispatch["remedy"])
+            if dispatch["dispatches"]:
+                messages.append(
+                    "Run one Codex turn that writes a file and it will appear here."
+                )
             return messages
         paths = int(scan.get("declaration_paths") or 0)
         only = int(scan.get("sessions_only_in_declarations") or 0)

@@ -244,3 +244,19 @@ def test_an_app_that_is_not_running_is_refused_naming_what_is(
 def test_the_refusal_sentence_names_a_near_miss_first():
     msg = not_running_message("Kindl", TABLE)
     assert "Kindle" in msg and "is not running" in msg
+
+
+def test_an_app_with_no_accessible_windows_says_so_instead_of_minus_1719():
+    """Kindle publishes no windows to accessibility; -1719 tells nobody that."""
+    from app.tools.tools.window_manager import _no_accessible_windows
+
+    msg = _no_accessible_windows(
+        b"99:103: execution error: System Events got an error: cannot get "
+        b"window 1 of application process 1 whose unix id = 56683. Invalid index. (-1719)",
+        KINDLE,
+    )
+    assert msg is not None
+    assert "Kindle is running" in msg
+    assert "brought to the front" in msg and "captured" in msg
+    assert "-1719" not in msg
+    assert _no_accessible_windows(b"some unrelated failure", KINDLE) is None

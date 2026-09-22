@@ -241,6 +241,10 @@ jobs:
         shell: bash
         run: cargo build -p matrx-egress --release
 
+      - name: Install NSIS (the Windows installer builder is not on the hosted runner)
+        shell: pwsh
+        run: choco install nsis --no-progress -y
+
       - name: Build the installer
         shell: bash
         env:

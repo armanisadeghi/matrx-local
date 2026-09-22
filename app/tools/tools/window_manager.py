@@ -47,17 +47,28 @@ async def tool_list_windows(
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)
         else:
             return await _list_windows_linux(app_filter)
-    except Exception as e:
+    except asyncio.TimeoutError:
         return ToolResult(
-            type=ToolResultType.ERROR, output=f"Failed to list windows: {e}"
+            type=ToolResultType.ERROR,
+            output=(
+                "Listing windows took longer than the 15-second limit. "
+                + ("Naming the app narrows the search. " if not app_filter else "")
+                + "Try again with the app named, or close apps with many windows."
+            ),
+        )
+    except Exception as e:
+        # A blank reason is not a reason: name the exception class when its
+        # message is empty (asyncio's TimeoutError is one such).
+        reason = str(e).strip() or type(e).__name__
+        return ToolResult(
+            type=ToolResultType.ERROR, output=f"Failed to list windows: {reason}"
         )
 
 
-async def _list_windows_macos(app_filter: str | None) -> ToolResult:
-    script = """
+_MAC_WINDOW_LIST_SCRIPT = """
 tell application "System Events"
     set windowList to {}
-    repeat with theApp in (every application process whose visible is true)
+    repeat with theApp in (every application process whose visible is true__FILTER__)
         set appName to name of theApp
         try
             repeat with theWindow in (every window of theApp)
@@ -72,6 +83,24 @@ tell application "System Events"
     return windowList as text
 end tell
 """
+
+
+def _applescript_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+async def _list_windows_macos(app_filter: str | None) -> ToolResult:
+    # System Events walks every window of every process; on a busy Mac that
+    # blows the 15-second budget with a blank error. When the caller names an
+    # app, only processes carrying that name (or its bundle id) are visited.
+    name_filter = ""
+    if app_filter and app_filter.strip():
+        quoted = _applescript_string(app_filter.strip())
+        name_filter = (
+            f" and ((name contains {quoted}) or (displayed name contains {quoted})"
+            f" or (bundle identifier contains {quoted}))"
+        )
+    script = _MAC_WINDOW_LIST_SCRIPT.replace("__FILTER__", name_filter)
     proc = await asyncio.create_subprocess_exec(
         "osascript",
         "-e",

@@ -93,6 +93,7 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
     groupedConversations,
     historyError,
     isStreaming,
+    localToolsRunningReason,
     localLlmError,
     localLlmStatus,
     mode,
@@ -491,9 +492,14 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
             onModeChange={setMode}
             engineReady={engineReady}
             sendBlockedReason={
-              replyDoor.status === "loading"
+              // A turn suspended on a tool running here cannot take another
+              // turn — the server refuses it with 409
+              // `outstanding_delegated_calls`. Say what is running instead of
+              // letting the person send into a refusal.
+              localToolsRunningReason ??
+              (replyDoor.status === "loading"
                 ? "Checking who answers here…"
-                : (door.refusalSentence ?? executionError)
+                : (door.refusalSentence ?? executionError))
             }
             selectedAgentId={selectedAgentId}
             showModelSelector={false}

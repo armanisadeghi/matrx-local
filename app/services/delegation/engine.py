@@ -75,6 +75,18 @@ logger = get_logger()
 # aidream-side publish deploys). Overridable for tests / impatient dev.
 DEFAULT_POLL_INTERVAL = float(os.environ.get("MATRX_DELEGATION_POLL_INTERVAL", "15"))
 
+#: Backstop poll while a conversation is mid-flight. The wake is the latency
+#: path; this only bounds the damage when a wake never arrives.
+ACTIVE_POLL_INTERVAL = float(
+    os.environ.get("MATRX_DELEGATION_ACTIVE_POLL_INTERVAL", "2")
+)
+
+#: A call in one of these states has NOT produced a result yet. While any of
+#: them is live for a conversation, that conversation's turn is still
+#: suspended and a `/resume` would be refused by aidream with
+#: `outstanding_delegated_calls` (HTTP 409).
+UNSETTLED_CALL_STATES = frozenset({"queued", "executing", "awaiting_user_review"})
+
 # Client-side execution guard per mega-tool (dispatcher name → seconds).
 # The server-side ledger expiry is 30 days (abandonment TTL, not a deadline)
 # so slow desktop ops are safe; this bound exists so a hung handler can't
@@ -287,11 +299,29 @@ class DelegationEngine:
         the pending continuation (user_request_id) once the last sibling
         result lands. Never includes arguments or result bodies."""
         facts = self._conversation_facts.get(conversation_id, {})
+        calls = list(facts.get("calls", {}).values())
+        outstanding = [c for c in calls if c.get("state") in UNSETTLED_CALL_STATES]
+        continuation = facts.get("continuation")
+        if outstanding and continuation and continuation.get("needed"):
+            # A continuation is an invitation to POST /resume, and aidream
+            # refuses a resume with HTTP 409 `outstanding_delegated_calls`
+            # while ANY sibling call of that user_request is still delegated.
+            # The fact is per-conversation and the user_request_id does not
+            # change across a whole tool-using turn, so an already-served
+            # continuation stays true-looking while the NEXT call of the same
+            # turn is still running. That stale invitation is what ended the
+            # owner's run on 2026-09-22 (conversation 60b6f5e7…, call
+            # toolu_01KCH6aM36tYXNk6CBExGmEZ was still delegated). A
+            # continuation is only real when nothing is outstanding.
+            continuation = {**continuation, "needed": False, "held_for": [
+                c["call_id"] for c in outstanding
+            ]}
         return {
             "conversation_id": conversation_id,
             "claimed": self._ui_claim_active(conversation_id),
-            "calls": list(facts.get("calls", {}).values()),
-            "continuation": facts.get("continuation"),
+            "calls": calls,
+            "outstanding": outstanding,
+            "continuation": continuation,
             # The UI's wait loop must not time out while a human is still
             # reading a proposed message — a review has no deadline.
             "reviews_pending": self.review_count(conversation_id),
@@ -416,6 +446,12 @@ class DelegationEngine:
             "state": state,
             "ts": time.time(),
         }
+        if state in UNSETTLED_CALL_STATES:
+            # The turn suspended again: whatever continuation was recorded for
+            # this conversation belongs to the previous suspend and has either
+            # been served already or been superseded. Leaving it would invite
+            # a resume that aidream refuses with `outstanding_delegated_calls`.
+            facts["continuation"] = None
         # Bounded memory: keep facts for at most 8 conversations / 40 calls.
         if len(self._conversation_facts) > 8:
             oldest = min(
@@ -509,6 +545,16 @@ class DelegationEngine:
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
+            # Clear BEFORE the sweep, never after. A sweep that executes a
+            # tool and drains a continuation runs for seconds, and the very
+            # next delegated call of the turn is created — and its broadcast
+            # wake published — inside that window. Clearing afterwards threw
+            # that wake away and made the call wait the full poll interval:
+            # measured on the owner's Mac 2026-09-22, claim latency 0.6 s when
+            # the wake landed in the wait and 16-82 s when it landed in the
+            # sweep (chat.tool_call claimed_at - created_at, conversations
+            # 86d096b9… and 60b6f5e7…).
+            self._wake.clear()
             try:
                 await self.sweep_once()
             except asyncio.CancelledError:
@@ -519,12 +565,40 @@ class DelegationEngine:
                 logger.error(
                     "[delegation] sweep crashed (loop continues)", exc_info=True
                 )
-            # Wait for the interval OR an explicit wake, whichever first.
-            self._wake.clear()
+            # Wait for the interval OR an explicit wake, whichever first. A
+            # wake set during the sweep above is still set here, so the next
+            # sweep starts immediately.
             try:
-                await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
+                await asyncio.wait_for(
+                    self._wake.wait(), timeout=self._next_interval()
+                )
             except asyncio.TimeoutError:
                 pass
+
+    def _next_interval(self) -> float:
+        """How long to wait before the backstop poll.
+
+        The broadcast wake carries normal latency; the poll only has to catch
+        a wake that was never published or never delivered (a non-production
+        server, a dropped realtime frame, a bridge that was reconnecting).
+        While a conversation is mid-flight — a UI stream attached, a result
+        still owed, or a call still running — a lost wake costs the person a
+        visible stall, so the backstop tightens to ``ACTIVE_POLL_INTERVAL``.
+        Idle, it stays at the full interval and costs nothing.
+        """
+        if self._stop.is_set():
+            return self._interval
+        if self._undelivered or self._reviews:
+            return min(self._interval, ACTIVE_POLL_INTERVAL)
+        if any(exp > time.time() for exp in self._ui_claims.values()):
+            return min(self._interval, ACTIVE_POLL_INTERVAL)
+        for facts in self._conversation_facts.values():
+            if any(
+                call.get("state") in UNSETTLED_CALL_STATES
+                for call in facts.get("calls", {}).values()
+            ):
+                return min(self._interval, ACTIVE_POLL_INTERVAL)
+        return self._interval
 
     async def sweep_once(self) -> int:
         """One sweep: retry undelivered results, then discover + execute new

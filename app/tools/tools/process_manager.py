@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
+from app.services.app_identity import AppNotRunning, require_running_app
 from app.tools.session import ToolSession
 from app.tools.types import ToolResult, ToolResultType
 
@@ -699,7 +700,17 @@ async def tool_focus_app(
     """
     try:
         if PLATFORM["is_mac"]:
-            script = f'tell application "{application}" to activate'
+            # The person's word for the app is resolved ONCE and the app is
+            # addressed by bundle id: `tell application "Kindle"` raises
+            # AppleScript -1728 because Kindle's bundle name is "Amazon
+            # Kindle". See app/services/app_identity.
+            try:
+                app = await require_running_app(application)
+            except AppNotRunning as exc:
+                return ToolResult(type=ToolResultType.ERROR, output=str(exc))
+            except RuntimeError as exc:
+                return ToolResult(type=ToolResultType.ERROR, output=str(exc))
+            script = f"tell {app.applescript_target} to activate"
             proc = await asyncio.create_subprocess_exec(
                 "osascript", "-e", script,
                 stdout=asyncio.subprocess.PIPE,
@@ -709,9 +720,12 @@ async def tool_focus_app(
             if proc.returncode != 0:
                 return ToolResult(
                     type=ToolResultType.ERROR,
-                    output=f"Failed to focus {application}: {stderr.decode()}",
+                    output=f"Failed to focus {app.spoken_name}: {stderr.decode()}",
                 )
-            return ToolResult(output=f"Focused: {application}")
+            return ToolResult(
+                output=f"Focused: {app.spoken_name}",
+                metadata={"app": app.spoken_name, "bundle_id": app.bundle_id, "pid": app.pid},
+            )
 
         elif PLATFORM["is_windows"]:
             ps_script = f"""

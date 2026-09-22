@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.common.platform_ctx import PLATFORM
-from app.services.book_capture.app_identity import ReaderApp, resolve_reader_app
+from app.services.app_identity import AppNotRunning, RunningApp, require_running_app
 
 
 class ReaderUnavailable(RuntimeError):
@@ -79,7 +79,7 @@ class MacReaderDriver:
         self.app_name = app_name
         self.window_title = window_title
         self._window_id: int | None = None
-        self._app: ReaderApp | None = None
+        self._app: RunningApp | None = None
 
     @property
     def describes(self) -> str:
@@ -87,32 +87,39 @@ class MacReaderDriver:
 
     # -- app resolution ---------------------------------------------------
 
-    async def _ensure_app(self) -> ReaderApp:
+    async def _ensure_app(self) -> RunningApp:
         """Turn the person's word for the reader into the running app, once.
 
         The person says "Kindle"; the process is "Kindle"; the AppleScript
         name is "Amazon Kindle".  Resolving here means every later call
         addresses the app by bundle id and its window by pid, so no namespace
-        can disagree with another.
+        can disagree with another.  An app that is not running is refused in
+        one sentence that names what is.
         """
         if self._app is None:
             try:
-                app = await resolve_reader_app(self.app_name)
+                self._app = await require_running_app(self.app_name)
+            except AppNotRunning as exc:
+                raise ReaderUnavailable(
+                    f"{exc} Open the book in that app first, then ask again."
+                ) from exc
             except RuntimeError as exc:
                 raise ReaderUnavailable(str(exc)) from exc
-            if app is None:
-                raise ReaderUnavailable(
-                    f"“{self.app_name}” is not running. Open the book in that app "
-                    "first, then ask again."
-                )
-            self._app = app
         return self._app
 
     def _applescript_target(self) -> str:
-        app = self._app
-        if app is not None and app.bundle_id:
-            return f'application id "{app.bundle_id}"'
-        return f'application "{self.app_name}"'
+        """The `tell` target — always the resolved bundle id, never a name.
+
+        `_ensure_app` runs before every use and refuses when the app is not
+        running, so there is no name-shaped fallback to fall back to: one
+        would be the -1728 bug returning by the back door.
+        """
+        if self._app is None:
+            raise ReaderUnavailable(
+                "The reader was not resolved before it was addressed; "
+                "this is a bug in the capture loop."
+            )
+        return self._app.applescript_target
 
     # -- window resolution ------------------------------------------------
 
@@ -136,17 +143,21 @@ class MacReaderDriver:
             | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID,
         )
-        wanted = self.app_name.strip().lower()
-        pid = self._app.pid if self._app else None
+        if self._app is None:
+            raise ReaderUnavailable(
+                "The reader was not resolved before its window was requested; "
+                "this is a bug in the capture loop."
+            )
+        pid = self._app.pid
         candidates = []
         for info in infos or []:
-            owner = str(info.get("kCGWindowOwnerName") or "")
-            if pid is not None:
-                # The resolved process owns the window; names are not consulted.
-                if int(info.get("kCGWindowOwnerPID") or -1) != pid:
-                    continue
-            elif wanted not in owner.lower():
+            # The RESOLVED process owns the window. A window owner name is
+            # the executable ("Kindle"), which is neither the bundle name
+            # ("Amazon Kindle") nor necessarily the Dock name — matching on it
+            # is the -1728 bug wearing a different hat.
+            if int(info.get("kCGWindowOwnerPID") or -1) != pid:
                 continue
+            owner = str(info.get("kCGWindowOwnerName") or "")
             if int(info.get("kCGWindowLayer") or 0) != 0:
                 continue  # menu bars, shadows, overlays
             title = str(info.get("kCGWindowName") or "")

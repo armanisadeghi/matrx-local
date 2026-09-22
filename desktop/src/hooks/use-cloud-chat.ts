@@ -29,6 +29,10 @@ import {
 } from "@/lib/aidream-stream";
 import {
   claimDelegationUi,
+  isBenignResumeConflict,
+  isTurnStillRunning,
+  outstandingCalls,
+  readDelegationState,
   releaseDelegationUi,
   waitForDelegatedContinuation,
 } from "@/lib/cloud-chat-delegation";
@@ -103,6 +107,19 @@ export interface CloudChatRunControls {
   maxTokens: number | null;
   excludedTools: string[];
 }
+
+/** How often the composer gate re-reads the engine's delegation snapshot. */
+const DELEGATION_GATE_POLL_MS = 1500;
+
+/** How many times a `/resume` may be refused as "siblings still running". */
+const MAX_RESUME_CONFLICT_RETRIES = 8;
+
+/** How often a turn this surface stopped streaming is re-checked and re-read. */
+const LIVE_TURN_POLL_MS = 3000;
+/** How long to keep following a detached turn before saying so plainly. */
+const LIVE_TURN_FOLLOW_CAP_MS = 20 * 60 * 1000;
+/** Consecutive quiet checks before a detached turn is called finished. */
+const LIVE_TURN_QUIET_CHECKS = 3;
 
 const DEFAULT_RUN_CONTROLS: CloudChatRunControls = {
   modelOverride: null,
@@ -878,6 +895,29 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [cacheUserId, setCacheUserId] = useState<string | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  /**
+   * Tool names this desktop is still running for the OPEN conversation.
+   *
+   * While this is non-empty the conversation's turn is suspended on the
+   * server: a new user turn would be a turn sent on top of a suspended one
+   * and aidream answers HTTP 409 `outstanding_delegated_calls`. The composer
+   * says so and holds. Sourced from the engine's own loopback state, so it
+   * self-heals: the engine reporting nothing outstanding — or being
+   * unreachable, when nothing can be running anyway — releases the composer.
+   */
+  const [localToolsRunning, setLocalToolsRunning] = useState<string[]>([]);
+  /**
+   * A turn this surface stopped streaming that the SERVER is still running.
+   *
+   * Set whenever a stream ends in anything other than the turn finishing —
+   * a refused resume, a dropped connection, a wait that gave up — while the
+   * conversation still has delegated calls outstanding. While it is set the
+   * surface says the turn is alive, keeps re-reading the conversation, and
+   * holds the composer. It is never accompanied by an error.
+   */
+  const [liveTurn, setLiveTurn] = useState<
+    { conversationId: string; cloudConversationId: string; since: number } | null
+  >(null);
   const [mode, setMode] = useState<ChatMode>("chat");
   const [model, setModel] = useState("");
   const [availableModels, setAvailableModels] = useState<CloudModelOption[]>([]);
@@ -1053,6 +1093,87 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const activeConversation =
     conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
 
+  const activeCloudConversationId =
+    activeConversation?.cloudConversationId ?? activeConversation?.serverConversationId ?? null;
+
+  /**
+   * Hold the composer while THIS desktop is still running a tool for the open
+   * conversation.
+   *
+   * On 2026-09-22 the owner's run ended on HTTP 409
+   * `outstanding_delegated_calls`: the surface sent on a conversation whose
+   * turn was still suspended on a local tool. Nothing in the UI knew a call
+   * was outstanding — the only record lived inside the send closure and died
+   * with it, so every give-up, stop, stream error and remount re-opened the
+   * composer over a still-running tool.
+   *
+   * The engine's loopback snapshot is the truth, and it is a READ: polling it
+   * never changes who owns the continuation. Fail-open is deliberate — an
+   * unreachable engine is an engine that is running nothing, and a composer
+   * that locks a person out is worse than the 409 it prevents.
+   */
+  useEffect(() => {
+    if (executionTarget !== "cloud" || !engineUrl || !activeCloudConversationId) {
+      setLocalToolsRunning([]);
+      return;
+    }
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (cancelled) return;
+      let running: string[] = [];
+      try {
+        const session = await getAuthedSession();
+        if (session?.access_token) {
+          const state = await readDelegationState(
+            engineUrl,
+            activeCloudConversationId,
+            session.access_token,
+          );
+          running = outstandingCalls(state).map((call) => call.tool_name);
+        }
+      } catch {
+        running = [];
+      }
+      if (cancelled) return;
+      setLocalToolsRunning((previous) =>
+        previous.length === running.length &&
+        previous.every((name, index) => name === running[index])
+          ? previous
+          : running,
+      );
+      // Poll while a stream is live, and keep polling after it ends for as
+      // long as anything is still outstanding — that is exactly the window a
+      // handed-off continuation leaves open.
+      if (isStreaming || running.length > 0) {
+        timer = window.setTimeout(poll, DELEGATION_GATE_POLL_MS);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [executionTarget, engineUrl, activeCloudConversationId, isStreaming]);
+
+  const localToolsRunningRef = useRef<string[]>([]);
+  useEffect(() => {
+    localToolsRunningRef.current = localToolsRunning;
+  }, [localToolsRunning]);
+  const liveTurnRef = useRef(liveTurn);
+  useEffect(() => {
+    liveTurnRef.current = liveTurn;
+  }, [liveTurn]);
+
+  const localToolsRunningReason =
+    localToolsRunning.length > 0
+      ? `Running on this computer: ${localToolsRunning.join(", ")} — the agent continues on its own when it finishes.`
+      : liveTurn
+        ? "This turn is still running — the reply appears here as soon as it lands."
+        : null;
+
   const refreshConversations = useCallback(async () => {
     const ownerAtStart = cacheUserIdRef.current;
     if (!ownerAtStart) return;
@@ -1205,6 +1326,57 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     },
     [hydrateConversationMessages],
   );
+
+  /**
+   * Follow a turn this surface detached from until it is genuinely over.
+   *
+   * Re-reads the conversation from the server so the reply lands in front of
+   * the person when it arrives, and stops only after the turn has been quiet
+   * for several checks — never on the first quiet one, because the gap while
+   * the model thinks between two tool calls looks exactly like the end.
+   */
+  useEffect(() => {
+    if (!liveTurn) return;
+    let cancelled = false;
+    let quiet = 0;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      await hydrateConversationMessages(liveTurn.conversationId, true);
+      let alive = false;
+      try {
+        const session = await getAuthedSession();
+        if (session?.access_token) {
+          alive = await isTurnStillRunning(
+            await getAIDreamServerUrl(),
+            liveTurn.cloudConversationId,
+            session.access_token,
+            engineUrl,
+          );
+        }
+      } catch {
+        alive = false;
+      }
+      if (cancelled) return;
+      quiet = alive ? 0 : quiet + 1;
+      if (
+        quiet >= LIVE_TURN_QUIET_CHECKS ||
+        Date.now() - liveTurn.since > LIVE_TURN_FOLLOW_CAP_MS
+      ) {
+        setLiveTurn(null);
+        void refreshConversations();
+        return;
+      }
+      timer = window.setTimeout(tick, LIVE_TURN_POLL_MS);
+    };
+
+    timer = window.setTimeout(tick, LIVE_TURN_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [liveTurn, hydrateConversationMessages, engineUrl, refreshConversations]);
 
   const createConversation = useCallback(
     (initialMode?: ChatMode): Conversation => {
@@ -1415,6 +1587,24 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       const hasAgent = Boolean(options?.agentId);
       if (!hasAgent && !trimmed) return;
       if (isStreaming) return;
+      // A turn suspended on a local tool cannot take another turn: aidream
+      // answers HTTP 409 `outstanding_delegated_calls`. The composer is
+      // already held (see `localToolsRunningReason`); this is the second
+      // lock, for a send that reaches here any other way.
+      if (localToolsRunningRef.current.length > 0) {
+        setRequestError(
+          `Still running on this computer: ${localToolsRunningRef.current.join(", ")}. ` +
+            "The agent carries on by itself the moment it finishes — no need to resend.",
+        );
+        return;
+      }
+      if (liveTurnRef.current) {
+        setRequestError(
+          "The previous turn is still running — it will finish and answer here. " +
+            "Sending now would be refused by the server.",
+        );
+        return;
+      }
 
       if (executionTarget === "local" && !engineUrl) {
         setRequestError("Local engine is not connected.");
@@ -1759,6 +1949,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
       let claimedDelegationConversation: string | null = null;
       let delegationAccessToken = "";
+      // Assigned below, once the cloud identifiers exist. Declared out here
+      // because the catch/finally must be able to ask the same question: is
+      // the server's turn still running? (see its definition).
+      let followIfTurnIsAlive: () => Promise<boolean> = async () => false;
       try {
         const getFreshAccessToken = async (): Promise<string> => {
           const session = await getAuthedSession();
@@ -1854,6 +2048,40 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         // stream segment; a non-empty set at segment end means the turn was
         // suspended and must be resumed after the engine runs the tools.
         const delegatedCallsThisSegment = new Set<string>();
+        // Bounded: a resume refused because siblings are still running is
+        // retried after waiting, but a conversation that keeps refusing must
+        // surface rather than spin.
+        let resumeConflicts = 0;
+        /**
+         * Hand this conversation to the follower instead of calling it failed.
+         *
+         * Returns true when the SERVER turn is still running — in which case
+         * nothing on screen may say the turn failed, stopped or finished. The
+         * owner watched a "failed" turn go on delegating work to his Mac for
+         * nine minutes on 2026-09-22; a screen is absent or honest.
+         */
+        followIfTurnIsAlive = async (): Promise<boolean> => {
+          if (executionTarget !== "cloud" || !cloudConversationId) return false;
+          try {
+            const token = await getFreshAccessToken();
+            const alive = await isTurnStillRunning(
+              cloudServerUrl,
+              cloudConversationId,
+              token,
+              engineUrl,
+            );
+            if (!alive) return false;
+          } catch {
+            return false;
+          }
+          setLiveTurn({
+            conversationId,
+            cloudConversationId,
+            since: Date.now(),
+          });
+          scheduleBackgroundHydration(conversationId);
+          return true;
+        };
         let requestUrl = url;
         let requestBody: Record<string, unknown> = body;
 
@@ -2021,8 +2249,22 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               streamHadError = true;
               sawTerminalEvent = true;
               const message = errorMessage(event.data);
-              setRequestError(message);
               blockBuilder.addError(event.data);
+              // An error event usually IS the end of the turn — but not
+              // always, and a turn that is still delegating work to this Mac
+              // must never be drawn as finished. Ask before saying so.
+              if (await followIfTurnIsAlive()) {
+                addDiagnostic(`Error: ${message}`);
+                updateAssistant({
+                  content: accumulated,
+                  isStreaming: false,
+                  streamStatus:
+                    "This turn is still running — the reply appears here as soon as it lands.",
+                });
+                publishBlocks();
+                break;
+              }
+              setRequestError(message);
               blockBuilder.failPendingTools("Stream errored before this tool finished.");
               updateAssistant({
                 error: message,
@@ -2277,6 +2519,53 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
           if (!response.ok || !response.body) {
             const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
+            // A resume refused with 409 `outstanding_delegated_calls` /
+            // `resume_conflict` is NOT a failed turn. It means a sibling tool
+            // of the same turn is still running (or another client already
+            // resumed). aidream itself files both as ordinary refusals. The
+            // desktop used to render them as a dead conversation — that is
+            // what ended the owner's run on 2026-09-22. Wait for the calls to
+            // land and post the resume again.
+            if (
+              isBenignResumeConflict(response.status, rawErrorText) &&
+              executionTarget === "cloud" &&
+              cloudConversationId &&
+              engineUrl &&
+              !abort.signal.aborted &&
+              resumeConflicts < MAX_RESUME_CONFLICT_RETRIES
+            ) {
+              resumeConflicts += 1;
+              setStatus("Waiting for the tools on this computer to finish...");
+              const retryRequestId = await waitForDelegatedContinuation(
+                engineUrl,
+                cloudConversationId,
+                getFreshAccessToken,
+                abort.signal,
+                setStatus,
+              );
+              if (retryRequestId) {
+                requestBody = { ...requestBody, user_request_id: retryRequestId };
+                continue;
+              }
+              if (!abort.signal.aborted) {
+                addDiagnostic(
+                  "Local tool continuation was handed off to the background engine; the final reply lands in the conversation history.",
+                );
+                setStatus("Local tools finished in the background.");
+                await followIfTurnIsAlive();
+                scheduleBackgroundHydration(conversationId);
+              }
+              break;
+            }
+            if (await followIfTurnIsAlive()) {
+              updateAssistant({
+                content: accumulated,
+                isStreaming: false,
+                streamStatus:
+                  "This turn is still running — the reply appears here as soon as it lands.",
+              });
+              return;
+            }
             const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
             const label = executionTarget === "local" ? "Local AI" : "AIDream";
             const message = `${label} request failed (${response.status}): ${errorText}`;
@@ -2334,6 +2623,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 "Local tool continuation was handed off to the background engine; the final reply lands in the conversation history.",
               );
               setStatus("Local tools finished in the background.");
+              await followIfTurnIsAlive();
               scheduleBackgroundHydration(conversationId);
             }
             break;
@@ -2380,8 +2670,21 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         updateAssistant({ content: accumulated, isStreaming: false });
       } catch (error: unknown) {
         if (error instanceof Error && error.name === "AbortError") {
-          blockBuilder.failPendingTools("Stopped before this tool finished.");
-          updateAssistant({ isStreaming: false, streamStatus: "Stopped." });
+          // Stop closes the stream this surface is reading; it does not reach
+          // into the server's turn. Saying "Stopped." while that turn is still
+          // delegating tools to this Mac is the same lie as "failed".
+          const stillRunning = await followIfTurnIsAlive();
+          blockBuilder.failPendingTools(
+            stillRunning
+              ? "Stopped watching — this is still running on your computer."
+              : "Stopped before this tool finished.",
+          );
+          updateAssistant({
+            isStreaming: false,
+            streamStatus: stillRunning
+              ? "Stopped watching — the turn is still running and will answer here."
+              : "Stopped.",
+          });
           publishBlocks();
         } else {
           if (isOrganizationNotSelectedError(error)) {
@@ -2397,16 +2700,29 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               : error instanceof Error
                 ? error.message
                 : "Connection error";
-          setRequestError(message);
-          console.error("[cloud-chat] stream failure", error);
-          blockBuilder.failPendingTools("Stream failed before this tool finished.");
-          updateAssistant({
-            content: accumulated,
-            isStreaming: false,
-            streamStatus: accumulated ? "Stream failed after partial response." : "Stream failed.",
-            error: message,
-          });
-          publishBlocks();
+          if (await followIfTurnIsAlive()) {
+            console.warn("[cloud-chat] stream dropped; the turn is still running", error);
+            updateAssistant({
+              content: accumulated,
+              isStreaming: false,
+              streamStatus:
+                "Lost the live stream — the turn is still running and will answer here.",
+            });
+            publishBlocks();
+          } else {
+            setRequestError(message);
+            console.error("[cloud-chat] stream failure", error);
+            blockBuilder.failPendingTools("Stream failed before this tool finished.");
+            updateAssistant({
+              content: accumulated,
+              isStreaming: false,
+              streamStatus: accumulated
+                ? "Stream failed after partial response."
+                : "Stream failed.",
+              error: message,
+            });
+            publishBlocks();
+          }
         }
       } finally {
         if (runGateRef.current.finish(runId)) {
@@ -2469,6 +2785,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     activeConversation,
     activeConversationId,
     isStreaming,
+    liveTurn,
+    localToolsRunning,
+    localToolsRunningReason,
     mode,
     model,
     availableModels,

@@ -93,6 +93,17 @@ export const conversationContinuePath = (conversationId: string): string =>
 export const conversationResumePath = (conversationId: string): string =>
   `/ai/conversations/${encodeURIComponent(conversationId)}/resume`;
 
+/**
+ * GET /ai/conversations/{conversation_id}/pending_calls — the client-delegated
+ * tool calls this conversation is still suspended on.
+ *
+ * A READ: unlike `/ai/user/pending_calls?instance_id=…`, which atomically
+ * LEASES the calls it returns, this one only reports. It is how a surface
+ * answers "is this turn still running?" without taking the work.
+ */
+export const conversationPendingCallsPath = (conversationId: string): string =>
+  `/ai/conversations/${encodeURIComponent(conversationId)}/pending_calls`;
+
 /** POST /ai/chat (promoted to /v2 on cloud) — model-addressed chat. */
 export const CHAT_PATH = "/ai/chat";
 

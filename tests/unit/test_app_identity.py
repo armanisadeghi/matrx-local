@@ -16,9 +16,11 @@ import types
 import pytest
 
 from app.services.book_capture import drivers as drivers_mod
-from app.services.book_capture.app_identity import (
+from app.services.app_identity import (
+    AppNotRunning,
     ReaderApp,
     match_reader_app,
+    not_running_message,
     parse_process_table,
 )
 from app.services.book_capture.drivers import MacReaderDriver, ReaderUnavailable
@@ -105,17 +107,28 @@ def test_the_window_is_found_by_the_resolved_process_never_by_its_name(monkeypat
 
 def test_a_reader_that_is_not_running_is_refused_in_a_sentence(monkeypatch):
     async def nobody(_wanted):
-        return None
-    monkeypatch.setattr(drivers_mod, "resolve_reader_app", nobody)
-    driver = MacReaderDriver("Kindle")
+        raise AppNotRunning(not_running_message("Calibre", list(TABLE)))
+    monkeypatch.setattr(drivers_mod, "require_running_app", nobody)
+    driver = MacReaderDriver("Calibre")
     with pytest.raises(ReaderUnavailable, match="is not running"):
         asyncio.run(driver.focus())
+
+
+def test_the_refusal_names_an_app_that_is_actually_running(monkeypatch):
+    """A refusal that does not say what IS running is a dead end."""
+    async def nobody(_wanted):
+        raise AppNotRunning(not_running_message("Calibre", list(TABLE)))
+    monkeypatch.setattr(drivers_mod, "require_running_app", nobody)
+    driver = MacReaderDriver("Calibre")
+    with pytest.raises(ReaderUnavailable) as err:
+        asyncio.run(driver.focus())
+    assert any(app.spoken_name in str(err.value) for app in TABLE)
 
 
 def test_activation_addresses_the_app_by_bundle_id_not_by_the_spoken_name(monkeypatch):
     async def found(_wanted):
         return KINDLE
-    monkeypatch.setattr(drivers_mod, "resolve_reader_app", found)
+    monkeypatch.setattr(drivers_mod, "require_running_app", found)
     driver = MacReaderDriver("Kindle")
     asyncio.run(driver._ensure_app())
     assert driver._applescript_target() == 'application id "com.amazon.Lassen"'

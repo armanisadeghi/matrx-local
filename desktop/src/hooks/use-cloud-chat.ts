@@ -1119,6 +1119,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     }
     let cancelled = false;
     let timer: number | undefined;
+    let first = true;
 
     const poll = async () => {
       if (cancelled) return;
@@ -1132,6 +1133,32 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             session.access_token,
           );
           running = outstandingCalls(state).map((call) => call.tool_name);
+          if (first && running.length === 0) {
+            // Opening a conversation whose turn is suspended: this engine may
+            // have restarted and forgotten it, so ask the server once. Without
+            // this, reopening a suspended conversation shows an open composer
+            // over a turn that is still waiting on a tool.
+            first = false;
+            if (
+              await isTurnStillRunning(
+                await getAIDreamServerUrl(),
+                activeCloudConversationId,
+                session.access_token,
+                engineUrl,
+              )
+            ) {
+              setLiveTurn((previous) =>
+                previous?.cloudConversationId === activeCloudConversationId
+                  ? previous
+                  : {
+                      conversationId: activeConversationId ?? activeCloudConversationId,
+                      cloudConversationId: activeCloudConversationId,
+                      since: Date.now(),
+                    },
+              );
+            }
+          }
+          first = false;
         }
       } catch {
         running = [];
@@ -1156,7 +1183,13 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [executionTarget, engineUrl, activeCloudConversationId, isStreaming]);
+  }, [
+    executionTarget,
+    engineUrl,
+    activeCloudConversationId,
+    activeConversationId,
+    isStreaming,
+  ]);
 
   const localToolsRunningRef = useRef<string[]>([]);
   useEffect(() => {

@@ -14,6 +14,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 
 import {
   isBenignResumeConflict,
+  isTurnStillRunning,
   outstandingCalls,
   waitForDelegatedContinuation,
   type EngineDelegationState,
@@ -125,5 +126,81 @@ describe("isBenignResumeConflict", () => {
     expect(isBenignResumeConflict(500, "boom")).toBe(false);
     expect(isBenignResumeConflict(409, '{"code":"not_resumable"}')).toBe(false);
     expect(isBenignResumeConflict(401, "outstanding_delegated_calls")).toBe(false);
+  });
+});
+
+describe("isTurnStillRunning", () => {
+  /**
+   * The nine minutes of 2026-09-22: the surface said the turn had failed and
+   * the same turn went on delegating tool calls to the owner's Mac. Whatever
+   * a stream does, the screen may only call a turn over when it IS over.
+   */
+  it("is true while the server still has a delegated call for the conversation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify([
+            { call_id: "toolu_01KCH6aM36tYXNk6CBExGmEZ", tool_name: "local_window" },
+          ]),
+          { status: 200 },
+        ),
+      ),
+    );
+    expect(
+      await isTurnStillRunning("https://server.test", "conv_1", "token", null),
+    ).toBe(true);
+  });
+
+  it("is true when the server is quiet but this desktop still owes a result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/pending_calls")
+          ? new Response("[]", { status: 200 })
+          : new Response(JSON.stringify(EXECUTING), { status: 200 }),
+      ),
+    );
+    expect(
+      await isTurnStillRunning(
+        "https://server.test",
+        "conv_1",
+        "token",
+        "http://127.0.0.1:22140",
+      ),
+    ).toBe(true);
+  });
+
+  it("is false only when both sources are quiet", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/pending_calls")
+          ? new Response("[]", { status: 200 })
+          : new Response(JSON.stringify(SETTLED), { status: 200 }),
+      ),
+    );
+    expect(
+      await isTurnStillRunning(
+        "https://server.test",
+        "conv_1",
+        "token",
+        "http://127.0.0.1:22140",
+      ),
+    ).toBe(false);
+  });
+
+  it("reads the wrapped shape as well as the bare list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ pending_calls: [{ call_id: "c" }] }), {
+          status: 200,
+        }),
+      ),
+    );
+    expect(
+      await isTurnStillRunning("https://server.test", "conv_1", "token", null),
+    ).toBe(true);
   });
 });

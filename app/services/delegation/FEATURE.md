@@ -169,6 +169,19 @@ claim instead of racing the 2.5 s browser grace window:
   no continuation ownership. It fails OPEN: an engine that reports nothing —
   or cannot be reached, and is therefore running nothing — releases the
   composer. `sendMessage` carries the same check as a second lock.
+- **The surface never draws a turn that is still running as over.** Whatever
+  ends the stream — a refused resume, a dropped connection, a server error
+  event, the person pressing Stop, a wait that gave up — the UI first asks
+  whether the SERVER turn is still alive (`isTurnStillRunning`: this
+  conversation's delegated calls on aidream, a READ that does not lease, plus
+  this engine's own outstanding list). While it is, no failure, no "Stopped.",
+  no completed reply: the surface says the turn is still running, keeps
+  re-reading the conversation every 3 s until it has been quiet for three
+  checks, and holds the composer. On 2026-09-22 the owner watched a "failed"
+  turn go on delegating work to his Mac for nine minutes. Guards:
+  `desktop/src/hooks/use-cloud-chat.honest-turn.test.ts` (no terminal status
+  or error may be written without asking) and
+  `desktop/src/lib/cloud-chat-delegation.test.ts`.
 - A `/resume` refused with 409 `outstanding_delegated_calls` or
   `resume_conflict` is NOT a failed turn: the UI waits for the calls to land
   and posts it again (bounded, `MAX_RESUME_CONFLICT_RETRIES`). aidream files

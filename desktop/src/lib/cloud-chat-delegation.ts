@@ -1,3 +1,5 @@
+import { conversationPendingCallsPath } from "@/lib/api/routes/ai";
+
 const DELEGATION_POLL_MS = 1000;
 const DELEGATION_CLAIM_TTL_SECONDS = 20;
 // Longest mega-tool execution timeout is Shell at 900s; add headroom.
@@ -180,4 +182,46 @@ export async function waitForDelegatedContinuation(
     await new Promise((resolve) => setTimeout(resolve, DELEGATION_POLL_MS));
   }
   return null;
+}
+
+/**
+ * Is this conversation's turn STILL RUNNING, even though this surface is no
+ * longer streaming it?
+ *
+ * On 2026-09-22 the desktop told the owner his turn had failed and the same
+ * turn went on running for nine more minutes, delegating tool call after tool
+ * call to his Mac. A screen that reports a dead turn that is alive is worse
+ * than one that reports nothing. Two independent sources answer it:
+ * the server's own suspended-call ledger for this conversation (a READ — it
+ * does not lease), and this desktop's engine, which knows what it still owes.
+ */
+export async function isTurnStillRunning(
+  cloudServerUrl: string,
+  cloudConversationId: string,
+  accessToken: string,
+  engineUrl: string | null | undefined,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${cloudServerUrl}/api${conversationPendingCallsPath(cloudConversationId)}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (response.ok) {
+      const body: unknown = await response.json();
+      const calls = Array.isArray(body)
+        ? body
+        : Array.isArray((body as { pending_calls?: unknown[] })?.pending_calls)
+          ? (body as { pending_calls: unknown[] }).pending_calls
+          : [];
+      if (calls.length > 0) return true;
+    }
+  } catch {
+    // An unreachable server is not evidence the turn died.
+  }
+  if (!engineUrl) return false;
+  const local = await readDelegationState(engineUrl, cloudConversationId, accessToken);
+  return outstandingCalls(local).length > 0;
 }

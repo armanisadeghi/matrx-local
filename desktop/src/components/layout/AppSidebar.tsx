@@ -3,7 +3,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   AudioLines,
   BookOpen,
-  Building2,
   BrainCircuit,
   Cloud,
   Cpu,
@@ -30,7 +29,6 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { requestOrganizationPicker } from "@/lib/org/active-org";
 import { Avatar, AvatarFallback, AvatarImage, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 // THE package initials formatter (`@ai-matrx/kit/format`, census H1
 // 2026-09-07). The desktop app is never a visual exception — the same data
@@ -305,16 +303,6 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
                   </div>
                 </div>
                 <div className="border-t pt-2">
-                  <button
-                    onClick={() => {
-                      setProfileOpen(false);
-                      requestOrganizationPicker();
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                  >
-                    <Building2 className="h-3.5 w-3.5" />
-                    Change organization
-                  </button>
                   <button
                     onClick={() => {
                       setProfileOpen(false);

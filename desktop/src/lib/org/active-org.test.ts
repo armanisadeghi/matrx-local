@@ -20,10 +20,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * `X-Organization-Id`, so asking it to bootstrap the header is circular.
  */
 
-const { rpc, from, getAuthedSession, enginePut, engineDelete } = vi.hoisted(() => ({
+const { rpc, from, getAuthedSession, currentSession, enginePut, engineDelete } = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
   getAuthedSession: vi.fn(),
+  currentSession: vi.fn(),
   enginePut: vi.fn(),
   engineDelete: vi.fn(),
 }));
@@ -31,7 +32,7 @@ const { rpc, from, getAuthedSession, enginePut, engineDelete } = vi.hoisted(() =
 vi.mock("@/lib/supabase", () => ({
   default: { rpc, schema: vi.fn(() => ({ from })) },
 }));
-vi.mock("@/lib/custodian", () => ({ getAuthedSession }));
+vi.mock("@/lib/custodian", () => ({ getAuthedSession, currentSession }));
 vi.mock("@/lib/api", () => ({ engine: { put: enginePut, delete: engineDelete } }));
 vi.mock("@/lib/app-config", () => ({
   getAppRuntimeConfig: () => ({ webAppOrigin: "https://web.example.test" }),
@@ -71,7 +72,23 @@ class FakeWindow {
   }
 }
 
-const STORAGE_KEY = "matrx-local.active-organization.v1";
+const STORAGE_KEY = "matrx-local.active-organization.v2";
+const LEGACY_STORAGE_KEY = "matrx-local.active-organization.v1";
+
+/** Seed THE persistent value the way the store writes it: per user, one key. */
+function seedStored(userId: string, org: { id: string; name: string; isPersonal?: boolean }) {
+  const all = JSON.parse(storage.getItem(STORAGE_KEY) ?? '{"users":{}}') as {
+    users: Record<string, unknown>;
+  };
+  all.users[userId] = { id: org.id, name: org.name, isPersonal: org.isPersonal === true };
+  storage.setItem(STORAGE_KEY, JSON.stringify(all));
+}
+
+function storedFor(userId: string): { id: string; name: string } | undefined {
+  const raw = storage.getItem(STORAGE_KEY);
+  if (!raw) return undefined;
+  return (JSON.parse(raw) as { users: Record<string, { id: string; name: string }> }).users[userId];
+}
 const storage = new MemoryStorage();
 let fakeWindow: FakeWindow;
 
@@ -95,6 +112,7 @@ beforeEach(() => {
     };
   }
   getAuthedSession.mockResolvedValue({ user: { id: "user-1" } });
+  currentSession.mockReset().mockReturnValue({ signed_in: true, user_id: "user-1" });
 });
 
 afterEach(() => {
@@ -182,7 +200,7 @@ describe("resolveActiveOrganization", () => {
   });
 
   it("prefers this device's set selection", async () => {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-1", name: "First Org" }));
+    seedStored("user-1", { id: "org-1", name: "First Org" });
     mockMemberships(["org-1", "org-2"]);
     mockOrganizationsTable([
       { id: "org-1", name: "First Org" },
@@ -194,7 +212,7 @@ describe("resolveActiveOrganization", () => {
   });
 
   it("drops a selection the user is no longer a member of and HOLDS rather than guessing", async () => {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-gone", name: "Removed Org" }));
+    seedStored("user-1", { id: "org-gone", name: "Removed Org" });
     mockMemberships(["org-1", "org-2"]);
     mockOrganizationsTable([
       { id: "org-1", name: "First Org" },
@@ -203,7 +221,7 @@ describe("resolveActiveOrganization", () => {
 
     const { resolveActiveOrganization } = await import("./active-org");
     expect(await resolveActiveOrganization()).toBeNull();
-    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+    expect(storedFor("user-1")).toBeUndefined();
   });
 });
 
@@ -316,7 +334,7 @@ describe("requireActiveOrganizationId — the hold", () => {
  */
 describe("republishActiveOrganizationToEngine — the engine inherits this Mac's answer", () => {
   it("re-states this device's SET organization to the engine", async () => {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-7", name: "Chosen" }));
+    seedStored("user-1", { id: "org-7", name: "Chosen" });
 
     const mod = await import("./active-org");
     await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(true);
@@ -328,7 +346,7 @@ describe("republishActiveOrganizationToEngine — the engine inherits this Mac's
   it("REPORTS that the engine did not take it, so the caller can retry", async () => {
     // The engine is not up yet — the normal case at boot. Swallowing this is
     // what left the sidecar empty and produced the double-ask.
-    storage.setItem(STORAGE_KEY, JSON.stringify({ id: "org-7", name: "Chosen" }));
+    seedStored("user-1", { id: "org-7", name: "Chosen" });
     enginePut.mockRejectedValue(new Error("engine not reachable"));
 
     const mod = await import("./active-org");
@@ -342,3 +360,74 @@ describe("republishActiveOrganizationToEngine — the engine inherits this Mac's
   });
 });
 
+
+/**
+ * THE ONE STATE, THE ONE PERSISTENT VALUE (Arman, 2026-09-21): every reader
+ * sees the same snapshot, the persisted value is per user under ONE key, and
+ * a write through the store is the only way anything changes.
+ */
+describe("the store — one state value, one persistent value", () => {
+  it("exposes a stable snapshot that changes only through the one write, and notifies subscribers", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "First Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+    const mod = await import("./active-org");
+
+    const before = mod.getActiveOrganizationSnapshot();
+    expect(before.organization).toBeNull();
+    expect(mod.getActiveOrganizationSnapshot()).toBe(before);
+
+    const notified = vi.fn();
+    mod.subscribeActiveOrganization(notified);
+    await mod.setActiveOrganization("org-2");
+
+    const after = mod.getActiveOrganizationSnapshot();
+    expect(after).not.toBe(before);
+    expect(after.organization?.id).toBe("org-2");
+    expect(after.organizations?.map((o) => o.id)).toEqual(["org-1", "org-2"]);
+    expect(notified).toHaveBeenCalled();
+    expect(storedFor("user-1")).toMatchObject({ id: "org-2", name: "Second Org" });
+    // The cheap request-boundary read is the SAME value, not a second store.
+    expect(await mod.getActiveOrganizationId()).toBe("org-2");
+  });
+
+  it("scopes the persisted value to the signed-in user — an account switch never inherits another account's pick", async () => {
+    seedStored("user-1", { id: "org-1", name: "First Org" });
+    seedStored("user-2", { id: "org-9", name: "Other Account's Org" });
+    const mod = await import("./active-org");
+
+    expect(mod.getActiveOrganizationSnapshot().organization?.id).toBe("org-1");
+
+    currentSession.mockReturnValue({ signed_in: true, user_id: "user-2" });
+    expect(mod.getActiveOrganizationSnapshot().organization?.id).toBe("org-9");
+    expect(mod.getActiveOrganizationSnapshot().userId).toBe("user-2");
+
+    currentSession.mockReturnValue({ signed_in: false, user_id: null });
+    expect(mod.getActiveOrganizationSnapshot().organization).toBeNull();
+    // Signing out forgets nothing: the returning account finds its own pick.
+    expect(storedFor("user-1")?.id).toBe("org-1");
+  });
+
+  it("migrates the older unscoped value once, to the user who reads it", async () => {
+    storage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({ id: "org-old", name: "Old Pick" }));
+    const mod = await import("./active-org");
+
+    expect(mod.getActiveOrganizationSnapshot().organization?.id).toBe("org-old");
+    expect(storedFor("user-1")?.id).toBe("org-old");
+    expect(storage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
+  });
+
+  it("refreshes the stored name from the live membership list — the switcher shows the truth", async () => {
+    seedStored("user-1", { id: "org-1", name: "Stale Name" });
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable([
+      { id: "org-1", name: "Renamed Org" },
+      { id: "org-2", name: "Second Org" },
+    ]);
+    const mod = await import("./active-org");
+    await mod.listMemberOrganizations();
+    expect(mod.getActiveOrganizationSnapshot().organization?.name).toBe("Renamed Org");
+  });
+});

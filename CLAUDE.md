@@ -97,7 +97,11 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 - **The organization is what the USER SET on this device — never a saved default, never the
   personal org** (Arman, 2026-09-19). The TS resolver is `desktop/src/lib/org/active-org.ts`,
   the engine's is `app/services/aidream/organization.py`, and each SET crosses to the other
-  through `PUT /organization/active`. With nothing set, the work HOLDS and the picker is
+  through `PUT /organization/active` (which also mirrors it to the server's coding-session
+  filing organization). ONE state, ONE stored value, ONE selector (Arman, 2026-09-21): the store
+  is `active-org.ts` (`useActiveOrganization()` in React), the control is
+  `desktop/src/features/org/OrganizationSwitcher.tsx` in the top bar — never a second copy of
+  the organization, never a second "choose organization" control. With nothing set, the work HOLDS and the picker is
   raised (the sidecar does it with an `organization_required` action-needed item) — it never
   fails with "no default organization". Guard: `pnpm check:org-default-ban` in `desktop/`.
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,

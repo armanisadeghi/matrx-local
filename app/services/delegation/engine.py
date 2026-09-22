@@ -87,6 +87,11 @@ ACTIVE_POLL_INTERVAL = float(
 #: `outstanding_delegated_calls` (HTTP 409).
 UNSETTLED_CALL_STATES = frozenset({"queued", "executing", "awaiting_user_review"})
 
+#: The subset of the above that is MACHINE work — a result is coming on its
+#: own. Waiting on a person is not: a parked review has no deadline and
+#: polling the server every two seconds for hours would buy nothing.
+IN_FLIGHT_CALL_STATES = frozenset({"queued", "executing"})
+
 # Client-side execution guard per mega-tool (dispatcher name → seconds).
 # The server-side ledger expiry is 30 days (abandonment TTL, not a deadline)
 # so slow desktop ops are safe; this bound exists so a hung handler can't
@@ -588,13 +593,13 @@ class DelegationEngine:
         """
         if self._stop.is_set():
             return self._interval
-        if self._undelivered or self._reviews:
+        if self._undelivered:
             return min(self._interval, ACTIVE_POLL_INTERVAL)
         if any(exp > time.time() for exp in self._ui_claims.values()):
             return min(self._interval, ACTIVE_POLL_INTERVAL)
         for facts in self._conversation_facts.values():
             if any(
-                call.get("state") in UNSETTLED_CALL_STATES
+                call.get("state") in IN_FLIGHT_CALL_STATES
                 for call in facts.get("calls", {}).values()
             ):
                 return min(self._interval, ACTIVE_POLL_INTERVAL)

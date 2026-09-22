@@ -28,6 +28,7 @@ import pytest
 
 from app.services.delegation.engine import (
     ACTIVE_POLL_INTERVAL,
+    IN_FLIGHT_CALL_STATES,
     UNSETTLED_CALL_STATES,
     DelegationEngine,
 )
@@ -91,11 +92,19 @@ def test_the_backstop_poll_is_lazy_when_nothing_is_happening():
     assert engine._next_interval() == 15.0
 
 
-@pytest.mark.parametrize("state", sorted(UNSETTLED_CALL_STATES))
-def test_the_backstop_poll_tightens_while_a_call_is_unsettled(state: str):
+@pytest.mark.parametrize("state", sorted(IN_FLIGHT_CALL_STATES))
+def test_the_backstop_poll_tightens_while_machine_work_is_in_flight(state: str):
     engine = _engine(poll_interval=15.0)
     engine._note_call("conv_1", "call_1", "local_window", state)
     assert engine._next_interval() == ACTIVE_POLL_INTERVAL
+
+
+def test_waiting_on_a_person_does_not_tighten_the_poll():
+    """A parked review has no deadline; polling for hours buys nothing."""
+    engine = _engine(poll_interval=15.0)
+    engine._note_call("conv_1", "call_1", "google_email_send", "awaiting_user_review")
+    assert "awaiting_user_review" in UNSETTLED_CALL_STATES
+    assert engine._next_interval() == 15.0
 
 
 def test_the_backstop_poll_tightens_while_the_ui_owns_a_stream():

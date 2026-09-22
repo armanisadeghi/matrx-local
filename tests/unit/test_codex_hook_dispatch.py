@@ -239,3 +239,116 @@ def test_the_state_record_carries_no_filesystem_path(tmp_path: Path) -> None:
     rendered = json.dumps(hook_dispatch_state(home))
     assert str(home) not in rendered
     assert str(tmp_path) not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Hook TRUST — the switch that was actually off on this Mac (lane CS-35)
+# ---------------------------------------------------------------------------
+
+PINNED = {
+    "preToolUse": "sha256:" + "a" * 64,
+    "sessionStart": "sha256:" + "b" * 64,
+    "userPromptSubmit": "sha256:" + "c" * 64,
+    "stop": "sha256:" + "d" * 64,
+}
+SNAKE = {
+    "preToolUse": "pre_tool_use",
+    "sessionStart": "session_start",
+    "userPromptSubmit": "user_prompt_submit",
+    "stop": "stop",
+}
+
+
+def _pin(root: Path) -> None:
+    """What the plugin ships: the hashes Codex computes for ITS hooks."""
+    (root / "hooks/trusted-hashes.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "hook_hashes": PINNED,
+                "capture_events": [e for e in PINNED if e != "preToolUse"],
+            }
+        )
+    )
+
+
+def _trust(home: Path, entries: dict[str, str]) -> None:
+    body = ["[hooks.state]\n"]
+    for event, value in entries.items():
+        key = f"matrx-codex-plugin@ai-matrx:hooks/hooks.json:{SNAKE[event]}:0:0"
+        body.append(f'\n[hooks.state."{key}"]\ntrusted_hash = "{value}"\n')
+    with (home / "config.toml").open("a") as handle:
+        handle.write("".join(body))
+
+
+def test_trust_recorded_for_an_older_hooks_file_is_the_blocker(tmp_path: Path) -> None:
+    """THE LIVE STATE OF THIS MAC on 2026-09-21, measured with `codex
+    app-server` + `hooks/list`: the git guard trusted at its current hash and
+    all eight capture hooks recorded at an older one, so Codex registered them
+    and dispatched none. Before this the screen said "install the plugin"."""
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    _pin(root)
+    _trust(home, {"preToolUse": PINNED["preToolUse"], "sessionStart": "sha256:" + "0" * 64,
+                  "userPromptSubmit": "sha256:" + "0" * 64, "stop": "sha256:" + "0" * 64})
+    state = hook_dispatch_state(home)
+    assert state["code"] == "codex_hook_trust_stale"
+    assert state["dispatches"] is False
+    assert "/hooks" in state["remedy"]
+    assert "older version" in state["message"]
+
+
+def test_hooks_never_approved_is_its_own_state(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    _pin(root)
+    state = hook_dispatch_state(home)
+    assert state["code"] == "codex_hook_never_trusted"
+    assert state["dispatches"] is False
+
+
+def test_a_trusted_enforcement_hook_alone_never_counts_as_capture(tmp_path: Path) -> None:
+    """The git guard is not capture. A host with only that approved records
+    nothing, and reading it as healthy is exactly how this was missed."""
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    _pin(root)
+    _trust(home, {"preToolUse": PINNED["preToolUse"]})
+    assert hook_dispatch_state(home)["dispatches"] is False
+
+
+def test_every_hook_approved_at_the_shipped_hashes_is_ready(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    _pin(root)
+    _trust(home, dict(PINNED))
+    state = hook_dispatch_state(home)
+    assert state["code"] == "codex_hooks_ready"
+    assert state["dispatches"] is True
+
+
+def test_an_install_without_the_pin_file_falls_back_and_never_invents_a_blocker(
+    tmp_path: Path,
+) -> None:
+    """An older plugin build ships no pin, so trust is unreadable — which is
+    reported as unknown, never as trusted and never as broken."""
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    state = hook_dispatch_state(home)
+    assert state["trust"]["state"] == "unknown"
+    assert state["code"] == "codex_hooks_ready"
+
+
+def test_the_trust_record_carries_no_filesystem_path(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+    root = _install_plugin(home)
+    _write_runtime_copy(home, root)
+    _pin(root)
+    _trust(home, dict(PINNED))
+    rendered = json.dumps(hook_dispatch_state(home))
+    assert str(home) not in rendered

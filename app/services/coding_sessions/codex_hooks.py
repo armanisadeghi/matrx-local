@@ -10,16 +10,29 @@ one has a different remedy:
    no hook at all; no plugin version and no number of turns can help. The
    remedy is one command, ``codex features enable hooks``.
 2. The plugin is not installed. Install it.
-3. The plugin is installed, but the emitter copy Codex actually EXECUTES for
+3. Codex has the hooks registered and REFUSES to run them, because hook trust
+   is granted per entry and is invalidated the moment that entry's definition
+   changes. This was the live state of this Mac on 2026-09-21: plugin
+   0.2.0-alpha.12 installed and enabled, ``features.hooks`` on, all nine hooks
+   in Codex's registry, and eight of them ``trustStatus: "modified"`` — only
+   the git guard (not capture) was trusted. Nothing had been captured since
+   2026-08-30 and no screen said a word. The decision is readable offline:
+   ``[hooks.state."<key>"].trusted_hash`` in ``$CODEX_HOME/config.toml`` is
+   exactly what Codex compares, and the installed plugin ships the hashes its
+   own hooks produce in ``hooks/trusted-hashes.json`` (path- and
+   version-independent, so an unchanged ``hooks.json`` keeps a host's trust).
+   Remedy: the interactive ``/hooks`` review — approval to execute code, which
+   no agent and no engine may grant on the person's behalf.
+4. The plugin is installed, but the emitter copy Codex actually EXECUTES for
    that install was never written — the plugin's launcher copies
    ``hooks/emit.py`` into ``PLUGIN_DATA/telemetry-runtime/<key>.py`` at
    ``SessionStart``, keyed by a hash of the install root, so a missing copy
    proves the telemetry hook has not run once since that version arrived
-   (untrusted hooks, or a host that has not started an interactive session
-   since the upgrade). Remedy: the one-time ``/hooks`` trust review.
-4. Everything is in place and no turn has happened yet. Run one.
+   (a host that has not started an interactive session since the upgrade).
+   Remedy: the one-time ``/hooks`` trust review.
+5. Everything is in place and no turn has happened yet. Run one.
 
-Before this module all four produced ONE sentence — "Install or update that
+Before this module all of them produced ONE sentence — "Install or update that
 plugin and run one Codex turn" — which is precisely what the person had
 already done (verifier note V-CS-34). That is the silent-failure law inverted:
 a stand-in remedy that names the wrong action sends them round the same loop.
@@ -37,6 +50,7 @@ name. Asking the CLI for the effective value costs a subprocess against a
 from __future__ import annotations
 
 import hashlib
+import json
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -61,6 +75,25 @@ CODE_NOT_INSTALLED = "codex_plugin_not_installed"
 CODE_NEVER_RAN = "codex_hook_never_ran"
 CODE_READY = "codex_hooks_ready"
 CODE_INSTALL_UNREADABLE = "codex_plugin_install_unreadable"
+CODE_TRUST_STALE = "codex_hook_trust_stale"
+CODE_NEVER_TRUSTED = "codex_hook_never_trusted"
+
+#: Shipped by the plugin; the hashes Codex computes for ITS hook entries.
+PIN_FILE = "hooks/trusted-hashes.json"
+#: ``<plugin id>:hooks/hooks.json:<snake event>:0:0`` — only the suffix is
+#: stable, because the plugin id carries the marketplace name.
+_KEY_SUFFIX = "hooks/hooks.json:%s:0:0"
+SNAKE_EVENTS = {
+    "preToolUse": "pre_tool_use",
+    "postToolUse": "post_tool_use",
+    "sessionStart": "session_start",
+    "sessionEnd": "session_end",
+    "userPromptSubmit": "user_prompt_submit",
+    "subagentStart": "subagent_start",
+    "subagentStop": "subagent_stop",
+    "postCompact": "post_compact",
+    "stop": "stop",
+}
 
 _ENABLE_REMEDY = (
     "Run `codex features enable hooks` in a terminal, then run one Codex turn. "
@@ -69,7 +102,8 @@ _ENABLE_REMEDY = (
 _TRUST_REMEDY = (
     "Open an interactive Codex session on this Mac and run /hooks, then approve the "
     "AI Matrx hooks. Codex only offers that review inside an interactive session, so a "
-    "host that has only run `codex exec` never sees it."
+    "host that has only run `codex exec` never sees it. Approving it is approval to run "
+    "code, so only you can do it — AI Matrx will never do it for you."
 )
 
 
@@ -134,6 +168,89 @@ def _has_runtime_copy(home: Path, plugin_root: Path) -> bool:
     return False
 
 
+def read_hook_trust(home: Path) -> dict[str, str]:
+    """``[hooks.state]`` for the AI Matrx plugin, as ``event -> trusted_hash``.
+
+    Another plugin's entries and the person's own ``hooks.json`` entries are
+    ignored: a trusted hook that is not ours proves nothing about capture.
+    """
+    path = home / CONFIG_NAME
+    try:
+        if path.stat().st_size > _MAX_CONFIG_BYTES:
+            return {}
+        parsed = tomllib.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    table = parsed.get("hooks")
+    state = table.get("state") if isinstance(table, dict) else None
+    if not isinstance(state, dict):
+        return {}
+    found: dict[str, str] = {}
+    for event, snake in SNAKE_EVENTS.items():
+        suffix = _KEY_SUFFIX % snake
+        for key, value in state.items():
+            if not key.startswith("matrx-codex-plugin@") or not key.endswith(suffix):
+                continue
+            recorded = value.get("trusted_hash") if isinstance(value, dict) else None
+            if isinstance(recorded, str) and recorded:
+                found[event] = recorded
+    return found
+
+
+def read_pinned_hashes(roots: list[Path]) -> dict[str, Any]:
+    """The hashes the INSTALLED plugin says its hooks produce, newest install
+    first. An older build ships none, and that is honestly unknown."""
+    for root in reversed(roots):
+        try:
+            record = json.loads((root / PIN_FILE).read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        hashes = record.get("hook_hashes")
+        if isinstance(hashes, dict) and hashes:
+            capture = record.get("capture_events")
+            return {
+                "hook_hashes": {
+                    str(k): str(v) for k, v in hashes.items() if isinstance(v, str)
+                },
+                "capture_events": [str(e) for e in capture or [] if isinstance(e, str)],
+            }
+    return {"hook_hashes": {}, "capture_events": []}
+
+
+def trust_state(home: Path, roots: list[Path]) -> dict[str, Any]:
+    """Which of the installed plugin's hooks Codex will actually dispatch.
+
+    ``never_reviewed`` (a fresh host), ``stale`` (approved for an OLDER version
+    of these hooks — what stopped capture here), ``trusted``, or ``unknown``
+    when the install ships no pin. ``capture_dispatches`` ignores the git
+    guard on purpose.
+    """
+    pinned = read_pinned_hashes(roots)
+    hashes: dict[str, str] = pinned["hook_hashes"]
+    capture: list[str] = pinned["capture_events"]
+    recorded = read_hook_trust(home)
+    trusted = sorted(e for e, h in hashes.items() if recorded.get(e) == h)
+    stale = sorted(
+        e for e, h in hashes.items() if e in recorded and recorded[e] != h
+    )
+    untrusted = [e for e in capture if e not in trusted]
+    if not hashes:
+        state = "unknown"
+    elif not untrusted:
+        state = "trusted"
+    elif any(e in stale for e in capture):
+        state = "stale"
+    else:
+        state = "never_reviewed"
+    return {
+        "state": state,
+        "trusted": trusted,
+        "stale": stale,
+        "capture_untrusted": untrusted,
+        "capture_dispatches": state == "trusted",
+    }
+
+
 def hook_dispatch_state(home: Path) -> dict[str, Any]:
     """What this host will actually do with the plugin's hooks, and what to do.
 
@@ -151,6 +268,7 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
         "config_explicit": explicit,
         "plugin_versions": versions,
         "runtime_copy_present": None,
+        "trust": {"state": "unknown"},
         "dispatches": None,
         "code": CODE_READY,
         "message": "",
@@ -203,6 +321,34 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
             ),
         )
         return record
+    trust = trust_state(home, roots)
+    record["trust"] = trust
+    if trust["state"] == "stale":
+        record.update(
+            dispatches=False,
+            code=CODE_TRUST_STALE,
+            message=(
+                f"Codex has the AI Matrx hooks ({', '.join(versions)}) and will not run "
+                f"{len(trust['capture_untrusted'])} of them: this Mac approved an older "
+                "version of these hooks, and Codex refuses a hook whose definition "
+                "changed since it was approved. Nothing from Codex is being recorded, "
+                "however many turns you run."
+            ),
+            remedy=_TRUST_REMEDY,
+        )
+        return record
+    if trust["state"] == "never_reviewed":
+        record.update(
+            dispatches=False,
+            code=CODE_NEVER_TRUSTED,
+            message=(
+                f"Codex has the AI Matrx hooks ({', '.join(versions)}) registered and has "
+                "never been asked to approve them, so it runs none of them and records "
+                "nothing from Codex."
+            ),
+            remedy=_TRUST_REMEDY,
+        )
+        return record
     present = any(_has_runtime_copy(home, root) for root in roots)
     record["runtime_copy_present"] = present
     if not present:
@@ -231,6 +377,8 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
 
 __all__ = [
     "CODE_DISABLED",
+    "CODE_NEVER_TRUSTED",
+    "CODE_TRUST_STALE",
     "CODE_INSTALL_UNREADABLE",
     "CODE_NEVER_RAN",
     "CODE_NOT_INSTALLED",
@@ -240,5 +388,7 @@ __all__ = [
     "hook_dispatch_state",
     "installed_plugin_roots",
     "read_config_feature",
+    "read_hook_trust",
     "runtime_copy_key",
+    "trust_state",
 ]

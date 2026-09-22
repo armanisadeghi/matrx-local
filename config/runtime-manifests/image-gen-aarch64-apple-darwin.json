@@ -1,7 +1,7 @@
 {
   "contract_sha256": "320e47365bc0d876edf2f02ed0a75fc2f1e6f1ff593c4b72711a39c2df2271b0",
   "lock_file": "image-gen-aarch64-apple-darwin.requirements.txt",
-  "lock_sha256": "a3a5b6b5fe1dea50e2e70af6f537907932ca5b6c58a0458d51869b4237d0f4b6",
+  "lock_sha256": "374152c3afb8172b9c3f2b8874d605ac472d302dce851adfb2a1b40410127694",
   "minimum_macos": "12.0",
   "packages": [
     {

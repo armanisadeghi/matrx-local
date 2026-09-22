@@ -70,9 +70,10 @@ GET /ai/user/pending_calls?instance_id=...  (user JWT, every poll interval)
    the call a whole poll interval. Measured on the owner's Mac 2026-09-22:
    claim latency 0.6-1.2 s when the wake landed in the wait, 16-82 s when it
    landed in the sweep. The backstop poll also tightens to
-   `ACTIVE_POLL_INTERVAL` (2 s) while anything is in flight — a result owed,
-   a review parked, a UI claim live, or a call unsettled — and stays at the
-   full interval when idle. Guard:
+   `ACTIVE_POLL_INTERVAL` (2 s) while MACHINE work is in flight — a result
+   owed, a UI claim live, or a call queued/executing — and stays at the full
+   interval when idle or when the wait is on a person (a parked review has no
+   deadline; polling it for hours buys nothing). Guard:
    `tests/unit/test_delegation_latency_and_conflict.py`.
    aidream publishes `kind:"wake"`,
    `action:"tool_call.delegated"` on `matrx-local-bridge:<user_id>` when a

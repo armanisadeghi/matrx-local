@@ -121,7 +121,12 @@ export function SandboxPicker({ thisDeviceInstanceId }: SandboxPickerProps) {
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0" align="end">
+      {/*
+        `sizing="content"` (design-system 0.35.0 consumer action): this popover
+        lists sandboxes and computers the PERSON named, so a fixed w-80 cut
+        names it has no business choosing the length of.
+      */}
+      <PopoverContent sizing="content" className="p-0" align="end">
         <div className="flex items-center justify-between border-b px-3 py-2">
           <div>
             <div className="text-xs font-semibold">Agent compute target</div>

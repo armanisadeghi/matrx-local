@@ -144,13 +144,45 @@ def runtime_copy_key(plugin_root: Path) -> str:
     return hashlib.sha256(str(plugin_root).encode()).hexdigest()[:24]
 
 
-def installed_plugin_roots(home: Path) -> list[Path]:
-    """Every installed matrx-codex-plugin version root, oldest path first."""
+def _plugin_version_sort_key(
+    version: str,
+) -> tuple[tuple[int, ...], int, tuple[tuple[int, int | str], ...]]:
+    """Sort Codex plugin cache directory names as release versions.
+
+    Plugin versions are SemVer-like (for example ``0.2.0-alpha.12``). A
+    lexical path sort gets ``alpha.9`` wrong relative to ``alpha.12``, which
+    matters because a runtime copy proves only that exact install ran.
+    """
+    release, separator, prerelease = version.removeprefix("v").partition("-")
     try:
-        candidates = sorted(home.glob(PLUGIN_CACHE_GLOB))
+        release_key = tuple(int(part) for part in release.split("."))
+    except ValueError:
+        # A malformed cache directory cannot outrank a valid release, but
+        # still has a deterministic position for diagnostic listing.
+        return ((), 0, ((0, version),))
+    prerelease_key = tuple(
+        (1, int(part)) if part.isdigit() else (0, part)
+        for part in prerelease.split(".")
+    )
+    return (release_key, 1 if not separator else 0, prerelease_key)
+
+
+def installed_plugin_roots(home: Path) -> list[Path]:
+    """Every installed matrx-codex-plugin version root, oldest version first."""
+    try:
+        candidates = home.glob(PLUGIN_CACHE_GLOB)
     except OSError:
         return []
-    return [path for path in candidates if (path / PLUGIN_MANIFEST).is_file()]
+    return sorted(
+        (path for path in candidates if (path / PLUGIN_MANIFEST).is_file()),
+        key=lambda path: _plugin_version_sort_key(path.name),
+    )
+
+
+def _newest_plugin_roots(roots: list[Path]) -> list[Path]:
+    """The cache root(s) for the newest installed plugin release."""
+    newest = max(_plugin_version_sort_key(root.name) for root in roots)
+    return [root for root in roots if _plugin_version_sort_key(root.name) == newest]
 
 
 def _plugin_data_roots(home: Path) -> list[Path]:
@@ -321,14 +353,16 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
             ),
         )
         return record
-    trust = trust_state(home, roots)
+    newest_roots = _newest_plugin_roots(roots)
+    newest_versions = [root.name for root in newest_roots]
+    trust = trust_state(home, newest_roots)
     record["trust"] = trust
     if trust["state"] == "stale":
         record.update(
             dispatches=False,
             code=CODE_TRUST_STALE,
             message=(
-                f"Codex has the AI Matrx hooks ({', '.join(versions)}) and will not run "
+                f"Codex has the AI Matrx hooks ({', '.join(newest_versions)}) and will not run "
                 f"{len(trust['capture_untrusted'])} of them: this Mac approved an older "
                 "version of these hooks, and Codex refuses a hook whose definition "
                 "changed since it was approved. Nothing from Codex is being recorded, "
@@ -342,21 +376,23 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
             dispatches=False,
             code=CODE_NEVER_TRUSTED,
             message=(
-                f"Codex has the AI Matrx hooks ({', '.join(versions)}) registered and has "
+                f"Codex has the AI Matrx hooks ({', '.join(newest_versions)}) registered and has "
                 "never been asked to approve them, so it runs none of them and records "
                 "nothing from Codex."
             ),
             remedy=_TRUST_REMEDY,
         )
         return record
-    present = any(_has_runtime_copy(home, root) for root in roots)
+    # A copy from a retired cache root proves only that retired plugin ran.
+    # Every root for the newest release must have its own launcher copy.
+    present = all(_has_runtime_copy(home, root) for root in newest_roots)
     record["runtime_copy_present"] = present
     if not present:
         record.update(
             dispatches=False,
             code=CODE_NEVER_RAN,
             message=(
-                f"The AI Matrx plugin for Codex ({', '.join(versions)}) is installed and "
+                f"The AI Matrx plugin for Codex ({', '.join(newest_versions)}) is installed and "
                 "Codex hook dispatch is on, but its hook has not run once since that "
                 "version was installed, so nothing has been captured from it."
             ),
@@ -367,7 +403,7 @@ def hook_dispatch_state(home: Path) -> dict[str, Any]:
         dispatches=True,
         code=CODE_READY,
         message=(
-            f"The AI Matrx plugin for Codex ({', '.join(versions)}) is installed and its "
+            f"The AI Matrx plugin for Codex ({', '.join(newest_versions)}) is installed and its "
             "hook has run on this Mac."
         ),
         remedy="",

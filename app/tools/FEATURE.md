@@ -23,18 +23,10 @@ covered by any action group.
    `tool_schemas`). Without it every param types as `"string"` and coercion silently no-ops —
    that was a real bug. `tool_schemas._handler_signature` raises `ToolAnnotationResolutionError`
    when annotations cannot be resolved; **never substitute the raw string annotations.**
-5. **An app NAME is never addressed directly on macOS.** Every handler that takes an app
-   name from a person or an agent resolves it through `app/services/app_identity`
-   (`require_running_app`) and then talks to the app by bundle id / pid. `tell application
-   "<name>"` raises -1728 for every app whose bundle name differs from its Dock name
-   (Kindle / "Amazon Kindle"), and `kCGWindowOwnerName` is a third namespace again. An app
-   that is not running is refused in ONE sentence naming what is. Guard:
-   `tests/unit/test_app_identity_is_the_only_authority.py`. →
-   [app/services/app_identity/FEATURE.md](../services/app_identity/FEATURE.md)
-6. **Platform gating is advertisement, not enforcement.** `platforms=("darwin",)` in `_META`
+5. **Platform gating is advertisement, not enforcement.** `platforms=("darwin",)` in `_META`
    describes; the handler itself must ALSO self-gate at runtime with a clear
    "only available on <OS>" error envelope.
-7. **`ToolResult.metadata` is NOT a UI-only channel.** `local_tool_bridge` hands it to the model
+6. **`ToolResult.metadata` is NOT a UI-only channel.** `local_tool_bridge` hands it to the model
    beside the tool output, so anything a handler puts there is paid for in every agent's
    context. A bulk payload (a table set, a link graph, a parse tree) must be **opt-in behind a
    flag** and **capped with the truncation reported**, never returned by default. `Scrape` is
@@ -44,12 +36,20 @@ covered by any action group.
    empty). Never forward `organized_data`, `ai_content`/`ai_research_*`,
    `markdown_renderable_by_header`, `link_records`, `raw_html`/`raw_body`. Typed consumer:
    `desktop/src/lib/scrape-extraction.ts`.
-8. **Mega handlers WRAP legacy handlers, never rewrite them** — `make_group_handler` in
+7. **Mega handlers WRAP legacy handlers, never rewrite them** — `make_group_handler` in
    `actions.py` re-dispatches through `dispatch()` so every hook in the underlying handler
    (e.g. file-sync hydration) rides along. Legacy PascalCase names stay dispatchable.
    Adding an ACTION to an existing group means the mega row's parameters CHANGED: add the
    legacy tool, add it to the group's `actions` map, regenerate the snapshot, emit + apply the
    changeset.
+8. **An app NAME is never addressed directly on macOS.** Every handler that takes an app
+   name from a person or an agent resolves it through `app/services/app_identity`
+   (`require_running_app`) and then talks to the app by bundle id / pid. `tell application
+   "<name>"` raises -1728 for every app whose bundle name differs from its Dock name
+   (Kindle / "Amazon Kindle"), and `kCGWindowOwnerName` is a third namespace again. An app
+   that is not running is refused in ONE sentence naming what is. Guard:
+   `tests/unit/test_app_identity_is_the_only_authority.py`. →
+   [app/services/app_identity/FEATURE.md](../services/app_identity/FEATURE.md)
 
 ## Adding a tool
 

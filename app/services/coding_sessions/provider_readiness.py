@@ -25,6 +25,9 @@ import psutil
 from app.common.system_logger import get_logger
 from app.config import MATRX_HOME_DIR
 from app.services.coding_sessions.codex_hooks import CODE_DISABLED, hook_dispatch_state
+from app.services.coding_sessions.cursor_hooks import (
+    hook_dispatch_state as cursor_hook_dispatch_state,
+)
 
 logger = get_logger()
 
@@ -405,6 +408,31 @@ class ProviderReadinessFacade:
             result["blocker"] = _dispatch_blocker(dispatch)
         return result
 
+    def _cursor_capture_health(self) -> dict[str, Any]:
+        """Why nothing was captured from Cursor — the host answer, not silence.
+
+        Cursor's capture has no kill switches of its own to read (the Codex
+        plugin's launch-failed / runtime-disabled markers have no Cursor
+        equivalent), and Cursor exposes no hook enable flag or trust record at
+        all. So this is the dispatch read alone, in the same shape the desktop
+        already renders for Codex: ``state`` plus a ``blocker`` carrying the
+        code, the sentence and the remedy.
+        """
+        dispatch = cursor_hook_dispatch_state(
+            self._home / ".cursor", [self._matrx_home, self._home / ".matrx"]
+        )
+        result: dict[str, Any] = {
+            "state": "unknown",
+            "blocker": None,
+            "dispatch": dispatch,
+        }
+        if dispatch["dispatches"] is True:
+            result["state"] = "ok"
+        elif dispatch["dispatches"] is False:
+            result["state"] = "blocked"
+            result["blocker"] = _dispatch_blocker(dispatch)
+        return result
+
     def _cursor_adapter(self) -> dict[str, Any]:
         manifests = list(
             _bounded_manifests(self._home / ".cursor/plugins", "plugin.json")
@@ -453,6 +481,14 @@ class ProviderReadinessFacade:
             "hook_trust": "not_applicable",
             "evidence": ["host_extension_registry"] if detected else [],
         }
+
+    def _capture(self, provider: str, now: datetime) -> dict[str, Any] | None:
+        """Hook-dispatch health for every provider whose capture lives in a hook."""
+        if provider == "codex":
+            return self._codex_capture_health(now)
+        if provider == "cursor":
+            return self._cursor_capture_health()
+        return None
 
     def _adapter(self, provider: str) -> dict[str, Any]:
         return {
@@ -682,7 +718,7 @@ class ProviderReadinessFacade:
                 "display_name": _DISPLAY_NAMES[provider],
                 "product": product_state,
                 "adapter": adapter,
-                "capture": self._codex_capture_health(now) if provider == "codex" else None,
+                "capture": self._capture(provider, now),
                 "upstream_spool": spool,
                 "activity": activity,
                 "connection": {

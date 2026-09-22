@@ -73,7 +73,11 @@ GET /ai/user/pending_calls?instance_id=...  (user JWT, every poll interval)
    `ACTIVE_POLL_INTERVAL` (2 s) while MACHINE work is in flight — a result
    owed, a UI claim live, or a call queued/executing — and stays at the full
    interval when idle or when the wait is on a person (a parked review has no
-   deadline; polling it for hours buys nothing). Guard:
+   deadline; polling it for hours buys nothing). A result retained under a
+   LIVE UI claim is NOT re-posted on those fast sweeps — the UI owns that
+   continuation, so re-posting is a full tool-result POST every two seconds
+   for nothing; the obligation waits and the retry resumes the moment the
+   claim lapses. Guard:
    `tests/unit/test_delegation_latency_and_conflict.py`.
    aidream publishes `kind:"wake"`,
    `action:"tool_call.delegated"` on `matrx-local-bridge:<user_id>` when a

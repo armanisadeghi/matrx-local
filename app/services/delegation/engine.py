@@ -1265,7 +1265,20 @@ class DelegationEngine:
     async def _retry_undelivered(self, jwt: str) -> None:
         if not self._undelivered:
             return
-        pending = list(self._undelivered.items())
+        # A result retained under a LIVE UI claim is not owed to anybody yet:
+        # the desktop Cloud Chat owns that continuation and reads it off
+        # `ui_conversation_state`. Re-posting it buys nothing, and the sweep
+        # now runs every two seconds while a stream is attached — that would
+        # be a full tool-result POST every two seconds for the length of a
+        # conversation. The obligation stays; the retry resumes the moment the
+        # claim lapses (`test_ui_claim_defers_resume_then_self_heals_on_release`).
+        pending = [
+            item
+            for item in self._undelivered.items()
+            if not self._ui_claim_active(item[1][0])
+        ]
+        if not pending:
+            return
         logger.info("[delegation] retrying %d undelivered result(s)", len(pending))
         for call_id, (conversation_id, payload) in pending:
             # _deliver re-queues on failure and pops on success.

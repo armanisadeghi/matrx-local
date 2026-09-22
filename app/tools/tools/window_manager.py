@@ -21,6 +21,25 @@ _ACCESSIBILITY_HINT = (
 )
 
 
+def _no_accessible_windows(stderr: bytes, app: "RunningApp | None") -> str | None:
+    """Turn AppleScript -1719 into a sentence a person can act on.
+
+    Some apps (Kindle among them) publish no windows to macOS accessibility at
+    all, so `window 1` is an invalid index however the process was addressed.
+    That is a fact about the app, not a failure of the lookup, and "Invalid
+    index. (-1719)" tells nobody anything.
+    """
+    if b"-1719" not in stderr:
+        return None
+    name = app.spoken_name if app is not None else "That app"
+    return (
+        f"{name} is running, but it publishes no windows to macOS accessibility, "
+        "so its windows cannot be raised by title, moved, resized or minimised "
+        f"from here. {name} can still be brought to the front by name, and its "
+        "window can still be listed and captured."
+    )
+
+
 def _check_applescript_error(stderr: bytes) -> str | None:
     """Return a friendly permission hint or None if error is not permission-related."""
     text = stderr.decode(errors="replace")
@@ -374,7 +393,11 @@ end tell
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode != 0:
                 friendly = _check_applescript_error(stderr)
-                msg = friendly or stderr.decode(errors="replace").strip()
+                msg = (
+                    friendly
+                    or _no_accessible_windows(stderr, app)
+                    or stderr.decode(errors="replace").strip()
+                )
                 return ToolResult(
                     type=ToolResultType.ERROR,
                     output=msg,
@@ -483,7 +506,11 @@ end tell
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode != 0:
                 friendly = _check_applescript_error(stderr)
-                msg = friendly or stderr.decode(errors="replace").strip()
+                msg = (
+                    friendly
+                    or _no_accessible_windows(stderr, app)
+                    or stderr.decode(errors="replace").strip()
+                )
                 return ToolResult(
                     type=ToolResultType.ERROR,
                     output=msg,
@@ -621,7 +648,11 @@ end tell
                 friendly = _check_applescript_error(stderr)
                 return ToolResult(
                     type=ToolResultType.ERROR,
-                    output=friendly or stderr.decode(errors="replace").strip(),
+                    output=(
+                        friendly
+                        or _no_accessible_windows(stderr, app)
+                        or stderr.decode(errors="replace").strip()
+                    ),
                     action_needed=(
                         os_permission_needed(
                             feature="Window controls",

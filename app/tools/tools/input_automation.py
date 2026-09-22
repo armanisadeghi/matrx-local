@@ -7,6 +7,7 @@ import logging
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.services.action_needed import os_permission_needed
+from app.services.app_identity import AppNotRunning, RunningApp, require_running_app
 from app.tools.session import ToolSession
 from app.tools.tools import NO_GUI_MSG, has_display
 from app.tools.types import ToolResult, ToolResultType
@@ -38,6 +39,24 @@ def _check_applescript_error(stderr: bytes) -> str | None:
     ):
         return _ACCESSIBILITY_HINT
     return None
+
+
+async def _target_app(app_name: str | None) -> tuple[RunningApp | None, ToolResult | None]:
+    """Resolve an optional app target, or hand back the honest refusal.
+
+    Keystrokes and clicks are aimed at an app by ACTIVATING it first. The name
+    the person typed is never interpolated into `tell application "<name>"` —
+    that raises AppleScript -1728 for every app whose bundle name differs from
+    its Dock name (Kindle / "Amazon Kindle"). See app/services/app_identity.
+    """
+    if not app_name:
+        return None, None
+    try:
+        return await require_running_app(app_name), None
+    except AppNotRunning as exc:
+        return None, ToolResult(type=ToolResultType.ERROR, output=str(exc))
+    except RuntimeError as exc:
+        return None, ToolResult(type=ToolResultType.ERROR, output=str(exc))
 
 
 async def _accessibility_preflight(feature: str) -> ToolResult | None:
@@ -79,9 +98,12 @@ async def tool_type_text(
         if PLATFORM["is_mac"]:
             # Escape for AppleScript
             escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-            if app_name:
+            app, refusal = await _target_app(app_name)
+            if refusal is not None:
+                return refusal
+            if app is not None:
                 script = f"""
-tell application "{app_name}" to activate
+tell {app.applescript_target} to activate
 delay 0.3
 tell application "System Events"
     keystroke "{escaped}"
@@ -240,9 +262,12 @@ async def tool_hotkey(
             else:
                 script_body = f'keystroke "{key}" using {{{mod_str}}}'
 
-            if app_name:
+            app, refusal = await _target_app(app_name)
+            if refusal is not None:
+                return refusal
+            if app is not None:
                 script = f"""
-tell application "{app_name}" to activate
+tell {app.applescript_target} to activate
 delay 0.2
 tell application "System Events"
     {script_body}
@@ -426,10 +451,14 @@ async def tool_mouse_click(
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)
         if PLATFORM["is_mac"]:
-            if app_name:
-                activate = f'tell application "{app_name}" to activate\ndelay 0.3\n'
-            else:
-                activate = ""
+            app, refusal = await _target_app(app_name)
+            if refusal is not None:
+                return refusal
+            activate = (
+                f"tell {app.applescript_target} to activate\ndelay 0.3\n"
+                if app is not None
+                else ""
+            )
 
             # cliclick verbs: c=left click, dc=double, tc=triple, rc=right.
             # The old code computed a click_type and never used it — every

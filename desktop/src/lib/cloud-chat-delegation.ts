@@ -3,9 +3,46 @@ const DELEGATION_CLAIM_TTL_SECONDS = 20;
 // Longest mega-tool execution timeout is Shell at 900s; add headroom.
 const DELEGATION_WAIT_CAP_MS = 16 * 60 * 1000;
 
+export interface DelegationCall {
+  call_id: string;
+  tool_name: string;
+  state: string;
+}
+
+/**
+ * Call states that have NOT produced a result yet. While any of them is live,
+ * this conversation's turn is still suspended on the server: a `/resume` is
+ * refused with HTTP 409 `outstanding_delegated_calls`, and a NEW user turn is
+ * a turn sent on top of a suspended one. Mirrors `UNSETTLED_CALL_STATES` in
+ * `app/services/delegation/engine.py`.
+ */
+export const UNSETTLED_CALL_STATES = new Set([
+  "queued",
+  "executing",
+  "awaiting_user_review",
+]);
+
+export function outstandingCalls(state: EngineDelegationState | null): DelegationCall[] {
+  if (state?.outstanding) return state.outstanding;
+  return (state?.calls ?? []).filter((call) => UNSETTLED_CALL_STATES.has(call.state));
+}
+
+/**
+ * True when the server would refuse a resume right now. aidream raises HTTP
+ * 409 `outstanding_delegated_calls` while any sibling call of the same
+ * user_request is still delegated, and the desktop used to render that
+ * refusal as a failed turn. It is not a failure — it means "wait".
+ */
+export function isBenignResumeConflict(status: number, body: string): boolean {
+  if (status !== 409) return false;
+  return /outstanding_delegated_calls|resume_conflict/.test(body);
+}
+
 export interface EngineDelegationState {
   claimed?: boolean;
-  calls?: Array<{ call_id: string; tool_name: string; state: string }>;
+  calls?: DelegationCall[];
+  /** Calls the engine itself reports as not yet settled (newer engines). */
+  outstanding?: DelegationCall[];
   continuation?: { user_request_id?: string | null; needed?: boolean } | null;
   /**
    * Delegated calls parked for explicit human review (e.g. a proposed Gmail
@@ -43,6 +80,31 @@ export async function claimDelegationUi(
       }),
       signal: AbortSignal.timeout(4000),
     });
+    if (!response.ok) return null;
+    return (await response.json()) as EngineDelegationState;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read-only delegation snapshot. Unlike `claimDelegationUi` this takes no
+ * ownership of the continuation, so the composer gate can poll it without
+ * changing who resumes the conversation.
+ */
+export async function readDelegationState(
+  engineUrl: string,
+  conversationId: string,
+  accessToken: string,
+): Promise<EngineDelegationState | null> {
+  try {
+    const response = await fetch(
+      `${engineUrl}/chat/delegation/conversation/${encodeURIComponent(conversationId)}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(4000),
+      },
+    );
     if (!response.ok) return null;
     return (await response.json()) as EngineDelegationState;
   } catch {
@@ -88,8 +150,13 @@ export async function waitForDelegatedContinuation(
       await resolveAccessToken(accessToken),
     );
     if (state) {
+      const outstanding = outstandingCalls(state);
       const continuation = state.continuation;
-      if (continuation?.needed && continuation.user_request_id) {
+      if (
+        outstanding.length === 0 &&
+        continuation?.needed &&
+        continuation.user_request_id
+      ) {
         return continuation.user_request_id;
       }
       if ((state.reviews_pending ?? 0) > 0) {
@@ -100,10 +167,9 @@ export async function waitForDelegatedContinuation(
         await new Promise((resolve) => setTimeout(resolve, DELEGATION_POLL_MS));
         continue;
       }
-      const executing = state.calls?.filter((call) => call.state === "executing") ?? [];
-      if (executing.length > 0) {
+      if (outstanding.length > 0) {
         onStatus(
-          `Running on this computer: ${executing.map((call) => call.tool_name).join(", ")}...`,
+          `Running on this computer: ${outstanding.map((call) => call.tool_name).join(", ")}...`,
         );
       } else {
         onStatus("Waiting for local tool results...");

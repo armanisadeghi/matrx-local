@@ -29,6 +29,9 @@ import {
 } from "@/lib/aidream-stream";
 import {
   claimDelegationUi,
+  isBenignResumeConflict,
+  outstandingCalls,
+  readDelegationState,
   releaseDelegationUi,
   waitForDelegatedContinuation,
 } from "@/lib/cloud-chat-delegation";
@@ -103,6 +106,12 @@ export interface CloudChatRunControls {
   maxTokens: number | null;
   excludedTools: string[];
 }
+
+/** How often the composer gate re-reads the engine's delegation snapshot. */
+const DELEGATION_GATE_POLL_MS = 1500;
+
+/** How many times a `/resume` may be refused as "siblings still running". */
+const MAX_RESUME_CONFLICT_RETRIES = 8;
 
 const DEFAULT_RUN_CONTROLS: CloudChatRunControls = {
   modelOverride: null,
@@ -878,6 +887,17 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
   const [cacheUserId, setCacheUserId] = useState<string | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  /**
+   * Tool names this desktop is still running for the OPEN conversation.
+   *
+   * While this is non-empty the conversation's turn is suspended on the
+   * server: a new user turn would be a turn sent on top of a suspended one
+   * and aidream answers HTTP 409 `outstanding_delegated_calls`. The composer
+   * says so and holds. Sourced from the engine's own loopback state, so it
+   * self-heals: the engine reporting nothing outstanding — or being
+   * unreachable, when nothing can be running anyway — releases the composer.
+   */
+  const [localToolsRunning, setLocalToolsRunning] = useState<string[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
   const [model, setModel] = useState("");
   const [availableModels, setAvailableModels] = useState<CloudModelOption[]>([]);
@@ -1052,6 +1072,81 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
   const activeConversation =
     conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+
+  const activeCloudConversationId =
+    activeConversation?.cloudConversationId ?? activeConversation?.serverConversationId ?? null;
+
+  /**
+   * Hold the composer while THIS desktop is still running a tool for the open
+   * conversation.
+   *
+   * On 2026-09-22 the owner's run ended on HTTP 409
+   * `outstanding_delegated_calls`: the surface sent on a conversation whose
+   * turn was still suspended on a local tool. Nothing in the UI knew a call
+   * was outstanding — the only record lived inside the send closure and died
+   * with it, so every give-up, stop, stream error and remount re-opened the
+   * composer over a still-running tool.
+   *
+   * The engine's loopback snapshot is the truth, and it is a READ: polling it
+   * never changes who owns the continuation. Fail-open is deliberate — an
+   * unreachable engine is an engine that is running nothing, and a composer
+   * that locks a person out is worse than the 409 it prevents.
+   */
+  useEffect(() => {
+    if (executionTarget !== "cloud" || !engineUrl || !activeCloudConversationId) {
+      setLocalToolsRunning([]);
+      return;
+    }
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (cancelled) return;
+      let running: string[] = [];
+      try {
+        const session = await getAuthedSession();
+        if (session?.access_token) {
+          const state = await readDelegationState(
+            engineUrl,
+            activeCloudConversationId,
+            session.access_token,
+          );
+          running = outstandingCalls(state).map((call) => call.tool_name);
+        }
+      } catch {
+        running = [];
+      }
+      if (cancelled) return;
+      setLocalToolsRunning((previous) =>
+        previous.length === running.length &&
+        previous.every((name, index) => name === running[index])
+          ? previous
+          : running,
+      );
+      // Poll while a stream is live, and keep polling after it ends for as
+      // long as anything is still outstanding — that is exactly the window a
+      // handed-off continuation leaves open.
+      if (isStreaming || running.length > 0) {
+        timer = window.setTimeout(poll, DELEGATION_GATE_POLL_MS);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [executionTarget, engineUrl, activeCloudConversationId, isStreaming]);
+
+  const localToolsRunningRef = useRef<string[]>([]);
+  useEffect(() => {
+    localToolsRunningRef.current = localToolsRunning;
+  }, [localToolsRunning]);
+
+  const localToolsRunningReason =
+    localToolsRunning.length > 0
+      ? `Running on this computer: ${localToolsRunning.join(", ")} — the agent continues on its own when it finishes.`
+      : null;
 
   const refreshConversations = useCallback(async () => {
     const ownerAtStart = cacheUserIdRef.current;
@@ -1415,6 +1510,17 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
       const hasAgent = Boolean(options?.agentId);
       if (!hasAgent && !trimmed) return;
       if (isStreaming) return;
+      // A turn suspended on a local tool cannot take another turn: aidream
+      // answers HTTP 409 `outstanding_delegated_calls`. The composer is
+      // already held (see `localToolsRunningReason`); this is the second
+      // lock, for a send that reaches here any other way.
+      if (localToolsRunningRef.current.length > 0) {
+        setRequestError(
+          `Still running on this computer: ${localToolsRunningRef.current.join(", ")}. ` +
+            "The agent carries on by itself the moment it finishes — no need to resend.",
+        );
+        return;
+      }
 
       if (executionTarget === "local" && !engineUrl) {
         setRequestError("Local engine is not connected.");
@@ -1854,6 +1960,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         // stream segment; a non-empty set at segment end means the turn was
         // suspended and must be resumed after the engine runs the tools.
         const delegatedCallsThisSegment = new Set<string>();
+        // Bounded: a resume refused because siblings are still running is
+        // retried after waiting, but a conversation that keeps refusing must
+        // surface rather than spin.
+        let resumeConflicts = 0;
         let requestUrl = url;
         let requestBody: Record<string, unknown> = body;
 
@@ -2277,6 +2387,43 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
           if (!response.ok || !response.body) {
             const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
+            // A resume refused with 409 `outstanding_delegated_calls` /
+            // `resume_conflict` is NOT a failed turn. It means a sibling tool
+            // of the same turn is still running (or another client already
+            // resumed). aidream itself files both as ordinary refusals. The
+            // desktop used to render them as a dead conversation — that is
+            // what ended the owner's run on 2026-09-22. Wait for the calls to
+            // land and post the resume again.
+            if (
+              isBenignResumeConflict(response.status, rawErrorText) &&
+              executionTarget === "cloud" &&
+              cloudConversationId &&
+              engineUrl &&
+              !abort.signal.aborted &&
+              resumeConflicts < MAX_RESUME_CONFLICT_RETRIES
+            ) {
+              resumeConflicts += 1;
+              setStatus("Waiting for the tools on this computer to finish...");
+              const retryRequestId = await waitForDelegatedContinuation(
+                engineUrl,
+                cloudConversationId,
+                getFreshAccessToken,
+                abort.signal,
+                setStatus,
+              );
+              if (retryRequestId) {
+                requestBody = { ...requestBody, user_request_id: retryRequestId };
+                continue;
+              }
+              if (!abort.signal.aborted) {
+                addDiagnostic(
+                  "Local tool continuation was handed off to the background engine; the final reply lands in the conversation history.",
+                );
+                setStatus("Local tools finished in the background.");
+                scheduleBackgroundHydration(conversationId);
+              }
+              break;
+            }
             const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
             const label = executionTarget === "local" ? "Local AI" : "AIDream";
             const message = `${label} request failed (${response.status}): ${errorText}`;
@@ -2469,6 +2616,8 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
     activeConversation,
     activeConversationId,
     isStreaming,
+    localToolsRunning,
+    localToolsRunningReason,
     mode,
     model,
     availableModels,

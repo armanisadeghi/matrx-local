@@ -7,6 +7,7 @@ import logging
 
 from app.common.platform_ctx import CAPABILITIES, PLATFORM
 from app.services.action_needed import os_permission_needed
+from app.services.app_identity import AppNotRunning, RunningApp, require_running_app
 from app.tools.session import ToolSession
 from app.tools.tools import NO_GUI_MSG, has_display
 from app.tools.types import ToolResult, ToolResultType
@@ -31,6 +32,22 @@ def _check_applescript_error(stderr: bytes) -> str | None:
     ):
         return _ACCESSIBILITY_HINT
     return None
+
+
+async def _resolve_or_refuse(app_name: str) -> tuple[RunningApp | None, ToolResult | None]:
+    """Resolve the person's app name, or hand back the honest refusal.
+
+    Every macOS branch in this module goes through here: an app name is never
+    interpolated into ``tell application "<name>"`` (AppleScript -1728 on any
+    app whose bundle name differs from its Dock name) and never into
+    ``application process "<name>"`` (a third namespace again).
+    """
+    try:
+        return await require_running_app(app_name), None
+    except AppNotRunning as exc:
+        return None, ToolResult(type=ToolResultType.ERROR, output=str(exc))
+    except RuntimeError as exc:
+        return None, ToolResult(type=ToolResultType.ERROR, output=str(exc))
 
 
 async def tool_list_windows(
@@ -65,102 +82,128 @@ async def tool_list_windows(
         )
 
 
-_MAC_WINDOW_LIST_SCRIPT = """
-tell application "System Events"
-    set windowList to {}
-    repeat with theApp in (every application process whose visible is true__FILTER__)
-        set appName to name of theApp
-        try
-            repeat with theWindow in (every window of theApp)
-                set winName to name of theWindow
-                set winPos to position of theWindow
-                set winSize to size of theWindow
-                set end of windowList to appName & "|||" & winName & "|||" & (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "|||" & (item 1 of winSize as text) & "," & (item 2 of winSize as text)
-            end repeat
-        end try
-    end repeat
-    set AppleScript's text item delimiters to "\\n"
-    return windowList as text
-end tell
-"""
+def _mac_windows_via_quartz(pid: int | None) -> tuple[list[dict], bool]:
+    """Every on-screen window, from CoreGraphics — the only source with ids.
 
+    System Events used to walk every window of every process here; on a busy
+    Mac that blew the 15-second AppleScript budget and returned a blank error
+    (Arman's first real run, 2026-09-21). CoreGraphics answers the same
+    question in ~0.1 s, needs no Accessibility grant, and carries the window
+    id that a window-scoped screenshot requires.
 
-def _applescript_string(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    Returns the windows plus whether ANY on-screen window reported a title:
+    without Screen Recording macOS blanks every ``kCGWindowName``, and a
+    silently title-less list would read as "these windows have no names".
+    """
+    import Quartz  # pyobjc-framework-Quartz
+
+    infos = (
+        Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID,
+        )
+        or []
+    )
+    windows: list[dict] = []
+    any_title = False
+    for info in infos:
+        if int(info.get("kCGWindowLayer") or 0) != 0:
+            continue  # menu bars, shadows, overlays — never a person's window
+        title = str(info.get("kCGWindowName") or "")
+        if title:
+            any_title = True
+        owner_pid = int(info.get("kCGWindowOwnerPID") or -1)
+        if pid is not None and owner_pid != pid:
+            continue
+        bounds = info.get("kCGWindowBounds") or {}
+        windows.append(
+            {
+                "app": str(info.get("kCGWindowOwnerName") or ""),
+                "title": title,
+                "x": int(bounds.get("X") or 0),
+                "y": int(bounds.get("Y") or 0),
+                "width": int(bounds.get("Width") or 0),
+                "height": int(bounds.get("Height") or 0),
+                "window_id": int(info.get("kCGWindowNumber") or 0),
+                "pid": owner_pid,
+            }
+        )
+    windows.sort(key=lambda w: (w["app"].lower(), -(w["width"] * w["height"])))
+    return windows, any_title
 
 
 async def _list_windows_macos(app_filter: str | None) -> ToolResult:
-    # System Events walks every window of every process; on a busy Mac that
-    # blows the 15-second budget with a blank error. When the caller names an
-    # app, only processes carrying that name (or its bundle id) are visited.
-    name_filter = ""
+    # The app the person named is resolved ONCE, then addressed by pid — the
+    # window owner name is the executable ("Kindle"), which is not the
+    # AppleScript name ("Amazon Kindle") and not always the Dock name.
+    pid: int | None = None
+    app: RunningApp | None = None
     if app_filter and app_filter.strip():
-        quoted = _applescript_string(app_filter.strip())
-        name_filter = (
-            f" and ((name contains {quoted}) or (displayed name contains {quoted})"
-            f" or (bundle identifier contains {quoted}))"
-        )
-    script = _MAC_WINDOW_LIST_SCRIPT.replace("__FILTER__", name_filter)
-    proc = await asyncio.create_subprocess_exec(
-        "osascript",
-        "-e",
-        script,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        try:
+            app = await require_running_app(app_filter.strip())
+        except AppNotRunning as exc:
+            return ToolResult(type=ToolResultType.ERROR, output=str(exc))
+        except RuntimeError as exc:
+            return ToolResult(type=ToolResultType.ERROR, output=str(exc))
+        pid = app.pid
 
-    if proc.returncode != 0:
-        friendly = _check_applescript_error(stderr)
-        msg = (
-            friendly or f"AppleScript error: {stderr.decode(errors='replace').strip()}"
+    try:
+        windows, titles_available = await asyncio.get_running_loop().run_in_executor(
+            None, _mac_windows_via_quartz, pid
         )
+    except ImportError:
         return ToolResult(
             type=ToolResultType.ERROR,
-            output=msg,
-            action_needed=(
-                os_permission_needed(
-                    feature="Window management",
-                    permission_key="accessibility",
-                    source="tool.window-manager",
-                )
-                if friendly
-                else None
+            output=(
+                "Listing windows needs the Quartz framework, which is not installed "
+                "in this engine. Reinstall the app's Python runtime."
             ),
         )
 
-    windows = []
-    for line in stdout.decode().strip().split("\n"):
-        if not line.strip():
-            continue
-        parts = line.split("|||")
-        if len(parts) >= 4:
-            app_name = parts[0].strip()
-            if app_filter and app_filter.lower() not in app_name.lower():
-                continue
-            pos = parts[2].strip().split(",")
-            size = parts[3].strip().split(",")
-            windows.append(
-                {
-                    "app": app_name,
-                    "title": parts[1].strip(),
-                    "x": int(pos[0]) if pos[0].strip().lstrip("-").isdigit() else 0,
-                    "y": int(pos[1]) if pos[1].strip().lstrip("-").isdigit() else 0,
-                    "width": int(size[0]) if size[0].strip().isdigit() else 0,
-                    "height": int(size[1]) if size[1].strip().isdigit() else 0,
-                }
-            )
+    if app is not None and not windows:
+        return ToolResult(
+            output=(
+                f"{app.spoken_name} is running (pid {app.pid}) but has no window on "
+                "screen right now — it may be minimised, hidden, or on another Space."
+            ),
+            metadata={"windows": [], "count": 0, "pid": app.pid,
+                      "app": app.spoken_name, "bundle_id": app.bundle_id},
+        )
 
-    lines = [f"{'APP':<25} {'TITLE':<35} {'POS':>12} {'SIZE':>12}"]
-    lines.append("-" * 90)
+    lines = [f"{'APP':<22} {'TITLE':<32} {'POS':>12} {'SIZE':>12} {'ID':>8}"]
+    lines.append("-" * 92)
     for w in windows:
         lines.append(
-            f"{w['app']:<25} {w['title'][:34]:<35} {w['x']:>5},{w['y']:<6} {w['width']:>5}x{w['height']:<5}"
+            f"{w['app'][:21]:<22} {w['title'][:31]:<32} "
+            f"{w['x']:>5},{w['y']:<6} {w['width']:>5}x{w['height']:<5} {w['window_id']:>8}"
+        )
+
+    header = f"Windows ({len(windows)}"
+    header += f" for {app.spoken_name}" if app is not None else ""
+    header += "):"
+    note = ""
+    action = None
+    if windows and not titles_available:
+        note = (
+            "\n\nWindow titles are blank because macOS Screen Recording permission "
+            "is not granted to AI Matrx — apps, sizes and window ids are correct."
+        )
+        action = os_permission_needed(
+            feature="Window titles",
+            permission_key="screen_recording",
+            source="tool.window-manager",
         )
 
     return ToolResult(
-        output=f"Windows ({len(windows)}):\n" + "\n".join(lines),
-        metadata={"windows": windows, "count": len(windows)},
+        output=header + "\n" + "\n".join(lines) + note,
+        metadata={
+            "windows": windows,
+            "count": len(windows),
+            **({"pid": app.pid, "app": app.spoken_name, "bundle_id": app.bundle_id}
+               if app is not None else {}),
+        },
+        action_needed=action,
     )
 
 
@@ -297,23 +340,29 @@ async def tool_focus_window(
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)
         if PLATFORM["is_mac"]:
+            app, refusal = await _resolve_or_refuse(app_name)
+            if refusal is not None:
+                return refusal
+            assert app is not None
             if window_title:
+                title = window_title.replace("\\", "\\\\").replace('"', '\\"')
                 script = f"""
+tell {app.applescript_target} to activate
 tell application "System Events"
-    tell application process "{app_name}"
+    tell {app.process_target}
         set frontmost to true
         repeat with w in windows
-            if name of w contains "{window_title}" then
+            if name of w contains "{title}" then
                 perform action "AXRaise" of w
                 return "Focused: " & name of w
             end if
         end repeat
-        return "Window not found: {window_title}"
+        return "Window not found: {title}"
     end tell
 end tell
 """
             else:
-                script = f'tell application "{app_name}" to activate'
+                script = f"tell {app.applescript_target} to activate"
 
             proc = await asyncio.create_subprocess_exec(
                 "osascript",
@@ -339,7 +388,10 @@ end tell
                         else None
                     ),
                 )
-            return ToolResult(output=stdout.decode().strip() or f"Focused: {app_name}")
+            return ToolResult(
+                output=stdout.decode().strip() or f"Focused: {app.spoken_name}",
+                metadata={"app": app.spoken_name, "bundle_id": app.bundle_id, "pid": app.pid},
+            )
 
         elif PLATFORM["is_windows"]:
             target = window_title or app_name
@@ -410,9 +462,13 @@ async def tool_move_window(
                     output="Provide x,y for position and/or width,height for size.",
                 )
 
+            app, refusal = await _resolve_or_refuse(app_name)
+            if refusal is not None:
+                return refusal
+            assert app is not None
             script = f"""
 tell application "System Events"
-    tell application process "{app_name}"
+    tell {app.process_target}
         {chr(10).join(parts)}
     end tell
 end tell
@@ -526,10 +582,14 @@ async def tool_minimize_window(
         if not PLATFORM["is_mac"] and not PLATFORM["is_windows"] and not has_display():
             return ToolResult(type=ToolResultType.ERROR, output=NO_GUI_MSG)
         if PLATFORM["is_mac"]:
+            app, refusal = await _resolve_or_refuse(app_name)
+            if refusal is not None:
+                return refusal
+            assert app is not None
             if action == "minimize":
                 script = f"""
 tell application "System Events"
-    tell application process "{app_name}"
+    tell {app.process_target}
         try
             click (first button of window 1 whose subrole is "AXMinimizeButton")
         end try
@@ -539,7 +599,7 @@ end tell
             elif action == "maximize":
                 script = f"""
 tell application "System Events"
-    tell application process "{app_name}"
+    tell {app.process_target}
         try
             click (first button of window 1 whose subrole is "AXFullScreenButton")
         end try
@@ -547,7 +607,7 @@ tell application "System Events"
 end tell
 """
             else:
-                script = f'tell application "{app_name}" to activate'
+                script = f"tell {app.applescript_target} to activate"
 
             proc = await asyncio.create_subprocess_exec(
                 "osascript",
@@ -572,7 +632,7 @@ end tell
                         else None
                     ),
                 )
-            return ToolResult(output=f"{action.capitalize()}d: {app_name}")
+            return ToolResult(output=f"{action.capitalize()}d: {app.spoken_name}")
 
         elif PLATFORM["is_windows"]:
             show_cmd = {"minimize": 6, "maximize": 3, "restore": 9}[action]

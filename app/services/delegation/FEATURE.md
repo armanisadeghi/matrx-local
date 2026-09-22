@@ -63,7 +63,18 @@ GET /ai/user/pending_calls?instance_id=...  (user JWT, every poll interval)
    An unscoped, read-only diagnostic request may run once on entry to an idle
    state (or once for a new unresolved-tool signature) so status can explain a
    target mismatch; it does not repeat every poll.
-2. **Broadcast wake (latency).** aidream publishes `kind:"wake"`,
+2. **Broadcast wake (latency).** The wake event is cleared BEFORE each sweep,
+   never after. A sweep executes the tool and drains the continuation stream,
+   and the NEXT delegated call of the same turn is created — and its wake
+   published — inside that window; clearing afterwards discarded it and cost
+   the call a whole poll interval. Measured on the owner's Mac 2026-09-22:
+   claim latency 0.6-1.2 s when the wake landed in the wait, 16-82 s when it
+   landed in the sweep. The backstop poll also tightens to
+   `ACTIVE_POLL_INTERVAL` (2 s) while anything is in flight — a result owed,
+   a review parked, a UI claim live, or a call unsettled — and stays at the
+   full interval when idle. Guard:
+   `tests/unit/test_delegation_latency_and_conflict.py`.
+   aidream publishes `kind:"wake"`,
    `action:"tool_call.delegated"` on `matrx-local-bridge:<user_id>` when a
    turn suspends. `app/api/cross_component_router.py::_handle_wake` routes
    it to `get_delegation_engine().request_sweep(...)`. The wake payload is a
@@ -113,6 +124,19 @@ execution path. Do not add one.
   transition (the app refreshes tokens; see MXL-D-046 — `TokenRepo.is_expired`
   decodes the JWT `exp` itself). Unreachable server → one WARN per
   transition, keep polling.
+- **A continuation is only offered when NOTHING is outstanding.** A
+  continuation is an invitation to POST `/resume`, and aidream refuses a
+  resume with HTTP 409 `outstanding_delegated_calls` while any sibling call of
+  that `user_request_id` is still delegated. The `user_request_id` does not
+  change across a whole tool-using turn, so a continuation already served
+  stays true-looking while the NEXT call of the same turn runs.
+  `ui_conversation_state` therefore suppresses the continuation (and reports
+  `outstanding`) while any call is `queued`/`executing`/`awaiting_user_review`,
+  and `_note_call` drops the recorded continuation the moment a call enters
+  one of those states. The retained `_undelivered` obligation re-establishes
+  it on the next sweep, so nothing is stranded. This is the defect that ended
+  the owner's run on 2026-09-22 (conversation 60b6f5e7…, call
+  `toolu_01KCH6aM36tYXNk6CBExGmEZ`).
 - **The resume body declares `surface: matrx-local/desktop` +
   `desktop-native`** so the continuation keeps this engine as an active
   executor — without it a re-delegated desktop tool is dropped pre-flight.
@@ -138,6 +162,17 @@ claim instead of racing the 2.5 s browser grace window:
 - `GET /chat/delegation/conversation/{id}` — per-call state
   (executing/delivered) + pending continuation `{user_request_id, needed}`
   for the UI poller. `POST /chat/delegation/ui-release` on stream end.
+- The UI never sends while one of its own calls is outstanding. The composer
+  is held with `Running on this computer: <tools>…` from
+  `localToolsRunningReason`, fed by a READ-ONLY poll of
+  `GET /chat/delegation/conversation/{id}` (`readDelegationState`) that takes
+  no continuation ownership. It fails OPEN: an engine that reports nothing —
+  or cannot be reached, and is therefore running nothing — releases the
+  composer. `sendMessage` carries the same check as a second lock.
+- A `/resume` refused with 409 `outstanding_delegated_calls` or
+  `resume_conflict` is NOT a failed turn: the UI waits for the calls to land
+  and posts it again (bounded, `MAX_RESUME_CONFLICT_RETRIES`). aidream files
+  both as ordinary refusals; rendering one as a dead conversation is the bug.
 - UI half: `desktop/src/hooks/use-cloud-chat.ts` (multi-segment stream loop:
   `tool_delegated` → claim → poll → `POST /resume` with the desktop client
   envelope). Pinned by `test_ui_claim_defers_resume_then_self_heals_on_release`.

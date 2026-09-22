@@ -94,6 +94,13 @@ export interface SessionSnapshot {
    *  reasons already carry the action. It is the daemon-process states (below) that need it: "the
    *  sync helper cannot start on this computer" is not a remedy, "Update AI Matrx" is. */
   readonly remedy?: string | null;
+  /** Whether **Start sync** can actually change this state.
+   *
+   *  Only the daemon-process states answer this. A helper that is missing from the build, one
+   *  that cannot execute, and one already asked to step aside and refusing are not fixed by
+   *  running the same ladder again — their remedy names the reinstall, the update or the
+   *  restart, and the button is not drawn (law 4: a control is absent or honest, never dead). */
+  readonly can_start_sync?: boolean;
 }
 
 /** `syncd_daemon_state` / `syncd_start` — the daemon PROCESS, classified by Rust. */
@@ -104,6 +111,8 @@ export interface DaemonState {
   readonly code: string;
   readonly state_reason: string;
   readonly remedy: string | null;
+  /** Whether Start sync is a control that can change this state. */
+  readonly can_start_sync: boolean;
   readonly detail: string;
 }
 
@@ -123,6 +132,7 @@ export const DAEMON_DOWN: SessionSnapshot = Object.freeze({
   state: "daemon_not_running" as const,
   state_reason: "AI Matrx Sync is not running on this computer, so there is no signed-in session.",
   remedy: "Choose Start sync to start it.",
+  can_start_sync: true,
   since: null,
   next_attempt_at: null,
   cloud_state_write_pending: false,
@@ -134,7 +144,12 @@ let daemonDown: SessionSnapshot = DAEMON_DOWN;
 let daemonDownInFlight: Promise<SessionSnapshot> | null = null;
 
 function daemonDownFrom(state: DaemonState): SessionSnapshot {
-  return { ...DAEMON_DOWN, state_reason: state.state_reason, remedy: state.remedy };
+  return {
+    ...DAEMON_DOWN,
+    state_reason: state.state_reason,
+    remedy: state.remedy,
+    can_start_sync: state.can_start_sync,
+  };
 }
 
 /** Ask Rust why sync is down. One call in flight at a time; never throws. */
@@ -177,6 +192,7 @@ export async function startSync(): Promise<SessionSnapshot> {
       ...DAEMON_DOWN,
       state_reason: `AI Matrx could not ask this computer to start sync (${String(error)}).`,
       remedy: "Quit AI Matrx and open it again. If this keeps happening, report it from Settings → Support.",
+      can_start_sync: false,
     };
     lastSnapshot = daemonDown;
     return lastSnapshot;

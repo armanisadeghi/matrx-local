@@ -152,3 +152,32 @@ def test_a_new_running_call_invalidates_the_recorded_continuation():
     engine._note_call("conv_1", "call_b", "local_window", "executing")
     facts = engine._conversation_facts["conv_1"]
     assert facts["continuation"] is None
+
+
+# ── the fast backstop must not turn into a POST storm ────────────────────
+
+
+def test_a_retained_result_is_not_re_posted_while_the_ui_owns_the_stream():
+    """The sweep now runs every 2 s while a stream is attached.
+
+    Re-posting the retained tool result on every one of those sweeps would be
+    a full result payload to the server every two seconds for the length of a
+    conversation. The UI owns that continuation; the obligation waits.
+    """
+    engine = _engine()
+    posted: list[str] = []
+
+    async def fake_deliver(conversation_id, call_id, payload):
+        posted.append(call_id)
+
+    engine._deliver = fake_deliver  # type: ignore[method-assign]
+    engine._undelivered["call_a"] = ("conv_1", {"call_id": "call_a"})
+
+    engine.claim_ui_stream("conv_1", ttl_seconds=30)
+    asyncio.run(engine._retry_undelivered("jwt"))
+    assert posted == [], "re-posted a result the UI already owns"
+    assert "call_a" in engine._undelivered, "the obligation was dropped"
+
+    engine.release_ui_stream("conv_1")
+    asyncio.run(engine._retry_undelivered("jwt"))
+    assert posted == ["call_a"], "the retry did not resume when the claim lapsed"

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.common.platform_ctx import PLATFORM
+from app.services.book_capture.app_identity import ReaderApp, resolve_reader_app
 
 
 class ReaderUnavailable(RuntimeError):
@@ -78,10 +79,40 @@ class MacReaderDriver:
         self.app_name = app_name
         self.window_title = window_title
         self._window_id: int | None = None
+        self._app: ReaderApp | None = None
 
     @property
     def describes(self) -> str:
-        return self.app_name
+        return self._app.spoken_name if self._app else self.app_name
+
+    # -- app resolution ---------------------------------------------------
+
+    async def _ensure_app(self) -> ReaderApp:
+        """Turn the person's word for the reader into the running app, once.
+
+        The person says "Kindle"; the process is "Kindle"; the AppleScript
+        name is "Amazon Kindle".  Resolving here means every later call
+        addresses the app by bundle id and its window by pid, so no namespace
+        can disagree with another.
+        """
+        if self._app is None:
+            try:
+                app = await resolve_reader_app(self.app_name)
+            except RuntimeError as exc:
+                raise ReaderUnavailable(str(exc)) from exc
+            if app is None:
+                raise ReaderUnavailable(
+                    f"“{self.app_name}” is not running. Open the book in that app "
+                    "first, then ask again."
+                )
+            self._app = app
+        return self._app
+
+    def _applescript_target(self) -> str:
+        app = self._app
+        if app is not None and app.bundle_id:
+            return f'application id "{app.bundle_id}"'
+        return f'application "{self.app_name}"'
 
     # -- window resolution ------------------------------------------------
 
@@ -106,10 +137,15 @@ class MacReaderDriver:
             Quartz.kCGNullWindowID,
         )
         wanted = self.app_name.strip().lower()
+        pid = self._app.pid if self._app else None
         candidates = []
         for info in infos or []:
             owner = str(info.get("kCGWindowOwnerName") or "")
-            if wanted not in owner.lower():
+            if pid is not None:
+                # The resolved process owns the window; names are not consulted.
+                if int(info.get("kCGWindowOwnerPID") or -1) != pid:
+                    continue
+            elif wanted not in owner.lower():
                 continue
             if int(info.get("kCGWindowLayer") or 0) != 0:
                 continue  # menu bars, shadows, overlays
@@ -122,7 +158,7 @@ class MacReaderDriver:
 
         if not candidates:
             raise ReaderUnavailable(
-                f"No visible window belonging to “{self.app_name}” was found. "
+                f"No visible window belonging to “{self.describes}” was found. "
                 "Open the book in that app and leave the window on screen."
             )
         # The book is in the largest window; palettes and inspectors are small.
@@ -137,7 +173,8 @@ class MacReaderDriver:
     # -- driver surface ---------------------------------------------------
 
     async def focus(self) -> None:
-        script = f'tell application "{self.app_name}" to activate'
+        await self._ensure_app()
+        script = f"tell {self._applescript_target()} to activate"
         proc = await asyncio.create_subprocess_exec(
             "osascript", "-e", script,
             stdout=asyncio.subprocess.PIPE,
@@ -146,7 +183,7 @@ class MacReaderDriver:
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
         if proc.returncode != 0:
             raise ReaderUnavailable(
-                f"Could not bring “{self.app_name}” forward: "
+                f"Could not bring “{self.describes}” forward: "
                 f"{stderr.decode(errors='replace').strip() or 'unknown error'}"
             )
         await asyncio.get_running_loop().run_in_executor(None, self._window_id_cached)
@@ -166,8 +203,9 @@ class MacReaderDriver:
                 f"“{key}” is not a page-turn key this driver knows. "
                 f"Use one of: {', '.join(supported_keys())}."
             )
+        await self._ensure_app()
         script = (
-            f'tell application "{self.app_name}" to activate\n'
+            f"tell {self._applescript_target()} to activate\n"
             f'tell application "System Events" to key code {code}'
         )
         proc = await asyncio.create_subprocess_exec(

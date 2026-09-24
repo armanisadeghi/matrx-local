@@ -244,23 +244,27 @@ def changed_files(ref):
     return _CHANGED[ref]
 
 
+def has_line(ref, path, line):
+    """True when `path` at `ref` has `line` as a whole line (surrounding whitespace ignored)."""
+    blob = blob_at(ref, path)
+    return bool(blob) and line in (l.strip() for l in content(blob).decode("utf-8", "replace").splitlines())
+
+
 def moved_to(line, path, refs=None):
     """Other files, changed since the merge base in one of `refs` (default: both sides), that
-    contain `line` in that ref but did NOT contain it at the merge base — i.e. the line arrived
-    there. A line a file always had (a version string shared by every manifest) never counts."""
+    have `line` as a WHOLE line in that ref but did NOT have it at the merge base — i.e. the line
+    arrived there. A line a file always had (a version string shared by every manifest) and a
+    longer line that merely contains it never count."""
     hits = []
     for ref in refs or (CTX["ours"], CTX["theirs"]):
         files = [f for f in changed_files(ref) if f != path]
         if not files:
             continue
-        _, out, _ = git("grep", "-l", "-F", "-e", line, ref, "--", *files[:2000], check=False)
-        found = [h.split(":", 1)[1] if ":" in h else h for h in out.splitlines()]
-        if found:
-            _, before, _ = git("grep", "-l", "-F", "-e", line, CTX["mb"], "--", *found, check=False)
-            had = {h.split(":", 1)[1] if ":" in h else h for h in before.splitlines()}
-            found = [f for f in found if f not in had]
+        # -z: exact names, never C-quoted (a quoted name would never match again below)
+        _, out, _ = git("grep", "-z", "-l", "-F", "-e", line, ref, "--", *files[:2000], check=False)
+        found = [h.split(":", 1)[1] if ":" in h else h for h in out.split("\0") if h]
         for name in found:
-            if name not in hits:
+            if name not in hits and has_line(ref, name, line) and not has_line(CTX["mb"], name, line):
                 hits.append(name)
     return hits
 
@@ -277,7 +281,9 @@ def containment(path, holder_bytes, base, side, holder_refs):
     added = added_lines(base, side)
     have = set(l.strip() for l in holder_bytes.decode("utf-8", "replace").splitlines())
     missing = [a for a in added if a not in have]
-    if not missing or len(missing) > 300:
+    # A "move" of one line is indistinguishable from a coincidence (a version string, a common
+    # call), so a lone missing line is always reported missing.
+    if len(missing) < 2 or len(missing) > 300:
         return len(added), missing, None
     common = None
     for m in missing:

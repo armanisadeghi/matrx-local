@@ -244,27 +244,36 @@ def changed_files(ref):
     return _CHANGED[ref]
 
 
-def moved_to(line, path):
-    """Other files (changed on either side) that contain `line`, as 'file' names."""
+def moved_to(line, path, refs=None):
+    """Other files, changed since the merge base in one of `refs` (default: both sides), that
+    contain `line` in that ref but did NOT contain it at the merge base — i.e. the line arrived
+    there. A line a file always had (a version string shared by every manifest) never counts."""
     hits = []
-    for ref in (CTX["ours"], CTX["theirs"]):
+    for ref in refs or (CTX["ours"], CTX["theirs"]):
         files = [f for f in changed_files(ref) if f != path]
         if not files:
             continue
         _, out, _ = git("grep", "-l", "-F", "-e", line, ref, "--", *files[:2000], check=False)
-        for h in out.splitlines():
-            name = h.split(":", 1)[1] if ":" in h else h
+        found = [h.split(":", 1)[1] if ":" in h else h for h in out.splitlines()]
+        if found:
+            _, before, _ = git("grep", "-l", "-F", "-e", line, CTX["mb"], "--", *found, check=False)
+            had = {h.split(":", 1)[1] if ":" in h else h for h in before.splitlines()}
+            found = [f for f in found if f not in had]
+        for name in found:
             if name not in hits:
                 hits.append(name)
     return hits
 
 
-def containment(path, holder_bytes, base, side):
+def containment(path, holder_bytes, base, side, holder_refs):
     """How many substantial lines `side` added (vs base) are present in `holder_bytes`.
     Returns (added_count, missing_list, moved_file). Missing lines count as MOVED only when every
-    one of them is found together in ONE other changed file — that is what a real move looks like
-    (content-splitter-v2.ts -> content-splitter-core.ts). Scattered look-alikes in unrelated files
-    never count."""
+    one of them is found together in ONE other file that the HOLDER's side changed — that is what
+    a real move looks like (content-splitter-v2.ts -> content-splitter-core.ts). `holder_refs` are
+    the commits whose tree the holder comes from: finding the missing lines in the OTHER side's
+    files proves nothing (2026-09-24: GitHub's `"version": "1.4.196"` in its own tauri.conf.json
+    was read as "moved", and a stale LOCAL 1.4.186 won in six version files). Scattered
+    look-alikes in unrelated files never count."""
     added = added_lines(base, side)
     have = set(l.strip() for l in holder_bytes.decode("utf-8", "replace").splitlines())
     missing = [a for a in added if a not in have]
@@ -272,7 +281,7 @@ def containment(path, holder_bytes, base, side):
         return len(added), missing, None
     common = None
     for m in missing:
-        where = set(moved_to(m, path))
+        where = set(moved_to(m, path, holder_refs))
         common = where if common is None else common & where
         if not common:
             return len(added), missing, None
@@ -309,7 +318,9 @@ def resolve_fake(path, ours, theirs, mb):
     def acceptable(result):
         have = set(l.strip() for l in result.decode("utf-8", "replace").splitlines())
         for side, blob in (("o", ours), ("t", theirs)):
-            _, missing, _ = containment(path, result, base_blob, blob)
+            # A line one side added may be missing only if the OTHER side moved it elsewhere.
+            refs = (CTX["theirs"],) if side == "o" else (CTX["ours"],)
+            _, missing, _ = containment(path, result, base_blob, blob, refs)
             if missing:
                 return False
             other = "t" if side == "o" else "o"
@@ -416,7 +427,8 @@ def facts(path, ours, theirs):
     for holder, hname, side, sname in ((ours, "LOCAL", theirs, "GITHUB"), (theirs, "GITHUB", ours, "LOCAL")):
         if not holder or not side:
             continue
-        n, missing, moved = containment(path, content(holder), base_blob, side)
+        refs = (CTX["ours"],) if hname == "LOCAL" else (CTX["theirs"],)
+        n, missing, moved = containment(path, content(holder), base_blob, side, refs)
         if n == 0:
             L.append("  %s added no lines of its own." % sname)
             continue

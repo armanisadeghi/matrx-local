@@ -2471,6 +2471,15 @@ app.add_middleware(
     # SSE fetch() to /setup/install so the stream is never buffered — a
     # non-safelisted header, so its absence here failed that route's
     # preflight with 400 (MXL CORS first-run defect, 2026-09-17).
+    #
+    # The /ai surface is byte-compatible with aidream's, so every request
+    # header aimatrx.com sends to aidream must be allowed here too — the web
+    # app posts local-pc turns DIRECT to this engine (resolve-base-url.ts
+    # "local-runtime" channel). X-Organization-Id missing here killed every
+    # "attach my computer" chat turn at preflight with "Failed to fetch"
+    # (2026-09-23) — the same defect aidream fixed on 2026-08-18. Keep this in
+    # step with aidream's CORS_ALLOW_HEADERS (aidream/app_config.py);
+    # tests/unit/test_web_client_cors.py guards the web-client set.
     allow_headers=[
         "Authorization",
         "Content-Type",
@@ -2478,6 +2487,15 @@ app.add_middleware(
         "X-API-Key",
         "Accept",
         "Cache-Control",
+        "X-Organization-Id",
+        "X-Fingerprint-ID",
+        "X-Guest-Fingerprint",
+        "X-Request-ID",
+        "X-Correlation-ID",
+        "X-Idempotency-Key",
+        "Idempotency-Key",
+        "Last-Event-ID",
+        "Pragma",
     ],
     allow_private_network=True,
     # The AI streaming surface's response headers the browser must be able to

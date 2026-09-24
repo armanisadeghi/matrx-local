@@ -327,6 +327,10 @@ def _validate_target(target: str) -> list[str]:
             errors.append(f"{target}: lock filename mismatch")
         if manifest.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
             errors.append(f"{target}: lock digest mismatch")
+        if "matrx-runtime-" in lock_path.read_text(encoding="utf-8"):
+            errors.append(
+                f"{target}: lock embeds a temp-dir path; regenerate with this script"
+            )
         inventory = manifest.get("packages")
         if not isinstance(inventory, list) or len(inventory) != len(packages):
             errors.append(f"{target}: package inventory mismatch")
@@ -375,7 +379,13 @@ def main() -> int:
             with tempfile.TemporaryDirectory(prefix=f"matrx-runtime-{target}-") as temp:
                 generated = Path(temp) / lock_path.name
                 _compile(target, generated)
-                content = generated.read_text(encoding="utf-8")
+                # uv records the constraints file's path in "# via -c <path>"
+                # comments. That path is a random temp dir, so without this
+                # every run rewrote dozens of lines and every release
+                # conflicted with any other checkout that regenerated.
+                content = generated.read_text(encoding="utf-8").replace(
+                    str(Path(temp)), "<generated>"
+                )
             lock_path.write_text(content, encoding="utf-8")
             packages = _parse_requirements(lock_path)
             _write_target_manifest(target, lock_path, packages)

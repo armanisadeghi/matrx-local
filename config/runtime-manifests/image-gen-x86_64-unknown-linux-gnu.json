@@ -1,7 +1,7 @@
 {
   "contract_sha256": "320e47365bc0d876edf2f02ed0a75fc2f1e6f1ff593c4b72711a39c2df2271b0",
   "lock_file": "image-gen-x86_64-unknown-linux-gnu.requirements.txt",
-  "lock_sha256": "16c7e809f3521c3a48fd5b9d34c57ffc7cf8d905d02b2e86bdcf12af7ffa0970",
+  "lock_sha256": "3cff8889e1130f47445121380d7a71a21184ea0fc6c45fd035cdda3bfd789a91",
   "minimum_glibc": "2.28",
   "packages": [
     {

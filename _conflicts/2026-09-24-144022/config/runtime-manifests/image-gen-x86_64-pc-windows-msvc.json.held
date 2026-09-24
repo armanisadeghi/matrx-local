@@ -1,8 +1,54 @@
+matrx-auto-git-conflict-file-work-delete-this-when-resolved
+
+HELD CONFLICT, written by scripts/sync-main.py
+File:      config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json
+Why held:  both sides changed the same code
+GITHUB's version is live in the repo at the path above. LOCAL's version is at the bottom
+of this file, below the FACTS.
+Done with it: the final code is in the live file, this .held file is deleted, and its line
+in _conflicts/README.md is deleted. The list of open items is _conflicts/README.md.
+
+FACTS (computed by sync-main from git)
+
+THE TWO VERSIONS
+  LOCAL  = the version that was on this Mac. It is saved below, in this .held file.
+  GITHUB = the version from GitHub. It is LIVE in the repo right now, at config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json
+  Both grew from the same COMMON version: commit d428a5a37f, 2026-09-23 19:26.
+
+WHEN EACH SIDE CHANGED THIS FILE (newest first)
+  LOCAL:
+    2026-09-24 10:48  3080f392fb  "Remove commit-own-paths: agents commit locally with git commit -- <paths>; only the release run pulls, merges and pushes"
+  GITHUB:
+    2026-09-24 10:05  9142f1f2f6  "release: v1.4.196 [skip actions]"
+    2026-09-24 00:06  cc0ba8ad47  "release: v1.4.195 [skip actions]"
+  LOCAL's latest change is 42m AFTER GITHUB's latest change.
+
+SIZE: common version 545 lines, LOCAL 545 lines, GITHUB 545 lines
+
+WHAT EACH SIDE DID, compared with the common version
+  LOCAL added 1 lines and removed 1 lines.
+  GITHUB added 1 lines and removed 1 lines.
+
+CODE ONE SIDE HAS THAT THE OTHER DOES NOT
+  LOCAL has 0 of the 1 lines GITHUB added.
+    Lines GITHUB added that LOCAL does NOT have:
+      | "lock_sha256": "c823cb90ceebb127778d7bc9a8cc5c87f61b7ddb2d44962e039ec0d1c18ac2b3",
+  GITHUB has 0 of the 1 lines LOCAL added.
+    Lines LOCAL added that GITHUB does NOT have:
+      | "lock_sha256": "a06d32ad21d30b96bd134a0f7d7a9ef1b3d64e55d1857bf77e5ae4fb39c13f25",
+
+COMPARE THEM (the labels are correct; '-' lines are GITHUB, '+' lines are LOCAL):
+  diff -u --label 'GITHUB (live)' --label 'LOCAL (held)' <(git show 9142f1f2f674:'config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json') <(git show d0ee5ddc8d83:'config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json')
+
+RECOVER EITHER VERSION FOREVER (works even after this .held file is deleted):
+  LOCAL : git show d0ee5ddc8d83:'config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json'
+  GITHUB: git show 9142f1f2f674:'config/runtime-manifests/image-gen-x86_64-pc-windows-msvc.json'
+
+---------------- LOCAL VERSION BELOW ----------------
 {
   "contract_sha256": "320e47365bc0d876edf2f02ed0a75fc2f1e6f1ff593c4b72711a39c2df2271b0",
-  "lock_file": "image-gen-aarch64-apple-darwin.requirements.txt",
-  "lock_sha256": "c9acc92803706f77abcd96bbd2b8a7b4afdfedaaadb4db742c84c6df663b6711",
-  "minimum_macos": "12.0",
+  "lock_file": "image-gen-x86_64-pc-windows-msvc.requirements.txt",
+  "lock_sha256": "a06d32ad21d30b96bd134a0f7d7a9ef1b3d64e55d1857bf77e5ae4fb39c13f25",
   "packages": [
     {
       "name": "accelerate",
@@ -53,9 +99,9 @@
       "version": "3.4.4",
       "wheels": [
         {
-          "filename": "charset_normalizer-3.4.4-cp313-cp313-macosx_10_13_universal2.whl",
-          "sha256": "e1f185f86a6f3403aa2420e815904c67b2f9ebc443f045edd0de921108345794",
-          "url": "https://files.pythonhosted.org/packages/97/45/4b3a1239bbacd321068ea6e7ac28875b03ab8bc0aa0966452db17cd36714/charset_normalizer-3.4.4-cp313-cp313-macosx_10_13_universal2.whl"
+          "filename": "charset_normalizer-3.4.4-cp313-cp313-win_amd64.whl",
+          "sha256": "b435cba5f4f750aa6c0a0d92c541fb79f69a387c91e61f1795227e4ed9cece14",
+          "url": "https://files.pythonhosted.org/packages/c4/26/b9924fa27db384bdcd97ab83b4f0a8058d96ad9626ead570674d5e737d90/charset_normalizer-3.4.4-cp313-cp313-win_amd64.whl"
         },
         {
           "filename": "charset_normalizer-3.4.4-py3-none-any.whl",
@@ -72,6 +118,17 @@
           "filename": "click-8.3.1-py3-none-any.whl",
           "sha256": "981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6",
           "url": "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl"
+        }
+      ]
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "wheels": [
+        {
+          "filename": "colorama-0.4.6-py2.py3-none-any.whl",
+          "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+          "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl"
         }
       ]
     },
@@ -135,9 +192,9 @@
       "version": "1.4.2",
       "wheels": [
         {
-          "filename": "hf_xet-1.4.2-cp37-abi3-macosx_11_0_arm64.whl",
-          "sha256": "e9b38d876e94d4bdcf650778d6ebbaa791dd28de08db9736c43faff06ede1b5a",
-          "url": "https://files.pythonhosted.org/packages/64/2e/af4475c32b4378b0e92a587adb1aa3ec53e3450fd3e5fe0372a874531c00/hf_xet-1.4.2-cp37-abi3-macosx_11_0_arm64.whl"
+          "filename": "hf_xet-1.4.2-cp37-abi3-win_amd64.whl",
+          "sha256": "ad185719fb2e8ac26f88c8100562dbf9dbdcc3d9d2add00faa94b5f106aea53f",
+          "url": "https://files.pythonhosted.org/packages/cd/71/193eabd7e7d4b903c4aa983a215509c6114915a5a237525ec562baddb868/hf_xet-1.4.2-cp37-abi3-win_amd64.whl"
         }
       ]
     },
@@ -223,9 +280,9 @@
       "version": "3.0.3",
       "wheels": [
         {
-          "filename": "markupsafe-3.0.3-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "116bb52f642a37c115f517494ea5feb03889e04df47eeff5b130b1808ce7c219",
-          "url": "https://files.pythonhosted.org/packages/9c/d9/5f7756922cdd676869eca1c4e3c0cd0df60ed30199ffd775e319089cb3ed/markupsafe-3.0.3-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "markupsafe-3.0.3-cp313-cp313-win_amd64.whl",
+          "sha256": "9a1abfdc021a164803f4d485104931fb8f8c1efd55bc6b748d2f5774e78b62c5",
+          "url": "https://files.pythonhosted.org/packages/05/73/c4abe620b841b6b791f2edc248f556900667a5a1cf023a6646967ae98335/markupsafe-3.0.3-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -267,9 +324,9 @@
       "version": "2.4.2",
       "wheels": [
         {
-          "filename": "numpy-2.4.2-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "bd3a7a9f5847d2fb8c2c6d1c862fa109c31a9abeca1a3c2bd5a64572955b2979",
-          "url": "https://files.pythonhosted.org/packages/09/f0/817d03a03f93ba9c6c8993de509277d84e69f9453601915e4a69554102a1/numpy-2.4.2-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "numpy-2.4.2-cp313-cp313-win_amd64.whl",
+          "sha256": "7df2de1e4fba69a51c06c28f5a3de36731eb9639feb8e1cf7e4a7b0daf4cf622",
+          "url": "https://files.pythonhosted.org/packages/43/bc/6352f343522fcb2c04dbaf94cb30cca6fd32c1a750c06ad6231b4293708c/numpy-2.4.2-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -300,9 +357,9 @@
       "version": "12.1.0",
       "wheels": [
         {
-          "filename": "pillow-12.1.0-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "db44d5c160a90df2d24a24760bbd37607d53da0b34fb546c4c232af7192298ac",
-          "url": "https://files.pythonhosted.org/packages/1c/34/583420a1b55e715937a85bd48c5c0991598247a1fd2eb5423188e765ea02/pillow-12.1.0-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "pillow-12.1.0-cp313-cp313-win_amd64.whl",
+          "sha256": "461f9dfdafa394c59cd6d818bdfdbab4028b83b02caadaff0ffd433faf4c9a7a",
+          "url": "https://files.pythonhosted.org/packages/e5/07/74a9d941fa45c90a0d9465098fe1ec85de3e2afbdc15cc4766622d516056/pillow-12.1.0-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -311,9 +368,9 @@
       "version": "7.2.2",
       "wheels": [
         {
-          "filename": "psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl",
-          "sha256": "1a7b04c10f32cc88ab39cbf606e117fd74721c831c98a27dc04578deb0c16979",
-          "url": "https://files.pythonhosted.org/packages/80/c4/f5af4c1ca8c1eeb2e92ccca14ce8effdeec651d5ab6053c589b074eda6e1/psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl"
+          "filename": "psutil-7.2.2-cp37-abi3-win_amd64.whl",
+          "sha256": "eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988",
+          "url": "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl"
         }
       ]
     },
@@ -333,9 +390,9 @@
       "version": "6.0.3",
       "wheels": [
         {
-          "filename": "pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1",
-          "url": "https://files.pythonhosted.org/packages/b1/16/95309993f1d3748cd644e02e38b75d50cbc0d9561d21f390a76242ce073f/pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "pyyaml-6.0.3-cp313-cp313-win_amd64.whl",
+          "sha256": "79005a0d97d5ddabfeeea4cf676af11e647e41d81c9a7722a193022accdb6b7c",
+          "url": "https://files.pythonhosted.org/packages/97/c9/39d5b874e8b28845e4ec2202b5da735d0199dbe5b8fb85f91398814a9a46/pyyaml-6.0.3-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -344,14 +401,9 @@
       "version": "2026.2.19",
       "wheels": [
         {
-          "filename": "regex-2026.2.19-cp313-cp313-macosx_10_13_universal2.whl",
-          "sha256": "8df08decd339e8b3f6a2eb5c05c687fe9d963ae91f352bc57beb05f5b2ac6879",
-          "url": "https://files.pythonhosted.org/packages/d2/2d/a849835e76ac88fcf9e8784e642d3ea635d183c4112150ca91499d6703af/regex-2026.2.19-cp313-cp313-macosx_10_13_universal2.whl"
-        },
-        {
-          "filename": "regex-2026.2.19-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "c13228fbecb03eadbfd8f521732c5fda09ef761af02e920a3148e18ad0e09968",
-          "url": "https://files.pythonhosted.org/packages/cd/58/714384efcc07ae6beba528a541f6e99188c5cc1bc0295337f4e8a868296d/regex-2026.2.19-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "regex-2026.2.19-cp313-cp313-win_amd64.whl",
+          "sha256": "127ea69273485348a126ebbf3d6052604d3c7da284f797bba781f364c0947d47",
+          "url": "https://files.pythonhosted.org/packages/3d/f2/39082e8739bfd553497689e74f9d5e5bb531d6f8936d0b94f43e18f219c0/regex-2026.2.19-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -382,9 +434,9 @@
       "version": "0.8.0",
       "wheels": [
         {
-          "filename": "safetensors-0.8.0-cp310-abi3-macosx_11_0_arm64.whl",
-          "sha256": "c80201d22cbf405b80647a60ada77bba06c8fba2da2743ba1e89cdcc39a81f25",
-          "url": "https://files.pythonhosted.org/packages/f5/b1/fa7c600e7dceae12e9606c7578cbc9ff1e1ed55844883ee5c92205e86226/safetensors-0.8.0-cp310-abi3-macosx_11_0_arm64.whl"
+          "filename": "safetensors-0.8.0-cp310-abi3-win_amd64.whl",
+          "sha256": "096ec1a98435df7beb08853bb5aa9081a84f23d0adc67ed1a0a10550f608373f",
+          "url": "https://files.pythonhosted.org/packages/1b/6d/3fba214c1e5e0f69991677ec3bc17023f0421776975e1de0c682dca475e2/safetensors-0.8.0-cp310-abi3-win_amd64.whl"
         }
       ]
     },
@@ -393,14 +445,9 @@
       "version": "0.2.1",
       "wheels": [
         {
-          "filename": "sentencepiece-0.2.1-cp313-cp313-macosx_10_13_universal2.whl",
-          "sha256": "dcd8161eee7b41aae57ded06272905dbd680a0a04b91edd0f64790c796b2f706",
-          "url": "https://files.pythonhosted.org/packages/ba/4a/85fbe1706d4d04a7e826b53f327c4b80f849cf1c7b7c5e31a20a97d8f28b/sentencepiece-0.2.1-cp313-cp313-macosx_10_13_universal2.whl"
-        },
-        {
-          "filename": "sentencepiece-0.2.1-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "097f3394e99456e9e4efba1737c3749d7e23563dd1588ce71a3d007f25475fff",
-          "url": "https://files.pythonhosted.org/packages/8d/de/5a007fb53b1ab0aafc69d11a5a3dd72a289d5a3e78dcf2c3a3d9b14ffe93/sentencepiece-0.2.1-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "sentencepiece-0.2.1-cp313-cp313-win_amd64.whl",
+          "sha256": "10ed3dab2044c47f7a2e7b4969b0c430420cdd45735d78c8f853191fa0e3148b",
+          "url": "https://files.pythonhosted.org/packages/dd/e9/932b9eae6fd7019548321eee1ab8d5e3b3d1294df9d9a0c9ac517c7b636d/sentencepiece-0.2.1-cp313-cp313-win_amd64.whl"
         }
       ]
     },
@@ -442,36 +489,31 @@
       "version": "0.22.2",
       "wheels": [
         {
-          "filename": "tokenizers-0.22.2-cp39-abi3-macosx_11_0_arm64.whl",
-          "sha256": "1e418a55456beedca4621dbab65a318981467a2b188e982a23e117f115ce5001",
-          "url": "https://files.pythonhosted.org/packages/2e/47/174dca0502ef88b28f1c9e06b73ce33500eedfac7a7692108aec220464e7/tokenizers-0.22.2-cp39-abi3-macosx_11_0_arm64.whl"
+          "filename": "tokenizers-0.22.2-cp39-abi3-win_amd64.whl",
+          "sha256": "c9ea31edff2968b44a88f97d784c2f16dc0729b8b143ed004699ebca91f05c48",
+          "url": "https://files.pythonhosted.org/packages/65/71/0670843133a43d43070abeb1949abfdef12a86d490bea9cd9e18e37c5ff7/tokenizers-0.22.2-cp39-abi3-win_amd64.whl"
         }
       ]
     },
     {
       "name": "torch",
-      "version": "2.10.0",
+      "version": "2.10.0+cu126",
       "wheels": [
         {
-          "filename": "torch-2.10.0-2-cp313-none-macosx_11_0_arm64.whl",
-          "sha256": "e521c9f030a3774ed770a9c011751fb47c4d12029a3d6522116e48431f2ff89e",
-          "url": "https://files.pythonhosted.org/packages/ec/23/2c9fe0c9c27f7f6cb865abcea8a4568f29f00acaeadfc6a37f6801f84cb4/torch-2.10.0-2-cp313-none-macosx_11_0_arm64.whl"
-        },
-        {
-          "filename": "torch-2.10.0-cp313-none-macosx_11_0_arm64.whl",
-          "sha256": "cdf2a523d699b70d613243211ecaac14fe9c5df8a0b0a9c02add60fb2a413e0f",
-          "url": "https://files.pythonhosted.org/packages/0e/13/e76b4d9c160e89fff48bf16b449ea324bda84745d2ab30294c37c2434c0d/torch-2.10.0-cp313-none-macosx_11_0_arm64.whl"
+          "filename": "torch-2.10.0+cu126-cp313-cp313-win_amd64.whl",
+          "sha256": "91e21e7ad572bf0136e5b7f192714f120c8abde8e128f1a0759f158951643822",
+          "url": "https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp313-cp313-win_amd64.whl#sha256=91e21e7ad572bf0136e5b7f192714f120c8abde8e128f1a0759f158951643822"
         }
       ]
     },
     {
       "name": "torchvision",
-      "version": "0.25.0",
+      "version": "0.25.0+cu126",
       "wheels": [
         {
-          "filename": "torchvision-0.25.0-cp313-cp313-macosx_12_0_arm64.whl",
-          "sha256": "24e11199e4d84ba9c5ee7825ebdf1cd37ce8deec225117f10243cae984ced3ec",
-          "url": "https://files.pythonhosted.org/packages/f5/5b/1562a04a6a5a4cf8cf40016a0cdeda91ede75d6962cff7f809a85ae966a5/torchvision-0.25.0-cp313-cp313-macosx_12_0_arm64.whl"
+          "filename": "torchvision-0.25.0+cu126-cp313-cp313-win_amd64.whl",
+          "sha256": "6f7994a27b7fe26f6b4828df20421af004986d01091b98ddbc9e763e384ce60a",
+          "url": "https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp313-cp313-win_amd64.whl#sha256=6f7994a27b7fe26f6b4828df20421af004986d01091b98ddbc9e763e384ce60a"
         }
       ]
     },
@@ -545,6 +587,6 @@
   "python_minor": "3.13",
   "schema_version": 1,
   "supported": true,
-  "target": "aarch64-apple-darwin",
-  "torch_variant": "mps"
+  "target": "x86_64-pc-windows-msvc",
+  "torch_variant": "cu126"
 }

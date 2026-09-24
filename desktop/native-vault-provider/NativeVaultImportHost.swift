@@ -64,7 +64,23 @@ final class NativeVaultImportHost {
         return operation.id
     }
     func status(_ id: UUID) -> PublicStatus { sync(id); return active?.id == id ? active!.status : .init(operation_id: id.uuidString.lowercased(), phase: "unavailable", total: 0, committed: 0, already_present: 0, unsupported: 0, failed: 0, uncertain: 0, not_attempted: 0, message: "Passkey import is unavailable.") }
-    func cancel(_ id: UUID) { guard let op = active, op.id == id else { return }; op.lifetime.cancel(); op.context?.invalidate(); op.parser?.cancel(); op.task?.cancel(); if let controller = op.controller, let inner = op.innerID { controller.cancel(operationID: inner); sync(id) } else { set(op, phase: "cancelled", message: "Passkey import cancelled.") } }
+    func cancel(_ id: UUID) {
+        guard let op = active, op.id == id else { return }
+        if let controller = op.controller, let inner = op.innerID {
+            // The controller cancels its write transport before starting an
+            // exact-receipt-only reconciliation task. Its production transport
+            // still needs this operation's lifetime and account/generation
+            // binding for that task; cancelling either here would turn the
+            // receipt into a stale request and leave an admitted mutation
+            // unresolved. The controller's cancellation fence forbids every
+            // subsequent write.
+            controller.cancel(operationID: inner)
+            sync(id)
+            return
+        }
+        op.lifetime.cancel(); op.context?.invalidate(); op.parser?.cancel(); op.task?.cancel()
+        set(op, phase: "cancelled", message: "Passkey import cancelled.")
+    }
     func chooseScope(_ id: UUID, organizationID: UUID) { guard let op = active, op.id == id, op.organization == organizationID, let controller = op.controller, let inner = op.innerID else { return }; controller.chooseScope(operationID: inner, organizationID: organizationID); sync(id) }
     func confirm(_ id: UUID, digest: String) { guard let op = active, op.id == id, let controller = op.controller, let inner = op.innerID else { return }; controller.confirm(operationID: inner, previewDigest: digest); sync(id) }
     func preview(_ id: UUID, offset: Int) -> PublicPreview? { guard offset >= 0, offset <= 2_000, let op = active, op.id == id, let controller = op.controller, let inner = op.innerID, let value = controller.preview(operationID: inner) else { return nil }; let page = Array(value.slots.dropFirst(offset).prefix(8)); return .init(operation_id: id.uuidString.lowercased(), preview_digest: value.digest, offset: offset, total: value.slots.count, slots: page.map { .init(slot_id: $0.slotID.uuidString.lowercased(), title: $0.title, disposition: $0.disposition.rawValue, reason: $0.reason) }) }
@@ -150,5 +166,18 @@ final class NativeVaultImportHost {
     private func grantCurrent(_ grant: NativeVaultSessionAccess.Grant) -> Bool { if let currentGrant { return currentGrant(grant) }; return (try? ProviderStore(mode: .providerAccess).locked { $0.generation == grant.generation && $0.provider_subject == grant.subject }) ?? false }
     private func journalBase() -> URL { journalDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appendingPathComponent("AI Matrx/Vault Import", isDirectory: true) }
     private func set(_ op: Operation, phase: String, message: String) { op.status = .init(operation_id: op.id.uuidString.lowercased(), phase: phase, total: 0, committed: 0, already_present: 0, unsupported: 0, failed: 0, uncertain: 0, not_attempted: 0, message: message) }
-    private func sync(_ id: UUID) { guard let op = active, op.id == id, let controller = op.controller, let inner = op.innerID else { return }; let value = controller.status(operationID: inner); op.status = .init(operation_id: id.uuidString.lowercased(), phase: value.phase.rawValue, total: value.total, committed: value.committed, already_present: value.alreadyPresent, unsupported: value.unsupported, failed: value.failed, uncertain: value.uncertain, not_attempted: value.notAttempted, message: value.message) }
+    private func sync(_ id: UUID) {
+        guard let op = active, op.id == id, let controller = op.controller, let inner = op.innerID else { return }
+        let value = controller.status(operationID: inner)
+        op.status = .init(operation_id: id.uuidString.lowercased(), phase: value.phase.rawValue, total: value.total, committed: value.committed, already_present: value.alreadyPresent, unsupported: value.unsupported, failed: value.failed, uncertain: value.uncertain, not_attempted: value.notAttempted, message: value.message)
+        switch value.phase {
+        case .preview, .awaiting_confirmation, .importing, .idle:
+            return
+        case .partial, .completed, .cancelled, .failed, .unavailable:
+            // The controller has finished all same-operation receipt reads.
+            // Release the host-bound grant/context now, while retaining its
+            // durable uncertain journal for a later verified recovery.
+            op.lifetime.cancel(); op.context?.invalidate(); op.parser?.cancel(); op.task?.cancel()
+        }
+    }
 }

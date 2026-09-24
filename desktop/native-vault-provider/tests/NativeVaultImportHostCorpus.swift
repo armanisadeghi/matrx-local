@@ -61,6 +61,48 @@ private final class HostTransportStore {
     var writes: [(UUID, Data, String, UUID)] { transports.flatMap(\.writes) }
 }
 
+/// Drives the production import transport through the same host cancellation
+/// path. Cancelling its admitted write releases an ambiguous response; exact
+/// receipt lookup remains available and contains no source material.
+@available(macOS 26.0, *)
+private final class HostProductionImportWire: NativeVaultPasskeyTransporting {
+    private var pendingWrite: ((Result<(Data, HTTPURLResponse), Error>) -> Void)?
+    var writes = 0
+    var receiptCalls = 0
+    var receiptAdmission: (() -> Bool)?
+    var receiptWasCurrent = false
+    func cancel() {
+        let completion = pendingWrite
+        pendingWrite = nil
+        completion?(.failure(URLError(.cancelled)))
+    }
+    func send(_ request: URLRequest, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+        let path = request.url?.path ?? ""
+        if path == "/api/vault/native/passkeys/import" {
+            writes += 1
+            pendingWrite = completion
+            return
+        }
+        guard path.contains("/api/vault/native/passkeys/import/receipts/"),
+              let mutation = path.split(separator: "/").last,
+              let mutationID = UUID(uuidString: String(mutation)) else {
+            completion(.failure(URLError(.badURL))); return
+        }
+        receiptCalls += 1
+        receiptWasCurrent = receiptAdmission?() ?? false
+        let value: [String: Any] = [
+            "mutation_id": mutationID.uuidString.lowercased(),
+            "item_id": UUID().uuidString.lowercased(),
+            "field_id": UUID().uuidString.lowercased(),
+            "passkey_id": UUID().uuidString.lowercased(),
+            "source_sha256": Data(repeating: 7, count: 32).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""),
+            "status": "saved_waiting_for_site"
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        completion(.success((data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)))
+    }
+}
+
 @available(macOS 26.0, *)
 @MainActor private func waitFor(_ label: String, _ condition: @escaping () -> Bool) async {
     for _ in 0..<400 {
@@ -129,7 +171,39 @@ private func cxfFile(at url: URL, titles: [String]) throws {
             subject.cancel(id); store.transports[0].holdWrite = false
             await waitFor("cancelled accounting") { ["partial", "cancelled", "failed"].contains(subject.status(id).phase) }
             let status = subject.status(id)
-            precondition(status.phase == "cancelled" && status.uncertain == 1 && status.not_attempted == 1 && status.total == status.committed + status.already_present + status.unsupported + status.failed + status.uncertain + status.not_attempted, "cancellation accounting was \(status.phase): uncertain=\(status.uncertain), not_attempted=\(status.not_attempted)")
+            precondition(status.phase == "partial" && status.uncertain == 1 && status.not_attempted == 1 && status.total == status.committed + status.already_present + status.unsupported + status.failed + status.uncertain + status.not_attempted, "cancellation accounting was \(status.phase): uncertain=\(status.uncertain), not_attempted=\(status.not_attempted)")
+        }
+
+        // Host cancellation must retain the production transport's operation
+        // lifetime for one same-account receipt-only reconciliation. A second
+        // candidate must never be replayed after the admitted first write.
+        do {
+            let productionWire = HostProductionImportWire()
+            var productionLifetime: NativeVaultRequestLifetime?
+            let subject = NativeVaultImportHost(
+                presentationAnchor: anchor,
+                key: { "host-key" },
+                choose: { twoFile },
+                authentication: { _, _ in grant },
+                currentGrant: { _ in true },
+                wire: HostWire(organization: organization),
+                transportFactory: { grant, lifetime, access, scopes, current in
+                    productionLifetime = lifetime
+                    productionWire.receiptAdmission = { productionLifetime?.isCurrent == true }
+                    return NativeVaultImportTransport(grant: grant, lifetime: lifetime, sessionAccess: access, principalByScope: scopes, transport: productionWire, current: current)
+                },
+                journalDirectory: root.appendingPathComponent("production-cancel"))
+            let id = subject.begin(organizationID: organization)
+            await waitFor("production cancellation preview") { subject.status(id).phase == "preview" }
+            let digest = subject.preview(id, offset: 0)!.preview_digest
+            subject.chooseScope(id, organizationID: organization); subject.confirm(id, digest: digest)
+            await waitFor("production admitted write") { productionWire.writes == 1 }
+            subject.cancel(id)
+            await waitFor("production receipt reconciliation") {
+                let status = subject.status(id)
+                return status.phase == "cancelled" && status.committed == 1 && status.not_attempted == 1
+            }
+            precondition(productionWire.writes == 1 && productionWire.receiptCalls == 1 && productionWire.receiptWasCurrent && productionLifetime?.isCurrent == false, "host cancellation replayed a write, blocked its same-operation receipt, or retained its terminal lifetime")
         }
 
         // Recovery must read the original mutation receipt and never reissue its write.

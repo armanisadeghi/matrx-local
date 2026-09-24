@@ -2,8 +2,8 @@
  * The screen shown while the system browser has the sign-in (FS-C5b).
  *
  * It used to receive the OAuth callback and exchange the code itself, through two redundant
- * channels (a Tauri event and a poll of a host command that handed the webview the whole callback
- * URL). Both are gone, and so is the host command: the OS routes `aimatrx://auth/callback` to the Rust host, which forwards the code to `matrx-syncd`
+ * channels (a Tauri event and a 500 ms poll of `get_pending_oauth_url`). It does neither now: the
+ * OS routes `aimatrx://auth/callback` to the Rust host, which forwards the code to `matrx-syncd`
  * — the only process holding the PKCE verifier (SPEC-CUSTODY S1). The daemon exchanges it and
  * emits `session.changed`; `useAuth` turns that into `isAuthenticated` and App.tsx swaps this
  * screen for the workspace.

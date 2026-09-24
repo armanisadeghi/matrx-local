@@ -96,39 +96,19 @@ const DAEMON_DOWN_SNAPSHOT: SessionSnapshot = {
     "This build's sync helper cannot start on this computer (bundled matrx-syncd --version was " +
     "killed by signal 9), so this computer cannot sign in or sync.",
   remedy: "Update AI Matrx to the latest version. If this keeps happening after updating, report it from Settings → Support.",
-  // Running the same ladder again cannot make an unrunnable helper run.
-  can_start_sync: false,
 };
 
-const startButton = () =>
-  [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Start sync"));
-
 it("says exactly why sync is down, offers the remedy, and never offers a dead sign-in", async () => {
-  await renderLogin(DAEMON_DOWN_SNAPSHOT);
+  const startSync = vi.fn();
+  await renderLogin(DAEMON_DOWN_SNAPSHOT, startSync);
 
   expect(container.textContent).toContain("killed by signal 9");
   expect(container.textContent).toContain("Update AI Matrx to the latest version");
   expect(container.textContent).toContain("Sync is not running");
   // The sign-in button would post at a daemon that is not there: it is ABSENT, not disabled.
   expect(container.textContent).not.toContain("Sign in with AI Matrx");
-  // L2a-2: so is Start sync, in a state it cannot change. A remedy that cannot remedy is the
-  // same lie as a dead control.
-  expect(startButton()).toBeUndefined();
-});
 
-it("offers Start sync in the states it can actually change", async () => {
-  const startSync = vi.fn();
-  await renderLogin(
-    {
-      ...DAEMON_DOWN_SNAPSHOT,
-      state_reason: "AI Matrx Sync started but never became ready (the new daemon did not report the expected version in time), so this computer cannot sign in or sync.",
-      remedy: "Choose Start sync to try again. If it keeps failing, restart your computer and report it from Settings → Support.",
-      can_start_sync: true,
-    },
-    startSync,
-  );
-
-  const start = startButton();
+  const start = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Start sync"));
   expect(start).toBeDefined();
   await act(async () => start?.click());
   expect(startSync).toHaveBeenCalledOnce();
@@ -139,9 +119,8 @@ it("shows the NEW reason when Start sync fails again", async () => {
     ...DAEMON_DOWN_SNAPSHOT,
     state_reason: "AI Matrx Sync started but never became ready (the new daemon did not report the expected version in time), so this computer cannot sign in or sync.",
     remedy: "Choose Start sync to try again. If it keeps failing, restart your computer and report it from Settings → Support.",
-    can_start_sync: true,
   });
   expect(container.textContent).toContain("never became ready");
   expect(container.textContent).toContain("restart your computer");
-  expect(startButton()).toBeDefined();
+  expect([...container.querySelectorAll("button")].some((b) => b.textContent?.includes("Start sync"))).toBe(true);
 });

@@ -1229,11 +1229,13 @@ def get_coding_session_artifacts_lane(
                 f"unknown coding-session artifact provider {provider!r}; "
                 f"known: {', '.join(ARTIFACT_PROVIDERS)}"
             )
-        from app.config import CLOUD_PARTICIPATION_ENABLED
-
-        lane = CodingSessionArtifactsLane(
-            provider=provider, cloud_enabled=CLOUD_PARTICIPATION_ENABLED
-        )
+        # NEVER PUBLISHED INTO THE PERSON'S FILES (Arman, 2026-09-24): "Nothing should be
+        # adding files to my files". This lane had uploaded every scratchpad file of every
+        # session — 55,912 rows, whole repo clones included — into his Files, where they
+        # buried his own ~650 and timed the /files page out. Capture into the durable local
+        # folder stays; the cloud upload is off until artifacts have a home of their own
+        # that is not the person's file library.
+        lane = CodingSessionArtifactsLane(provider=provider, cloud_enabled=False)
         _lanes[provider] = lane
     return lane
 

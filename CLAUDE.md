@@ -39,12 +39,6 @@ push small batches to `origin/main` continuously; never run tree-wide destructiv
 never request your own branch/worktree/PR. Canonical:
 `/Users/armanisadeghi/code/common-docs/policies/shared-checkout.md`.
 
-**Release: you run it.** This repo is NOT on the twice-hourly release train (only `aidream` and
-`ai-matrx` are). Whoever works here releases their own work: when your change is verified,
-run `scripts/release.sh` from `origin/main` before you finish — do not leave it for "the
-release agent"; there is none for this repo. Expected cadence is about one release a day. A
-daily scheduled sweep only catches what a session forgot; it is a safety net, not the plan.
-
 ## What this is
 
 A **Tauri v2 desktop app** (Rust + React 19 + TS 7 + Vite 6 + Tailwind 3.4/shadcn,
@@ -272,5 +266,5 @@ RULE.
 
 Put all work directly on main--no worktrees, local branches or anything else!
 - Commit often (Locally)
-- Commit and push to `origin/main` as you go, then run this repo's release yourself when your work is verified (see § Release: you run it). Only `aidream` and `ai-matrx` have a twice-hourly release agent; this repo does not.
+- We have agents who handle a twice hourly release of the main repos so get your work committed and it will be live since we're pre-launch and need to move fast.
 - Focus on writing code that is going to do stuff and is going to get us to production! Do not waste time or we will lose the opportunity to go to production forever.

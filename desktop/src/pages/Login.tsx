@@ -111,22 +111,15 @@ export function Login({ auth }: LoginProps) {
                   {auth.snapshot.remedy && <p className="font-medium">{auth.snapshot.remedy}</p>}
                 </div>
               </div>
-              {/* Law 4, L2a-2: a control is absent or honest, never dead. Start sync re-runs the
-                  reconciliation ladder — which cannot help a build whose helper is missing or
-                  cannot execute, and cannot help a daemon that has already refused to step
-                  aside. Those states name the reinstall, the update or the restart instead, and
-                  the button is not drawn rather than drawn and futile. */}
-              {auth.snapshot.can_start_sync !== false && (
-                <Button
-                  type="button"
-                  className="w-full gap-2"
-                  disabled={auth.loading}
-                  onClick={() => void auth.startSync()}
-                >
-                  {auth.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Start sync
-                </Button>
-              )}
+              <Button
+                type="button"
+                className="w-full gap-2"
+                disabled={auth.loading}
+                onClick={() => void auth.startSync()}
+              >
+                {auth.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Start sync
+              </Button>
               {auth.error && <p className="text-center text-sm text-red-500">{auth.error}</p>}
             </CardContent>
           </Card>

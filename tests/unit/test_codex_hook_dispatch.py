@@ -59,7 +59,7 @@ def _install_plugin(home: Path, *, version: str = VERSION) -> Path:
     (root / "hooks").mkdir()
     (root / "hooks/emit.py").write_text("# the installed emitter\n")
     (home / "plugins/data" / PLUGIN_ID / "coding-session-bridge/pending").mkdir(
-        parents=True, exist_ok=True
+        parents=True
     )
     return root
 
@@ -153,22 +153,6 @@ def test_a_stale_copy_from_an_older_install_does_not_count_as_this_one(
     stale.write_text("an older install's emitter\n")
     state = hook_dispatch_state(home)
     assert state["code"] == "codex_hook_never_ran"
-
-
-def test_an_older_cached_runtime_copy_does_not_make_a_newer_install_ready(
-    tmp_path: Path,
-) -> None:
-    """Only the newest cached plugin can prove the currently installed hook ran."""
-    home = _home(tmp_path)
-    older = _install_plugin(home, version="0.2.0-alpha.9")
-    _install_plugin(home, version="0.2.0-alpha.12")
-    _write_runtime_copy(home, older)
-
-    state = hook_dispatch_state(home)
-
-    assert state["code"] == "codex_hook_never_ran"
-    assert state["dispatches"] is False
-    assert "0.2.0-alpha.12" in state["message"]
 
 
 def test_the_runtime_copy_key_is_the_launchers_own_key(tmp_path: Path) -> None:

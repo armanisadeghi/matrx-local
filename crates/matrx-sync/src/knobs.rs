@@ -128,6 +128,65 @@ impl Default for Knobs {
     }
 }
 
+/// The knobs only the executor's IO layers read (SPEC-ENGINE §2), resolved by the daemon.
+///
+/// Kept apart from [`Knobs`] on purpose: that struct is the PLANNER's surface, and a knob that
+/// appears there is one a pure decision depends on. Nothing here changes what the plan says — only
+/// how fast, how patiently and how many at once the executor carries it out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferKnobs {
+    /// `sync.transfer_concurrency` — device, 1–16, default 4. One pool per device.
+    pub transfer_concurrency: u32,
+    /// `sync.locked_file_retry_base_s` — device, default 5. The first backoff step.
+    pub retry_base_s: u32,
+    /// `sync.locked_file_retry_max_s` — device, default 900. The backoff ceiling.
+    pub retry_max_s: u32,
+    /// `sync.lease_ttl_s` — device, default 900.
+    pub lease_ttl_s: u32,
+    /// `sync.request_timeout_s` — device, default 300, 10–3600. **A registry row this unit adds**
+    /// (SPEC-ENGINE §2 had no timeout knob, and a request with no timeout hangs a mapping
+    /// forever on a captive portal). Sized for a buffered upload of a large file on a slow link.
+    pub request_timeout_s: u64,
+}
+
+impl Default for TransferKnobs {
+    fn default() -> Self {
+        TransferKnobs {
+            transfer_concurrency: 4,
+            retry_base_s: 5,
+            retry_max_s: 900,
+            lease_ttl_s: 900,
+            request_timeout_s: 300,
+        }
+    }
+}
+
+impl TransferKnobs {
+    /// Check every value against its documented range; refuse, never clamp.
+    pub fn validate(&self) -> crate::Result<()> {
+        use crate::SyncError::KnobOutOfRange;
+        if !(1..=16).contains(&self.transfer_concurrency) {
+            return Err(KnobOutOfRange {
+                knob: "sync.transfer_concurrency",
+                value: self.transfer_concurrency.to_string(),
+            });
+        }
+        if self.retry_base_s == 0 || self.retry_max_s < self.retry_base_s {
+            return Err(KnobOutOfRange {
+                knob: "sync.locked_file_retry_base_s",
+                value: format!("{} (max {})", self.retry_base_s, self.retry_max_s),
+            });
+        }
+        if !(10..=3600).contains(&self.request_timeout_s) {
+            return Err(KnobOutOfRange {
+                knob: "sync.request_timeout_s",
+                value: self.request_timeout_s.to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 impl Knobs {
     /// Check every value against its documented range (SPEC-ENGINE §2).
     ///

@@ -25,17 +25,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sqlite3
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 SCRATCH = Path.home() / "code" / "matrx-scratch-runtime-e2e"
-LIVE_DB = Path.home() / ".matrx" / "matrx.db"
+# The world whose sync daemon hands out the token. The engine code this script drives in-process
+# reads its token from the daemon at MATRX_HOME_DIR (TokenRepo -> app.services.sync_client), so
+# the script and the engine must name the SAME home. Set before any `app.*` import.
+os.environ.setdefault("MATRX_HOME_DIR", str(Path.home() / ".matrx"))
+MATRX_HOME = Path(os.environ["MATRX_HOME_DIR"])
 AIDREAM_ENV = Path.home() / "code" / "aidream" / ".env"
 
 MARKER = "MATRX-LOCAL-RUNTIME-E2E-OK"
@@ -43,19 +47,59 @@ RESUME_MARKER = "RESUME-CONFIRMED"
 
 
 def _live_token() -> tuple[str, str, int]:
-    conn = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+    """Ask the sync daemon for this device's access token.
+
+    The custody cutover (FS-C5b) made `matrx-syncd` the device's ONLY session holder and
+    migration V34 dropped `auth_tokens` from the local database, so the old
+    query of that table in here could no longer do anything but raise
+    `no such table` (finding C5b-3). The daemon publishes its endpoint in `~/.matrx/syncd.json`
+    and its two scoped tokens in `~/.matrx/syncd.token`; line 2 is the read token, which
+    authorises `GET /v1/token`.
+    """
+    import urllib.error
+    import urllib.request
+
+    home = MATRX_HOME
+    discovery_path = home / "syncd.json"
+    token_path = home / "syncd.token"
+    if not discovery_path.exists() or not token_path.exists():
+        raise SystemExit(
+            "AI Matrx Sync is not publishing on this computer — open the desktop app first"
+        )
+    discovery = json.loads(discovery_path.read_text())
+    port = discovery.get("tcp_port")
+    read_token = (token_path.read_text().splitlines() + ["", ""])[1].strip()
+    if not port or not read_token:
+        raise SystemExit("AI Matrx Sync published no endpoint or read token yet")
+
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/token",
+        headers={
+            "Authorization": f"Bearer {read_token}",
+            "X-Matrx-Client": "matrx-local-runtime-e2e",
+        },
+    )
     try:
-        row = conn.execute(
-            "SELECT access_token, user_id, expires_at FROM auth_tokens "
-            "WHERE key='current_user'"
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row or not row[0]:
-        raise SystemExit("No signed-in Matrx user in the installed app's DB")
-    if int(row[2] or 0) < time.time() + 600:
-        raise SystemExit("Matrx JWT is expired/expiring; open the desktop app first")
-    return str(row[0]), str(row[1]), int(row[2])
+        with urllib.request.urlopen(request, timeout=10) as response:
+            grant = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", "replace")
+        raise SystemExit(
+            f"AI Matrx Sync refused the token hand-out ({error.code}): {body}"
+        ) from error
+    except OSError as error:
+        raise SystemExit(f"AI Matrx Sync is not answering on 127.0.0.1:{port}: {error}") from error
+
+    access_token = str(grant.get("access_token") or "")
+    if not access_token:
+        raise SystemExit("No signed-in Matrx user on this computer — sign in from the desktop app")
+    user_id = str(grant.get("user_id") or "")
+    # `/v1/token` never hands out a token with less than a minute of life, and it dates the
+    # expiry in RFC3339 rather than the epoch seconds the dropped table held.
+    expires_at = int(
+        datetime.fromisoformat(str(grant["expires_at"]).replace("Z", "+00:00")).timestamp()
+    )
+    return access_token, user_id, expires_at
 
 
 def _pg_dsn_params() -> dict[str, str]:
@@ -129,7 +173,7 @@ async def main() -> None:
     from app.services.coding_sessions.service import CodingSessionBridgeOutbox
     from app.services.local_db.database import LocalDatabase
 
-    access_token, user_id, _exp = _live_token()
+    _access_token, user_id, _exp = _live_token()
     print(f"[e2e] Matrx user: {user_id}")
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -140,12 +184,10 @@ async def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="matrx-runtime-e2e-"))
     db = LocalDatabase(tmp / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, expires_at, updated_at)
-           VALUES ('current_user', ?, ?, ?, datetime('now'))""",
-        (access_token, user_id, int(time.time()) + 3600),
-    )
-    await db.commit()
+    # No token is written into the scratch DB: `auth_tokens` was dropped by local-DB migration V34
+    # and the engine's TokenRepo asks the sync daemon at MATRX_HOME_DIR for every token (C5b-3).
+    # `_live_token()` above proved the daemon will hand one out before any subscription turn is
+    # spent.
 
     class _Settings:
         values = {

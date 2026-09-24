@@ -20,7 +20,7 @@ Doctrine: `docs/SYNC_CONTRACT.md` (this feature has a row in its matrix).
 
 | Piece | File | Notes |
 |---|---|---|
-| Engine | `engine.py` | One `FileSyncEngine` singleton (`get_file_sync_engine`), engine-owned loop (Phase 2e in `app/main.py`), creds from the persisted `auth_tokens` row each tick. Cycle = pull folders → pull change feed → drain pushes → (full) hydration backfill. |
+| Engine | `engine.py` | One `FileSyncEngine` singleton (`get_file_sync_engine`), engine-owned loop (Phase 2e in `app/main.py`), creds from the sync daemon's token hand-out (`TokenRepo`) each tick. Cycle = pull folders → pull change feed → drain pushes → (full) hydration backfill. |
 | Cloud client | `client.py` | `MatrxFilesClient` — the matrx-files REST API with the user JWT. matrx-files is the ONLY file backend; URLs come from its envelope, never hand-built. Server contract: `packages/matrx-files/matrx_files/api/router_files.py` (aidream) — `GET /files/sync/changes` (keyset cursor + tombstones) + `GET /files/sync/folders`. |
 | Index | `index.py` | Cloud truth in the ATTACHed structural mirror (`files.files` / `files.folders`, spec = `schema_mirror/snapshot.json`); on-disk state in the `file_sync_state` sidecar (schema V11): `pointer | synced | pending_push | conflict`, `pending_op` (`upload|delete|move`), `last_synced_hash`. |
 | Tool seam | `hydration.py` | `ensure_hydrated(abs_path)` — cheap outside the Files root; loud error string when a pointer can't hydrate (an empty placeholder must never read as content). |

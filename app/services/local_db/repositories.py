@@ -854,7 +854,7 @@ class SyncMetaRepo:
 
 
 # ==================================================================
-# TokenRepo — auth_tokens table (single row: key='current_user')
+# TokenRepo — an adapter over the sync daemon's token hand-out (no table)
 # ==================================================================
 
 _TOKEN_KEY = "current_user"

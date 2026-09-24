@@ -661,11 +661,6 @@ mod update_install_state_tests {
     }
 }
 
-/// Holds a pending OAuth deep-link URL that arrived before the frontend
-/// mounted its listener. The frontend polls this via get_pending_oauth_url
-/// and clears it after consuming.
-struct PendingOAuthUrl(Mutex<Option<String>>);
-
 #[derive(Serialize)]
 struct SidecarStatus {
     running: bool,
@@ -2395,13 +2390,6 @@ fn running_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// Return the pending OAuth deep-link URL (if one arrived before the frontend
-/// listener was ready) and clear it from state. Returns null if none pending.
-#[tauri::command]
-fn get_pending_oauth_url(state: tauri::State<'_, PendingOAuthUrl>) -> Option<String> {
-    state.0.lock().unwrap().take()
-}
-
 /// Bring the app to front: focuses the most recent full window, recreating
 /// `main` if none exist (multi-window generalization — see windows.rs).
 ///
@@ -2587,9 +2575,6 @@ pub fn run() {
             if let Some(url_str) = argv.iter().find(|a| a.starts_with("aimatrx://")) {
                 println!("[single-instance] Received deep-link callback");
                 show_main_window(app);
-                if let Some(state) = app.try_state::<PendingOAuthUrl>() {
-                    *state.0.lock().unwrap() = Some(url_str.clone());
-                }
                 // FS-C5b: the code goes to the DAEMON, which holds the PKCE verifier. It is never
                 // emitted to the webview — a code the webview cannot use is a code an XSS cannot
                 // steal (SPEC-CUSTODY S1).
@@ -2646,7 +2631,6 @@ pub fn run() {
         .manage(UpdateInstallState::default())
         .manage(CloseToTray(AtomicBool::new(true)))
         .manage(windows::WindowRegistry::default())
-        .manage(PendingOAuthUrl(Mutex::new(None)))
         .manage(TranscriptionState(Mutex::new(None)))
         .manage(RecordingState::new())
         .manage(WakeWordAppState(Arc::new(WakeWordState::new())))
@@ -2696,7 +2680,6 @@ pub fn run() {
             reconcile_native_vault_host_actor,
             set_compact_mode,
             proxy_fetch,
-            get_pending_oauth_url,
             filesystem::open_filesystem_path,
             // Transcription commands
             detect_hardware,
@@ -3077,13 +3060,6 @@ pub fn run() {
 
                     // Bring the window to front
                     show_main_window(&handle);
-
-                    // Store in app state — OAuthPending.tsx will poll this via
-                    // get_pending_oauth_url() in case it wasn't mounted yet when
-                    // the event fired (race condition on app activation).
-                    if let Some(state) = handle.try_state::<PendingOAuthUrl>() {
-                        *state.0.lock().unwrap() = Some(url_str.clone());
-                    }
 
                     // FS-C5b: forward to the DAEMON rather than emitting the code to the
                     // webview. The daemon holds the verifier (SPEC-CUSTODY S1), so the webview

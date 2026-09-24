@@ -56,6 +56,28 @@ export interface HarnessIdentity {
  * on this device) rather than a proxy for it (a credentials file exists somewhere).
  */
 export async function harnessIdentity(): Promise<HarnessIdentity | null> {
+  const session = await harnessSession();
+  if (!session?.signed_in || !session.email || !session.user_id) return null;
+  return { email: session.email, userId: session.user_id };
+}
+
+/** What the dev-world daemon's `GET /v1/session` answers, verbatim. */
+export interface HarnessSession {
+  readonly signed_in?: boolean;
+  readonly state?: string;
+  readonly state_reason?: string | null;
+  readonly email?: string | null;
+  readonly user_id?: string | null;
+}
+
+/**
+ * The dev-world daemon's own session snapshot, or `null` when no dev daemon is answering.
+ *
+ * A spec that asserts the signed-out screen must assert what THIS device's daemon says, not what a
+ * never-signed-in device would say: a device that signed out is told "Sign in again to continue"
+ * with the daemon's reason, a fresh one is told "Sign in to your workspace" (C5b-5).
+ */
+export async function harnessSession(): Promise<HarnessSession | null> {
   const home = harnessHome();
   try {
     const discovery = JSON.parse(
@@ -69,13 +91,7 @@ export async function harnessIdentity(): Promise<HarnessIdentity | null> {
       signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) return null;
-    const session = (await response.json()) as {
-      signed_in?: boolean;
-      email?: string;
-      user_id?: string;
-    };
-    if (!session.signed_in || !session.email || !session.user_id) return null;
-    return { email: session.email, userId: session.user_id };
+    return (await response.json()) as HarnessSession;
   } catch {
     return null;
   }

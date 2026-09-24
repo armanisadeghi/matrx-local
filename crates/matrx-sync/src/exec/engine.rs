@@ -83,6 +83,17 @@ impl ExecContext {
     }
 }
 
+impl ExecContext {
+    /// Take the backoff and lease values from the resolved transfer knobs — registry values,
+    /// never constants in this module.
+    pub fn with_transfer_knobs(mut self, t: &crate::knobs::TransferKnobs) -> Self {
+        self.lease_ttl_s = i64::from(t.lease_ttl_s);
+        self.retry_base_s = i64::from(t.retry_base_s);
+        self.retry_max_s = i64::from(t.retry_max_s);
+        self
+    }
+}
+
 /// What one op did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpOutcome {

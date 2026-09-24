@@ -1,7 +1,7 @@
 """File sync engine — the desktop replica of the matrx-files cloud tree.
 
 Same spine as the notes and chat engines (engine-owned background loop,
-credentials from the persisted auth_tokens row, keyset cursor in sync_meta,
+credentials from the sync daemon's token hand-out, keyset cursor in sync_meta,
 loud failures), with two user-choosable modes (docs/handoffs/file-sync-system.md):
 
 - ``pointers`` — the full metadata tree lives locally (files.* mirror +

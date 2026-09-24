@@ -7,7 +7,7 @@
 
 1. **Done means verified engineering, then handoff.** Implement the requested outcome, verify changed types and regressions, exercise UI changes in localhost from the user’s seat with real data, obtain independent verification, and commit/push. Deployment, production verification, and full release belong to dedicated agents; they never make a completed engineering task incomplete. Tests alone are not UI proof. `common-docs/policies/reality-is-the-referee.md` · `common-docs/policies/deployment-is-the-deploy-agents-job.md`.
 2. **Attack before you trust.** Hole-poke plans before commitment; adversarially re-verify "done" before believing it. An attack or verification that inherits the builder's frame — his file list, his path, his summary — is neither; it must be able to return what the builder does not already believe.
-3. **Fix the class, never the instance.** Root cause → census the siblings → a guard proven failing-then-passing.
+3. **Fix the class, never the instance.** Root cause → census the siblings → a guard proven failing-then-passing. **Felt it? Fix it:** a bug you hit while using the product yourself is fixed in that session — never just logged, listed, or reported (Arman, 2026-09-23).
 4. **Nothing fails silently.** Every stand-in announces itself with a remedy; a screen is absent or honest — never dead, disabled-looking, or lying.
 5. **Think in platform primitives.** Never scope a capability to the feature that surfaced it; build it in the shared layer so every module and client app inherits it.
 6. **Opinions become knobs.** Behavioral choices are org-configurable settings; organizations decide — never agents, never hardcoded taste.
@@ -38,6 +38,12 @@ relocate it, don't grow this file.
 push small batches to `origin/main` continuously; never run tree-wide destructive git;
 never request your own branch/worktree/PR. Canonical:
 `/Users/armanisadeghi/code/common-docs/policies/shared-checkout.md`.
+
+**Release: you run it.** This repo is NOT on the twice-hourly release train (only `aidream` and
+`ai-matrx` are). Whoever works here releases their own work: when your change is verified,
+run `scripts/release.sh` from `origin/main` before you finish — do not leave it for "the
+release agent"; there is none for this repo. Expected cadence is about one release a day. A
+daily scheduled sweep only catches what a session forgot; it is a safety net, not the plan.
 
 ## What this is
 
@@ -266,5 +272,5 @@ RULE.
 
 Put all work directly on main--no worktrees, local branches or anything else!
 - Commit often (Locally)
-- We have agents who handle a twice hourly release of the main repos so get your work committed and it will be live since we're pre-launch and need to move fast.
+- Commit and push to `origin/main` as you go, then run this repo's release yourself when your work is verified (see § Release: you run it). Only `aidream` and `ai-matrx` have a twice-hourly release agent; this repo does not.
 - Focus on writing code that is going to do stuff and is going to get us to production! Do not waste time or we will lose the opportunity to go to production forever.

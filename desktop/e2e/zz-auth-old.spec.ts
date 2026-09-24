@@ -12,7 +12,6 @@ import {
   HARNESS_ALREADY_SIGNED_IN,
   HARNESS_NOT_SIGNED_IN,
   harnessIdentity,
-  harnessSession,
   signInViaHarness,
 } from "./helpers";
 
@@ -22,25 +21,11 @@ test.describe("authentication", () => {
     page,
   }) => {
     test.skip(Boolean(await harnessIdentity()), HARNESS_ALREADY_SIGNED_IN);
-    const session = await harnessSession();
     await page.goto("/");
     await expect(
       page.getByRole("heading", { name: "Matrx Local" }),
     ).toBeVisible();
-    // The honest screen depends on THIS device's history, and the daemon is the one that knows it
-    // (C5b-5). A device that never held a session gets the plain first-run line; a device that
-    // signed out, or whose session was refused, is told to sign in AGAIN and shown the daemon's
-    // own reason verbatim. Asserting the first-run copy on a signed-out device made this spec fail
-    // on a screen that was telling the truth.
-    const firstRun = !session || (session.state === "signed_out" && !session.user_id);
-    if (firstRun) {
-      await expect(page.getByText("Sign in to your workspace")).toBeVisible();
-    } else {
-      await expect(page.getByText("Sign in again to continue")).toBeVisible();
-      if (session.state_reason) {
-        await expect(page.getByRole("status")).toContainText(session.state_reason);
-      }
-    }
+    await expect(page.getByText("Sign in to your workspace")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Sign in with AI Matrx" }),
     ).toBeVisible();

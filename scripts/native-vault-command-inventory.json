@@ -32,7 +32,6 @@
     "get_close_to_tray",
     "get_llm_server_status",
     "get_llm_setup_status",
-    "get_pending_oauth_url",
     "get_sidecar_logs",
     "get_voice_setup_status",
     "get_wake_word_mode",

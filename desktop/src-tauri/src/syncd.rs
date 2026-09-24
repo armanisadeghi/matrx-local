@@ -136,15 +136,19 @@ sign in or sync."
         }
     }
 
+    /// Something IS serving on this home's recorded endpoint, and it is not a daemon this app
+    /// can use. Start sync has already asked it to step aside by the time a person reads this
+    /// (see `reconcile_with`), so naming Start sync again would be a remedy that cannot remedy
+    /// (L2a-2). The honest next step is the restart.
     fn unreachable(detail: impl Into<String>) -> Self {
         let detail = detail.into();
         Self {
             code: "unreachable",
             state_reason: format!(
-                "AI Matrx Sync is running on this computer but is not answering ({detail}), so \
-this computer cannot sign in or sync."
+                "AI Matrx Sync is running on this computer but is not answering ({detail}), and \
+it did not step aside when AI Matrx asked it to, so this computer cannot sign in or sync."
             ),
-            remedy: REMEDY_START_SYNC,
+            remedy: REMEDY_RESTART,
             detail,
         }
     }
@@ -187,6 +191,13 @@ pub struct DaemonState {
     pub state_reason: String,
     /// `None` when running.
     pub remedy: Option<&'static str>,
+    /// Whether **Start sync** is a control that can actually change this state.
+    ///
+    /// Law 4: a control is absent or honest, never dead. A daemon that cannot execute, a build
+    /// missing its helper, or one already asked to step aside and refusing are not fixed by
+    /// running the same ladder again — those states name the restart, the update or the
+    /// reinstall, and the button is not drawn.
+    pub can_start_sync: bool,
     /// The engineering half, or empty.
     pub detail: String,
 }
@@ -198,6 +209,7 @@ impl DaemonState {
             code: "running",
             state_reason: String::new(),
             remedy: None,
+            can_start_sync: false,
             detail: String::new(),
         }
     }
@@ -209,6 +221,7 @@ impl From<DaemonDown> for DaemonState {
             running: false,
             code: down.code,
             state_reason: down.state_reason,
+            can_start_sync: down.remedy == REMEDY_START_SYNC,
             remedy: Some(down.remedy),
             detail: down.detail,
         }
@@ -603,8 +616,20 @@ fn start_absent_allowed(discovery_present: bool) -> bool {
     !discovery_present
 }
 
-fn stale_discovery_allows_recovery(discovery_present: bool, valid_pid_exited: bool) -> bool {
-    !discovery_present || valid_pid_exited
+/// Whether the ladder may treat the discovery file as absent and spawn a replacement.
+///
+/// **A live pid is not enough** (L2a-1). Pids are reused — routinely, after a reboot, when macOS
+/// reassigns low numbers — and a hung process is not a serving one. The daemon's own
+/// `clobber_check` has said so since FS-C2 and probes `GET /v1/health` before refusing to
+/// publish; the host half asked only whether *some* process held that pid, so a corpse's file
+/// plus a recycled pid wedged the app in `unreachable`, where Start sync could never spawn.
+/// Same rule on both sides now: the pid must be alive AND the recorded endpoint must answer.
+fn stale_discovery_allows_recovery(
+    discovery_present: bool,
+    valid_pid_exited: bool,
+    endpoint_answers: bool,
+) -> bool {
+    !discovery_present || valid_pid_exited || !endpoint_answers
 }
 
 fn replacement_matches(expected_version: &str, world: &str, version: &DaemonVersion) -> bool {
@@ -730,6 +755,31 @@ fn process_is_alive(pid: u32) -> bool {
     system.process(process).is_some()
 }
 
+/// Does the endpoint the discovery file names actually answer?
+///
+/// The daemon's own `clobber_check` (`crates/matrx-syncd/src/discovery.rs`) asks exactly this,
+/// unauthenticated, with a 2 s budget, before it refuses to publish over an existing file. The
+/// host asks it the same way so the two halves can never disagree about whether a daemon is
+/// there: whatever one of them treats as a corpse, the other does too.
+async fn recorded_endpoint_answers() -> bool {
+    let Some(port) = discovery_file()
+        .and_then(|file| file.get("tcp_port").and_then(serde_json::Value::as_u64))
+    else {
+        return false;
+    };
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/v1/health"))
+            .header("X-Matrx-Client", "matrx-local-host")
+            .send(),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .is_some_and(|r| r.status().is_success())
+}
+
 async fn wait_for_original_shutdown(pid: u32, budget_seconds: u64) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(budget_seconds + 5);
     loop {
@@ -828,6 +878,7 @@ trait ReconcileOps {
     fn discovery_pid(&self) -> Option<u32>;
     fn discovery_present(&self) -> bool;
     fn process_alive(&self, pid: u32) -> bool;
+    async fn endpoint_answers(&self) -> bool;
     async fn shutdown(&self) -> Result<serde_json::Value, String>;
     async fn wait_for_shutdown(&self, pid: u32, budget: u64) -> bool;
     fn spawn(&self, binary: &Path, world: &str) -> Result<(), String>;
@@ -842,12 +893,54 @@ impl ReconcileOps for RuntimeOps {
     fn discovery_pid(&self) -> Option<u32> { discovery_pid() }
     fn discovery_present(&self) -> bool { !discovery_is_removed() }
     fn process_alive(&self, pid: u32) -> bool { process_is_alive(pid) }
+    async fn endpoint_answers(&self) -> bool { recorded_endpoint_answers().await }
     async fn shutdown(&self) -> Result<serde_json::Value, String> {
         call(reqwest::Method::POST, "/v1/shutdown", Some(serde_json::json!({ "reason": "upgrade" }))).await
     }
     async fn wait_for_shutdown(&self, pid: u32, budget: u64) -> bool { wait_for_original_shutdown(pid, budget).await }
     fn spawn(&self, binary: &Path, world: &str) -> Result<(), String> { spawn_daemon(binary, world) }
     async fn verify(&self, expected_version: &str, world: &str) -> bool { verify_replacement(expected_version, world).await }
+}
+
+/// Ask a daemon that answers but is not usable to stop, then take its place.
+///
+/// This is the `unreachable` branch's one real recovery: the same `/v1/shutdown` request the
+/// upgrade path uses. A daemon from another home rejects our control token, and a hung one never
+/// answers — both end in `unreachable`, which now names the restart.
+async fn stand_aside_and_replace(
+    ops: &impl ReconcileOps,
+    binary: &Path,
+    world: &str,
+    expected_version: &str,
+    original_error: String,
+) -> Result<(), DaemonDown> {
+    let Some(pid) = ops.discovery_pid() else {
+        return Err(DaemonDown::unreachable(original_error));
+    };
+    let Ok(shutdown) = ops.shutdown().await else {
+        return Err(DaemonDown::unreachable(original_error));
+    };
+    let budget = shutdown.get("budget_s").and_then(serde_json::Value::as_u64);
+    if shutdown.get("accepted").and_then(serde_json::Value::as_bool) != Some(true)
+        || !matches!(budget, Some(5..=120))
+    {
+        return Err(DaemonDown::unreachable(original_error));
+    }
+    if !may_spawn_replacement(
+        true,
+        ops.wait_for_shutdown(pid, budget.expect("validated above")).await,
+        !ops.discovery_present(),
+    ) {
+        return Err(DaemonDown::unreachable(original_error));
+    }
+    ops.spawn(binary, world).map_err(DaemonDown::cannot_execute)?;
+    if ops.verify(expected_version, world).await {
+        Ok(())
+    } else {
+        Err(DaemonDown::never_became_ready(
+            "the replacement daemon did not report the expected version in time",
+        ))
+    }
 }
 
 async fn reconcile_with(
@@ -864,15 +957,24 @@ async fn reconcile_with(
     };
     let observed = match ops.version().await {
         Ok(version) => Some(version),
-        Err(_)
+        Err(error) => {
+            // The daemon the file names did not answer US. Is it serving anybody? A dead pid, a
+            // recycled pid whose new owner is not a daemon, and a hung process all answer "no",
+            // and all of them mean the file is a corpse this app may replace (L2a-1).
             if stale_discovery_allows_recovery(
                 ops.discovery_present(),
                 ops.discovery_pid().is_some_and(|pid| !ops.process_alive(pid)),
-            ) =>
-        {
-            None
+                ops.endpoint_answers().await,
+            ) {
+                None
+            } else {
+                // Something IS serving there and this app cannot use it. Rule 9 forbids killing
+                // it, so Start sync asks it to step aside through the door it owns — and only
+                // when it refuses does the person get `unreachable`, whose remedy is the restart
+                // rather than the button they just pressed (L2a-2).
+                return stand_aside_and_replace(ops, binary, world, &expected_version, error).await;
+            }
         }
-        Err(error) => return Err(DaemonDown::unreachable(error)),
     };
     match decide_reconciliation(&expected_version, &world, observed.as_ref()) {
         ReconcileDecision::StartAbsent => {
@@ -1111,6 +1213,9 @@ mod tests {
         shutdown: Result<serde_json::Value, String>,
         stopped: bool,
         verified: bool,
+        /// Does the recorded endpoint answer `/v1/health`? A corpse's file with a recycled pid
+        /// says no while `alive` still says yes — the L2a-1 shape.
+        answers: Cell<bool>,
         shutdown_calls: Cell<u8>,
         spawn_calls: Cell<u8>,
     }
@@ -1125,6 +1230,7 @@ mod tests {
                 shutdown: Ok(serde_json::json!({ "accepted": true, "budget_s": 5 })),
                 stopped: true,
                 verified: true,
+                answers: Cell::new(true),
                 shutdown_calls: Cell::new(0),
                 spawn_calls: Cell::new(0),
             }
@@ -1137,6 +1243,7 @@ mod tests {
         fn discovery_pid(&self) -> Option<u32> { self.pid }
         fn discovery_present(&self) -> bool { self.discovery_present.get() }
         fn process_alive(&self, _: u32) -> bool { self.alive.get() }
+        async fn endpoint_answers(&self) -> bool { self.answers.get() }
         async fn shutdown(&self) -> Result<serde_json::Value, String> {
             self.shutdown_calls.set(self.shutdown_calls.get() + 1);
             self.shutdown.clone()
@@ -1174,7 +1281,10 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_refuses_live_unreachable_and_adopts_equal_or_newer() {
-        let unreachable = FakeOps::ready(Err("http failed".to_string()));
+        // A daemon that is serving something, is not usable by this app, and will not step aside
+        // stays refused — and no second daemon is ever spawned beside it (rule 0, L2a-2).
+        let mut unreachable = FakeOps::ready(Err("http failed".to_string()));
+        unreachable.shutdown = Err("unauthorized".to_string());
         assert!(reconcile_with(&unreachable, Path::new("payload"), "dev").await.is_err());
         assert_eq!(unreachable.spawn_calls.get(), 0);
 
@@ -1247,8 +1357,63 @@ mod tests {
     fn unreachable_daemon_with_discovery_is_not_treated_as_absent() {
         assert!(!start_absent_allowed(true));
         assert!(start_absent_allowed(false));
-        assert!(stale_discovery_allows_recovery(true, true));
-        assert!(!stale_discovery_allows_recovery(true, false));
+        assert!(stale_discovery_allows_recovery(true, true, false));
+        assert!(stale_discovery_allows_recovery(true, true, true));
+        // A live pid whose endpoint answers is the ONE shape that blocks recovery.
+        assert!(!stale_discovery_allows_recovery(true, false, true));
+        // …and a live pid whose endpoint says nothing is a corpse, not a daemon (L2a-1).
+        assert!(stale_discovery_allows_recovery(true, false, false));
+    }
+
+    #[tokio::test]
+    async fn a_recycled_pid_does_not_wedge_start_sync_forever() {
+        // L2a-1. The machine was powered off with a daemon running, so `syncd.json` survived with
+        // pid 34496 in it. On the next boot macOS handed 34496 to something else entirely. The
+        // host's old liveness test — "some process holds this pid" — said the daemon was alive,
+        // the version call failed because there is no daemon there, and the ladder answered
+        // `unreachable`, where recovery was forbidden: Start sync could never spawn a
+        // replacement. Proven failing before the rule: with `answers` ignored, this returns
+        // `unreachable` and `spawn_calls == 0`.
+        let corpse = FakeOps::ready(Err("connection refused".to_string()));
+        corpse.alive.set(true); // the pid was recycled — a process holds it
+        corpse.answers.set(false); // …but nothing is serving on the recorded port
+        reconcile_with(&corpse, Path::new("payload"), "dev")
+            .await
+            .expect("a corpse's discovery file must not block recovery");
+        assert_eq!(corpse.spawn_calls.get(), 1, "Start sync must be able to spawn");
+        assert_eq!(corpse.shutdown_calls.get(), 0, "there is nothing there to ask");
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_answers_but_is_not_ours_is_asked_to_step_aside_first() {
+        // L2a-2. `unreachable`'s remedy used to be Start sync, which re-ran the same ladder and
+        // returned `unreachable` again by construction — a button that could not work. Start sync
+        // now asks the daemon holding this home to stop, through the door it owns (rule 9: a
+        // request, never a kill), and only names the restart when that is refused.
+        let stubborn = FakeOps::ready(Err("unauthorized".to_string()));
+        stubborn.answers.set(true);
+        reconcile_with(&stubborn, Path::new("payload"), "dev")
+            .await
+            .expect("a daemon that steps aside is replaced");
+        assert_eq!(stubborn.shutdown_calls.get(), 1);
+        assert_eq!(stubborn.spawn_calls.get(), 1);
+    }
+
+    #[test]
+    fn a_daemon_down_state_only_offers_start_sync_when_it_can_work() {
+        // Law 4: a control is absent or honest, never dead.
+        assert!(DaemonState::from(DaemonDown::never_became_ready("x")).can_start_sync);
+        for down in [
+            DaemonDown::helper_missing(),
+            DaemonDown::cannot_execute("x"),
+            DaemonDown::unreachable("x"),
+            DaemonDown::incompatible("x"),
+            DaemonDown::upgrade_blocked("x"),
+        ] {
+            let state = DaemonState::from(down.clone());
+            assert!(!state.can_start_sync, "{} must not offer Start sync", down.code);
+            assert!(state.remedy.is_some_and(|r| !r.is_empty()));
+        }
     }
 
     #[test]
@@ -1275,6 +1440,7 @@ mod tests {
             fn discovery_pid(&self) -> Option<u32> { None }
             fn discovery_present(&self) -> bool { false }
             fn process_alive(&self, _: u32) -> bool { false }
+            async fn endpoint_answers(&self) -> bool { false }
             async fn shutdown(&self) -> Result<serde_json::Value, String> { unreachable!() }
             async fn wait_for_shutdown(&self, _: u32, _: u64) -> bool { unreachable!() }
             fn spawn(&self, _: &Path, _: &str) -> Result<(), String> { unreachable!() }
@@ -1298,13 +1464,18 @@ mod tests {
         assert_eq!(never_ready.code, "never_became_ready");
         assert!(never_ready.remedy.contains("Start sync"));
 
-        // (d) it is running but unreachable — a live discovery file and no answer.
-        let unreachable = FakeOps::ready(Err("connection refused".to_string()));
+        // (d) something IS serving there, it is not a daemon this app can use, and it refused to
+        // step aside. Only then is it `unreachable` — and the remedy is the restart, not the
+        // button the person just pressed (L2a-2).
+        let mut unreachable = FakeOps::ready(Err("connection refused".to_string()));
+        unreachable.shutdown = Err("unauthorized".to_string());
         let unreachable = reconcile_with(&unreachable, Path::new("payload"), "dev")
             .await
             .expect_err("an unreachable live daemon is not a success");
         assert_eq!(unreachable.code, "unreachable");
         assert!(unreachable.state_reason.contains("connection refused"));
+        assert_eq!(unreachable.remedy, REMEDY_RESTART);
+        assert!(!DaemonState::from(unreachable.clone()).can_start_sync);
 
         // An incompatible daemon is its own reason, never "unreachable".
         let mut wrong_world = FakeOps::ready(Ok(daemon("0.1.0")));

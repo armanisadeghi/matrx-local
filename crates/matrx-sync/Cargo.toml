@@ -42,7 +42,7 @@ async-trait = "0.1.90"
 # S6: `keyring` 4.2.0, DEFAULT features — the `v1` set resolves to exactly our three stores
 # (apple keychain, Windows credential manager, Secret Service). Never a disk fallback (S7).
 keyring = "4.2.0"
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true }
 chrono = { version = "0.4.43", default-features = false, features = ["clock", "serde", "std"] }
 # PKCE (S5): 256-bit state and a 32-byte verifier from the OS CSPRNG.

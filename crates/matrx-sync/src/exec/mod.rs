@@ -11,6 +11,7 @@
 //! | [`io`] | The two seams, [`io::LocalIo`] and [`io::RemoteIo`], so the decisions are testable without a disk that can fill up or a server that must be asked to return 412. |
 //! | [`order`] | Dependency order: dirs before files, moves before the creates that reuse their paths, deletes last and deepest-first. |
 //! | [`local`] | The production disk: atomic writes through `.matrx-sync/tmp`, NFC/NFD and case resolution (I8), preserved mtimes, the OS trash. |
+//! | [`remote`] | The production cloud: the live file service's routes as probed, preconditions always sent, `X-Organization-Id` on every call, bytes metered. |
 //! | [`engine`] | The executor itself: enqueue, act, confirm — and re-plan rather than retry when the world moved. |
 //! | [`fakes`] | A **test seam**: fault-injectable stand-ins for both. Never product evidence. |
 //!
@@ -24,8 +25,10 @@ pub mod fakes;
 pub mod io;
 pub mod local;
 pub mod order;
+pub mod remote;
 
 pub use local::RealLocalIo;
+pub use remote::{AccessToken, HttpRemote, RemoteConfig, StaticToken};
 pub use engine::{ExecContext, ExecEvent, ExecReport, Executor, OpOutcome};
 pub use error::{ExecError, ExecResult, Precondition};
 pub use io::{

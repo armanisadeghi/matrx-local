@@ -1936,9 +1936,9 @@ class SyncEngine:
     # engine only configured itself (JWT + user_id) inside request handlers,
     # so a user who never visited the Documents page got NO pulls, NO watcher,
     # and pending pushes stranded for months. This loop makes the engine
-    # self-sufficient: credentials come from the persisted auth_tokens row
-    # (kept fresh by the sync daemon's session grant, not a direct write
-    # route — see app/services/session_freshness.py), the watcher is
+    # self-sufficient: credentials come from the sync daemon's token hand-out
+    # (TokenRepo -> matrx-syncd, the device's only session holder — see
+    # app/services/session_freshness.py), the watcher is
     # ensured, and an incremental pull + pending push runs every tick, with a
     # full reconcile when the last one is older than _FULL_SYNC_MAX_AGE_S.
 

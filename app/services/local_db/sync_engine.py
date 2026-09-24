@@ -27,10 +27,10 @@ Offline behaviour:
 
 User JWT:
   The agent catalog RPC REQUIRES a JWT — there is no public
-  builtins variant anymore. The engine reads the JWT from the auth_tokens
-  SQLite table, kept current by the sync daemon's session grant (see
-  app/services/sync_client/client.py and app/services/session_freshness.py;
-  the old direct-write auth-token routes were removed in commit 7faafcff2). If
+  builtins variant anymore. The engine asks the sync daemon for the JWT
+  (TokenRepo -> app/services/sync_client/client.py; the local auth_tokens table
+  was dropped by migration V34 and the direct-write auth-token routes were
+  removed in commit 7faafcff2). If
   no valid token is stored, the agent sync is skipped entirely, the
   previously cached agents are kept, and the skip is logged loudly (never
   silently swallowed).

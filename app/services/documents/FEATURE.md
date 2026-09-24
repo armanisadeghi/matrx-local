@@ -13,7 +13,7 @@ contract conversation, not a test edit.
   `full_sync` / per-note), content-hash three-way conflict handling, file
   watcher, and the **engine-owned auto-sync loop** (`start_background_sync`,
   main.py Phase 2c: 10-min incremental pull + pending push, daily full
-  reconcile, credentials from the persisted `auth_tokens` row). The watcher
+  reconcile, credentials from the sync daemon's token hand-out via `TokenRepo`). The watcher
   auto-starts on documents traffic and in the auto-sync tick.
 - `file_manager.py` — note files under `MATRX_NOTES_DIR` (default `~/Documents/Matrx/Notes/`), `.sync/state.json`
   checkpoint, `.sync/conflicts/<id>/{local,remote}.md`. Records access

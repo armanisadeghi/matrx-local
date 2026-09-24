@@ -51,9 +51,9 @@ working store, never a competing server.
     writes to local SQLite first. ``app/services/chat_sync`` mirrors those
     canonical chat rows to Supabase immediately after a turn and retries from
     the outbox on reconnect.
-  - The user JWT is read from an in-memory cache (warmed from the auth_tokens
-    SQLite table, updated on every token push) at call time so it
-    automatically picks up token refreshes without re-initializing.
+  - The user JWT is asked of the sync daemon (``matrx-syncd``, the device's only
+    session holder) at each cloud operation and never retained, so it always
+    carries the daemon's latest rotation without re-initializing.
   - AI provider calls (OpenAI, Anthropic, etc.) work in full, using
     locally-stored provider API keys (local-only, never synced) via the
     injected key resolver.

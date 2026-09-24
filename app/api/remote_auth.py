@@ -554,8 +554,9 @@ async def is_instance_owner(user_id: str) -> bool:
 
     Remote (tunnel) callers must be the machine's own owner — a valid token
     from a different AI Matrx account must not be able to drive someone else's
-    machine. The owner is the user_id persisted in auth_tokens when the desktop
-    UI signed in. If no owner is recorded yet (nobody has signed in locally),
+    machine. The owner is the user_id of the session the sync daemon holds
+    (``TokenRepo.get_owner_user_id`` asks ``matrx-syncd``). If there is no owner (nobody has
+    signed in on this machine),
     no remote caller can match — remote control requires a prior local sign-in.
     """
     if not user_id:

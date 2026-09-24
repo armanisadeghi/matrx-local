@@ -13,7 +13,7 @@ phrase in the sync directories.
 
 - `database.py` — connection/bootstrap for `~/.matrx/matrx.db`.
 - `schema.py` — versioned migrations `_V1.._V7+` (core catalog tables,
-  auth_tokens/prompts/notes, conversation persistence, notes-sync metadata,
+  auth_tokens (dropped in V34 — the sync daemon is the only session holder)/prompts/notes, conversation persistence, notes-sync metadata,
   local version history, the opaque canonical executable-agent cache in V14,
   and the dedicated coding-session hook outbox in V19). Additive, applied at
   startup.
@@ -38,7 +38,7 @@ phrase in the sync directories.
   `app/services/ai/model_catalog.py` (SqliteModelCatalog) — change the
   cached fields and AI model resolution breaks, not just the models list.
 - `secret_store.py` — keychain-backed Fernet encryption for `api_keys` (in the
-  SQLite `app_settings` blob) and `auth_tokens`. **These never sync, never
+  SQLite `app_settings` blob). (It also covered `auth_tokens` until V34 dropped that table.) **These never sync, never
   leave the machine.** Credential writes raise `SecretEncryptionUnavailableError`
   when the OS keychain/Fernet backend is unavailable; plaintext/base64 is not an
   equivalent fallback. Historical plaintext remains readable but is never newly written.
@@ -113,7 +113,7 @@ phrase in the sync directories.
   6 fail on the pre-fix seam, and one is a census over `app/**`).
 - **Offline skips are LOUD and recorded** in `sync_meta.status`
   (`skipped`/`offline`); stale cache is served, never wiped. Agents sync needs
-  a user JWT (from `auth_tokens`); no token ⇒ loud skip, cache kept.
+  a user JWT (asked of the sync daemon through `TokenRepo`); no token ⇒ loud skip, cache kept.
 - **Do NOT delete `sync_queue` or `SyncMetaRepo`'s queue methods** — dormant,
   but it is the designated outbox for future offline-write push pipelines
   (conversations first; contract gap #1).

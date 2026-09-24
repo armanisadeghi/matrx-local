@@ -40,8 +40,9 @@ Auth model:
     ``X-Request-Id``), and the user identity — the JWT ``sub`` claim
     decoded WITHOUT signature verification (the outer middleware already
     established trust; the engine deliberately holds no JWT secret — see
-    the SUPABASE_JWT_SECRET note in CLAUDE.md), falling back to the stored
-    auth_tokens user_id (single-user desktop), then to ``local-user`` for
+    the SUPABASE_JWT_SECRET note in CLAUDE.md), falling back to the user_id of
+    the sync daemon's current token grant (``TokenRepo``, single-user desktop), then to
+    ``local-user`` for
     tokenless TEST_MODE callers.
 """
 

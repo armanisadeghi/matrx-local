@@ -856,7 +856,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _registry.failed("sync_engine", exc)
 
     # Phase 2c: Engine-owned notes auto-sync (documents ↔ workbench.notes).
-    # Credentials come from the persisted auth_tokens row, so this works even
+    # Credentials come from the sync daemon's token hand-out (TokenRepo ->
+    # matrx-syncd), so this works even
     # if the user never opens the Notes UI — the historical failure mode was
     # months of no sync because everything hinged on frontend traffic.
     _registry.starting("notes_sync")
@@ -900,7 +901,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _registry.failed("notes_sync", exc)
 
     # Phase 2d: Engine-owned chat mirror sync (chat.* <-> cloud). Same
-    # credential model as notes: the persisted auth_tokens row feeds each
+    # credential model as notes: the sync daemon's token hand-out feeds each
     # tick, so local turns push and cloud conversations pull without any
     # frontend involvement. See app/services/chat_sync/engine.py.
     _registry.starting("chat_sync")
@@ -920,7 +921,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Phase 2e: Engine-owned file sync (files.* mirror + ~/Documents/Matrx/Files
     # replica of the matrx-files cloud tree). Same credential model: the
-    # persisted auth_tokens row feeds each tick. Mode (off|pointers|full)
+    # sync daemon's token hand-out feeds each tick. Mode (off|pointers|full)
     # comes from settings; 'off' keeps the loop alive but idle.
     # See app/services/file_sync/engine.py.
     _registry.starting("file_sync")

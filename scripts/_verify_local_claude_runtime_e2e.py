@@ -35,7 +35,11 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 SCRATCH = Path.home() / "code" / "matrx-scratch-runtime-e2e"
-LIVE_DB = Path.home() / ".matrx" / "matrx.db"
+# The world whose sync daemon hands out the token. The engine code this script drives in-process
+# reads its token from the daemon at MATRX_HOME_DIR (TokenRepo -> app.services.sync_client), so
+# the script and the engine must name the SAME home. Set before any `app.*` import.
+os.environ.setdefault("MATRX_HOME_DIR", str(Path.home() / ".matrx"))
+MATRX_HOME = Path(os.environ["MATRX_HOME_DIR"])
 AIDREAM_ENV = Path.home() / "code" / "aidream" / ".env"
 
 MARKER = "MATRX-LOCAL-RUNTIME-E2E-OK"
@@ -47,7 +51,7 @@ def _live_token() -> tuple[str, str, int]:
 
     The custody cutover (FS-C5b) made `matrx-syncd` the device's ONLY session holder and
     migration V34 dropped `auth_tokens` from the local database, so the old
-    `SELECT access_token … FROM auth_tokens` in here could no longer do anything but raise
+    query of that table in here could no longer do anything but raise
     `no such table` (finding C5b-3). The daemon publishes its endpoint in `~/.matrx/syncd.json`
     and its two scoped tokens in `~/.matrx/syncd.token`; line 2 is the read token, which
     authorises `GET /v1/token`.
@@ -55,7 +59,7 @@ def _live_token() -> tuple[str, str, int]:
     import urllib.error
     import urllib.request
 
-    home = Path.home() / ".matrx"
+    home = MATRX_HOME
     discovery_path = home / "syncd.json"
     token_path = home / "syncd.token"
     if not discovery_path.exists() or not token_path.exists():
@@ -169,7 +173,7 @@ async def main() -> None:
     from app.services.coding_sessions.service import CodingSessionBridgeOutbox
     from app.services.local_db.database import LocalDatabase
 
-    access_token, user_id, _exp = _live_token()
+    _access_token, user_id, _exp = _live_token()
     print(f"[e2e] Matrx user: {user_id}")
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -180,12 +184,10 @@ async def main() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="matrx-runtime-e2e-"))
     db = LocalDatabase(tmp / "matrx.db")
     await db.connect()
-    await db.execute(
-        """INSERT INTO auth_tokens (key, access_token, user_id, expires_at, updated_at)
-           VALUES ('current_user', ?, ?, ?, datetime('now'))""",
-        (access_token, user_id, int(time.time()) + 3600),
-    )
-    await db.commit()
+    # No token is written into the scratch DB: `auth_tokens` was dropped by local-DB migration V34
+    # and the engine's TokenRepo asks the sync daemon at MATRX_HOME_DIR for every token (C5b-3).
+    # `_live_token()` above proved the daemon will hand one out before any subscription turn is
+    # spent.
 
     class _Settings:
         values = {

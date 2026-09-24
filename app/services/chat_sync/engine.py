@@ -1,8 +1,8 @@
 """Bidirectional sync engine for the chat.* canonical mirror.
 
 One sync spine, same shape as the notes engine (documents/sync_engine.py):
-an engine-owned background loop pulls credentials from the persisted
-auth_tokens row every tick, pushes the sync_queue outbox, then pulls
+an engine-owned background loop asks the sync daemon for credentials
+every tick, pushes the sync_queue outbox, then pulls
 incremental changes per table with checkpoints in sync_meta.
 
 Doctrine (docs/SYNC_CONTRACT.md):

@@ -10,19 +10,19 @@ importers:
     dependencies:
       '@ai-matrx/agents':
         specifier: latest
-        version: 0.13.3(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.13.6(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/content-ir':
         specifier: latest
-        version: 0.11.6
+        version: 0.11.7
       '@ai-matrx/content-ir-react':
         specifier: latest
-        version: 0.11.9(react@19.2.4)
+        version: 0.11.10(react@19.2.4)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.36.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 0.37.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.16.1(react@19.2.4)
+        version: 0.16.2(react@19.2.4)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -211,8 +211,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/agents@0.13.3':
-    resolution: {integrity: sha512-TLcZLhRbxQvJKcDktUWnZGk6C4kXUG4myq1rlEmFDv5j4aRP5GpmvyjCNbOVcWKp2sIGn/FZKA33CSRYJVimKQ==}
+  '@ai-matrx/agents@0.13.6':
+    resolution: {integrity: sha512-LfZGUrxOeyKAYOurOkkvMPO7/61Dh0PF7q/uJom8mnDBMf/NK+ZCnX9bUOj/lKn6qRiiQNrtQ0uxUCaTi1FdAg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -226,18 +226,18 @@ packages:
       react-native-svg:
         optional: true
 
-  '@ai-matrx/content-ir-react@0.11.9':
-    resolution: {integrity: sha512-+UNnjFI1F7I8JOPc7LTpxRdqZbPHQXhzWk/rUG4Lwi6Yb+kKbzcAGNCewFIeBLQ45l9vLVwdNPKs4uKQMxyLiA==}
+  '@ai-matrx/content-ir-react@0.11.10':
+    resolution: {integrity: sha512-I4U5JbvknfQDxfa9X+VJgf31ETG5bjCD6wUYJ/u7DLdFvkiRbQoH3MGIlU+nYJmf/pEIucf6/MCuGSogoOXXZg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=19.0.0'
 
-  '@ai-matrx/content-ir@0.11.6':
-    resolution: {integrity: sha512-wAPmHwOv+uy15Ff6FGXnMCQef6yEz9BzL9qdhrvS9soZjCSOOA0QEecvgVhsL9NIWmI/T909XH/q9FhaQMIuFA==}
+  '@ai-matrx/content-ir@0.11.7':
+    resolution: {integrity: sha512-2ys6Rv9IdRbYOUc4vsQfhk0AtGtLSiLp22zWyn7bFfC3RbmcHuESH9vvgKB9O5lpv5Tj/qEKx+6ZZ3R/OB4mGQ==}
     engines: {node: '>=20'}
 
-  '@ai-matrx/data@0.18.0':
-    resolution: {integrity: sha512-sBMdVnYs9auPdKMIQc1dZHsGWt69brr3syPH71tTUyTjKqxyiDe3q96DV6fT8t6AhZDuKrN3euxIro8Uj0NIxQ==}
+  '@ai-matrx/data@0.18.1':
+    resolution: {integrity: sha512-3Y+Ew28zYRp6erCiS7YM86qE4BQJlGMK4ebSW57U6yhynOwukiwqJH8oqmFZTyxOgmHatZyEle0Cs10qZOXlqQ==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -245,21 +245,21 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.36.0':
-    resolution: {integrity: sha512-kv362XCUsvoz+rRhvBydQU1Ys3EenrA59X0dtYM0bfAHEDsPkArndt/zKgu+VUoV3Kgt5rDof3+DeHbusSMOsA==}
+  '@ai-matrx/design-system@0.37.1':
+    resolution: {integrity: sha512-NHQVQ26DOWdurXl9bvimV9Lbj7XKEGyijpoEyE/XyZ1A0AH1++zJrfSCFEw4tRmQcI8hkte0Fzms4vNBj8+1zA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
 
-  '@ai-matrx/kit@0.16.1':
-    resolution: {integrity: sha512-URyYaOdCdy2x5sgeIv/nqyzL0q2oxu71I+gmEJQTwJ8seBXOUTrJkZcM0kJOjEXDh+qN1CSBw9ZJD1NVENpdGg==}
+  '@ai-matrx/kit@0.16.2':
+    resolution: {integrity: sha512-UvKqaVREfPnnRoHF5iMV2nJJgxXtKZUIHOryJTKemBEzC3o/YzTt52u/VUgAvG7si69/CQYIHXzpJrFxzb4Ldw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
 
-  '@ai-matrx/realtime@0.8.6':
-    resolution: {integrity: sha512-NY5KZrSbzadvuXdnWa1OskMDJZWL+V7RNkWPkdW23JcI6BiWWMnxMG+wgqAH2BjLRMut8HHEdG5uHVCqKeZ9CA==}
+  '@ai-matrx/realtime@0.8.7':
+    resolution: {integrity: sha512-pzGwojb/uLBlYL9d60sq2lR+tdN3gAJA0ZnS2KdIh31z6glIzDbwyP9oub7DXFYn/LlhC/dKfoT0qcwl5l9GKw==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -2906,8 +2906,8 @@ packages:
   markdown-table@3.0.4:
     resolution: {integrity: sha512-wiYz4+JrLyb/DqW2hkFJxP7Vd7JuTDm77fvbM8VfEQdmSMqcImWeeRbHwZjBjIFki/VaMK2BhFi7oUUZeM5bqw==}
 
-  marked@18.0.13:
-    resolution: {integrity: sha512-xTxVzZsBFwunP6HDmtBkabUQEYArnP7/rMDGmPj9SlrKlQ4i8MdYVow+nJL0eOqwpUqhzBoTBRADGN6uYwPyOw==}
+  marked@18.0.14:
+    resolution: {integrity: sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -3230,8 +3230,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-resizable-panels@4.13.2:
-    resolution: {integrity: sha512-iBcbYj/ki6Jdz5ZUH/6npl2nBd2s45c/Dd1VNghNDGDtIXjrFIDpZbCU8AlAKawtnyajiy02/xvUWWZZdVqauQ==}
+  react-resizable-panels@4.13.3:
+    resolution: {integrity: sha512-k41s4nP8IXiGjnso8TsZLzoRbuxBb6buTJUOrFWrYpmbV4PGH5GHYM2RvNWWBRIJ6e+Zxlf3m9Tubk8VoPU9Ww==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -3661,11 +3661,11 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/agents@0.13.3(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/agents@0.13.6(@supabase/supabase-js@2.116.0)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@ai-matrx/data': 0.18.0(@supabase/supabase-js@2.116.0)(react@19.2.4)
-      '@ai-matrx/design-system': 0.36.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@ai-matrx/kit': 0.16.1(react@19.2.4)
+      '@ai-matrx/data': 0.18.1(@supabase/supabase-js@2.116.0)(react@19.2.4)
+      '@ai-matrx/design-system': 0.37.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@ai-matrx/kit': 0.16.2(react@19.2.4)
     optionalDependencies:
       react: 19.2.4
     transitivePeerDependencies:
@@ -3674,18 +3674,18 @@ snapshots:
       - '@types/react-dom'
       - react-dom
 
-  '@ai-matrx/content-ir-react@0.11.9(react@19.2.4)':
+  '@ai-matrx/content-ir-react@0.11.10(react@19.2.4)':
     dependencies:
-      '@ai-matrx/content-ir': 0.11.6
+      '@ai-matrx/content-ir': 0.11.7
       react: 19.2.4
 
-  '@ai-matrx/content-ir@0.11.6':
+  '@ai-matrx/content-ir@0.11.7':
     dependencies:
       ajv: 8.20.0
 
-  '@ai-matrx/data@0.18.0(@supabase/supabase-js@2.116.0)(react@19.2.4)':
+  '@ai-matrx/data@0.18.1(@supabase/supabase-js@2.116.0)(react@19.2.4)':
     dependencies:
-      '@ai-matrx/realtime': 0.8.6(react@19.2.4)
+      '@ai-matrx/realtime': 0.8.7(react@19.2.4)
       '@supabase/ssr': 0.12.7(@supabase/supabase-js@2.116.0)
     optionalDependencies:
       react: 19.2.4
@@ -3693,9 +3693,9 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.36.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@ai-matrx/design-system@0.37.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@ai-matrx/kit': 0.16.1(react@19.2.4)
+      '@ai-matrx/kit': 0.16.2(react@19.2.4)
       '@dnd-kit/core': 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@radix-ui/react-alert-dialog': 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -3726,7 +3726,7 @@ snapshots:
       cmdk: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
-      react-resizable-panels: 4.13.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      react-resizable-panels: 4.13.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       tailwind-merge: 3.7.0
       vaul: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       xlsx: 0.18.5
@@ -3735,16 +3735,16 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@ai-matrx/kit@0.16.1(react@19.2.4)':
+  '@ai-matrx/kit@0.16.2(react@19.2.4)':
     dependencies:
       dompurify: 3.4.15
       idb: 8.0.3
       json5: 2.2.3
       jsqr: 1.4.0
-      marked: 18.0.13
+      marked: 18.0.14
       react: 19.2.4
 
-  '@ai-matrx/realtime@0.8.6(react@19.2.4)':
+  '@ai-matrx/realtime@0.8.7(react@19.2.4)':
     optionalDependencies:
       react: 19.2.4
 
@@ -6227,7 +6227,7 @@ snapshots:
 
   markdown-table@3.0.4: {}
 
-  marked@18.0.13: {}
+  marked@18.0.14: {}
 
   mdast-util-find-and-replace@3.0.2:
     dependencies:
@@ -6743,7 +6743,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.14
 
-  react-resizable-panels@4.13.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
+  react-resizable-panels@4.13.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
     dependencies:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)

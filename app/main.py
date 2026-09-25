@@ -27,6 +27,7 @@ from app.api.cloud_sync_routes import router as cloud_sync_router
 from app.api.local_browser_context import router as local_browser_context_router
 from app.api.local_browser_transport import router as local_browser_transport_router
 from app.api.agent_catalog_routes import router as agent_catalog_router
+from app.api.local_mandate_routes import router as local_mandate_router
 from app.api.chat_routes import router as chat_router
 from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
@@ -2160,6 +2161,7 @@ app.include_router(local_browser_context_router)
 app.include_router(local_browser_transport_router)
 app.include_router(chat_router)
 app.include_router(agent_catalog_router)
+app.include_router(local_mandate_router)
 app.include_router(data_router)
 app.include_router(permissions_router)
 app.include_router(artifact_router)

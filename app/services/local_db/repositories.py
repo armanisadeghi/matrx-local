@@ -373,6 +373,63 @@ class AgentExecutionDefinitionsRepo:
 
 
 # ==================================================================
+# MandateResolutionsRepo — last-resolved local-model mandates (V38)
+# ==================================================================
+
+class MandateResolutionsRepo:
+    """The platform's last answer to "which agent holds this mandate" for one
+    person in one organization, kept verbatim for offline runs."""
+
+    def __init__(self, db: LocalDatabase | None = None):
+        self._db = db or get_db()
+
+    async def get(
+        self, mandate_key: str, *, user_id: str, organization_id: str
+    ) -> dict[str, Any] | None:
+        row = await self._db.fetchone(
+            """SELECT * FROM mandate_resolutions
+               WHERE mandate_key = ? AND user_id = ? AND organization_id = ?""",
+            (mandate_key, user_id, organization_id),
+        )
+        if not row:
+            return None
+        data = _row_to_dict(row)
+        data["resolution_json"] = _json_loads(data.get("resolution_json"))
+        return data
+
+    async def upsert(
+        self,
+        mandate_key: str,
+        *,
+        user_id: str,
+        organization_id: str,
+        resolution: dict[str, Any],
+    ) -> str:
+        fetched_at = _now()
+        await self._db.execute(
+            """INSERT INTO mandate_resolutions
+               (mandate_key, user_id, organization_id, resolution_json, fetched_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(mandate_key, user_id, organization_id) DO UPDATE SET
+                 resolution_json=excluded.resolution_json,
+                 fetched_at=excluded.fetched_at""",
+            (mandate_key, user_id, organization_id, _json_dumps(resolution), fetched_at),
+        )
+        await self._db.commit()
+        return fetched_at
+
+    async def delete(
+        self, mandate_key: str, *, user_id: str, organization_id: str
+    ) -> None:
+        await self._db.execute(
+            """DELETE FROM mandate_resolutions
+               WHERE mandate_key = ? AND user_id = ? AND organization_id = ?""",
+            (mandate_key, user_id, organization_id),
+        )
+        await self._db.commit()
+
+
+# ==================================================================
 # ConversationsRepo — canonical chat.conversation mirror table
 #
 # The bespoke `conversations` table is GONE (migration V10). This repo now

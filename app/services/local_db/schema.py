@@ -1498,6 +1498,32 @@ CREATE INDEX IF NOT EXISTS idx_custom_record_mirror_state
 """
 
 
+# ------------------------------------------------------------------
+# Migration 38: last-resolved local-model mandates (offline cache)
+#
+# Every on-device intelligence point runs through a Mandate, and the Mandate
+# decides WHICH agent holds the job (common-docs/systems/intelligence/mandates
+# STATE.md §9). "Offline" is a data LOCATION, never a different intelligence:
+# this table keeps the last resolution the platform gave THIS person in THIS
+# organization for each mandate key, verbatim, so a local-model job still runs
+# the platform-chosen Holder with the network down. The Holder's definition is
+# cached separately in `agent_execution_definitions`. Served only by
+# `GET /local-mandates/{key}` (app/services/ai/local_mandates.py), always
+# flagged stale when it is the cached answer rather than a fresh one.
+# ------------------------------------------------------------------
+
+_V38_MANDATE_RESOLUTIONS = """
+CREATE TABLE IF NOT EXISTS mandate_resolutions (
+    mandate_key     TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    organization_id TEXT NOT NULL,
+    resolution_json TEXT NOT NULL,
+    fetched_at      TEXT NOT NULL,
+    PRIMARY KEY (mandate_key, user_id, organization_id)
+)
+"""
+
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1536,4 +1562,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (35, _V35_FILE_SYNC_PLACEMENT_ATTEMPTS),
     (36, _V36_SYNC_OPERATION_WRITABLE_PROBED),
     (37, _V37_CUSTOM_RECORD_MIRROR),
+    (38, _V38_MANDATE_RESOLUTIONS),
 ]

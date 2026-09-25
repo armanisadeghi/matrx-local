@@ -212,6 +212,15 @@ export async function resolveLocalMandate(
   }
 }
 
+/**
+ * The Holder's authored messages that lead a conversation — a system message
+ * with no text is dropped (it carries no instructions), everything else is
+ * kept in order.
+ */
+export function holderLeadMessages(holder: ResolvedLocalMandate): HolderMessage[] {
+  return holder.messages.filter((m) => m.role !== "system" || m.content.trim() !== "");
+}
+
 /** Replace `{{name}}` with the value when one is supplied; leave others as authored. */
 export function substituteVariables(
   template: string,

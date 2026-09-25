@@ -399,9 +399,9 @@ def test_status_payload_surfaces_skipped_rows(tmp_path: Path) -> None:
 def test_kind_floor_applies_when_remote_empties_a_compiled_kind(
     tmp_path: Path,
 ) -> None:
-    # Remote has ONLY a system_prompt row → the lora kind (non-empty in the
+    # Remote has ONLY a workflow_preset row → the lora kind (non-empty in the
     # compiled tier) resolves to zero from the remote tier → compiled floor.
-    rows = [_row(kind="system_prompt", key="sp", payload={"id": "sp"})]
+    rows = [_row(kind="workflow_preset", key="wp", payload={"id": "wp"})]
     svc = _make_service(tmp_path, fetch_rows=rows)
     _run(svc.refresh_now())
     assert svc.resolved.tier == "remote"
@@ -413,7 +413,7 @@ def test_kind_floor_applies_when_remote_empties_a_compiled_kind(
 
 
 def test_kind_floor_lifts_when_kind_recovers(tmp_path: Path) -> None:
-    rows = [_row(kind="system_prompt", key="sp", payload={"id": "sp"})]
+    rows = [_row(kind="workflow_preset", key="wp", payload={"id": "wp"})]
     svc = _make_service(tmp_path, fetch_rows=rows)
     _run(svc.refresh_now())
     assert [e.key for e in svc.get_catalog("lora")] == ["compiled/one"]
@@ -496,3 +496,13 @@ def test_postgrest_fetch_screams_past_the_sanity_ceiling(
 
     with pytest.raises(CatalogsValidationError, match="more than 5000"):
         _run(client_mod._fetch_postgrest())
+
+
+def test_system_prompt_kind_stays_retired() -> None:
+    """Prompts are agents' instructions and run through their Mandates
+    (local.chat_persona_*), never a catalog copy — retired 2026-09-25."""
+    from app.services.catalogs import compiled_data
+    from app.services.catalogs.models import KNOWN_KINDS
+
+    assert "system_prompt" not in KNOWN_KINDS
+    assert not hasattr(compiled_data, "COMPILED_SYSTEM_PROMPT_ENTRIES")

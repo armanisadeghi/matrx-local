@@ -1,7 +1,7 @@
 """Drift guard for the generated compiled-fallback catalog data.
 
 ``app/services/catalogs/compiled_data.py`` vendors the Rust/TS-sourced
-catalog kinds (llm_model / whisper_model / system_prompt /
+catalog kinds (llm_model / whisper_model /
 api_key_provider). It has no build-time generation step, so an edit to
 ``desktop/src-tauri/src/llm/model_selector.rs`` (or the other sources)
 would silently rot the offline fallback — THIS test re-extracts from the

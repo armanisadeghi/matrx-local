@@ -12,7 +12,7 @@ Two sources, deliberately split:
     wake-word models) adapt LIVE from the legacy lists in their
     ``app/services/*/models.py`` — those lists stay in code as explicitly
     demoted fallback data, so this tier can never drift from them.
-  - **Rust/TS-sourced kinds** (llm_model, whisper_model, system_prompt,
+  - **Rust/TS-sourced kinds** (llm_model, whisper_model,
     api_key_provider) come from ``compiled_data.py`` — a generated,
     mechanically extracted mirror of the Rust/TS constants (the desktop
     side keeps its own compiled fallbacks; this copy exists so the ENGINE
@@ -157,7 +157,6 @@ def _vendored_entries() -> list[CatalogEntry]:
     from app.services.catalogs.compiled_data import (  # noqa: PLC0415 — 90KB literal, load lazily
         COMPILED_API_KEY_PROVIDER_ENTRIES,
         COMPILED_LLM_MODEL_ENTRIES,
-        COMPILED_SYSTEM_PROMPT_ENTRIES,
         COMPILED_WHISPER_MODEL_ENTRIES,
     )
 
@@ -165,7 +164,6 @@ def _vendored_entries() -> list[CatalogEntry]:
     for kind, rows in (
         ("llm_model", COMPILED_LLM_MODEL_ENTRIES),
         ("whisper_model", COMPILED_WHISPER_MODEL_ENTRIES),
-        ("system_prompt", COMPILED_SYSTEM_PROMPT_ENTRIES),
         ("api_key_provider", COMPILED_API_KEY_PROVIDER_ENTRIES),
     ):
         for row in rows:
@@ -187,7 +185,7 @@ def _vendored_entries() -> list[CatalogEntry]:
 def compiled_catalog_entries() -> list[CatalogEntry]:
     """Every legacy compiled catalog, adapted to ``CatalogEntry`` form.
 
-    Covers ALL 14 kinds in ``KNOWN_KINDS`` — pinned by the characterization
+    Covers ALL 13 kinds in ``KNOWN_KINDS`` — pinned by the characterization
     test (total network failure must still yield every kind non-empty).
     """
     return _python_sourced_entries() + _vendored_entries()

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Regenerate app/services/catalogs/compiled_data.py from the Rust/TS sources.
 
-``compiled_data.py`` is the compiled-fallback tier for the four catalog kinds
+``compiled_data.py`` is the compiled-fallback tier for the three catalog kinds
 whose source of truth lives OUTSIDE Python:
 
   - ``llm_model``        ← desktop/src-tauri/src/llm/model_selector.rs
   - ``whisper_model``    ← desktop/src-tauri/src/transcription/model_selector.rs
                            + transcription/downloader.rs (HF base URLs, VAD)
-  - ``system_prompt``    ← desktop/src/lib/system-prompts.ts
   - ``api_key_provider`` ← desktop/src/lib/api-key-patterns.ts
+
+(``system_prompt`` was retired 2026-09-25: Confidential Chat's built-in prompt
+library is Mandates now — ``local.chat_persona_*`` — cached for offline by the
+engine's ``GET /local-mandates/{key}``, never a prompt copy in a catalog.)
 
 All extraction is MECHANICAL (regex + balanced-brace parsing over the real
 source files — adapted from the original seed extraction, catalog-seeds/
@@ -274,38 +277,6 @@ def extract_whisper_model_entries() -> list[dict]:
     return entries
 
 
-def extract_system_prompt_entries() -> list[dict]:
-    src = (REPO / "desktop/src/lib/system-prompts.ts").read_text(encoding="utf-8")
-    prompt_consts = dict(re.findall(r"const (PROMPT_BUILTIN_\w+) = `(.*?)`;", src, re.S))
-    arr_m = re.search(r"export const BUILTIN_PROMPTS[^=]*=\s*\[(.*?)\n\];", src, re.S)
-    assert arr_m, "BUILTIN_PROMPTS array not found in system-prompts.ts"
-    prompt_objs = re.findall(
-        r'\{\s*id:\s*"([^"]+)",\s*name:\s*"([^"]+)",\s*content:\s*'
-        r'(PROMPT_BUILTIN_\w+),\s*category:\s*"([^"]+)",\s*\}',
-        arr_m.group(1),
-    )
-    assert prompt_objs, "parsed ZERO builtin prompts"
-    entries: list[dict] = []
-    for i, (pid, name, const_ref, category) in enumerate(prompt_objs):
-        assert const_ref in prompt_consts, (
-            f"BUILTIN_PROMPTS references {const_ref} but no matching "
-            "template-literal const was parsed — extractor drift"
-        )
-        entries.append(
-            _entry(
-                pid,
-                {
-                    "id": pid,
-                    "name": name,
-                    "content": prompt_consts[const_ref],
-                    "category": category,
-                },
-                sort_order=i * 10,
-            )
-        )
-    return entries
-
-
 def extract_api_key_provider_entries() -> list[dict]:
     src = (REPO / "desktop/src/lib/api-key-patterns.ts").read_text(encoding="utf-8")
 
@@ -358,8 +329,6 @@ KINDS: list[tuple[str, str, Any, str]] = [
      "desktop/src-tauri/src/llm/model_selector.rs"),
     ("whisper_model", "COMPILED_WHISPER_MODEL_ENTRIES", extract_whisper_model_entries,
      "desktop/src-tauri/src/transcription/model_selector.rs + downloader.rs"),
-    ("system_prompt", "COMPILED_SYSTEM_PROMPT_ENTRIES", extract_system_prompt_entries,
-     "desktop/src/lib/system-prompts.ts"),
     ("api_key_provider", "COMPILED_API_KEY_PROVIDER_ENTRIES",
      extract_api_key_provider_entries, "desktop/src/lib/api-key-patterns.ts"),
 ]

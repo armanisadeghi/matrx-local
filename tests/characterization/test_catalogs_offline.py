@@ -50,7 +50,6 @@ def test_total_network_failure_yields_every_kind(tmp_path: Path) -> None:
         "lora": 13,
         "ner_model": 6,
         "ner_pii_labels": 1,
-        "system_prompt": 7,
         "tts_language": 9,
         "tts_model_file": 2,
         "tts_voice": 54,

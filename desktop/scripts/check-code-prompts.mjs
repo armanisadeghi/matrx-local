@@ -9,8 +9,13 @@
  * Mandate rebind can never reach it. matrx-local shipped exactly that —
  * `PIPELINE_TEMPLATES` in `desktop/src/hooks/use-llm-pipeline.ts`, six system
  * prompts run against the local llama-server — until they became the Holders
- * of the `local.*` mandates (2026-09-25). This guard keeps that shape from
- * coming back. Offline is a data LOCATION, never a licence to carry prompts.
+ * of the `local.*` mandates (2026-09-25). Round 2 (same day) converted the
+ * rest: the Voice page's AI Polish styles, the Confidential Chat prompt
+ * library (and its `system_prompt` catalog copies), and the Tools / Raw JSON
+ * modes that called the local model with no mandate at all. This guard keeps
+ * those shapes from coming back. Offline is a data LOCATION, never a licence
+ * to carry prompts — the engine caches each mandate's last answer
+ * (GET /local-mandates/{key}).
  *
  * WHAT THIS FAILS ON (code only — comments are stripped)
  *
@@ -19,7 +24,20 @@
  *   2. A system message built from a literal: `role: "system"` with a
  *      `content: "…"` literal in the same object.
  *   3. An instruction-voice literal: a string that opens "You are …" (the
- *      persona line every system prompt starts with).
+ *      persona line every system prompt starts with), or an output-format
+ *      instruction that opens "Return ONLY / Respond ONLY / Output ONLY …"
+ *      (the JSON instruction polish-presets.ts used to append).
+ *   4. A read of the retired `system_prompt` catalog kind (a prompt library
+ *      served around the mandate system).
+ *   5. A LOCAL-MODEL CALL WITH NO MANDATE: every call of a local-model
+ *      primitive (chatCompletion / streamCompletion / structuredOutput /
+ *      runAgenticLoop / callWithTools, or a POST to /v1/chat/completions) must
+ *      have a mandate resolution (resolveLocalMandate / runLocalMandate, or a
+ *      RESOLVING_HELPERS function) earlier in its ENCLOSING function. The
+ *      function boundary is found by pattern (the nearest preceding
+ *      `function` / `const x = async` / `useCallback(async`), so it proves the
+ *      resolution is on the call's path by text — not that its messages are
+ *      the ones sent.
  *
  * WHAT IT DELIBERATELY DOES NOT FAIL ON
  *
@@ -52,16 +70,56 @@ const SKIP = /(\.test\.tsx?$|\.spec\.tsx?$|^src\/types\/python-generated\/)/;
  * mandate conversion. The list may only SHRINK. Adding a file here to get
  * green is the defect this guard exists to stop.
  */
-const KNOWN_OPEN = new Map([
+const KNOWN_OPEN = new Map([]);
+
+/** The module that DEFINES the local-model primitives (it calls none on its own). */
+const LOCAL_MODEL_PRIMITIVES = "src/lib/llm/api.ts";
+
+/**
+ * Files that call the local model with no mandate — OPEN bypasses awaiting a
+ * ruling. May only SHRINK.
+ */
+const KNOWN_UNMANDATED = new Map([
   [
-    "src/lib/polish-presets.ts",
-    "Voice page's built-in AI Polish styles (six system prompts). The run itself resolves local.polish_transcript; the built-in STYLES are still code-authored prompts awaiting conversion (reported 2026-09-25).",
-  ],
-  [
-    "src/lib/system-prompts.ts",
-    "Compiled fallback of the prompt-library catalog (the live set is the remote catalog_entries overlay); a person picks one as their own chat system text. Awaiting a ruling on the offline fallback copy.",
+    "src/hooks/use-chat.ts",
+    "Cloud Chat's local-model path (a person picks a downloaded model in Cloud Chat) streams the conversation to the local llama-server with no mandate. Which mandate owns Cloud Chat's LOCAL target (local.cloud_chat's Holder is a cloud agent) needs a ruling (reported 2026-09-25).",
   ],
 ]);
+
+const LOCAL_MODEL_CALL =
+  /\b(chatCompletion|streamCompletion|structuredOutput|runAgenticLoop|callWithTools)\s*(<[^>()]*>)?\s*\(|["'`][^"'`\n]*\/v1\/chat\/completions/g;
+
+/**
+ * Functions that resolve a local-model mandate themselves, so a call made
+ * after them is on a mandated path. Each is defined next to its
+ * resolveLocalMandate call — keep this list that short.
+ *   confidentialChatPrefix — pages/LocalModels.tsx, resolves local.confidential_chat.
+ */
+const RESOLVING_HELPERS = ["confidentialChatPrefix"];
+const MANDATE_RESOLUTION = new RegExp(
+  `\\b(resolveLocalMandate|runLocalMandate|${RESOLVING_HELPERS.join("|")})\\s*\\(`,
+);
+const FUNCTION_START =
+  /(^|\n)[ \t]*(export\s+)?(async\s+)?function\b|(^|\n)[ \t]*(export\s+)?const\s+\w+\s*=\s*(useCallback\(\s*)?async\b/g;
+
+/** Line numbers of local-model calls with no mandate resolution on their path. */
+export function unmandatedLocalCalls(text) {
+  const code = codeOnly(text);
+  const starts = [...code.matchAll(FUNCTION_START)].map((m) => m.index);
+  const out = [];
+  for (const m of code.matchAll(LOCAL_MODEL_CALL)) {
+    let start = 0;
+    for (const s of starts) if (s < m.index) start = s;
+    if (!MANDATE_RESOLUTION.test(code.slice(start, m.index))) {
+      out.push(code.slice(0, m.index).split("\n").length);
+    }
+  }
+  return out;
+}
+
+export function unmandatedLocalCall(text) {
+  return unmandatedLocalCalls(text).length > 0;
+}
 
 const RULES = [
   {
@@ -72,6 +130,14 @@ const RULES = [
   {
     name: "system message built from a literal",
     re: /role\s*:\s*["']system["'][^}]{0,200}?\bcontent\s*:\s*["'`]/s,
+  },
+  {
+    name: "output-format instruction literal (\"Return ONLY …\")",
+    re: /["'`](Return|Respond|Output) ONLY\b/,
+  },
+  {
+    name: "read of the retired system_prompt catalog kind",
+    re: /fetchCatalog\s*(<[^>()]*>)?\s*\(\s*["'`]system_prompt["'`]/s,
   },
   {
     name: "instruction-voice literal (\"You are …\")",
@@ -110,12 +176,21 @@ function trackedFiles() {
 function run() {
   const findings = [];
   const openSeen = new Set();
+  const unmandatedSeen = new Set();
   for (const file of trackedFiles()) {
     let text;
     try {
       text = readFileSync(resolve(DESKTOP, file), "utf8");
     } catch {
       continue;
+    }
+    const unmandatedLines = file === LOCAL_MODEL_PRIMITIVES ? [] : unmandatedLocalCalls(text);
+    if (unmandatedLines.length > 0) {
+      if (KNOWN_UNMANDATED.has(file)) unmandatedSeen.add(file);
+      else
+        findings.push(
+          `${file}:${unmandatedLines.join(",")} — calls the local model with no mandate: resolve one first (resolveLocalMandate / runLocalMandate in src/lib/local-mandates.ts, or useLlmPipeline) and run ITS messages and settings.`,
+        );
     }
     const hits = findingsIn(text, file);
     if (hits.length === 0) continue;
@@ -130,6 +205,14 @@ function run() {
     if (!openSeen.has(file)) {
       findings.push(
         `${file} is listed as an open bypass but no longer carries a prompt — delete it from KNOWN_OPEN so the list only shrinks.`,
+      );
+    }
+  }
+  for (const [file, reason] of KNOWN_UNMANDATED) {
+    console.log(`  open unmandated local-model call (tracked): ${file} — ${reason}`);
+    if (!unmandatedSeen.has(file)) {
+      findings.push(
+        `${file} is listed as an unmandated local-model caller but no longer is one — delete it from KNOWN_UNMANDATED so the list only shrinks.`,
       );
     }
   }
@@ -156,6 +239,11 @@ function selfTest() {
       `const messages = [{ role: "system" as const, content: "Answer tersely." }, { role: "user", content: q }];`,
     ],
     ["a persona literal", `const p = "You are an expert editor specializing in transcripts.";`],
+    [
+      "the POLISH_JSON_INSTRUCTION shape",
+      `export const X = 'Return ONLY a JSON object with exactly four fields: "title"';`,
+    ],
+    ["a system_prompt catalog read", `const e = await fetchCatalog<{ id: string }>("system_prompt");`],
   ];
   const clean = [
     [
@@ -167,7 +255,39 @@ function selfTest() {
     ["an empty system-prompt state", `const conv = { id, systemPrompt: "", messages: [] };`],
     ["an input placeholder example", `<Textarea placeholder="You are a helpful assistant that…" />`],
   ];
+  const unmandated = [
+    [
+      "a second handler borrowing the first one's resolution",
+      `const handleA = async () => {\n  await resolveLocalMandate(K.a);\n};\nconst handleRaw = async () => {\n  await fetch(\`http://127.0.0.1:\${port}/v1/chat/completions\`, {});\n};`,
+    ],
+    ["a Tools-mode loop with no mandate", `await runAgenticLoop(port, history, tools, invoke, onStep, signal);`],
+    ["a raw POST with no mandate", "await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: \"POST\" });"],
+    ["a typed structured call", `const r = await structuredOutput<Out>(port, messages, schema);`],
+  ];
+  const mandated = [
+    [
+      "a run through the mandate",
+      `const h = await resolveLocalMandate(K.toolCallingChat);\nawait runAgenticLoop(port, [...lead, ...history], tools, invoke, onStep, signal, 10, h.settings);`,
+    ],
+    ["a comment naming the call", `// runAgenticLoop(port, …) is only ever called after resolveLocalMandate`],
+    [
+      "a chat send after the page's resolving helper",
+      `const handleSend = async () => {\n  const prefix = await confidentialChatPrefix();\n  const stream = streamCompletion(port, [...prefix, ...msgs], {});\n};`,
+    ],
+  ];
   let ok = true;
+  for (const [label, text] of unmandated) {
+    if (!unmandatedLocalCall(text)) {
+      console.error(`self-test: MISSED ${label}`);
+      ok = false;
+    }
+  }
+  for (const [label, text] of mandated) {
+    if (unmandatedLocalCall(text)) {
+      console.error(`self-test: FALSE POSITIVE on ${label}`);
+      ok = false;
+    }
+  }
   for (const [label, text] of planted) {
     if (findingsIn(text, "planted").length === 0) {
       console.error(`self-test: MISSED ${label}`);
@@ -182,7 +302,9 @@ function selfTest() {
     }
   }
   if (!ok) process.exit(1);
-  console.log(`check:code-prompts self-test: ${planted.length} plants caught, ${clean.length} clean shapes passed.`);
+  console.log(
+    `check:code-prompts self-test: ${planted.length + unmandated.length} plants caught, ${clean.length + mandated.length} clean shapes passed.`,
+  );
 }
 
 if (process.argv.includes("--self-test")) selfTest();

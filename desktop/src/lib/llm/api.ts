@@ -198,12 +198,23 @@ export async function* streamCompletion(
   }
 }
 
+/**
+ * Sampling a resolved Mandate Holder declares for a tool-calling run; absent
+ * values keep the device's tool-call settings.
+ */
+export interface ToolCallSampling {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}
+
 /** Chat completion with tool calling support. */
 export async function callWithTools(
   port: number,
   messages: ChatMessage[],
   tools: ToolDefinition[],
   signal?: AbortSignal,
+  sampling?: ToolCallSampling,
 ): Promise<{
   content: string | null;
   toolCalls: Array<{
@@ -224,10 +235,10 @@ export async function callWithTools(
       messages,
       tools,
       tool_choice: "auto",
-      temperature: params.temperature,
-      max_tokens: s.llmChatMaxTokens,
+      temperature: sampling?.temperature ?? params.temperature,
+      max_tokens: sampling?.maxTokens ?? s.llmChatMaxTokens,
       stream: false,
-      top_p: params.top_p,
+      top_p: sampling?.topP ?? params.top_p,
       top_k: params.top_k,
       chat_template_kwargs: params.chat_template_kwargs,
     }),
@@ -316,6 +327,7 @@ export async function runAgenticLoop(
   onStep: (step: AgenticStep) => void,
   signal: AbortSignal,
   maxSteps = 10,
+  sampling?: ToolCallSampling,
 ): Promise<AgenticLoopResult> {
   const steps: AgenticStep[] = [];
   const history: ChatMessage[] = [...messages];
@@ -331,7 +343,7 @@ export async function runAgenticLoop(
 
     let response: Awaited<ReturnType<typeof callWithTools>>;
     try {
-      response = await callWithTools(port, history, tools, signal);
+      response = await callWithTools(port, history, tools, signal, sampling);
     } catch (e) {
       if ((e as Error).name === "AbortError") {
         stoppedByUser = true;

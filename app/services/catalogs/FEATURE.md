@@ -5,7 +5,7 @@ Whisper tiers, image/video-gen models, LoRAs, workflow presets, TTS
 voices/languages/model files, NER models/PII labels, wake-word models,
 built-in system prompts, API-key provider patterns — comes from ONE
 anon-readable Supabase table (`public.catalog_entries`, `app = 'matrx-local'`,
-164 entries across 14 kinds) instead of compiled-in lists. This module
+164 entries across 14 kinds — 13 read since `system_prompt` was retired, 2026-09-25) instead of compiled-in lists. This module
 fetches those rows, caches them to disk, and serves the resolved entries
 process-wide; the legacy in-code lists remain ONLY as the explicitly-labeled
 compiled fallback tier.
@@ -33,7 +33,7 @@ mirrors its architecture 1:1 and imports its semver helpers).
 3. **Compiled fallback** — `compiled.py` adapts the legacy in-code lists:
    Python-sourced kinds LIVE from `app/services/{image_gen,video_gen,tts,
    ner,wake_word}/models.py` + `image_gen/loras.py` (can never drift);
-   Rust/TS-sourced kinds (`llm_model`, `whisper_model`, `system_prompt`,
+   Rust/TS-sourced kinds (`llm_model`, `whisper_model`,
    `api_key_provider`) from `compiled_data.py`, a GENERATED mechanical
    mirror of the Rust/TS constants — regenerate with
    `uv run python scripts/generate_catalog_fallback.py` whenever those
@@ -79,7 +79,9 @@ adaptation; nothing imports the legacy lists directly anymore):
 | `tts_voice`, `tts_language`, `tts_model_file` | `tts/models.py get_builtin_voices/get_voice_map/get_default_voice_id/get_languages/get_language_map/get_tts_model_files` | `tts/service.py`, `api/setup_routes.py` (loud recovery: a missing required model file re-adds the compiled spec) |
 | `ner_model`, `ner_pii_labels` | `ner/models.py get_ner_models/get_ner_model/get_default_ner_model_id/get_pii_labels` | `ner/service.py` |
 | `wake_word_model` | `wake_word/models.py get_pretrained_registry/get_bundled_models` | `wake_word/models.py list/download`, `wake_word/service.py` |
-| `llm_model`, `whisper_model`, `system_prompt`, `api_key_provider` | served over HTTP (below) to the desktop webview | `desktop/src/lib/{llm,transcription}/catalog.ts`, `system-prompts.ts`, `api-key-patterns.ts` |
+| `llm_model`, `whisper_model`, `api_key_provider` | served over HTTP (below) to the desktop webview | `desktop/src/lib/{llm,transcription}/catalog.ts`, `api-key-patterns.ts` |
+
+`system_prompt` was RETIRED 2026-09-25: a prompt is an agent's instructions, and every intelligence runs through its Mandate — Confidential Chat's built-in prompt library is the `local.chat_persona_*` Mandates, cached offline by `GET /local-mandates/{key}` (`app/services/ai/local_mandates.py`). The live `catalog_entries` rows of that kind stay only for installed builds that predate the change; nothing in this repo reads them.
 
 ## HTTP surface
 
@@ -143,7 +145,7 @@ pattern via `desktop/src/lib/catalogs.ts` (`fetchCatalog(kind)`).
   metadata); the whole payload is rejected only when it is empty or when
   **>20% of rows are malformed** (`MALFORMED_ROW_FRACTION_LIMIT` — systemic
   corruption, not a bad row). One bad DB row must never pin the app to a
-  stale tier across all 14 kinds.
+  stale tier across all 13 kinds.
 - **Invalid payload = fetch failure** — loud warning, fall to the next tier,
   never partially applied. An EMPTY remote list is a validation failure
   (zero rows means broken query/RLS, not a real state).

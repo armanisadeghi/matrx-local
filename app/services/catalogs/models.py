@@ -44,7 +44,6 @@ KNOWN_KINDS: frozenset[str] = frozenset(
         "video_gen_model",
         "lora",
         "workflow_preset",
-        "system_prompt",
         "tts_voice",
         "tts_language",
         "tts_model_file",

@@ -117,9 +117,11 @@ import {
 import type { SystemPrompt } from "@/lib/system-prompts";
 import {
   LOCAL_MODEL_MANDATE_KEYS,
+  holderLeadMessages,
   resolveLocalMandate,
   type ResolvedLocalMandate,
 } from "@/lib/local-mandates";
+import { refreshBuiltinPrompts } from "@/lib/system-prompts";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
 import { engine } from "@/lib/api";
@@ -3223,6 +3225,8 @@ function InferenceTab() {
     const settings = await loadSettings();
     const promptId =
       settings.voiceAssistantSystemPromptId || "builtin-voice-assistant";
+    // Built-in prompts are Mandates resolved on demand (engine-cached offline).
+    await refreshBuiltinPrompts();
     const content = systemPrompts.resolve(promptId) ?? "";
     if (content && setSystemPromptRef.current) {
       // Only save pre-voice prompt once per activation
@@ -3524,6 +3528,21 @@ function InferenceTab() {
       return;
     }
 
+    // Tools mode runs through its Mandate (local.tool_calling_chat): the
+    // Holder's instructions lead the conversation and its sampling applies.
+    // Unresolvable → the send is refused with the reason; no fallback.
+    let toolHolder: ResolvedLocalMandate;
+    try {
+      toolHolder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.toolCallingChat);
+    } catch (e) {
+      setAgentError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const toolPrefix: ChatMessage[] = holderLeadMessages(toolHolder).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     const userMsg = agentInput.trim();
     setAgentInput("");
     setAgentError(null);
@@ -3553,6 +3572,7 @@ function InferenceTab() {
     // Use the accumulated full history (includes tool result messages) so the
     // model has proper context on follow-up turns.
     const chatHistory: ChatMessage[] = [
+      ...toolPrefix,
       ...agentHistoryRef.current,
       { role: "user" as const, content: userMsg },
     ];
@@ -3606,6 +3626,7 @@ function InferenceTab() {
         },
         controller.signal,
         maxAgentSteps,
+        toolHolder.settings,
       );
 
       const finalMsg =
@@ -3618,7 +3639,8 @@ function InferenceTab() {
 
       // Persist the full history (including tool results) for accurate context
       // on subsequent turns. Also append the final assistant message.
-      agentHistoryRef.current = [...result.fullHistory];
+      // The Holder's lead messages are re-resolved every turn, never stored.
+      agentHistoryRef.current = result.fullHistory.slice(toolPrefix.length);
 
       setAgentMessages((prev) =>
         prev.map((m) =>
@@ -4442,7 +4464,25 @@ function InferenceTab() {
     setRawResult(null);
     setIsGenerating(true);
     try {
-      const body = JSON.parse(rawJson);
+      // Raw JSON mode runs through its Mandate (local.raw_completion): the
+      // Holder's instructions lead the person's messages, and its sampling
+      // fills any value the body leaves out — the body's own values win.
+      const holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.rawCompletion);
+      const body = JSON.parse(rawJson) as Record<string, unknown>;
+      const lead = holderLeadMessages(holder);
+      if (lead.length > 0) {
+        const own = Array.isArray(body.messages) ? body.messages : [];
+        body.messages = [...lead, ...own];
+      }
+      if (body.temperature === undefined && holder.settings.temperature !== undefined) {
+        body.temperature = holder.settings.temperature;
+      }
+      if (body.top_p === undefined && holder.settings.topP !== undefined) {
+        body.top_p = holder.settings.topP;
+      }
+      if (body.max_tokens === undefined && holder.settings.maxTokens !== undefined) {
+        body.max_tokens = holder.settings.maxTokens;
+      }
       const response = await fetch(
         `http://127.0.0.1:${port}/v1/chat/completions`,
         {

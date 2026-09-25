@@ -1,10 +1,17 @@
 /**
  * System Prompts Library
  *
- * Persists user-defined system prompts to localStorage.
- * Import { systemPrompts } anywhere to read/write prompts.
+ * Persists user-defined system prompts to localStorage; the built-in prompts
+ * are Mandates (see builtinPrompts()). Import { systemPrompts } anywhere to
+ * read/write prompts.
  * The PromptPicker component (components/PromptPicker.tsx) provides the UI.
  */
+
+import {
+  LOCAL_MODEL_MANDATE_KEYS,
+  resolveLocalMandate,
+  type LocalModelMandateKey,
+} from "@/lib/local-mandates";
 
 export interface SystemPrompt {
   id: string;
@@ -24,200 +31,72 @@ export interface CreateSystemPromptInput {
 
 const STORAGE_KEY = "matrx-system-prompts";
 
-const PROMPT_BUILTIN_ASSISTANT = `You are a helpful, accurate, and concise assistant.
-
-Rules:
-- Answer the question directly — no preamble, no filler
-- If you don't know something, say so — do not guess or fabricate
-- Keep responses as short as they can be while still being complete
-- Match the tone of the question: casual gets casual, technical gets technical
-`;
-
-const PROMPT_BUILTIN_TRANSCRIPT_POLISH = `You are a Transcript Cleanup Specialist. You take raw, messy transcripts and produce clean, polished text.
-
-Your job is simple: clean up the transcript while keeping the original meaning completely intact.
-
-What to fix:
-- Transcription errors (misheard words, garbled phrases)
-- Punctuation, grammar, and spelling
-- Filler words like "um," "uh," "you know," "like" when used as filler
-- Repeated or duplicated words that are clearly stutters or transcription artifacts
-- Run-on sentences — break them into proper sentences
-- Walls of text — break them into shorter paragraphs
-
-What to improve:
-- Add structure where it helps: short paragraphs, bullet points, numbered lists, headers
-- Favor shorter paragraphs over long ones
-- Make sentences clear and readable
-
-What NOT to do:
-- Do not change the meaning of anything
-- Do not add information that was not in the original
-- Do not remove meaningful content
-- Do not make the text more formal unless it was already formal — preserve the speaker's natural voice and tone
-- Do not summarize or condense — keep all the substance
-
-When something is genuinely ambiguous and you cannot tell what was meant, use this format: [OPTION A: first interpretation] / [OPTION B: second interpretation]. Only do this for important ambiguities where the meaning would change.
-`;
-
-const PROMPT_BUILTIN_SUMMARIZE = `You are a summarization specialist. You take text and produce a concise summary that captures every key point.
-
-Rules:
-- Include all important information — do not skip key points
-- Use clear, structured prose — not a rewrite of the original
-- Use bullet points only if the source material is already a list
-- Do not add an introduction, conclusion, or commentary
-- Do not add opinions or information that was not in the original
-- Output only the summary — nothing else
-`;
-
-const PROMPT_BUILTIN_EXPLAIN = `You are an explanation specialist. You take complex topics and make them easy to understand for someone with no background.
-
-Rules:
-- Use plain, simple language — no jargon
-- Use short sentences and concrete examples
-- If a technical term is unavoidable, define it immediately in parentheses
-- Build understanding step by step — start with the basics before details
-- Do not assume the reader knows anything about the topic
-- Do not add unnecessary disclaimers or filler
-`;
-
-const PROMPT_BUILTIN_CODE_REVIEW = `You are a code review specialist. You analyze code for correctness, readability, and potential bugs.
-
-Rules:
-- List each issue as a bullet point with a brief explanation
-- For each issue, suggest a fix or improvement
-- Focus on things that matter: bugs, logic errors, edge cases, readability problems
-- Do not nitpick style preferences (formatting, naming conventions) unless they hurt readability
-- If the code looks good, say so briefly — do not invent problems
-- Do not rewrite the entire code unless asked to
-`;
-
-const PROMPT_BUILTIN_BRAINSTORM = `You are a brainstorming specialist. You generate creative, diverse ideas for a given topic.
-
-Rules:
-- Aim for breadth — cover a wide range of approaches, both conventional and unconventional
-- Present each idea as a short bullet point (1-2 sentences max)
-- Do not explain or justify ideas unless asked — just list them
-- Do not repeat the same idea in different words
-- Do not filter ideas for feasibility unless asked — include bold and unusual ones
-- Generate at least 8 ideas unless the topic is very narrow
-`;
-
-const PROMPT_BUILTIN_VOICE_ASSISTANT = `You are a voice assistant. Your responses are spoken aloud by a text-to-speech engine, so they must be short and conversational.
-
-Critical rules:
-- Keep every response under 3 sentences unless the question strictly requires more
-- Never use bullet points, numbered lists, markdown, code blocks, or headers — plain prose only
-- Never say "Certainly!", "Great question!", "Of course!" or any filler opener — just answer directly
-- If you need to give a long answer, summarize it in 2 sentences and offer to elaborate
-- Match the pace of conversation: short question → short answer
-- If you don't know something, say so in one sentence
-`;
 export type BuiltinPrompt = Omit<
   SystemPrompt,
   "createdAt" | "updatedAt" | "isPinned"
 >;
 
-// Built-in prompts that ship with the app — always available, not editable.
-// Users can "fork" them into their own library.
+// ── Built-in prompts: each one a Mandate ─────────────────────────────────────
 //
-// COMPILED FALLBACK DATA: the live builtin set is the remote catalog (kind
-// `system_prompt`, engine GET /catalogs/system_prompt) — read it via
-// builtinPrompts() below, never this array directly. It stays only for
-// first paint / engine-unreachable.
-export const BUILTIN_PROMPTS: BuiltinPrompt[] = [
-  {
-    id: "builtin-assistant",
-    name: "Helpful Assistant",
-    content: PROMPT_BUILTIN_ASSISTANT,
-    category: "General",
-  },
-  {
-    id: "builtin-transcript-polish",
-    name: "Transcript Polish",
-    content: PROMPT_BUILTIN_TRANSCRIPT_POLISH,
-    category: "Voice",
-  },
-  {
-    id: "builtin-summarize",
-    name: "Summarize",
-    content: PROMPT_BUILTIN_SUMMARIZE,
-    category: "Writing",
-  },
-  {
-    id: "builtin-explain",
-    name: "Explain Simply",
-    content: PROMPT_BUILTIN_EXPLAIN,
-    category: "Writing",
-  },
-  {
-    id: "builtin-code-review",
-    name: "Code Review",
-    content: PROMPT_BUILTIN_CODE_REVIEW,
-    category: "Development",
-  },
-  {
-    id: "builtin-brainstorm",
-    name: "Brainstorm",
-    content: PROMPT_BUILTIN_BRAINSTORM,
-    category: "Creative",
-  },
-  {
-    id: "builtin-voice-assistant",
-    name: "Voice Assistant",
-    content: PROMPT_BUILTIN_VOICE_ASSISTANT,
-    category: "Voice",
-  },
+// The built-in library is the `local.chat_persona_*` Mandates: the prompt text
+// is the resolved Holder's system message, so a rebind in the mandate console
+// reaches every desktop. The engine keeps the last answer for offline use
+// (GET /local-mandates/{key}); there is no prompt copy in this repo. Until a
+// builtin resolves it is absent from the list — never a stand-in text.
+
+const BUILTIN_PROMPT_MANDATES: ReadonlyArray<{
+  id: string;
+  name: string;
+  category: string;
+  mandateKey: LocalModelMandateKey;
+}> = [
+  { id: "builtin-assistant", name: "Helpful Assistant", category: "General", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaHelpful },
+  { id: "builtin-transcript-polish", name: "Transcript Polish", category: "Voice", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaTranscriptPolish },
+  { id: "builtin-summarize", name: "Summarize", category: "Writing", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaSummarize },
+  { id: "builtin-explain", name: "Explain Simply", category: "Writing", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaExplainSimply },
+  { id: "builtin-code-review", name: "Code Review", category: "Development", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaCodeReview },
+  { id: "builtin-brainstorm", name: "Brainstorm", category: "Creative", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaBrainstorm },
+  { id: "builtin-voice-assistant", name: "Voice Assistant", category: "Voice", mandateKey: LOCAL_MODEL_MANDATE_KEYS.chatPersonaSpokenReplies },
 ];
 
-// ── Remote builtins (Remote Catalogs overlay) ────────────────────────────────
-
-let remoteBuiltins: BuiltinPrompt[] | null = null;
+let resolvedBuiltins: BuiltinPrompt[] = [];
 let refreshInFlight: Promise<void> | null = null;
 
-/** The resolved builtin set: remote catalog when loaded, compiled otherwise. */
+/** The built-in prompts resolved so far (each from its Mandate's Holder). */
 export function builtinPrompts(): BuiltinPrompt[] {
-  return remoteBuiltins ?? BUILTIN_PROMPTS;
+  return resolvedBuiltins;
 }
 
 /**
- * Fetch the builtin prompts from the engine's resolved catalog
- * (kind `system_prompt`). Fire-and-forget safe: failures keep the compiled
- * set, success dispatches "matrx-prompts-changed" so open UIs re-read.
+ * Resolve every built-in prompt's Mandate (engine-cached, so it works
+ * offline once resolved). Success dispatches "matrx-prompts-changed" so open
+ * UIs re-read; a builtin that cannot be resolved is left out and logged with
+ * its reason.
  */
 export async function refreshBuiltinPrompts(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
-      const { fetchCatalog } = await import("@/lib/catalogs");
-      const entries = await fetchCatalog<{
-        id: string;
-        name: string;
-        content: string;
-        category: string;
-      }>("system_prompt");
-      const prompts: BuiltinPrompt[] = entries
-        .filter(
-          (e) =>
-            typeof e.payload?.id === "string" &&
-            typeof e.payload?.name === "string" &&
-            typeof e.payload?.content === "string",
-        )
-        .map((e) => ({
-          id: e.payload.id,
-          name: e.payload.name,
-          content: e.payload.content,
-          category: e.payload.category || "General",
-        }));
-      if (prompts.length === 0) return; // empty catalog — keep compiled set
-      const changed = JSON.stringify(prompts) !== JSON.stringify(builtinPrompts());
-      remoteBuiltins = prompts;
+      const settled = await Promise.allSettled(
+        BUILTIN_PROMPT_MANDATES.map(async (b) => {
+          const holder = await resolveLocalMandate(b.mandateKey);
+          const content = holder.messages.find((m) => m.role === "system")?.content ?? "";
+          if (!content.trim()) {
+            throw new Error(`${b.mandateKey}'s Holder has no system instructions`);
+          }
+          return { id: b.id, name: b.name, category: b.category, content };
+        }),
+      );
+      const prompts: BuiltinPrompt[] = [];
+      for (const r of settled) {
+        if (r.status === "fulfilled") prompts.push(r.value);
+        else console.warn("[system-prompts] built-in prompt unavailable:", r.reason);
+      }
+      const changed = JSON.stringify(prompts) !== JSON.stringify(resolvedBuiltins);
+      resolvedBuiltins = prompts;
       if (changed) {
         window.dispatchEvent(new CustomEvent("matrx-prompts-changed"));
       }
-    } catch {
-      // Engine unreachable — compiled builtins stay; next call retries.
     } finally {
       refreshInFlight = null;
     }

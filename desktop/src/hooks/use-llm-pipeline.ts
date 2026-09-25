@@ -126,16 +126,6 @@ export function parsePolishOutput(
 // ── Hook types ────────────────────────────────────────────────────────────
 
 export interface PipelineRunOptions {
-  /**
-   * The person's own run-scope system text (a polish style they picked or
-   * wrote). Replaces the Holder's system message for this run only; the
-   * Holder's user template, settings and output schema still apply.
-   */
-  systemPrompt?: string;
-  /** Override max tokens for this run. */
-  maxTokens?: number;
-  /** Override temperature for this run. */
-  temperature?: number;
   /** Signal to abort the request. */
   signal?: AbortSignal;
 }
@@ -178,21 +168,17 @@ export async function runLocalMandate<T = string>(
   vars: Record<string, string> = {},
   options: PipelineRunOptions = {},
 ): Promise<T> {
+  // The Holder's messages, filled with the run's variables — nothing replaces
+  // them: a person's own text reaches a Holder only as a declared variable
+  // (e.g. local.polish_style_custom's {{style_instructions}}).
   const holder = await resolveLocalMandate(mandateKey, options.signal);
-  const override = options.systemPrompt?.trim() ? options.systemPrompt : null;
   const messages = holder.messages.map((m) => ({
     role: m.role,
-    content:
-      m.role === "system" && override !== null
-        ? override
-        : substituteVariables(m.content, vars),
+    content: substituteVariables(m.content, vars),
   }));
-  if (override !== null && !messages.some((m) => m.role === "system")) {
-    messages.unshift({ role: "system", content: override });
-  }
 
-  const maxTokens = options.maxTokens ?? holder.settings.maxTokens;
-  const temperature = options.temperature ?? holder.settings.temperature;
+  const maxTokens = holder.settings.maxTokens;
+  const temperature = holder.settings.temperature;
   const sampling = {
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(temperature !== undefined ? { temperature } : {}),

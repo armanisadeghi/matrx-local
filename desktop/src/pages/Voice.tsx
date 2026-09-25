@@ -29,7 +29,6 @@ import { isTauri } from "@/lib/sidecar";
 import { useLlmApp } from "@/contexts/LlmContext";
 import { useLlmPipeline, parsePolishOutput } from "@/hooks/use-llm-pipeline";
 import type { TranscriptPolishOutput } from "@/hooks/use-llm-pipeline";
-import { LOCAL_MODEL_MANDATE_KEYS } from "@/lib/local-mandates";
 import { usePolishPresets } from "@/hooks/use-polish-presets";
 import type { PolishPreset } from "@/hooks/use-polish-presets";
 import { personStyleText, polishRunFor } from "@/lib/polish-presets";

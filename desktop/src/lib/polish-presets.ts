@@ -1,29 +1,38 @@
 /**
  * polish-presets.ts
  *
- * Storage layer for AI Polish presets.
- * Stored in localStorage under "matrx-polish-presets" so they survive app restarts
- * without touching the main settings blob.
+ * The Voice page's AI Polish styles.
  *
- * Each preset overrides only the system prompt — the user prompt template and
- * output schema are inherited from the built-in polish_transcript pipeline template.
- * Custom output fields (title, description, tags) are always requested so the
- * session metadata is always populated regardless of the chosen preset style.
+ * BUILT-IN styles are Mandates (`local.polish_style_*`): the platform's Holder
+ * for each carries its instructions, user template, output schema and
+ * settings — there is no style prompt in this file. A CUSTOM style is the
+ * person's own text, stored in localStorage under "matrx-polish-presets", and
+ * runs through `local.polish_style_custom`, whose Holder takes that text as the
+ * `style_instructions` variable and adds the platform's JSON-output
+ * instruction itself.
  */
+
+import {
+  LOCAL_MODEL_MANDATE_KEYS,
+  resolveLocalMandate,
+  type LocalModelMandateKey,
+} from "@/lib/local-mandates";
 
 export interface PolishPreset {
   id: string;
   /** Display name shown in the dropdown. */
   name: string;
   /**
-   * The system prompt sent to the model.
-   * Must end with the JSON-output instruction so parsePolishOutput stays valid.
+   * Built-in styles: the Mandate whose Holder IS this style. Absent for a
+   * custom style (it runs through `local.polish_style_custom`).
+   */
+  mandateKey?: LocalModelMandateKey;
+  /**
+   * Custom styles: the person's own style instructions. Built-in styles: a
+   * read-only preview of the Holder's instructions once resolved ("" before).
    */
   systemPrompt: string;
-  /**
-   * True for shipped presets that cannot be deleted (only the name and prompt
-   * can't be edited either, but they serve as reference).
-   */
+  /** True for shipped styles, which cannot be edited or deleted. */
   isBuiltIn: boolean;
   /** ISO timestamp of last save — used for ordering custom presets. */
   updatedAt: string;
@@ -34,99 +43,61 @@ export interface PolishPreset {
 const STORAGE_KEY = "matrx-polish-presets";
 const DEFAULT_PRESET_KEY = "matrx-polish-default-preset";
 
-// ── JSON output instruction appended to every system prompt ───────────────
+// ── Built-in styles (each one a Mandate) ──────────────────────────────────
 
-export const POLISH_JSON_INSTRUCTION =
-  'Return ONLY a JSON object with exactly four fields: "title" (string, 5–8 words), ' +
-  '"description" (string, one sentence), "tags" (array of 2–5 lowercase strings), ' +
-  'and "cleaned" (string, the processed text). No markdown, no extra text.';
-
-// ── Built-in presets ──────────────────────────────────────────────────────
+const SHIPPED = "2025-01-01T00:00:00.000Z";
 
 export const BUILT_IN_PRESETS: PolishPreset[] = [
-  {
-    id: "builtin-standard",
-    name: "Standard Clean-up",
-    systemPrompt:
-      "You are an expert editor specializing in spoken-word transcripts. " +
-      "Your job is to produce clean, well-punctuated prose from raw speech. " +
-      "Rules: fix punctuation and capitalization; remove filler words (um, uh, like, you know, sort of); " +
-      "merge run-on sentences into clear, complete sentences; preserve the speaker's exact meaning and vocabulary; " +
-      "do not add any content that was not spoken. " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-  {
-    id: "builtin-formal",
-    name: "Formal / Professional",
-    systemPrompt:
-      "You are a professional transcription editor. " +
-      "Rewrite the transcript in formal, professional English suitable for business communication. " +
-      "Eliminate all informal language, filler words, and conversational phrases. " +
-      "Use complete sentences, proper grammar, and business-appropriate vocabulary. " +
-      "Preserve all factual content and meaning exactly. Do not invent or embellish. " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-  {
-    id: "builtin-bullets",
-    name: "Bullet Points",
-    systemPrompt:
-      "You are a note-taking assistant. Convert the spoken transcript into a clean, structured " +
-      "bullet-point list. Group related points together under short bold headings where appropriate. " +
-      "Each bullet should be a complete, concise thought. Remove all filler words and repetition. " +
-      "Preserve every distinct point made — do not omit any ideas. " +
-      "For the 'cleaned' field, format the output as markdown bullet points (- item). " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-  {
-    id: "builtin-action-items",
-    name: "Action Items",
-    systemPrompt:
-      "You are a meeting assistant. Extract all action items, commitments, tasks, and next steps " +
-      "from the transcript. Format the 'cleaned' field as a numbered list of actionable items. " +
-      "Each item should be specific and start with a verb. Include who is responsible if mentioned. " +
-      "If no action items are present, write 'No action items identified.' " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-  {
-    id: "builtin-meeting",
-    name: "Meeting Notes",
-    systemPrompt:
-      "You are a meeting transcription specialist. Convert the spoken transcript into structured " +
-      "meeting notes with the following sections (use only sections that have content): " +
-      "**Summary** (2–3 sentences), **Key Points** (bullet list), **Decisions Made** (bullet list), " +
-      "**Action Items** (numbered list with owners if mentioned), **Follow-ups** (if any). " +
-      "Format the 'cleaned' field as markdown. Remove all filler words and repetition. " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-  {
-    id: "builtin-verbatim",
-    name: "Light Cleanup Only",
-    systemPrompt:
-      "You are a careful transcription editor. Make only the minimum necessary corrections: " +
-      "fix obvious punctuation and capitalization errors, and remove the most egregious filler " +
-      "words (um, uh) — but otherwise preserve the speaker's exact words, phrasing, and style. " +
-      "Do NOT restructure sentences, paraphrase, or alter the speaker's voice in any way. " +
-      "Also generate a short title, a one-sentence description, and 2–5 topic tags. " +
-      POLISH_JSON_INSTRUCTION,
-    isBuiltIn: true,
-    updatedAt: "2025-01-01T00:00:00.000Z",
-  },
-];
+  { id: "builtin-standard", name: "Standard Clean-up", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleStandard },
+  { id: "builtin-formal", name: "Formal / Professional", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleFormal },
+  { id: "builtin-bullets", name: "Bullet Points", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleBullets },
+  { id: "builtin-action-items", name: "Action Items", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleActionItems },
+  { id: "builtin-meeting", name: "Meeting Notes", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleMeetingNotes },
+  { id: "builtin-verbatim", name: "Light Cleanup Only", mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleLightCleanup },
+].map((p) => ({ ...p, systemPrompt: "", isBuiltIn: true, updatedAt: SHIPPED }));
+
+// ── Custom-style Holder (the platform's JSON-output instruction) ─────────
+
+const STYLE_VARIABLE = "{{style_instructions}}";
+
+/**
+ * What the custom-style Holder appends after the person's text — read from
+ * the resolved Holder, never written here. Null when its system message does
+ * not carry the `{{style_instructions}}` slot.
+ */
+export async function customStyleSuffix(): Promise<string | null> {
+  const holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.polishStyleCustom);
+  const system = holder.messages.find((m) => m.role === "system")?.content ?? "";
+  const at = system.indexOf(STYLE_VARIABLE);
+  return at === -1 ? null : system.slice(at + STYLE_VARIABLE.length);
+}
+
+/**
+ * The person's own text of a custom style. Styles saved before 2026-09-25
+ * carried the platform's JSON instruction appended to them; the Holder adds it
+ * now, so a saved copy is removed here (it is the Holder's text, not theirs).
+ */
+export function personStyleText(saved: string, suffix: string | null): string {
+  if (suffix && suffix.trim() && saved.endsWith(suffix)) {
+    return saved.slice(0, saved.length - suffix.length).trimEnd();
+  }
+  return saved;
+}
+
+/** The Mandate and variables one polish run uses for `preset`. */
+export async function polishRunFor(
+  preset: PolishPreset,
+  transcript: string,
+): Promise<{ mandateKey: LocalModelMandateKey; vars: Record<string, string> }> {
+  if (preset.mandateKey) {
+    return { mandateKey: preset.mandateKey, vars: { transcript } };
+  }
+  const suffix = await customStyleSuffix();
+  return {
+    mandateKey: LOCAL_MODEL_MANDATE_KEYS.polishStyleCustom,
+    vars: { transcript, style_instructions: personStyleText(preset.systemPrompt, suffix) },
+  };
+}
 
 // ── Storage helpers ───────────────────────────────────────────────────────
 

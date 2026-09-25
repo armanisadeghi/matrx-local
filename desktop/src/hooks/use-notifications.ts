@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { engine } from "@/lib/api";
 import { loadSettings, type AppSettings } from "@/lib/settings";
+import { LOCAL_MANDATE_STALE_EVENT } from "@/lib/local-mandates";
 import {
   actionNeededStore,
   useActionNeeded,
@@ -276,6 +277,26 @@ export function useNotifications() {
         .slice(0, 3),
     [notifications, hiddenToastIds],
   );
+
+  // A local-model job ran on the LAST instructions the platform gave this
+  // device because AI Matrx was unreachable — say so once per job per session
+  // (lib/local-mandates.ts dispatches it; nothing runs stale silently).
+  useEffect(() => {
+    const announced = new Set<string>();
+    const onStale = (event: Event) => {
+      const detail = (event as CustomEvent<{ mandateKey?: string; reason?: string }>).detail;
+      const key = detail?.mandateKey ?? "";
+      if (!key || announced.has(key)) return;
+      announced.add(key);
+      addNotification(
+        "Using saved AI instructions",
+        `${key} ran on the instructions AI Matrx last gave this device, because ${detail?.reason ?? "AI Matrx was unreachable"}. Reconnect to pick up any change.`,
+        "warning",
+      );
+    };
+    window.addEventListener(LOCAL_MANDATE_STALE_EVENT, onStale);
+    return () => window.removeEventListener(LOCAL_MANDATE_STALE_EVENT, onStale);
+  }, [addNotification]);
 
   // Listen for 'notification' events from the WebSocket
   useEffect(() => {

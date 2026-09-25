@@ -32,7 +32,7 @@ import type { TranscriptPolishOutput } from "@/hooks/use-llm-pipeline";
 import { LOCAL_MODEL_MANDATE_KEYS } from "@/lib/local-mandates";
 import { usePolishPresets } from "@/hooks/use-polish-presets";
 import type { PolishPreset } from "@/hooks/use-polish-presets";
-import { POLISH_JSON_INSTRUCTION } from "@/lib/polish-presets";
+import { personStyleText, polishRunFor } from "@/lib/polish-presets";
 import {
   Popover,
   PopoverTrigger,
@@ -966,14 +966,11 @@ function TranscribeTab({
       setPolishError(null);
       setPolishSuccess(null);
       try {
-        // The platform's polish Holder (local.polish_transcript) supplies the
-        // user template, settings and output schema; the preset the person
-        // picked is their run-scope system text.
-        const raw = await runPipeline<TranscriptPolishOutput>(
-          LOCAL_MODEL_MANDATE_KEYS.polishTranscript,
-          { transcript: transcriptText },
-          { systemPrompt: preset.systemPrompt },
-        );
+        // Every style is a Mandate: a built-in style's Holder carries its
+        // instructions; a custom style runs local.polish_style_custom with the
+        // person's own text as a variable.
+        const { mandateKey, vars } = await polishRunFor(preset, transcriptText);
+        const raw = await runPipeline<TranscriptPolishOutput>(mandateKey, vars);
         const result = parsePolishOutput(
           raw,
           session.title ?? "",
@@ -2243,12 +2240,13 @@ function TranscribeTab({
                               onClick={() => {
                                 setEditingPreset(preset);
                                 setPresetDraftName(preset.name);
-                                // Strip the auto-appended JSON instruction so the user
-                                // only sees and edits the meaningful part of the prompt.
+                                // Only the person's own text is theirs to edit; the
+                                // JSON instruction belongs to the custom-style Holder.
                                 setPresetDraftPrompt(
-                                  preset.systemPrompt
-                                    .replace("\n" + POLISH_JSON_INSTRUCTION, "")
-                                    .trim(),
+                                  personStyleText(
+                                    preset.systemPrompt,
+                                    polishPresets.customSuffix,
+                                  ).trim(),
                                 );
                               }}
                               title="Edit"
@@ -2333,7 +2331,8 @@ function TranscribeTab({
                       <span className="font-medium text-foreground">
                         Auto-appended:
                       </span>{" "}
-                      {POLISH_JSON_INSTRUCTION}
+                      {polishPresets.customSuffix?.trim() ||
+                        "The platform's JSON-output instruction (loads when AI Matrx is reachable)."}
                     </div>
                   </div>
                 </div>
@@ -2354,12 +2353,12 @@ function TranscribeTab({
                     }
                     onClick={() => {
                       const existingId = editingPreset?.id || null;
-                      const rawPrompt = presetDraftPrompt.trim();
-                      const systemPrompt = rawPrompt.includes(
-                        POLISH_JSON_INSTRUCTION,
-                      )
-                        ? rawPrompt
-                        : rawPrompt + "\n" + POLISH_JSON_INSTRUCTION;
+                      // Store only the person's own text; the custom-style
+                      // Holder adds the JSON-output instruction at run time.
+                      const systemPrompt = personStyleText(
+                        presetDraftPrompt.trim(),
+                        polishPresets.customSuffix,
+                      );
                       const saved = polishPresets.save(
                         existingId
                           ? {

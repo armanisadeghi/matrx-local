@@ -3,11 +3,16 @@
  *
  * React hook for managing AI Polish presets.
  * Wraps the polish-presets storage layer with local state so components
- * re-render when presets change.
+ * re-render when presets change. Built-in styles are Mandates: their preview
+ * text is the resolved Holder's instructions, and `customSuffix` is what the
+ * custom-style Holder appends after the person's own text (null until
+ * resolved or when it cannot be resolved — never a copy held here).
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { resolveLocalMandate } from "@/lib/local-mandates";
 import {
+  customStyleSuffix,
   getAllPresets,
   getDefaultPresetId,
   setDefaultPresetId,
@@ -31,6 +36,8 @@ export interface UsePolishPresetsReturn {
   }) => PolishPreset;
   remove: (id: string) => void;
   refresh: () => void;
+  /** What the custom-style Holder appends after the person's text. */
+  customSuffix: string | null;
 }
 
 export function usePolishPresets(): UsePolishPresetsReturn {
@@ -38,6 +45,33 @@ export function usePolishPresets(): UsePolishPresetsReturn {
   const [defaultPresetId, setDefaultPresetIdState] = useState<string>(() =>
     getDefaultPresetId(),
   );
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [customSuffix, setCustomSuffix] = useState<string | null>(null);
+
+  // Built-in previews and the custom-style suffix come from the resolved
+  // Holders. A failure leaves the preview empty; the run itself resolves
+  // again and refuses loudly with the reason.
+  useEffect(() => {
+    let cancelled = false;
+    for (const preset of getAllPresets()) {
+      const key = preset.mandateKey;
+      if (!key) continue;
+      resolveLocalMandate(key)
+        .then((holder) => {
+          const text = holder.messages.find((m) => m.role === "system")?.content ?? "";
+          if (!cancelled) setPreviews((prev) => ({ ...prev, [preset.id]: text }));
+        })
+        .catch(() => undefined);
+    }
+    customStyleSuffix()
+      .then((suffix) => {
+        if (!cancelled) setCustomSuffix(suffix);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = useCallback(() => {
     setPresets(getAllPresets());
@@ -64,11 +98,15 @@ export function usePolishPresets(): UsePolishPresetsReturn {
     setDefaultPresetIdState(getDefaultPresetId());
   }, []);
 
-  const defaultPreset =
-    getPresetById(defaultPresetId) ?? getPresetById("builtin-standard")!;
+  const withPreview = (p: PolishPreset): PolishPreset =>
+    p.isBuiltIn ? { ...p, systemPrompt: previews[p.id] ?? "" } : p;
+  const defaultPreset = withPreview(
+    getPresetById(defaultPresetId) ?? getPresetById("builtin-standard")!,
+  );
 
   return {
-    presets,
+    presets: presets.map(withPreview),
+    customSuffix,
     defaultPresetId,
     defaultPreset,
     setDefault,

@@ -9,32 +9,30 @@
  * sampling settings and output schema — and this device only supplies the
  * compute. There is no prompt in this repo for these jobs.
  *
- * Flow: GET /api/mandates/{key}/resolution → the Holder's execution definition
- * (GET /api/agents/{id}/execution-definition, or the pinned version's) →
- * substitute variables into ITS messages → run on the local model with ITS
- * settings. Resolves or refuses — there is never a client-side fallback agent
- * or a seed prompt.
+ * Flow: GET {engine}/local-mandates/{key} — the engine resolves the mandate
+ * against AIDream as this person in their active organization, keeps that
+ * answer (and the Holder's execution definition) in SQLite, and hands back
+ * both. With the network down it serves the LAST answer the platform gave,
+ * flagged `stale` with the reason (app/services/ai/local_mandates.py). Never a
+ * client-side fallback agent or a seed prompt.
  */
 
-import { getAuthedSession } from "@/lib/custodian";
-import {
-  fetchAgentExecutionDefinition,
-  fetchMandateResolution,
-  type AgentExecutionDefinition,
-  type MandateResolution,
+import { engine } from "@/lib/api";
+import type {
+  AgentExecutionDefinition,
+  MandateResolution,
 } from "@/lib/aidream-client";
-import { requireActiveOrganizationId } from "@/lib/org/active-org";
 
 /**
  * The local-model Mandate keys, declared in aidream
- * `aidream/services/mandates/client_mandates.py` (2026-09-25).
+ * `aidream/services/mandates/client_mandates.py` (2026-09-25, rounds 1 and 2).
  *
- * TODO(@ai-matrx/agents > 0.13.7): these keys are declared and regenerated into
- * `apps/shared/matrx-agents/mandates/keys.generated.ts` but the package that
- * carries them is not published yet (installed: 0.13.7). When it publishes,
- * replace each literal with `MANDATE_KEYS.local__<job>` from
- * `@ai-matrx/agents/mandates` so a rename or retirement fails type-check here
- * (the way `DEFAULT_CHAT_MANDATE_KEY` in `@/lib/mandates` already does).
+ * TODO(@ai-matrx/agents > 0.13.8): round 2's keys are regenerated into
+ * `apps/shared/matrx-agents/mandates/keys.generated.ts` but not published yet
+ * (installed here: 0.13.7). When the package carries them, replace each literal
+ * with `MANDATE_KEYS.local__<job>` from `@ai-matrx/agents/mandates` so a rename
+ * or retirement fails type-check here (the way `DEFAULT_CHAT_MANDATE_KEY` in
+ * `@/lib/mandates` already does).
  */
 export const LOCAL_MODEL_MANDATE_KEYS = {
   polishTranscript: "local.polish_transcript",
@@ -44,6 +42,26 @@ export const LOCAL_MODEL_MANDATE_KEYS = {
   explainCode: "local.explain_code",
   answerQuestion: "local.answer_question",
   confidentialChat: "local.confidential_chat",
+  /** Confidential Chat's Tools mode (the person's selected local tools). */
+  toolCallingChat: "local.tool_calling_chat",
+  /** Confidential Chat's Raw JSON mode (the person's hand-written request body). */
+  rawCompletion: "local.raw_completion",
+  /** Voice page AI Polish — built-in styles and the person's own style. */
+  polishStyleStandard: "local.polish_style_standard",
+  polishStyleFormal: "local.polish_style_formal",
+  polishStyleBullets: "local.polish_style_bullets",
+  polishStyleActionItems: "local.polish_style_action_items",
+  polishStyleMeetingNotes: "local.polish_style_meeting_notes",
+  polishStyleLightCleanup: "local.polish_style_light_cleanup",
+  polishStyleCustom: "local.polish_style_custom",
+  /** Confidential Chat's built-in prompt library (the Holder's system text). */
+  chatPersonaHelpful: "local.chat_persona_helpful",
+  chatPersonaTranscriptPolish: "local.chat_persona_transcript_polish",
+  chatPersonaSummarize: "local.chat_persona_summarize",
+  chatPersonaExplainSimply: "local.chat_persona_explain_simply",
+  chatPersonaCodeReview: "local.chat_persona_code_review",
+  chatPersonaBrainstorm: "local.chat_persona_brainstorm",
+  chatPersonaSpokenReplies: "local.chat_persona_spoken_replies",
 } as const;
 
 export type LocalModelMandateKey =
@@ -69,6 +87,29 @@ export interface ResolvedLocalMandate {
   messages: HolderMessage[];
   settings: HolderSettings;
   outputSchema: Record<string, unknown> | null;
+  /**
+   * True when the platform was unreachable and this is the LAST answer it
+   * gave this person in this organization (cached on this device).
+   */
+  stale: boolean;
+  /** Why the answer is stale; null when fresh. */
+  staleReason: string | null;
+}
+
+/**
+ * Window event fired when a run used a stale (offline) answer; the app's
+ * notification center announces it (hooks/use-notifications.ts).
+ */
+export const LOCAL_MANDATE_STALE_EVENT = "matrx-local-mandate-stale";
+
+/** What `GET {engine}/local-mandates/{key}` answers. */
+interface EngineLocalMandate {
+  mandate_key: string;
+  resolution: MandateResolution;
+  definition: AgentExecutionDefinition;
+  resolved_at: string;
+  stale: boolean;
+  stale_reason: string | null;
 }
 
 /**
@@ -121,8 +162,9 @@ function holderSettings(definition: AgentExecutionDefinition): HolderSettings {
 
 /**
  * Resolve a local-model Mandate for THIS user and organization and load its
- * Holder's definition. Throws with the Mandate key named when anything fails —
- * the caller refuses the run and shows the message; it never falls back.
+ * Holder's definition — through the engine, so the last answer survives
+ * offline. Throws with the Mandate key named when anything fails — the caller
+ * refuses the run and shows the message; it never falls back.
  */
 export async function resolveLocalMandate(
   mandateKey: LocalModelMandateKey,
@@ -131,37 +173,38 @@ export async function resolveLocalMandate(
   const hit = cache.get(mandateKey);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   try {
-    const session = await getAuthedSession();
-    if (!session?.access_token) {
-      throw new Error("Sign in first — this job's instructions come from your AI Matrx account.");
+    const raw = (await engine.get(
+      `/local-mandates/${encodeURIComponent(mandateKey)}`,
+      signal ? { signal } : undefined,
+    )) as EngineLocalMandate | null;
+    if (!raw || typeof raw !== "object" || !raw.resolution || !raw.definition) {
+      throw new Error("the engine answered without a resolution and a Holder definition");
     }
-    const organizationId = await requireActiveOrganizationId();
-    const resolution = await fetchMandateResolution(
-      mandateKey,
-      session.access_token,
-      organizationId,
-      signal,
-    );
-    const definition = await fetchAgentExecutionDefinition(
-      resolution.agent_id,
-      resolution.is_version,
-      session.access_token,
-      organizationId,
-      signal,
-    );
+    const definition = raw.definition;
     const messages = holderMessages(definition);
     if (messages.length === 0) {
-      throw new Error(`agent ${resolution.agent_id} has no authored messages`);
+      throw new Error(`agent ${raw.resolution.agent_id} has no authored messages`);
     }
     const value: ResolvedLocalMandate = {
       mandateKey,
-      resolution,
+      resolution: raw.resolution,
       definition,
       messages,
       settings: holderSettings(definition),
       outputSchema: definition.output_schema ?? null,
+      stale: raw.stale === true,
+      staleReason: raw.stale === true ? (raw.stale_reason ?? "the platform was unreachable") : null,
     };
-    cache.set(mandateKey, { at: Date.now(), value });
+    // A stale answer is never cached here: the next run asks again, so a
+    // reconnect (or a rebind) reaches it at once.
+    if (!value.stale) cache.set(mandateKey, { at: Date.now(), value });
+    else if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(LOCAL_MANDATE_STALE_EVENT, {
+          detail: { mandateKey, reason: value.staleReason },
+        }),
+      );
+    }
     return value;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

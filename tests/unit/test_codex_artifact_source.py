@@ -69,7 +69,7 @@ async def _codex_lane(
         source=CodexRolloutSessionSource(home=home),
         durable_root=tmp_path / "durable-codex",
         files_client=client,  # type: ignore[arg-type]
-        cloud_enabled=cloud,
+        machine_writer=mod.MachineWriter("test-machine-writer") if cloud else None,
     )
     return db, lane
 
@@ -362,12 +362,14 @@ async def test_each_provider_keeps_its_own_durable_root_and_cloud_path(
         source=CodexRolloutSessionSource(home=home),
         durable_root=tmp_path / "durable" / "codex",
         files_client=client,  # type: ignore[arg-type]
+        machine_writer=mod.MachineWriter("test-machine-writer"),
     )
     claude_lane = CodingSessionArtifactsLane(
         db=db,
         roots=[tmp_path / "roots" / "claude-501"],
         durable_root=tmp_path / "durable" / "claude_code",
         files_client=client,  # type: ignore[arg-type]
+        machine_writer=mod.MachineWriter("test-machine-writer"),
     )
     try:
         await codex_lane.run_once()

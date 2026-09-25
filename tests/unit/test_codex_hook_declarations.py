@@ -230,7 +230,6 @@ async def test_the_lane_captures_a_hook_declared_file_and_still_refuses_a_checko
         source=CodexRolloutSessionSource(home=home),
         durable_root=durable,
         files_client=_FakeFilesClient(),  # type: ignore[arg-type]
-        cloud_enabled=False,
     )
     try:
         tick = await lane.run_once()

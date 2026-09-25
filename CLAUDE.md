@@ -81,8 +81,10 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   (`app/services/ai/engine.py`). TS half: `desktop/src/lib/mandates.ts` +
   `desktop/src/lib/api/routes/ai.ts` — Cloud Chat defaults to the `local.cloud_chat`
   Mandate (`mandate:<key>` UI ref → `POST /api/ai/mandates/{key}`; local target resolves
-  via `GET /api/mandates/{key}/resolution`). Never add an agent UUID here; only L3 (local
-  personas, unruled) remains open. →
+  via `GET /api/mandates/{key}/resolution`). Local-model jobs (AI Polish, pipeline, Confidential
+  Chat, its prompt library, Tools/Raw modes) resolve `local.*` mandates through the engine's
+  offline-cached `GET /local-mandates/{key}`; guard `pnpm check:code-prompts`. Never add an
+  agent UUID or a prompt here. →
   `/Users/armanisadeghi/code/common-docs/systems/mandates/STATE.md` (+ `STATE.md`, `ROLLOUT.md`)
 - **No unapproved schedules.** Every scheduled task exists only with Arman's approval
   by name and interval, registered and claimed via the master registry. →

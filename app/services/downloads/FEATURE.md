@@ -1,7 +1,7 @@
 # Downloads — universal manager + the errors-vs-states doctrine
 
 One queue for every large download (LLM GGUFs, whisper, image/video weights,
-TTS, NER, file-sync). SQLite-backed (`downloads` table), survives restarts,
+TTS, NER). SQLite-backed (`downloads` table), survives restarts,
 streams progress over `GET /downloads/stream` (SSE). Entry points:
 `manager.py::get_download_manager()`; routes in `routes.py`.
 

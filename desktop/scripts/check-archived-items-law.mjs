@@ -76,7 +76,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -261,7 +261,11 @@ function sourceFiles() {
     .filter((file) => /^(desktop\/src|app)\//.test(file))
     .filter((file) => /\.(ts|tsx|py)$/.test(file))
     .filter((file) => !/\.(test|spec)\.(ts|tsx)$/.test(file))
-    .filter((file) => !/(^|\/)test_[^/]*\.py$/.test(file));
+    .filter((file) => !/(^|\/)test_[^/]*\.py$/.test(file))
+    // `git ls-files --cached` includes a tracked file deleted from the
+    // worktree until the next index update (for example a self-test fixture
+    // removed by its cleanup). There is no source left to inspect.
+    .filter((file) => existsSync(path.join(REPO, file)));
 }
 
 // ── Self-test — a guard you cannot demonstrate failing is not a guard ──────

@@ -77,7 +77,7 @@ Linux:    ~/.cache/matrx-local/   (XDG)
 | Category | On disk | Sync owner (see SYNC_CONTRACT for behaviour) |
 |---|---|---|
 | Notes | `MATRX_NOTES_DIR` + SQLite `notes` | `app/services/documents/` ↔ cloud `workbench.notes` |
-| User files (binary) | `MATRX_FILES_DIR` + mirrored `files.files` | `app/services/file_sync/` ↔ the matrx-files service |
+| User files (binary) | `MATRX_FILES_DIR` (no background mirror — retired 2026-09-24) | explicit uploads via `app/services/matrx_files/`; folder sync is the Rust daemon (`crates/matrx-syncd`) |
 | Chat | `~/.matrx/mirror/chat.db` | `app/services/chat_sync/` ↔ cloud `chat.*` |
 | Code / agent workspaces | `MATRX_CODE_DIR`, `~/.matrx/workspaces/` | **None — git is the sync mechanism.** Never pushed to cloud storage by us |
 | Structured data / config | `~/.matrx/data/`, `settings.json` | `app/services/cloud_sync/` + the pull-only catalog engine |

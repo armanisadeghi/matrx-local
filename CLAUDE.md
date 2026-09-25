@@ -83,7 +83,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   Mandate (`mandate:<key>` UI ref → `POST /api/ai/mandates/{key}`; local target resolves
   via `GET /api/mandates/{key}/resolution`). Never add an agent UUID here; only L3 (local
   personas, unruled) remains open. →
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/RUNTIME.md` (+ `STATE.md`, `ROLLOUT.md`)
+  `/Users/armanisadeghi/code/common-docs/systems/mandates/STATE.md` (+ `STATE.md`, `ROLLOUT.md`)
 - **No unapproved schedules.** Every scheduled task exists only with Arman's approval
   by name and interval, registered and claimed via the master registry. →
   `/Users/armanisadeghi/code/common-docs/operations/scheduled-tasks.md`

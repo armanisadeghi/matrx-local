@@ -1183,7 +1183,9 @@ a registered `MachineWriter` passed to `CodingSessionArtifactsLane`, and
 `get_coding_session_artifacts_lane` builds every lane without one. Re-enabling means
 registering as a machine writer, whose rows the platform keeps out of the person's own
 library. Guard: `test_lane_never_publishes_without_a_registered_machine_writer` in
-`tests/unit/test_coding_session_artifacts.py`.
+`tests/unit/test_coding_session_artifacts.py`. The platform rule that keeps such rows out of the
+person's Files and Recents (and how a machine writer registers before it writes):
+`/Users/armanisadeghi/code/common-docs/systems/media/file-service/USER_FILES_VS_MACHINE_FILES.md`.
 
 ### ONE artifacts lane per provider, and THE REPOSITORY RULE (2026-09-18)
 

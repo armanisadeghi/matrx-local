@@ -17,6 +17,7 @@
  * client-side fallback agent or a seed prompt.
  */
 
+import { MANDATE_KEYS } from "@ai-matrx/agents/mandates";
 import { engine } from "@/lib/api";
 import type {
   AgentExecutionDefinition,
@@ -25,43 +26,43 @@ import type {
 
 /**
  * The local-model Mandate keys, declared in aidream
- * `aidream/services/mandates/client_mandates.py` (2026-09-25, rounds 1 and 2).
+ * `aidream/services/mandates/client_mandates.py` (2026-09-25, rounds 1-3), read
+ * from `@ai-matrx/agents/mandates` so a rename or retirement fails type-check here.
  *
- * TODO(@ai-matrx/agents > 0.13.8): round 2's keys are regenerated into
- * `apps/shared/matrx-agents/mandates/keys.generated.ts` but not published yet
- * (installed here: 0.13.7). When the package carries them, replace each literal
- * with `MANDATE_KEYS.local__<job>` from `@ai-matrx/agents/mandates` so a rename
- * or retirement fails type-check here (the way `DEFAULT_CHAT_MANDATE_KEY` in
- * `@/lib/mandates` already does).
+ * TODO(@ai-matrx/agents > 0.13.9): round 3's `local.cloud_chat_reply` is generated
+ * but not yet published — swap its literal for `MANDATE_KEYS.local__cloud_chat_reply`
+ * when the package carries it.
  */
 export const LOCAL_MODEL_MANDATE_KEYS = {
-  polishTranscript: "local.polish_transcript",
-  summarizeText: "local.summarize_text",
-  improveWriting: "local.improve_writing",
-  extractActionItems: "local.extract_action_items",
-  explainCode: "local.explain_code",
-  answerQuestion: "local.answer_question",
-  confidentialChat: "local.confidential_chat",
+  polishTranscript: MANDATE_KEYS.local__polish_transcript,
+  summarizeText: MANDATE_KEYS.local__summarize_text,
+  improveWriting: MANDATE_KEYS.local__improve_writing,
+  extractActionItems: MANDATE_KEYS.local__extract_action_items,
+  explainCode: MANDATE_KEYS.local__explain_code,
+  answerQuestion: MANDATE_KEYS.local__answer_question,
+  confidentialChat: MANDATE_KEYS.local__confidential_chat,
   /** Confidential Chat's Tools mode (the person's selected local tools). */
-  toolCallingChat: "local.tool_calling_chat",
+  toolCallingChat: MANDATE_KEYS.local__tool_calling_chat,
   /** Confidential Chat's Raw JSON mode (the person's hand-written request body). */
-  rawCompletion: "local.raw_completion",
+  rawCompletion: MANDATE_KEYS.local__raw_completion,
+  /** Cloud Chat when the person picks a model running on this desktop (use-chat.ts). */
+  cloudChatReply: "local.cloud_chat_reply",
   /** Voice page AI Polish — built-in styles and the person's own style. */
-  polishStyleStandard: "local.polish_style_standard",
-  polishStyleFormal: "local.polish_style_formal",
-  polishStyleBullets: "local.polish_style_bullets",
-  polishStyleActionItems: "local.polish_style_action_items",
-  polishStyleMeetingNotes: "local.polish_style_meeting_notes",
-  polishStyleLightCleanup: "local.polish_style_light_cleanup",
-  polishStyleCustom: "local.polish_style_custom",
+  polishStyleStandard: MANDATE_KEYS.local__polish_style_standard,
+  polishStyleFormal: MANDATE_KEYS.local__polish_style_formal,
+  polishStyleBullets: MANDATE_KEYS.local__polish_style_bullets,
+  polishStyleActionItems: MANDATE_KEYS.local__polish_style_action_items,
+  polishStyleMeetingNotes: MANDATE_KEYS.local__polish_style_meeting_notes,
+  polishStyleLightCleanup: MANDATE_KEYS.local__polish_style_light_cleanup,
+  polishStyleCustom: MANDATE_KEYS.local__polish_style_custom,
   /** Confidential Chat's built-in prompt library (the Holder's system text). */
-  chatPersonaHelpful: "local.chat_persona_helpful",
-  chatPersonaTranscriptPolish: "local.chat_persona_transcript_polish",
-  chatPersonaSummarize: "local.chat_persona_summarize",
-  chatPersonaExplainSimply: "local.chat_persona_explain_simply",
-  chatPersonaCodeReview: "local.chat_persona_code_review",
-  chatPersonaBrainstorm: "local.chat_persona_brainstorm",
-  chatPersonaSpokenReplies: "local.chat_persona_spoken_replies",
+  chatPersonaHelpful: MANDATE_KEYS.local__chat_persona_helpful,
+  chatPersonaTranscriptPolish: MANDATE_KEYS.local__chat_persona_transcript_polish,
+  chatPersonaSummarize: MANDATE_KEYS.local__chat_persona_summarize,
+  chatPersonaExplainSimply: MANDATE_KEYS.local__chat_persona_explain_simply,
+  chatPersonaCodeReview: MANDATE_KEYS.local__chat_persona_code_review,
+  chatPersonaBrainstorm: MANDATE_KEYS.local__chat_persona_brainstorm,
+  chatPersonaSpokenReplies: MANDATE_KEYS.local__chat_persona_spoken_replies,
 } as const;
 
 export type LocalModelMandateKey =

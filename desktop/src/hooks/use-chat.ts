@@ -22,6 +22,11 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { isTauri } from "@/lib/sidecar";
 import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";
+import {
+  LOCAL_MODEL_MANDATE_KEYS,
+  holderLeadMessages,
+  resolveLocalMandate,
+} from "@/lib/local-mandates";
 import { loadSettings } from "@/lib/settings";
 import type { ToolImageData, ToolMediaArtifact } from "@/lib/api";
 import type { ActionNeeded } from "@/features/action-needed";
@@ -671,7 +676,25 @@ export function useChat({ engineUrl }: UseChatOptions) {
             .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
           try {
-            const gen = streamCompletion(port, llmMessages);
+            // Cloud Chat on a local model runs through its Mandate
+            // (local.cloud_chat_reply): the Holder's instructions lead the
+            // conversation and its sampling values apply where it declares
+            // them. The seed Holder is empty, so today's turn is unchanged.
+            const holder = await resolveLocalMandate(
+              LOCAL_MODEL_MANDATE_KEYS.cloudChatReply,
+              abort.signal,
+            );
+            const lead = holderLeadMessages(holder).map((m) => ({
+              role: m.role,
+              content: m.content,
+            }));
+            const { temperature, maxTokens, topP } = holder.settings;
+            const gen = streamCompletion(port, [...lead, ...llmMessages], {
+              signal: abort.signal,
+              ...(temperature !== undefined ? { temperature } : {}),
+              ...(maxTokens !== undefined ? { maxTokens } : {}),
+              ...(topP !== undefined ? { top_p: topP } : {}),
+            });
             for await (const token of gen) {
               if (abort.signal.aborted) break;
               accumulated += token;

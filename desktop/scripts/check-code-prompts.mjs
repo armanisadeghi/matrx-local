@@ -79,12 +79,7 @@ const LOCAL_MODEL_PRIMITIVES = "src/lib/llm/api.ts";
  * Files that call the local model with no mandate — OPEN bypasses awaiting a
  * ruling. May only SHRINK.
  */
-const KNOWN_UNMANDATED = new Map([
-  [
-    "src/hooks/use-chat.ts",
-    "Cloud Chat's local-model path (a person picks a downloaded model in Cloud Chat) streams the conversation to the local llama-server with no mandate. Which mandate owns Cloud Chat's LOCAL target (local.cloud_chat's Holder is a cloud agent) needs a ruling (reported 2026-09-25).",
-  ],
-]);
+const KNOWN_UNMANDATED = new Map([]);
 
 const LOCAL_MODEL_CALL =
   /\b(chatCompletion|streamCompletion|structuredOutput|runAgenticLoop|callWithTools)\s*(<[^>()]*>)?\s*\(|["'`][^"'`\n]*\/v1\/chat\/completions/g;

@@ -139,7 +139,6 @@ export interface AppSettings {
    * Off — no sync; Pointers — cloud files appear here, downloaded when
    * used; Full — every file stored on this machine.
    */
-  fileSyncMode: "off" | "pointers" | "full";
 
   // ── Extension bridge ────────────────────────────────────────────────
   /**
@@ -247,7 +246,6 @@ const DEFAULTS: AppSettings = {
   voiceSilenceTimeoutMs: 1400,
   voiceRestorePromptOnExit: true,
   // File sync
-  fileSyncMode: "pointers",
   // Extension bridge
   extensionBroadcastEnabled: true,
   // UI
@@ -331,14 +329,6 @@ async function syncSetting<K extends keyof AppSettings>(
           } else {
             await engine.egressDisable();
           }
-        }
-        break;
-
-      case "fileSyncMode":
-        // Apply immediately so the engine switches sync behavior without
-        // waiting for the next cloud-settings pull.
-        if (engine.engineUrl) {
-          await engine.fileSyncSetMode(all.fileSyncMode);
         }
         break;
 
@@ -787,10 +777,6 @@ export function mergeCloudSettings(
       "voice_restore_prompt_on_exit",
       local.voiceRestorePromptOnExit,
     ),
-    // File sync
-    fileSyncMode:
-      (cloud.file_sync_mode as AppSettings["fileSyncMode"]) ||
-      local.fileSyncMode,
     // Extension bridge
     extensionBroadcastEnabled: cloudBool(
       cloud,
@@ -903,7 +889,6 @@ export function settingsToCloud(
     voice_silence_timeout_ms: settings.voiceSilenceTimeoutMs,
     voice_restore_prompt_on_exit: settings.voiceRestorePromptOnExit,
     // File sync
-    file_sync_mode: settings.fileSyncMode,
     // Extension bridge
     extension_broadcast_enabled: settings.extensionBroadcastEnabled,
     // Claude Code metadata reconciliation

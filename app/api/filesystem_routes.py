@@ -84,7 +84,7 @@ async def list_directory(
 
 @router.post("/prepare-open")
 async def prepare_open(request: PrepareOpenRequest) -> dict[str, object]:
-    """Validate an OS-open target and hydrate managed pointer bytes first."""
+    """Validate an OS-open target."""
     try:
         return await get_filesystem_service().prepare_open(request.path)
     except FileNotFoundError as exc:

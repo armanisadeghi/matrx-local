@@ -16,7 +16,7 @@ nobody had been asked yet. These tests FAIL if any of them drifts back:
     ``choose_organization`` action a screen renders as one button;
   * a genuinely blocked case (no membership at all) keeps its own words and
     offers NO button, because there is nothing for the person to click;
-  * the file-sync transport lets the TYPED error through instead of flattening
+  * the matrx-files client lets the TYPED error through instead of flattening
     it into a bare ``RuntimeError`` — the flattening that made the artifacts
     lane's one-click blocker unreachable and burned an upload attempt per tick;
   * the publisher recognises the refusal BY TYPE, not by matching its sentence.
@@ -87,13 +87,13 @@ def test_the_typed_error_is_a_runtime_error():
 
 
 @pytest.mark.anyio
-async def test_file_sync_lets_the_typed_refusal_through(monkeypatch):
+async def test_matrx_files_client_lets_the_typed_refusal_through(monkeypatch):
     """It used to raise a bare ``RuntimeError`` with its own sentence, which
     made ``coding_sessions/artifacts.py``'s ``except
     OrganizationNotResolvedError`` unreachable: the held upload fell into the
     generic handler, charged an attempt toward the stop, and set no blocker."""
     from app.services.aidream import organization as org_module
-    from app.services.file_sync.client import MatrxFilesClient
+    from app.services.matrx_files.client import MatrxFilesClient
 
     async def _held(_jwt):
         raise HELD

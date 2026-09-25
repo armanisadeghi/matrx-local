@@ -1,7 +1,7 @@
 """HTTP client for the matrx-files microservice (files.matrxserver.com).
 
-matrx-files is the ONLY file backend (docs/handoffs/file-sync-system.md
-§Contracts): every byte and every metadata mutation goes through its API
+matrx-files is the ONLY file backend: every byte and every metadata
+mutation goes through its API
 with the user's Supabase JWT. URLs come from the service's four-flavour
 envelope — never hand-constructed. Wire contract:
 packages/matrx-files/matrx_files/api/router_files.py (aidream repo) and
@@ -23,7 +23,7 @@ logger = get_logger()
 _WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 
-class FileSyncHTTPError(RuntimeError):
+class MatrxFilesHTTPError(RuntimeError):
     """A matrx-files call failed; carries enough context for loud reporting."""
 
     def __init__(self, method: str, path: str, status_code: int, body: str) -> None:
@@ -92,7 +92,7 @@ class MatrxFilesClient:
                 files=files, headers=headers,
             )
         if resp.status_code >= 400:
-            raise FileSyncHTTPError(method.upper(), path, resp.status_code, resp.text)
+            raise MatrxFilesHTTPError(method.upper(), path, resp.status_code, resp.text)
         if resp.status_code == 204 or not resp.text:
             return {}
         return resp.json()

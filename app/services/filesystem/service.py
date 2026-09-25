@@ -337,16 +337,10 @@ class FilesystemService:
         )
 
     async def prepare_open(self, path: str) -> dict[str, object]:
-        """Return an OS-open target, hydrating cloud-backed pointer files first."""
+        """Return an OS-open target for an existing path."""
         absolute = str(Path(path).expanduser().absolute())
         if not os.path.exists(absolute):
             raise FileNotFoundError(absolute)
-        if os.path.isfile(absolute):
-            from app.services.file_sync.hydration import ensure_hydrated
-
-            hydration_error = await ensure_hydrated(absolute)
-            if hydration_error:
-                return {"path": absolute, "ready": False, "error": hydration_error}
         return {"path": absolute, "ready": True}
 
     async def find(

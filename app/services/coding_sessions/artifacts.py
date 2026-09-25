@@ -88,7 +88,7 @@ from app.services.aidream.organization import (
     OrganizationNotResolvedError,
     organization_refusal,
 )
-from app.services.file_sync.client import FileSyncHTTPError, MatrxFilesClient
+from app.services.matrx_files.client import MatrxFilesHTTPError, MatrxFilesClient
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 from app.services.paths.manager import safe_dir
@@ -404,6 +404,29 @@ class SessionArtifacts:
         }
 
 
+@dataclass(frozen=True)
+class MachineWriter:
+    """A registered machine writer — the ONLY key that opens the cloud upload.
+
+    This lane captures coding-session files into a durable LOCAL folder. It
+    must never publish them into the person's AI Matrx Files as if the person
+    had put them there (Arman, 2026-09-24: "Nothing should be adding files to
+    my files"). A machine-generated file may reach the cloud only as a
+    registered machine writer, whose rows the platform keeps out of the
+    person's own library. There is no registration in this codebase yet, so
+    no lane is ever built with one and the upload stays off. Building one
+    here is the whole decision — it is not a setting, not a flag, not a
+    default. Guard: tests/unit/test_coding_session_artifacts.py
+    (``test_lane_never_publishes_without_a_registered_machine_writer``).
+    """
+
+    writer_id: str
+
+    def __post_init__(self) -> None:
+        if not str(self.writer_id or "").strip():
+            raise ValueError("a machine writer needs its registered writer_id")
+
+
 class CodingSessionArtifactsLane:
     """Capture → durable copy → publish, with every state visible."""
 
@@ -416,7 +439,7 @@ class CodingSessionArtifactsLane:
         roots: list[Path] | None = None,
         durable_root: Path | None = None,
         files_client: MatrxFilesClient | None = None,
-        cloud_enabled: bool = True,
+        machine_writer: MachineWriter | None = None,
     ) -> None:
         self._db = db or get_db()
         if source is None:
@@ -431,7 +454,10 @@ class CodingSessionArtifactsLane:
         self._source = source
         self._durable_root_override = durable_root
         self._client = files_client or MatrxFilesClient()
-        self._cloud_enabled = cloud_enabled
+        if machine_writer is not None and not isinstance(machine_writer, MachineWriter):
+            raise TypeError("machine_writer must be a registered MachineWriter")
+        self._machine_writer = machine_writer
+        self._cloud_enabled = machine_writer is not None
         self._task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._stopping = False
@@ -810,8 +836,11 @@ class CodingSessionArtifactsLane:
         if not self._cloud_enabled:
             self._blocker = {
                 "code": "cloud_disabled",
-                "message": "Artifact publishing to AI Matrx is turned off; files are kept locally.",
-                "remedy": "Turn cloud participation on in Matrx Local settings.",
+                "message": (
+                    "Coding-session files are kept on this computer only; they are "
+                    "never added to your AI Matrx Files."
+                ),
+                "remedy": "Nothing to do. They stay in the local coding-sessions folder.",
             }
             return 0, 0
         pending = [
@@ -928,7 +957,7 @@ class CodingSessionArtifactsLane:
                     # and burned an attempt per tick.)
                     self._blocker = organization_refusal(exc)
                     halt.set()
-                except FileSyncHTTPError as exc:
+                except MatrxFilesHTTPError as exc:
                     if exc.is_auth:
                         self._blocker = None
                         self._session_blocker_since = (
@@ -976,7 +1005,7 @@ class CodingSessionArtifactsLane:
             return False
         try:
             row = await self._client.get_record(str(file_id))
-        except FileSyncHTTPError as exc:
+        except MatrxFilesHTTPError as exc:
             if exc.status_code in (404, 410):
                 self._mark_missing(record, f"HTTP {exc.status_code}: AI Matrx no longer serves this file")
                 return False
@@ -1235,7 +1264,8 @@ def get_coding_session_artifacts_lane(
         # buried his own ~650 and timed the /files page out. Capture into the durable local
         # folder stays; the cloud upload is off until artifacts have a home of their own
         # that is not the person's file library.
-        lane = CodingSessionArtifactsLane(provider=provider, cloud_enabled=False)
+        # No MachineWriter is passed, so the lane never uploads (see MachineWriter).
+        lane = CodingSessionArtifactsLane(provider=provider)
         _lanes[provider] = lane
     return lane
 

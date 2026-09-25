@@ -76,7 +76,7 @@ stall plus one recovery. It never restarts, signals, or writes remotely.
   `delegation/engine.py` (captured at engine construction),
   `ai/engine.py` (`initialize_matrx_ai()` captures the aidream URL once —
   remote changes apply on restart, same posture as delegation),
-  `file_sync/client.py` + `scraper/remote_client.py` (read per-request via
+  `matrx_files/client.py` + `scraper/remote_client.py` (read per-request via
   property), `tools/tool_sync.py` (per-use). New code reads the accessors —
   never `config.AIDREAM_SERVER_URL` / `MATRX_FILES_URL` / `SCRAPER_SERVER_URL`
   directly.

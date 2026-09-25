@@ -161,18 +161,7 @@ async def tool_read(
     if os.path.isdir(resolved):
         return ToolResult(type=ToolResultType.ERROR, output=f"Path is a directory: {resolved}")
 
-    # Pointer files under the Files root hydrate transparently and remain under
-    # the sync guard through the actual byte read. A pull must never replace a
-    # hydrated file with a placeholder between hydration and consumption.
-    from app.services.file_sync.hydration import run_tree_operation_hydrated
-
-    result, hydrate_error = await run_tree_operation_hydrated(
-        resolved, lambda: _read_resolved(session, resolved, offset, limit)
-    )
-    if hydrate_error:
-        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
-    assert result is not None
-    return result
+    return await asyncio.to_thread(_read_resolved, session, resolved, offset, limit)
 
 
 def _read_resolved(
@@ -518,7 +507,7 @@ def _replace_from_staged_copy(source: str, destination: str, *, remove_source: b
 # a remote agent's mistake must be recoverable from the OS trash.
 
 
-def _move_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
+def _move_resolved(src: str, dst: str, overwrite: bool) -> ToolResult:
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
@@ -561,7 +550,7 @@ def _move_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
     )
 
 
-def _copy_hydrated(src: str, dst: str, overwrite: bool) -> ToolResult:
+def _copy_resolved(src: str, dst: str, overwrite: bool) -> ToolResult:
     if os.path.isdir(dst) and not os.path.isdir(src):
         dst = os.path.join(dst, os.path.basename(src))
     if os.path.abspath(dst) == os.path.abspath(src):
@@ -619,17 +608,7 @@ async def tool_move(
     if not os.path.exists(src):
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
 
-    from app.services.file_sync.hydration import run_tree_operation_hydrated
-
-    result, hydrate_error = await run_tree_operation_hydrated(
-        src,
-        lambda: _move_hydrated(src, dst, overwrite),
-        guard_paths=(dst,),
-    )
-    if hydrate_error:
-        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
-    assert result is not None
-    return result
+    return await asyncio.to_thread(_move_resolved, src, dst, overwrite)
 
 
 async def tool_copy(
@@ -644,17 +623,7 @@ async def tool_copy(
     if not os.path.exists(src):
         return ToolResult(type=ToolResultType.ERROR, output=f"Source not found: {src}")
 
-    from app.services.file_sync.hydration import run_tree_operation_hydrated
-
-    result, hydrate_error = await run_tree_operation_hydrated(
-        src,
-        lambda: _copy_hydrated(src, dst, overwrite),
-        guard_paths=(dst,),
-    )
-    if hydrate_error:
-        return ToolResult(type=ToolResultType.ERROR, output=hydrate_error)
-    assert result is not None
-    return result
+    return await asyncio.to_thread(_copy_resolved, src, dst, overwrite)
 
 
 async def tool_delete(

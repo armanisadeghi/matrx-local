@@ -13,8 +13,9 @@ from app.services.coding_sessions import artifacts as mod
 from app.services.coding_sessions.artifacts import (
     MANIFEST_NAME,
     CodingSessionArtifactsLane,
+    MachineWriter,
 )
-from app.services.file_sync.client import FileSyncHTTPError
+from app.services.matrx_files.client import MatrxFilesHTTPError
 from app.services.local_db.database import LocalDatabase
 
 pytestmark = pytest.mark.anyio
@@ -122,7 +123,7 @@ class _FakeFilesClient:
         self.reads.append(file_id)
         row = self.rows.get(file_id)
         if row is None:
-            raise FileSyncHTTPError("GET", f"/files/{file_id}", 404, "not found")
+            raise MatrxFilesHTTPError("GET", f"/files/{file_id}", 404, "not found")
         return dict(row)
 
     def drop_row(self, file_id: str) -> None:
@@ -156,7 +157,7 @@ async def _lane(tmp_path: Path, *, client: _FakeFilesClient, tokens: _Tokens, cl
         roots=[tmp_path / "roots" / "claude-501"],
         durable_root=tmp_path / "durable",
         files_client=client,  # type: ignore[arg-type]
-        cloud_enabled=cloud,
+        machine_writer=MachineWriter("test-machine-writer") if cloud else None,
     )
     return db, lane
 
@@ -276,6 +277,47 @@ async def test_cloud_off_keeps_files_locally_and_says_so(tmp_path: Path, monkeyp
         status = lane.status()
         assert status["files"] == 2 and status["uploaded"] == 0
         assert status["blocker"]["code"] == "cloud_disabled" and status["blocker"]["remedy"]
+        assert client.uploads == []
+    finally:
+        await db.close()
+
+
+async def test_lane_never_publishes_without_a_registered_machine_writer(tmp_path: Path, monkeypatch) -> None:
+    """The recorder's cloud upload has ONE key: a registered MachineWriter.
+
+    No boolean re-enables it (the old ``cloud_enabled=True`` default put 60,480
+    scratch files into a person's Files), the production factory builds its
+    lanes without one, and a blank writer id is refused."""
+    import inspect
+
+    params = inspect.signature(CodingSessionArtifactsLane.__init__).parameters
+    assert "cloud_enabled" not in params
+    assert params["machine_writer"].default is None
+    with pytest.raises(ValueError):
+        MachineWriter("  ")
+
+    mod._lanes.clear()
+    try:
+        for provider in mod.ARTIFACT_PROVIDERS:
+            lane = mod.get_coding_session_artifacts_lane(provider)
+            assert lane.status()["cloud_enabled"] is False
+    finally:
+        mod._lanes.clear()
+
+    _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db = LocalDatabase(tmp_path / "t.db")
+    await db.connect()
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        lane = CodingSessionArtifactsLane(
+            db=db,
+            roots=[tmp_path / "roots" / "claude-501"],
+            durable_root=tmp_path / "durable",
+            files_client=client,  # type: ignore[arg-type]
+        )
+        await lane.run_once()
+        assert lane.status()["files"] == 2
         assert client.uploads == []
     finally:
         await db.close()

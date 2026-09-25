@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.common.system_logger import get_logger
-from app.services.file_sync.client import MatrxFilesClient
+from app.services.matrx_files.client import MatrxFilesClient
 from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import TokenRepo
 from app.services.paths.manager import safe_dir

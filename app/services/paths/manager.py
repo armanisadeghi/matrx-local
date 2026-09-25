@@ -218,7 +218,7 @@ def set_path(name: str, new_path: str) -> dict[str, Any]:
 # different id than "path:<name>".
 _ACCESS_RESOURCE_FOR_PATH = {
     "notes": "notes-canonical",
-    "files": "files-replica",
+    "files": "files-folder",
 }
 
 

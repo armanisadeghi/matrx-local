@@ -1,7 +1,7 @@
 """HTTP contract of the /access surface against a real engine.
 
 The engine fixture (tests/conftest.py) boots the real app, whose lifespan
-registers notes-canonical (+ mappings) and files-replica and probes them, so
+registers notes-canonical (+ mappings) and files-folder and probes them, so
 these endpoints must return populated, well-formed payloads.
 """
 
@@ -17,7 +17,7 @@ def _assert_health_shape(data: dict) -> None:
     assert isinstance(data.get("resources"), list)
     ids = {r["resource_id"] for r in data["resources"]}
     assert "notes-canonical" in ids, f"resources registered: {ids}"
-    assert "files-replica" in ids, f"resources registered: {ids}"
+    assert "files-folder" in ids, f"resources registered: {ids}"
     for res in data["resources"]:
         assert res["status"] in ("ok", "degraded", "unknown")
         assert isinstance(res["root"], str) and res["root"]

@@ -113,11 +113,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "tunnel_enabled": False,
     # Instance
     "instance_name": "My Computer",
-    # File sync — the desktop replica of the matrx-files cloud tree.
-    # off      → engine idles (no watcher, no pulls)
-    # pointers → metadata tree + zero-byte placeholders; bytes on demand
-    # full     → bytes mirrored locally, bidirectional, offline-capable
-    "file_sync_mode": "pointers",
     # Notifications
     "notification_sound": True,
     "notification_sound_style": "chime",
@@ -212,7 +207,6 @@ RESET_SCOPES: dict[str, tuple[str, ...]] = {
         "research_",
         "residential_egress_",
         "tunnel_",
-        "file_sync_",
         "extension_",
     ),
     "ai": ("chat_", "llm_", "transcription_", "tts_", "wake_word_", "voice_", "cloud_tools"),

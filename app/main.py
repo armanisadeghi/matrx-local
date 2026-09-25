@@ -53,7 +53,6 @@ from app.api.prompt_matrix_routes import router as prompt_matrix_router
 from app.api.video_gen_routes import router as video_gen_router
 from app.api.media_library_routes import router as media_library_router
 from app.api.media_vault_routes import router as media_vault_router
-from app.api.file_sync_routes import router as file_sync_router
 from app.api.records_routes import router as records_router
 from app.api.tts_routes import router as tts_router
 from app.api.ner_routes import router as ner_router
@@ -919,47 +918,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         _registry.failed("chat_sync", exc)
 
-    # Phase 2e: Engine-owned file sync (files.* mirror + ~/Documents/Matrx/Files
-    # replica of the matrx-files cloud tree). Same credential model: the
-    # sync daemon's token hand-out feeds each tick. Mode (off|pointers|full)
-    # comes from settings; 'off' keeps the loop alive but idle.
-    # See app/services/file_sync/engine.py.
-    _registry.starting("file_sync")
+    # Phase 2e: the Files folder (path key `files`, ~/Documents/Matrx/Files by
+    # default) is registered with the access-health authority so
+    # /access/health reports its true state at boot. The old background file
+    # mirror that used to live here is RETIRED (Arman, 2026-09-24): it copied
+    # the whole cloud Files tree into this folder as zero-byte placeholders.
+    # Folder sync now syncs only folders the person picks. What remains is its
+    # one-time cleanup — app/services/file_sync/FEATURE.md.
     try:
-        from app.services.file_sync import get_file_sync_engine
-
-        _fs_engine = get_file_sync_engine()
-        # Register the replica root with the access-health authority and
-        # probe it once so /access/health reports its true state at boot.
         from app.services.access_health import get_access_health as _get_access
+        from app.services.paths.manager import get_path as _get_path
 
         _get_access().register(
-            "files-replica",
-            resolver=lambda: _fs_engine.root,
+            "files-folder",
+            resolver=lambda: _get_path("files"),
             label="Files folder",
-            registry_service="file_sync",
         )
-        await asyncio.to_thread(_get_access().recheck, ["files-replica"])
-
-        await _fs_engine.start_background_sync()
-        if _get_access().is_degraded("files-replica"):
-            reason = _get_access().message("files-replica")
-            logger.info(
-                "[app/main.py] Phase 2e: File sync started but replica dir "
-                "is NOT accessible: %s",
-                reason,
-            )
-            _registry.degraded("file_sync", reason=reason)
-        else:
-            logger.info("[app/main.py] Phase 2e: File sync started ✓")
-            _registry.ready("file_sync")
-    except Exception as exc:
+        await asyncio.to_thread(_get_access().recheck, ["files-folder"])
+    except Exception:
         logger.error(
-            "[app/main.py] Phase 2e: File sync FAILED to start — the local file "
-            "replica will not update until triggered manually",
+            "[app/main.py] Phase 2e: Files folder access check could not be registered",
             exc_info=True,
         )
-        _registry.failed("file_sync", exc)
+
+    from app.services.file_sync import retire_file_mirror
+
+    # Background: tens of thousands of placeholders can take a while to remove
+    # and must never hold up startup. Never raises; logs one line with counts.
+    _file_mirror_retirement_task = asyncio.create_task(retire_file_mirror())
+    _file_mirror_retirement_task.add_done_callback(lambda _: None)
 
     # Phase 2f: Cloud tool-call delegation client (suspend/resume, headless).
     # Sweeps GET /ai/user/pending_calls for delegated calls bound to this
@@ -1816,19 +1803,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             _registry.stopped("chat_sync")
 
-    from app.services.file_sync import get_file_sync_engine as _get_file_sync
-
-    _file_sync = _get_file_sync()
-    if _file_sync.auto_sync_active or _file_sync.watcher_active:
-        _registry.stopping("file_sync")
-        try:
-            await asyncio.wait_for(_file_sync.stop_background_sync(), timeout=3.0)
-            _registry.stopped("file_sync")
-            logger.info("[app/main.py] File sync stopped ✓")
-        except (asyncio.TimeoutError, Exception) as exc:
-            logger.warning("[app/main.py] File sync did not stop cleanly: %s", exc)
-            _registry.stopped("file_sync")
-
     from app.services.delegation import get_delegation_engine as _get_delegation
 
     _delegation = _get_delegation()
@@ -2204,7 +2178,6 @@ app.include_router(prompt_matrix_router)
 app.include_router(video_gen_router)
 app.include_router(media_library_router)
 app.include_router(media_vault_router)
-app.include_router(file_sync_router)
 app.include_router(records_router)
 app.include_router(tts_router)
 app.include_router(ner_router)

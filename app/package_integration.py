@@ -64,8 +64,8 @@ class MatrxLocalSettings:
         misconfiguration silent instead of loud.
       * ``SUPABASE_SECRET_KEY`` (matrx-files cloud_sync) — a service-role
         secret. It cannot exist on a machine the user owns (CLAUDE.md
-        § Security posture, rule 4). File sync here goes through
-        `app/services/file_sync` with the user's own JWT.
+        § Security posture, rule 4). matrx-files calls here go through
+        `app/services/matrx_files` with the user's own JWT.
     """
 
     def __init__(self, base_dir: Any) -> None:

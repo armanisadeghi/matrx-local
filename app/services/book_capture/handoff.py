@@ -16,7 +16,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 
-from app.services.file_sync.client import MatrxFilesClient
+from app.services.matrx_files.client import MatrxFilesClient
 
 from .models import AssembledBook, CaptureRun
 

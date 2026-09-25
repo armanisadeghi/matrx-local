@@ -160,7 +160,7 @@ AIDREAM_SERVER_URL = AIDREAM_SERVER_URL_LIVE
 WEB_APP_ORIGIN_DEFAULT = "https://www.aimatrx.com"
 
 # Matrx Files — the standalone file microservice (EC2/Cloudflare, launched
-# 2026-07-13). ALL desktop file-sync traffic (change feed, uploads, patches,
+# 2026-07-13). ALL desktop matrx-files traffic (uploads, patches,
 # tombstones, URL minting) goes here — never through aidream, never a
 # hand-constructed S3/CDN URL. MATRX_FILES_URL_DEFAULT is the shipping
 # default — overridden at runtime by remote app config

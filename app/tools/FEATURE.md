@@ -38,7 +38,7 @@ covered by any action group.
    `desktop/src/lib/scrape-extraction.ts`.
 7. **Mega handlers WRAP legacy handlers, never rewrite them** — `make_group_handler` in
    `actions.py` re-dispatches through `dispatch()` so every hook in the underlying handler
-   (e.g. file-sync hydration) rides along. Legacy PascalCase names stay dispatchable.
+   rides along. Legacy PascalCase names stay dispatchable.
    Adding an ACTION to an existing group means the mega row's parameters CHANGED: add the
    legacy tool, add it to the group's `actions` map, regenerate the snapshot, emit + apply the
    changeset.

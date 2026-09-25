@@ -295,7 +295,7 @@ def make_group_handler(
     The handler validates the ``action`` discriminator, applies arg aliases,
     and fans out to the wrapped legacy tool THROUGH ``dispatch`` — so input
     coercion, error envelopes, and all hooks living in the underlying
-    handlers (e.g. file-sync pointer hydration) are preserved untouched.
+    handlers are preserved untouched.
     """
 
     async def group_handler(session: ToolSession, **tool_input: Any) -> ToolResult:

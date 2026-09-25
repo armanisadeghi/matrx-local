@@ -229,6 +229,11 @@ def _canonical_uuid(value: object) -> str | None:
     return parsed if parsed == value else None
 
 
+def _local_browser_result_diagnostic(stage: str) -> None:
+    """Emit only a fixed ingress-stage label; result material is private."""
+    logger.warning("[extension_routes] local_browser_result stage=%s", stage)
+
+
 def _build_pong(client_timestamp: Any) -> Dict[str, Any]:
     """Construct the pong envelope.
 
@@ -576,19 +581,24 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
                 "utf-8"
             )
         except (TypeError, ValueError, UnicodeError):
+            _local_browser_result_diagnostic("invalid_envelope")
+            return True
+        if len(encoded) > max_size:
+            _local_browser_result_diagnostic("oversize")
             return True
         if (
-            len(encoded) > max_size
-            or set(msg) != required
+            set(msg) != required
             or type(msg.get("version")) is not int
             or msg.get("version") != 1
             or _canonical_uuid(msg.get("call_id")) is None
             or operation not in {"discover", "admit", "approve", "renew", "cleanup"}
             or not receipt_ok
         ):
+            _local_browser_result_diagnostic("invalid_envelope")
             return True
         session = get_registry().get(session_id)
         if session is None:
+            _local_browser_result_diagnostic("no_waiter_or_wrong_socket")
             return False
         # The envelope authenticates and correlates this WebSocket reply; transport
         # receipt validators consume only the already-validated result payload.
@@ -597,9 +607,11 @@ async def _handle_extension_message(session_id: str, msg: Dict[str, Any]) -> boo
             for key, value in msg.items()
             if key not in {"type", "version", "call_id"}
         }
-        resolve_local_browser_result(
+        resolved = resolve_local_browser_result(
             session_id, session.websocket, msg["call_id"], result_payload
         )
+        if not resolved:
+            _local_browser_result_diagnostic("no_waiter_or_wrong_socket")
         return True
 
     if msg_type == "extension.result":

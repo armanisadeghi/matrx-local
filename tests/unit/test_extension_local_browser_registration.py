@@ -348,6 +348,85 @@ async def test_approve_result_accepts_only_closed_receipt_and_sanitized_inspect_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
+    ("frame", "stage"),
+    [
+        (
+            {
+                "type": "local_browser.result",
+                "version": 1,
+                "call_id": "00000000-0000-4000-8000-000000000099",
+                "operation": "discover",
+                "status": "acknowledged",
+                "receipt": "not-accepted",
+                "secret": "must-not-appear-in-logs",
+            },
+            "invalid_envelope",
+        ),
+        (
+            {
+                "type": "local_browser.result",
+                "version": 1,
+                "call_id": "00000000-0000-4000-8000-000000000099",
+                "operation": "discover",
+                "status": "acknowledged",
+                "receipt": "accepted",
+                "padding": "x" * (5 * 1024),
+            },
+            "oversize",
+        ),
+    ],
+)
+async def test_invalid_local_browser_result_emits_only_fixed_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    frame: dict[str, object],
+    stage: str,
+) -> None:
+    registry = manager.ExtensionSessionRegistry()
+    session = registry.register(Socket())  # type: ignore[arg-type]
+    diagnostics: list[str] = []
+    monkeypatch.setattr(routes, "get_registry", lambda: registry)
+    monkeypatch.setattr(
+        routes, "_local_browser_result_diagnostic", diagnostics.append
+    )
+    monkeypatch.setattr(
+        routes,
+        "resolve_local_browser_result",
+        lambda *_args: pytest.fail("invalid result must not resolve a waiter"),
+    )
+
+    assert await routes._handle_extension_message(session.session_id, frame)
+
+    assert diagnostics == [stage]
+
+
+@pytest.mark.anyio
+async def test_unresolved_local_browser_result_emits_fixed_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = manager.ExtensionSessionRegistry()
+    session = registry.register(Socket())  # type: ignore[arg-type]
+    diagnostics: list[str] = []
+    monkeypatch.setattr(routes, "get_registry", lambda: registry)
+    monkeypatch.setattr(
+        routes, "_local_browser_result_diagnostic", diagnostics.append
+    )
+    monkeypatch.setattr(routes, "resolve_local_browser_result", lambda *_args: False)
+    frame = {
+        "type": "local_browser.result",
+        "version": 1,
+        "call_id": "00000000-0000-4000-8000-000000000099",
+        "operation": "discover",
+        "status": "acknowledged",
+        "receipt": "accepted",
+    }
+
+    assert await routes._handle_extension_message(session.session_id, frame)
+
+    assert diagnostics == ["no_waiter_or_wrong_socket"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
     ("operation", "result", "inspect", "expected"),
     [
         (

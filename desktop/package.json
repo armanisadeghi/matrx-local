@@ -34,6 +34,8 @@
     "check:canonical-pickers": "node scripts/check-canonical-pickers.mjs",
     "check:org-default-ban": "node scripts/check-org-default-ban.mjs",
     "check:org-default-ban:self-test": "node scripts/check-org-default-ban.mjs --self-test",
+    "check:code-prompts": "node scripts/check-code-prompts.mjs",
+    "check:code-prompts:self-test": "node scripts/check-code-prompts.mjs --self-test",
     "check:canonical-pickers:self-test": "node scripts/check-canonical-pickers.mjs --self-test",
     "check:package-twins": "node scripts/check-package-twins.mjs --strict",
     "check:package-twins:self-test": "node scripts/check-package-twins.mjs --self-test",

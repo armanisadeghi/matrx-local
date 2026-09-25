@@ -450,6 +450,12 @@ export async function structuredOutput<T>(
   port: number,
   messages: ChatMessage[],
   schema: object,
+  options?: {
+    /** The resolved Holder's temperature; absent = the device setting. */
+    temperature?: number;
+    /** The resolved Holder's output ceiling; absent = 2048. */
+    maxTokens?: number;
+  },
 ): Promise<T> {
   const s = await cfg();
 
@@ -459,8 +465,8 @@ export async function structuredOutput<T>(
     body: JSON.stringify({
       model: "local",
       messages,
-      temperature: s.llmStructuredOutputTemperature,
-      max_tokens: 2048,
+      temperature: options?.temperature ?? s.llmStructuredOutputTemperature,
+      max_tokens: options?.maxTokens ?? 2048,
       stream: false,
       response_format: {
         type: "json_schema",

@@ -115,6 +115,11 @@ import {
   setModelContextOverride,
 } from "@/lib/llm/contextLength";
 import type { SystemPrompt } from "@/lib/system-prompts";
+import {
+  LOCAL_MODEL_MANDATE_KEYS,
+  resolveLocalMandate,
+  type ResolvedLocalMandate,
+} from "@/lib/local-mandates";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
 import { engine } from "@/lib/api";
@@ -3325,6 +3330,59 @@ function InferenceTab() {
   const [temperature, setTemperature] = useState(0.7);
   const [topP, setTopP] = useState(0.8);
   const [maxTokens, setMaxTokens] = useState(8000);
+
+  // ── The Confidential Chat Mandate (local.confidential_chat) ────────────
+  // The platform decides this chat's Holder: its instructions and sampling
+  // defaults. The sliders are the person's run-scope layer — seeded from the
+  // Holder until they move one — and a system prompt the person chose or typed
+  // above is their own text, which replaces the Holder's for the run.
+  const samplingTouchedRef = useRef(false);
+  const chatHolderRef = useRef<ResolvedLocalMandate | null>(null);
+  const applyChatHolder = useCallback((holder: ResolvedLocalMandate) => {
+    chatHolderRef.current = holder;
+    if (samplingTouchedRef.current) return;
+    if (holder.settings.temperature !== undefined) setTemperature(holder.settings.temperature);
+    if (holder.settings.topP !== undefined) setTopP(holder.settings.topP);
+    if (holder.settings.maxTokens !== undefined) setMaxTokens(holder.settings.maxTokens);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    // Prefetch only: a failure here is re-raised, loudly, by the next send.
+    resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.confidentialChat)
+      .then((holder) => {
+        if (!cancelled) applyChatHolder(holder);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyChatHolder]);
+  /**
+   * The messages the Holder puts ahead of the conversation, or null when the
+   * Mandate cannot be resolved — the send is then REFUSED with the reason
+   * shown; there is no fallback prompt.
+   */
+  const confidentialChatPrefix = async (): Promise<ChatMessage[] | null> => {
+    let holder: ResolvedLocalMandate;
+    try {
+      holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.confidentialChat);
+      applyChatHolder(holder);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+    const personal = systemPrompt.trim() ? systemPrompt : null;
+    const prefix: ChatMessage[] = [];
+    for (const m of holder.messages) {
+      const content = m.role === "system" && personal !== null ? personal : m.content;
+      if (m.role === "system" && !content.trim()) continue;
+      prefix.push({ role: m.role, content });
+    }
+    if (personal !== null && !holder.messages.some((m) => m.role === "system")) {
+      prefix.unshift({ role: "system", content: personal });
+    }
+    return prefix;
+  };
   const [mode, setMode] = useState<InferenceMode>("chat");
   modeRef.current = mode;
 
@@ -3899,6 +3957,8 @@ function InferenceTab() {
   // ── Edit & resend a user message ──────────────────────────────────────
   const handleEditAndResend = async (msgId: string, newContent: string) => {
     if (!port || !newContent.trim() || isGenerating) return;
+    const holderPrefix = await confidentialChatPrefix();
+    if (!holderPrefix) return;
     setEditingMsgId(null);
     setEditingContent("");
     const msgIndex = messages.findIndex((m) => m.id === msgId);
@@ -3928,9 +3988,7 @@ function InferenceTab() {
     scrollToBottom(true);
 
     const chatMessages: ChatMessage[] = [
-      ...(systemPrompt.trim()
-        ? [{ role: "system" as const, content: systemPrompt }]
-        : []),
+      ...holderPrefix,
       ...truncated.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
@@ -3987,6 +4045,8 @@ function InferenceTab() {
   // ── Retry an assistant message (re-run the preceding user turn) ───────
   const handleRetry = async (assistantMsgId: string) => {
     if (!port || isGenerating || !activeConvId) return;
+    const holderPrefix = await confidentialChatPrefix();
+    if (!holderPrefix) return;
     const msgIndex = messages.findIndex((m) => m.id === assistantMsgId);
     if (msgIndex === -1) return;
 
@@ -3999,9 +4059,7 @@ function InferenceTab() {
 
     // History sent to the model: all messages up to (not including) the assistant msg
     const chatMessages: ChatMessage[] = [
-      ...(systemPrompt.trim()
-        ? [{ role: "system" as const, content: systemPrompt }]
-        : []),
+      ...holderPrefix,
       ...historyBeforeAssistant.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
@@ -4166,6 +4224,8 @@ function InferenceTab() {
   // ── Send message ───────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!port || !input.trim() || isGenerating) return;
+    const holderPrefix = await confidentialChatPrefix();
+    if (!holderPrefix) return;
     const userMsg = input.trim();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setInput("");
@@ -4192,9 +4252,7 @@ function InferenceTab() {
     }
 
     const chatMessages: ChatMessage[] = [
-      ...(systemPrompt.trim()
-        ? [{ role: "system" as const, content: systemPrompt }]
-        : []),
+      ...holderPrefix,
       ...messages.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
@@ -4287,6 +4345,8 @@ function InferenceTab() {
   // Variant of handleSend that accepts text directly (used by voice chat hook)
   const handleSendText = async (text: string) => {
     if (!port || !text.trim() || isGenerating) return;
+    const holderPrefix = await confidentialChatPrefix();
+    if (!holderPrefix) return;
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setInput("");
     setError(null);
@@ -4311,9 +4371,7 @@ function InferenceTab() {
     }
 
     const chatMessages: ChatMessage[] = [
-      ...(systemPrompt.trim()
-        ? [{ role: "system" as const, content: systemPrompt }]
-        : []),
+      ...holderPrefix,
       ...messages.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
@@ -5925,7 +5983,10 @@ function InferenceTab() {
                     max={2}
                     step={0.01}
                     value={[temperature]}
-                    onValueChange={([v]) => setTemperature(v ?? temperature)}
+                    onValueChange={([v]) => {
+                      samplingTouchedRef.current = true;
+                      setTemperature(v ?? temperature);
+                    }}
                   />
                   <p className="text-xs text-muted-foreground">
                     0.7 balanced · 0.1 precise · 1.5 creative
@@ -5945,7 +6006,10 @@ function InferenceTab() {
                     max={1}
                     step={0.05}
                     value={[topP]}
-                    onValueChange={([v]) => setTopP(v ?? topP)}
+                    onValueChange={([v]) => {
+                      samplingTouchedRef.current = true;
+                      setTopP(v ?? topP);
+                    }}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -5956,7 +6020,10 @@ function InferenceTab() {
                     min={1}
                     integer
                     value={maxTokens}
-                    onChange={setMaxTokens}
+                    onChange={(v) => {
+                      samplingTouchedRef.current = true;
+                      setMaxTokens(v);
+                    }}
                     emptyValue={maxTokens}
                     className="h-8 text-xs"
                   />

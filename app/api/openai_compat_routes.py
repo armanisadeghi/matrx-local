@@ -214,6 +214,20 @@ async def chat_completions(request: Request) -> Response:
     url = f"{target['base_url']}/chat/completions"
     stream = bool(payload.get("stream"))
     started = time.monotonic()
+    # Census line, not a gate: this OpenAI-compatible door runs a raw model
+    # call with no Mandate (the owner's ruling on it is pending). One structured
+    # line per call records who is using it and for what, so the ruling is made
+    # on evidence. Behavior is unchanged.
+    logger.info(
+        "[openai_compat] unmandated_call route=%s model_requested=%s model_served=%s "
+        "stream=%s caller_ua=%s caller_host=%s",
+        request.url.path,
+        requested_model,
+        target["canonical_model_name"],
+        stream,
+        request.headers.get("user-agent", "-"),
+        request.client.host if request.client else "-",
+    )
 
     if stream:
         client = _new_upstream_client()

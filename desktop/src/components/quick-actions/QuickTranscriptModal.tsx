@@ -23,6 +23,7 @@ import { useLlmPipeline, parsePolishOutput } from "@/hooks/use-llm-pipeline";
 import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { TranscriptPolishOutput } from "@/hooks/use-llm-pipeline";
+import { LOCAL_MODEL_MANDATE_KEYS } from "@/lib/local-mandates";
 import type {
   TranscriptionState,
   TranscriptionActions,
@@ -213,7 +214,7 @@ export function QuickTranscriptModal({
     setPolishError(null);
     try {
       const raw = await runPipeline<TranscriptPolishOutput>(
-        "polish_transcript",
+        LOCAL_MODEL_MANDATE_KEYS.polishTranscript,
         { transcript: fullTranscript.trim() },
       );
       const result = parsePolishOutput(raw, "", fullTranscript.trim());

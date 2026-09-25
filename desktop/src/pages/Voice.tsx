@@ -29,6 +29,7 @@ import { isTauri } from "@/lib/sidecar";
 import { useLlmApp } from "@/contexts/LlmContext";
 import { useLlmPipeline, parsePolishOutput } from "@/hooks/use-llm-pipeline";
 import type { TranscriptPolishOutput } from "@/hooks/use-llm-pipeline";
+import { LOCAL_MODEL_MANDATE_KEYS } from "@/lib/local-mandates";
 import { usePolishPresets } from "@/hooks/use-polish-presets";
 import type { PolishPreset } from "@/hooks/use-polish-presets";
 import { POLISH_JSON_INSTRUCTION } from "@/lib/polish-presets";
@@ -962,32 +963,17 @@ function TranscribeTab({
         polishPresets.presets.find((p) => p.id === pid) ??
         polishPresets.defaultPreset;
 
-      // Build an inline template using the preset's system prompt
-      const template = {
-        description: preset.name,
-        system: preset.systemPrompt,
-        user: "Transcript:\n\n{{transcript}}",
-        outputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            description: { type: "string" },
-            tags: { type: "array", items: { type: "string" } },
-            cleaned: { type: "string" },
-          },
-          required: ["title", "description", "tags", "cleaned"],
-          additionalProperties: false,
-        },
-        maxTokens: 4096,
-        temperature: 0.2,
-      };
-
       setPolishError(null);
       setPolishSuccess(null);
       try {
-        const raw = await runPipeline<TranscriptPolishOutput>(template, {
-          transcript: transcriptText,
-        });
+        // The platform's polish Holder (local.polish_transcript) supplies the
+        // user template, settings and output schema; the preset the person
+        // picked is their run-scope system text.
+        const raw = await runPipeline<TranscriptPolishOutput>(
+          LOCAL_MODEL_MANDATE_KEYS.polishTranscript,
+          { transcript: transcriptText },
+          { systemPrompt: preset.systemPrompt },
+        );
         const result = parsePolishOutput(
           raw,
           session.title ?? "",

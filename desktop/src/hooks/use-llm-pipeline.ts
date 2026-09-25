@@ -1,47 +1,35 @@
 /**
  * useLlmPipeline
  *
- * A reusable hook for running named LLM tasks against the local llama-server.
- * Each task is defined as a template — a system prompt + a user prompt template
- * with {{variable}} placeholders. Variables are substituted at call time.
+ * Runs a local-model MANDATE on the on-device llama-server. The platform
+ * decides which agent holds the job — its instructions, user template,
+ * variables, sampling settings and output schema — and this hook only supplies
+ * the compute (common-docs/systems/intelligence/mandates/STATE.md §9–§10).
+ * There is no prompt in this file: the templates that used to live here were
+ * mandate bypasses and are now the system Holders of the `local.*` mandates.
  *
  * Usage:
- *   const { run, running, error } = useLlmPipeline();
+ *   const { run, running, error } = useLlmPipeline(() => port);
+ *   const result = await run(LOCAL_MODEL_MANDATE_KEYS.polishTranscript, {
+ *     transcript: rawText,
+ *   });
  *
- *   // Run a built-in task:
- *   const result = await run("polish_transcript", { transcript: rawText });
+ * A resolution failure refuses the run with the mandate named — never a
+ * fallback prompt. If the local server is not running, run() throws.
  *
- *   // Run with a custom template ad-hoc:
- *   const result = await run({ system: "...", user: "{{text}}" }, { text: "..." });
- *
- * The hook reads the LLM server port from the llama-server status.
- * If the server is not running, run() throws with a clear message.
- *
- * Adding new templates: add an entry to PIPELINE_TEMPLATES below.
+ * New job? Declare a mandate in aidream (`client_mandates.py`), seed its
+ * Holder, and call run() with its key. Never add a prompt here.
  */
 
 import { useState, useCallback } from "react";
 import { chatCompletion, structuredOutput } from "@/lib/llm/api";
+import {
+  resolveLocalMandate,
+  substituteVariables,
+  type LocalModelMandateKey,
+} from "@/lib/local-mandates";
 
-// ── Template definitions ──────────────────────────────────────────────────
-
-export interface PipelineTemplate {
-  /** Short description shown in the UI. */
-  description: string;
-  /** System prompt — plain text, no variables. */
-  system: string;
-  /** User prompt — may contain {{variable}} placeholders. */
-  user: string;
-  /**
-   * If set, the model output is parsed as JSON matching this schema.
-   * structuredOutput() is used instead of chatCompletion().
-   */
-  outputSchema?: object;
-  /** Max tokens for the completion. Defaults to 2048. */
-  maxTokens?: number;
-  /** Temperature override. Defaults to 0.3 for deterministic tasks. */
-  temperature?: number;
-}
+// ── Output shapes ─────────────────────────────────────────────────────────
 
 export interface TranscriptPolishOutput {
   title: string;
@@ -135,118 +123,15 @@ export function parsePolishOutput(
   return { title, cleaned, description, tags };
 }
 
-/**
- * Named templates available via run(templateName, vars).
- * Add new entries here to extend the pipeline.
- */
-export const PIPELINE_TEMPLATES: Record<string, PipelineTemplate> = {
-  // ── Voice / transcription ────────────────────────────────────────────────
-  polish_transcript: {
-    description:
-      "Clean up a voice transcript, generate a title, description and tags",
-    system:
-      "You are an expert editor specializing in spoken-word transcripts. " +
-      "Your job is to produce clean, well-punctuated prose from raw speech. " +
-      "Rules: fix punctuation and capitalization; remove filler words (um, uh, like, you know, sort of); " +
-      "merge run-on sentences into clear, complete sentences; preserve the speaker's exact meaning and vocabulary; " +
-      "do not add any content that was not spoken. " +
-      "Also generate: " +
-      "(1) a short descriptive title of 5–8 words capturing the main topic; " +
-      "(2) a one-sentence description summarising what was said; " +
-      "(3) an array of 2–5 short topic tags (single words or short phrases, lowercase). " +
-      'Return ONLY a JSON object with exactly four fields: "title" (string), "description" (string), ' +
-      '"tags" (array of strings), and "cleaned" (string). No markdown, no extra text.',
-    user: "Transcript:\n\n{{transcript}}",
-    outputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string" },
-        description: { type: "string" },
-        tags: { type: "array", items: { type: "string" } },
-        cleaned: { type: "string" },
-      },
-      required: ["title", "description", "tags", "cleaned"],
-      additionalProperties: false,
-    },
-    maxTokens: 4096,
-    temperature: 0.2,
-  },
-
-  // ── Writing aids ─────────────────────────────────────────────────────────
-  summarize: {
-    description: "Summarize text concisely",
-    system:
-      "Summarize the provided text. Capture all key points in clear, structured prose. " +
-      "Use bullet points only if the source is a list. Return only the summary with no preamble.",
-    user: "Text to summarize:\n\n{{text}}",
-    maxTokens: 1024,
-    temperature: 0.3,
-  },
-
-  improve_writing: {
-    description: "Improve clarity and style",
-    system:
-      "Rewrite the provided text to improve clarity, grammar, and flow. " +
-      "Preserve the author's meaning and voice. Fix grammatical errors and awkward phrasing. " +
-      "Return only the improved text with no explanation.",
-    user: "{{text}}",
-    maxTokens: 4096,
-    temperature: 0.4,
-  },
-
-  extract_action_items: {
-    description: "Extract action items from text",
-    system:
-      "Extract all action items, tasks, and commitments from the provided text. " +
-      "Format as a numbered list. Each item should be actionable and specific. " +
-      "If no action items are found, return 'No action items found.'",
-    user: "{{text}}",
-    maxTokens: 1024,
-    temperature: 0.1,
-  },
-
-  // ── Development ──────────────────────────────────────────────────────────
-  explain_code: {
-    description: "Explain what code does",
-    system:
-      "Explain what the following code does in plain English. " +
-      "Start with a one-sentence summary, then describe the key steps. " +
-      "Assume the reader is a developer but may not know this specific library or language.",
-    user: "```\n{{code}}\n```",
-    maxTokens: 1024,
-    temperature: 0.3,
-  },
-
-  // ── Generic ──────────────────────────────────────────────────────────────
-  answer_question: {
-    description: "Answer a question directly",
-    system:
-      "Answer the question directly and concisely. " +
-      "If you are uncertain, say so. Do not add unnecessary preamble.",
-    user: "{{question}}",
-    maxTokens: 2048,
-    temperature: 0.5,
-  },
-};
-
-// ── Variable substitution ─────────────────────────────────────────────────
-
-function substituteVars(
-  template: string,
-  vars: Record<string, string>,
-): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-    return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] ?? match : match;
-  });
-}
-
 // ── Hook types ────────────────────────────────────────────────────────────
 
-export type TemplateNameOrInline =
-  | keyof typeof PIPELINE_TEMPLATES
-  | PipelineTemplate;
-
 export interface PipelineRunOptions {
+  /**
+   * The person's own run-scope system text (a polish style they picked or
+   * wrote). Replaces the Holder's system message for this run only; the
+   * Holder's user template, settings and output schema still apply.
+   */
+  systemPrompt?: string;
   /** Override max tokens for this run. */
   maxTokens?: number;
   /** Override temperature for this run. */
@@ -257,14 +142,14 @@ export interface PipelineRunOptions {
 
 export interface UseLlmPipelineReturn {
   /**
-   * Run a named template or an inline template definition.
-   * @param template - Template name from PIPELINE_TEMPLATES, or an inline PipelineTemplate object.
-   * @param vars - Variable values to substitute into {{placeholders}}.
-   * @param options - Optional overrides.
-   * @returns The model's response as a string (or parsed object if outputSchema is set).
+   * Resolve a local-model mandate and run its Holder on the local model.
+   * @param mandateKey - One of LOCAL_MODEL_MANDATE_KEYS.
+   * @param vars - Values for the Holder's {{variables}}.
+   * @param options - Run-scope overrides.
+   * @returns The model's response as a string (or parsed object when the Holder declares an output schema).
    */
   run: <T = string>(
-    template: TemplateNameOrInline,
+    mandateKey: LocalModelMandateKey,
     vars?: Record<string, string>,
     options?: PipelineRunOptions,
   ) => Promise<T>;
@@ -277,6 +162,46 @@ export interface UseLlmPipelineReturn {
 
   /** Clears the error state. */
   clearError: () => void;
+}
+
+// ── The run (pure; the hook below only adds React state) ─────────────────
+
+/**
+ * Resolve `mandateKey`, fill the Holder's authored messages with `vars`, and
+ * run them on the local llama-server at `port` with the Holder's settings —
+ * structured output when the Holder declares an output schema. Throws (naming
+ * the mandate) when the platform cannot resolve it; never falls back.
+ */
+export async function runLocalMandate<T = string>(
+  port: number,
+  mandateKey: LocalModelMandateKey,
+  vars: Record<string, string> = {},
+  options: PipelineRunOptions = {},
+): Promise<T> {
+  const holder = await resolveLocalMandate(mandateKey, options.signal);
+  const override = options.systemPrompt?.trim() ? options.systemPrompt : null;
+  const messages = holder.messages.map((m) => ({
+    role: m.role,
+    content:
+      m.role === "system" && override !== null
+        ? override
+        : substituteVariables(m.content, vars),
+  }));
+  if (override !== null && !messages.some((m) => m.role === "system")) {
+    messages.unshift({ role: "system", content: override });
+  }
+
+  const maxTokens = options.maxTokens ?? holder.settings.maxTokens;
+  const temperature = options.temperature ?? holder.settings.temperature;
+  const sampling = {
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+  };
+
+  if (holder.outputSchema) {
+    return structuredOutput<T>(port, messages, holder.outputSchema, sampling);
+  }
+  return (await chatCompletion(port, messages, sampling)) as T;
 }
 
 // ── The hook ──────────────────────────────────────────────────────────────
@@ -296,7 +221,7 @@ export function useLlmPipeline(
 
   const run = useCallback(
     async <T = string>(
-      template: TemplateNameOrInline,
+      mandateKey: LocalModelMandateKey,
       vars: Record<string, string> = {},
       options: PipelineRunOptions = {},
     ): Promise<T> => {
@@ -307,41 +232,11 @@ export function useLlmPipeline(
         );
       }
 
-      // Resolve template
-      const tpl: PipelineTemplate | undefined =
-        typeof template === "string" ? PIPELINE_TEMPLATES[template] : template;
-
-      if (!tpl) {
-        throw new Error(`Unknown pipeline template: "${String(template)}"`);
-      }
-
-      const userContent = substituteVars(tpl.user, vars);
-      const messages = [
-        { role: "system" as const, content: tpl.system },
-        { role: "user" as const, content: userContent },
-      ];
-
-      const maxTokens = options.maxTokens ?? tpl.maxTokens ?? 2048;
-      const temperature = options.temperature ?? tpl.temperature ?? 0.3;
-
       setRunning(true);
       setError(null);
 
       try {
-        if (tpl.outputSchema) {
-          const result = await structuredOutput<T>(
-            port,
-            messages,
-            tpl.outputSchema,
-          );
-          return result;
-        } else {
-          const text = await chatCompletion(port, messages, {
-            maxTokens,
-            temperature,
-          });
-          return text as T;
-        }
+        return await runLocalMandate<T>(port, mandateKey, vars, options);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);

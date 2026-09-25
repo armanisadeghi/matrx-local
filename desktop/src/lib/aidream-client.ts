@@ -263,6 +263,35 @@ export async function fetchMandateResolution(
   });
 }
 
+export type AgentExecutionDefinition =
+  components["schemas"]["ExecutionAgentDefinition"];
+
+/**
+ * GET /api/agents/{agent_id}/execution-definition, or
+ * GET /api/agents/versions/{version_id}/execution-definition when the
+ * resolution named a pinned version — the complete, ownership-scoped
+ * definition (messages, variables, settings, output schema) of the agent a
+ * Mandate resolved to. The ONE reader for "what are this agent's
+ * instructions" on a local-model run; the desktop never carries its own copy.
+ */
+export async function fetchAgentExecutionDefinition(
+  definitionId: string,
+  isVersion: boolean,
+  jwt: string,
+  organizationId: string,
+  signal?: AbortSignal,
+): Promise<AgentExecutionDefinition> {
+  const id = encodeURIComponent(definitionId);
+  const path = isVersion
+    ? `/agents/versions/${id}/execution-definition`
+    : `/agents/${id}/execution-definition`;
+  return aidreamGet<AgentExecutionDefinition>(path, {
+    jwt,
+    organizationId,
+    ...(signal ? { signal } : {}),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The reply door for a coding-session conversation
 // ---------------------------------------------------------------------------

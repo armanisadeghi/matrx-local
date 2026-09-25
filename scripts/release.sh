@@ -818,6 +818,10 @@ info "Checking @ai-matrx packages are npm latest..."
 # THE ORGANIZATION IS WHAT THE USER SET — never a saved default, never the
 # personal org (Arman, 2026-09-19).
 (cd desktop && pnpm check:org-default-ban:self-test && pnpm check:org-default-ban) || fail "A default organization is back (see above). Nothing that builds a request may read a saved default-organization preference, and the personal org is never a fallback. With nothing SET on this device, HOLD the request, show the picker, and continue once the user picks: desktop/src/lib/org/active-org.ts and app/services/aidream/organization.py."
+# EVERY INTELLIGENCE RUNS THROUGH A MANDATE — no platform prompt lives in
+# desktop code (mandates STATE.md §9). PIPELINE_TEMPLATES shipped six system
+# prompts here until they became the local.* mandates' Holders (2026-09-25).
+(cd desktop && pnpm check:code-prompts:self-test && pnpm check:code-prompts) || fail "A platform prompt is written into desktop code (see above). Declare a mandate in aidream (client_mandates.py), seed its Holder with the prompt, and run it through useLlmPipeline / resolveLocalMandate (desktop/src/lib/local-mandates.ts)."
 # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
 # ../common-docs/policies/archived-items.md): every list over an entity that can
 # be archived carries an archive filter, the default hides archived, revealing

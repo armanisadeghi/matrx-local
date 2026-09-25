@@ -72,7 +72,8 @@ export function BatchConfirmDialog({
     secondsPerRun !== null ? formatEtaSeconds(secondsPerRun * total) : null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    // Approving a whole batch is a confirmation: it blocks the page (design-system 0.38.0).
+    <Dialog modal open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[88vh] w-[min(96vw,42rem)] max-w-2xl flex-col gap-0 overflow-hidden">
         <DialogHeader className="min-w-0 shrink-0">
           <DialogTitle className="flex min-w-0 items-center gap-2 pr-6 leading-snug">

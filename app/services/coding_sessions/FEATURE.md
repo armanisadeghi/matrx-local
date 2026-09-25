@@ -1171,10 +1171,19 @@ as `cancelled`, outbox drained to zero with validated receipts.
   `test_identical_bytes_two_paths_same_session_each_get_their_own_placement`,
   `test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased`,
   `test_placement_repair_gives_up_loudly_after_max_rounds`). NOT fixed here and filed as
-  its own bug: `app/services/file_sync/engine.py` uploads the user's mirrored files with no
-  declaration, so two identical local files at different paths leave the second path
-  recorded nowhere while the index calls it synced (feedback
-  `75e2ae34-5ec6-45fb-ad1b-e909c86eb3f8`).
+  its own bug: the old file mirror uploaded mirrored files with no declaration (feedback
+  `75e2ae34-5ec6-45fb-ad1b-e909c86eb3f8`) — moot since that mirror was retired 2026-09-24.
+
+### NEVER PUBLISHED INTO THE PERSON'S FILES — the MachineWriter key (2026-09-24)
+
+The artifacts lanes capture into the durable LOCAL folder only; the cloud upload is OFF
+(Arman, 2026-09-24: "Nothing should be adding files to my files" — the lane had put 60,480
+scratch files into his Files). There is no boolean that turns it back on: the ONLY key is
+a registered `MachineWriter` passed to `CodingSessionArtifactsLane`, and
+`get_coding_session_artifacts_lane` builds every lane without one. Re-enabling means
+registering as a machine writer, whose rows the platform keeps out of the person's own
+library. Guard: `test_lane_never_publishes_without_a_registered_machine_writer` in
+`tests/unit/test_coding_session_artifacts.py`.
 
 ### ONE artifacts lane per provider, and THE REPOSITORY RULE (2026-09-18)
 

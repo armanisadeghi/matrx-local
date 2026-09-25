@@ -645,7 +645,7 @@ export function VariantStudio() {
 
       {/* ── Model picker dialog ─────────────────────────────────────────── */}
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent dismissOnOutsideClick className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {isImage ? "Image models" : "Video models"}

@@ -281,7 +281,7 @@ function PromptManageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col p-0">
+      <DialogContent dismissOnOutsideClick className="max-w-2xl max-h-[80vh] flex flex-col p-0">
         <DialogHeader className="px-5 py-4 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4" />

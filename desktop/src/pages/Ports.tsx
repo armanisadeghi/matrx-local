@@ -883,7 +883,10 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
         </Tabs>
       </div>
 
+      {/* A destructive step: blocks the page (design-system 0.38.0 — only a caller that
+          passes `modal` blocks). */}
       <Dialog
+        modal
         open={killDialogOpen}
         onOpenChange={(open) => {
           setKillDialogOpen(open);

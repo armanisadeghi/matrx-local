@@ -74,7 +74,11 @@ async def _mixed_tree(tmp_path: Path) -> tuple[LocalDatabase, Path, Path]:
     await _track(db, "p-escape", "../Elsewhere/escape.txt", "pointer")
     # A symlinked folder inside the root that leads outside it.
     _write(outside / "linked/target.txt")
-    os.symlink(outside / "linked", root / "via-link")
+    try:
+        os.symlink(outside / "linked", root / "via-link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        await db.close()
+        pytest.skip("this machine cannot create symlinks (Windows without the privilege)")
     await _track(db, "p-link", "via-link/target.txt", "pointer")
     # A tracked conflict row stays exactly as it is.
     _write(root / "Reports/conflicted.txt")

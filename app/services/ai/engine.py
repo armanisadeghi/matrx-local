@@ -22,7 +22,7 @@ Initialization sequence
      aidream API with the SAME precedence the server uses for itself, and a
      user's rebind reaches desktop with no deploy. Never hardcode an agent
      id here; a missing capability is a missing API call to add.
-     Contract: common-docs/systems/mandates/RUNTIME.md.
+     Contract: common-docs/systems/intelligence/mandates/STATE.md.
      Seam validation is all-errors-at-once (ClientHostConfigError) and any
      wiring failure CRASHES startup — a client host without its seams would
      die with DBNotConfiguredError mid-request otherwise.

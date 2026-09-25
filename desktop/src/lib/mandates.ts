@@ -10,7 +10,7 @@
  *
  * A Mandate is the platform's named answer to "which agent runs this step" —
  * the agent lives in the DATABASE; this file only names the job. Never an
- * agent UUID here. SoR: common-docs/systems/mandates/STATE.md (+ RUNTIME.md).
+ * agent UUID here. SoR: common-docs/systems/intelligence/mandates/STATE.md (+ RUNTIME.md).
  *
  * What this file still owns is the `mandate:` REF — the desktop's own stable UI
  * identity for a Mandate-backed choice, stored in settings beside real agent

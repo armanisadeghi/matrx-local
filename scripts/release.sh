@@ -849,7 +849,7 @@ fi
 # /administration/mandates/references is what reads it.
 #
 # It may NEVER block a release (D23, and law 1 of
-# common-docs/projects/mandate-declaration-reporting/REGISTER.md): `check`
+# common-docs/systems/intelligence/mandates/REGISTER.md): `check`
 # always exits 0 without --strict, and `|| true` covers a crash inside uvx.
 #
 # 🚨 THE VERSION IS PINNED EXACTLY, ON PURPOSE. The "always latest" law governs

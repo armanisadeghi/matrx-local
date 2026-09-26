@@ -968,8 +968,12 @@ def valid_terminal_receipt(value: object) -> bool:
         value.get("reason"),
     )
     if (
-        operation not in {"navigate", "inspect_login", "vault_login", "authenticator"}
+        not isinstance(operation, str)
+        or operation
+        not in {"navigate", "inspect_login", "vault_login", "authenticator"}
+        or not isinstance(outcome, str)
         or outcome not in {"completed", "refused", "cancelled", "outcome_unknown"}
+        or not isinstance(reason, str)
         or reason not in _RESULT_REASONS
     ):
         return False
@@ -1012,13 +1016,22 @@ def valid_terminal_receipt(value: object) -> bool:
         ):
             return False
     if operation == "inspect_login":
-        return data.get("form") in {
-            "login",
-            "username_first",
-            "password_change",
-            "none",
-            "ambiguous",
-        } and data.get("challenge") in {"none", "mfa", "captcha", "unknown"}
+        form, challenge = data.get("form"), data.get("challenge")
+        return (
+            isinstance(form, str)
+            and isinstance(challenge, str)
+            and form
+            in {
+                "login",
+                "username_first",
+                "password_change",
+                "none",
+                "ambiguous",
+            }
+            and challenge in {"none", "mfa", "captcha", "unknown"}
+        )
+    if operation == "navigate":
+        return True
     receipt_digest = data.get("verification_digest")
     if (
         not isinstance(receipt_digest, str)

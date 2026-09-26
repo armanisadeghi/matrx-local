@@ -355,6 +355,31 @@ def test_closed_terminal_receipt_refuses_malformed_origin_without_raising() -> N
     )
 
 
+def test_navigate_terminal_receipt_accepts_origin_only() -> None:
+    receipt = {
+        "command_id": "00000000-0000-4000-8000-000000000002",
+        "operation": "navigate",
+        "outcome": "completed",
+        "reason": "none",
+        "data": {"origin": "https://example.com"},
+    }
+    assert transport.valid_terminal_receipt(receipt)
+    for key in ("operation", "outcome", "reason"):
+        assert transport.valid_terminal_receipt({**receipt, key: []}) is False
+    inspect = {
+        **receipt,
+        "operation": "inspect_login",
+        "data": {"origin": "https://example.com", "form": "login", "challenge": "none"},
+    }
+    for key in ("form", "challenge"):
+        assert (
+            transport.valid_terminal_receipt(
+                {**inspect, "data": {**inspect["data"], key: []}}
+            )
+            is False
+        )
+
+
 def test_document_id_is_opaque_but_utf8_bounded() -> None:
     document = {"url": "https://example.com/login", "document_id": "A" * 32}
     assert transport._document(document) == document

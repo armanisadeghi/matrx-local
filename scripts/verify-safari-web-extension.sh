@@ -31,4 +31,21 @@ SIGNATURE="$(codesign -dvv "$APPEX_PATH" 2>&1)"
 [[ "$SIGNATURE" == *"flags=0x10000(runtime)"* ]] || { echo "ERROR: Safari extension is missing the hardened runtime signature option." >&2; exit 1; }
 [[ "$SIGNATURE" == *"Timestamp="* ]] || { echo "ERROR: Safari extension signature is missing a secure timestamp." >&2; exit 1; }
 
+# Tauri must preserve this independently signed bundle when it copies the
+# release overlay. A profile-less Developer ID child cannot carry the host's
+# Vault/profile-backed entitlements: macOS will refuse it at launch.
+ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APPEX_PATH" 2>/dev/null || true)"
+for key in \
+    com.apple.application-identifier \
+    com.apple.developer.team-identifier \
+    com.apple.security.application-groups \
+    com.apple.developer.authentication-services.autofill-credential-provider \
+    keychain-access-groups \
+    com.apple.security.keychain-access-groups; do
+    [[ "$ENTITLEMENTS" != *"$key"* ]] || {
+        echo "ERROR: Safari extension carries profile-backed entitlement '$key' without a provisioning profile." >&2
+        exit 1
+    }
+done
+
 echo "PASS signed Safari Web Extension: $APPEX_PATH"

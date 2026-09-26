@@ -19,7 +19,21 @@ SUCCESS_OUTPUT="$WORKDIR/success"
 MATRX_SAFARI_EXTENSION_SIGNING_IDENTITY="$IDENTITY" \
 MATRX_SAFARI_WEB_EXTENSION_OUTPUT_DIR="$SUCCESS_OUTPUT" \
 "$BUILDER"
-"$VERIFIER" "$SUCCESS_OUTPUT/Matrx Extend Safari.appex"
+SUCCESS_APPEX="$SUCCESS_OUTPUT/Matrx Extend Safari.appex"
+"$VERIFIER" "$SUCCESS_APPEX"
+
+RESTRICTED_ENTITLEMENTS="$WORKDIR/restricted.entitlements.plist"
+cat >"$RESTRICTED_ENTITLEMENTS" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>com.apple.security.application-groups</key><array><string>JH83UH9P4D.com.aimatrx.desktop</string></array></dict></plist>
+EOF
+codesign --force --timestamp --options runtime --entitlements "$RESTRICTED_ENTITLEMENTS" --sign "$IDENTITY" "$SUCCESS_APPEX"
+if "$VERIFIER" "$SUCCESS_APPEX" >"$WORKDIR/restricted-entitlements.log" 2>&1; then
+    echo "ERROR: profile-backed Safari child entitlement unexpectedly passed verification." >&2
+    exit 1
+fi
+grep -Fq "profile-backed entitlement 'com.apple.security.application-groups'" "$WORKDIR/restricted-entitlements.log"
 
 FAILURE_OUTPUT="$WORKDIR/invalid-identity"
 STALE_APPEX="$FAILURE_OUTPUT/Matrx Extend Safari.appex"

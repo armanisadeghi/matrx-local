@@ -848,6 +848,46 @@ async def test_detached_replay_retains_global_capacity_after_creator_cancels(
 
 
 @pytest.mark.anyio
+async def test_callback_limits_admit_complete_credential_burst_then_refill(monkeypatch):
+    """A complete inspect, two-page password, MFA, and cleanup stays bounded."""
+    now = transport.time.monotonic() + 1.0
+    monkeypatch.setattr(transport.time, "monotonic", lambda: now)
+    limits = transport.CallbackLimits()
+    address = "127.0.0.1"
+    canonical_callbacks = (
+        "discover",
+        "admit",
+        "renew",
+        "approve",
+        "renew",
+        "approve",
+        "renew",
+        "renew",
+        "renew",
+        "approve",
+        "renew",
+        "approve",
+        "cleanup",
+    )
+
+    assert len(canonical_callbacks) == transport._CANONICAL_CREDENTIAL_CALLBACK_BURST
+    for _operation in canonical_callbacks:
+        capacity = await limits.acquire(address)
+        capacity.release()
+
+    with pytest.raises(transport.TransportRefusal) as exhausted:
+        await limits.acquire(address)
+    assert exhausted.value.reason == "rate_limited"
+
+    now += 2.0
+    capacity = await limits.acquire(address)
+    capacity.release()
+    with pytest.raises(transport.TransportRefusal) as refilled_once:
+        await limits.acquire(address)
+    assert refilled_once.value.reason == "rate_limited"
+
+
+@pytest.mark.anyio
 async def test_cancelled_creator_leaves_its_capacity_with_detached_replay(monkeypatch):
     """Cancelling HTTP cannot make an in-flight socket relay exceed its cap."""
     fresh = FreshContext(BrowserContext("boot", 3, "org"), ("user", "session"), "jwt")

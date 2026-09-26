@@ -41,6 +41,13 @@ _MAX_GRANT = 8 * 1024
 _MAX_REPLY = 4 * 1024
 _MAX_INSPECT_REPLY = 8 * 1024
 _MAX_COMMAND = 16 * 1024
+# One complete local credential journey can synchronously consume all of these
+# callbacks from the same source: discover, admit, inspect (renew + approve),
+# two password pages (renew + approve each), the two custody renewals between
+# pages, authenticator (renew + approve), and cleanup.  Keep that finite
+# journey admissible before grant verification; sustained abuse remains limited
+# by the unchanged refill rates and the concurrency gates below.
+_CANONICAL_CREDENTIAL_CALLBACK_BURST = 13
 _OPERATIONS = frozenset({"discover", "admit", "approve", "renew", "cleanup"})
 _REASONS = frozenset(
     {
@@ -201,8 +208,10 @@ class CallbackLimits:
     def __init__(self) -> None:
         self.global_gate = asyncio.Semaphore(4)
         self._per_address: dict[str, asyncio.Semaphore] = {}
-        self._global_bucket = _Bucket(8.0, 1.0)
-        self._buckets: dict[str, _Bucket] = {"unknown": _Bucket(4.0, 0.5)}
+        self._global_bucket = _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 1.0)
+        self._buckets: dict[str, _Bucket] = {
+            "unknown": _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
+        }
 
     def _address_gate(self, address: str) -> asyncio.Semaphore | None:
         if address not in self._per_address:
@@ -217,7 +226,9 @@ class CallbackLimits:
     async def acquire(self, address: str) -> "CapacityLease":
         key = address if address and len(address) <= 128 else "unknown"
         bucket = (
-            self._buckets.setdefault(key, _Bucket(4.0, 0.5))
+            self._buckets.setdefault(
+                key, _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
+            )
             if len(self._buckets) < 65 or key == "unknown"
             else self._buckets["unknown"]
         )

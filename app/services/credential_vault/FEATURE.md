@@ -78,7 +78,7 @@ Vault-supplied key.
 - **Only what is needed is decrypted.** `refresh_vault_keys()` resolves
   plaintext only for providers with no local key. A secret the desktop already
   owns is never fetched again.
-- **Personal scope only.** `principal_type=user`. Organization-owned items are
+- **The person's own items only.** `principal_type=user`. Organization-owned items are
   deliberately not pulled onto a personal machine — that is a sharing decision
   nobody made here.
 - **The Vault tier is never stale.** An unavailable vault DISCARDS the previous

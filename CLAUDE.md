@@ -105,7 +105,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   look for, what to report — never a list or menu. →
   `/Users/armanisadeghi/code/common-docs/policies/human-steps-are-guided-sessions.md`
 - **The organization is what the USER SET on this device — never a saved default, never the
-  personal org** (Arman, 2026-09-19). The TS resolver is `desktop/src/lib/org/active-org.ts`,
+  organization created at signup**. The TS resolver is `desktop/src/lib/org/active-org.ts`,
   the engine's is `app/services/aidream/organization.py`, and each SET crosses to the other
   through `PUT /organization/active` (which also mirrors it to the server's coding-session
   filing organization). ONE state, ONE stored value, ONE selector (Arman, 2026-09-21): the store
@@ -114,8 +114,9 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   the organization, never a second "choose organization" control. With nothing set, the work HOLDS and the picker is
   raised (the sidecar does it with an `organization_required` action-needed item) — it never
   fails with "no default organization". Guard: `pnpm check:org-default-ban` in `desktop/`.
+- **The access ladder decides who can open a record.** Every table starts at Organization; only Arman approves Confidential or Private; sharing sits outside the ladder; children inherit their parent; organizations are unlimited and equal, with no personal type. → `/Users/armanisadeghi/code/common-docs/policies/access-ladder.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
-  personal/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
+  signup-organization/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
   `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`
 
 ## Configuration posture — everything here ships to the user

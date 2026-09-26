@@ -420,7 +420,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 \
-            tesseract-ocr tesseract-ocr-eng libasound2-dev cmake libgcc-12-dev
+            tesseract-ocr tesseract-ocr-eng libasound2-dev libdbus-1-dev pkg-config cmake libgcc-12-dev
 
       - name: Install macOS system dependencies
         if: matrix.platform == 'macos-15'

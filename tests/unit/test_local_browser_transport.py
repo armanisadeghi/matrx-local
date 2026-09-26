@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 
 import pytest
@@ -31,6 +32,141 @@ class Socket:
 
     async def send_text(self, value: str) -> None:
         self.frames.append(value)
+
+
+@pytest.mark.anyio
+async def test_authority_peer_close_cannot_stall_browser_control_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow HTTP pool close must run outside the browser-control event loop."""
+    payload = {
+        "status": "accepted",
+        "operation": "admit",
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "app_instance_id": "00000000-0000-0000-0000-000000000002",
+        "controller_revision": 7,
+        "jti": "00000000-0000-0000-0000-000000000003",
+        "expires_at_ms": 4_000_000_000_000,
+        "extension_generation": "00000000-0000-0000-0000-000000000004",
+        "connection_id": "00000000-0000-0000-0000-000000000005",
+    }
+
+    class Response:
+        status_code = 200
+        headers = {"cache-control": "no-store", "connection": "close"}
+
+        async def aiter_bytes(self):
+            yield json.dumps(payload).encode()
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            # Models HTTPX cleanup when the authority peer closes its socket.
+            time.sleep(0.2)
+
+        @asynccontextmanager
+        async def stream(self, *_args, **_kwargs):
+            yield Response()
+
+    monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(
+        transport, "get_aidream_server_url", lambda: "https://server.example"
+    )
+    fresh = FreshContext(
+        BrowserContext("boot", 1, "org"), ("user", "session"), "daemon"
+    )
+    registration = type(
+        "Registration",
+        (),
+        {
+            "extension_generation": payload["extension_generation"],
+            "connection_id": payload["connection_id"],
+        },
+    )()
+    ticks: list[float] = []
+
+    async def ticker() -> None:
+        await asyncio.sleep(0.03)
+        ticks.append(time.monotonic())
+
+    tick_task = asyncio.create_task(ticker())
+    result = await transport._verify(
+        fresh,
+        payload["app_instance_id"],
+        registration,
+        {"grant": "opaque", "operation": "admit"},
+    )
+    finished = time.monotonic()
+    await tick_task
+    assert result["status"] == "accepted"
+    assert ticks and ticks[0] < finished
+
+
+@pytest.mark.anyio
+async def test_authority_callback_never_carries_peer_cookie_to_next_org(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "status": "accepted",
+        "operation": "admit",
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "app_instance_id": "00000000-0000-0000-0000-000000000002",
+        "controller_revision": 7,
+        "jti": "00000000-0000-0000-0000-000000000003",
+        "expires_at_ms": 4_000_000_000_000,
+        "extension_generation": "00000000-0000-0000-0000-000000000004",
+        "connection_id": "00000000-0000-0000-0000-000000000005",
+    }
+    seen: list[tuple[str | None, str | None]] = []
+
+    def endpoint(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                request.headers.get("x-organization-id"),
+                request.headers.get("cookie"),
+            )
+        )
+        return httpx.Response(
+            200,
+            headers={"cache-control": "no-store", "set-cookie": "peer=ambient"},
+            json=payload,
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        transport.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(endpoint), **kwargs),
+    )
+    monkeypatch.setattr(
+        transport, "get_aidream_server_url", lambda: "https://server.example"
+    )
+    registration = type(
+        "Registration",
+        (),
+        {
+            "extension_generation": payload["extension_generation"],
+            "connection_id": payload["connection_id"],
+        },
+    )()
+    for org in ("org-one", "org-two"):
+        fresh = FreshContext(
+            BrowserContext("boot", 1, org), ("user", "session"), "daemon"
+        )
+        assert (
+            await transport._verify(
+                fresh,
+                payload["app_instance_id"],
+                registration,
+                {"grant": "opaque", "operation": "admit"},
+            )
+        )["status"] == "accepted"
+    assert seen == [("org-one", None), ("org-two", None)]
 
 
 def _registration(registry: manager.ExtensionSessionRegistry):
@@ -142,7 +278,6 @@ async def test_approve_verify_forwards_exact_command_and_rejects_wrong_digest(
             seen.update(json)
             yield Response()
 
-    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
     monkeypatch.setattr(
         transport, "get_aidream_server_url", lambda: "https://server.example"
@@ -358,7 +493,6 @@ async def test_server_callback_uses_actual_closed_contract_and_streams_limit(
             sent.update(method=method, url=url, body=json)
             yield Response()
 
-    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
     monkeypatch.setattr(
         transport, "get_aidream_server_url", lambda: "https://server.example"
@@ -1064,7 +1198,6 @@ async def test_callback_negotiates_identity_instead_of_rejecting_requested_compr
         return httpx.Response(200, headers=headers, content=raw)
 
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(
         transport.httpx,
         "AsyncClient",

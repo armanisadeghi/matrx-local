@@ -7,8 +7,10 @@ materializes credentials, forwards a caller JWT, or dispatches generic tools.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -87,30 +89,38 @@ _RECEIPTS = {
 }
 logger = get_logger()
 
-# One retained, headerless client prevents the authority callback from closing a
-# connection pool while a lifecycle request owns the event loop. Request identity
-# remains per-call; no credential or organization is retained on this client.
-_AUTHORITY_CLIENT: httpx.AsyncClient | None = None
+# HTTPX can spend seconds closing a peer connection even when its request timeout
+# has expired. Keep the complete one-shot exchange, including pool teardown, off
+# the browser-control event loop. Two occupied workers fail closed instead of
+# allowing an unbounded queue of late authority checks.
+_AUTHORITY_WORKERS = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="local-browser-authority"
+)
+_AUTHORITY_SLOTS = threading.BoundedSemaphore(2)
 
 
-def _authority_client() -> httpx.AsyncClient:
-    global _AUTHORITY_CLIENT
-    if _AUTHORITY_CLIENT is None or getattr(_AUTHORITY_CLIENT, "is_closed", False):
-        _AUTHORITY_CLIENT = httpx.AsyncClient(
-            follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
-        )
-    return _AUTHORITY_CLIENT
+async def _authority_exchange(
+    url: str, payload: dict[str, str], headers: dict[str, str]
+) -> tuple[int, dict[str, str], bytes]:
+    async with httpx.AsyncClient(
+        follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
+    ) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+            if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                raise TransportRefusal("transport_unavailable", 503)
+            raw = await _read_response(response)
+            return response.status_code, dict(response.headers), raw
+
+
+def _authority_exchange_in_worker(
+    url: str, payload: dict[str, str], headers: dict[str, str]
+) -> tuple[int, dict[str, str], bytes]:
+    return asyncio.run(_authority_exchange(url, payload, headers))
 
 
 async def shutdown_authority_client() -> None:
-    """Best-effort process teardown, never invoked by a lifecycle callback."""
-    global _AUTHORITY_CLIENT
-    client, _AUTHORITY_CLIENT = _AUTHORITY_CLIENT, None
-    if client is not None:
-        try:
-            await asyncio.wait_for(client.aclose(), timeout=2.0)
-        except Exception:
-            logger.warning("[local_browser_transport] authority client shutdown incomplete")
+    """Stop accepting new checks when the desktop application shuts down."""
+    _AUTHORITY_WORKERS.shutdown(wait=False, cancel_futures=True)
 
 
 class TransportRefusal(Exception):
@@ -532,28 +542,28 @@ async def _verify(
         "Accept-Encoding": "identity",
     }
     try:
-        async with asyncio.timeout(5.0):
-            client = _authority_client()
-            async with client.stream(
-                "POST",
+        if not _AUTHORITY_SLOTS.acquire(blocking=False):
+            raise TransportRefusal("transport_unavailable", 503)
+        try:
+            task = _AUTHORITY_WORKERS.submit(
+                _authority_exchange_in_worker,
                 f"{_base_url()}/browser-manager/local/transport/verify",
-                json=payload,
-                headers=headers,
-            ) as response:
-                if (
-                    response.headers.get("content-encoding", "identity")
-                    .strip()
-                    .lower()
-                    != "identity"
-                ):
-                    raise TransportRefusal("transport_unavailable", 503)
-                raw = await _read_response(response)
+                payload,
+                headers,
+            )
+        except Exception:
+            _AUTHORITY_SLOTS.release()
+            raise
+        task.add_done_callback(lambda _task: _AUTHORITY_SLOTS.release())
+        status_code, response_headers, raw = await asyncio.wait_for(
+            asyncio.wrap_future(task), timeout=5.0
+        )
     except Exception as exc:
         raise TransportRefusal("transport_unavailable", 503) from exc
-    if response.headers.get("cache-control", "").lower().find("no-store") < 0:
+    if response_headers.get("cache-control", "").lower().find("no-store") < 0:
         raise TransportRefusal("transport_unavailable", 503)
     value = _strict_response_json(raw)
-    if response.status_code != 200:
+    if status_code != 200:
         raise TransportRefusal("authority_refused", 403)
     required = {
         "status",

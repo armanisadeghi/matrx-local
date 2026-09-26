@@ -24,3 +24,19 @@ require("node:child_process").execFileSync(
   ["scripts/build-native-vault-provider.sh"],
   { stdio: "inherit" },
 );
+
+const safariMode = process.env.MATRX_SAFARI_WEB_EXTENSION;
+if (safariMode === undefined || safariMode === "absent") {
+  process.exit(0);
+}
+if (safariMode !== "sealed") {
+  throw new Error(
+    "MATRX_SAFARI_WEB_EXTENSION must be sealed, absent, or unset",
+  );
+}
+
+require("node:child_process").execFileSync(
+  "bash",
+  ["scripts/build-safari-web-extension.sh"],
+  { stdio: "inherit" },
+);

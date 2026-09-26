@@ -225,3 +225,7 @@ desktop/src-tauri/macos-helpers/
 # Development-only signed Safari containing app. Built by
 # scripts/build-safari-test-app.sh; never a Tauri release input.
 .safari-test-app/
+
+# Release-preparation output from the pinned public Matrx Extend source. The
+# signed bundle is copied into the Tauri macOS app only by the release overlay.
+desktop/safari-web-extension/

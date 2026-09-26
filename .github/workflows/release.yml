@@ -604,6 +604,8 @@ jobs:
           MATRX_NATIVE_VAULT_PROVIDER: ${{ env.MATRX_NATIVE_VAULT_PROVIDER }}
           MATRX_APPLE_SIGNING_IDENTITY: ${{ env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           MATRX_VAULT_PROVIDER_PROFILE_FILE: ${{ env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && format('{0}/vault-provider.provisionprofile', runner.temp) || '' }}
+          MATRX_SAFARI_WEB_EXTENSION: ${{ matrix.platform == 'macos-15' && 'sealed' || 'absent' }}
+          MATRX_SAFARI_EXTENSION_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-15' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           # macOS notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}

@@ -7,12 +7,12 @@ const vm = require("node:vm");
 const hookPath = require.resolve("./build-native-vault-provider-hook.cjs");
 const source = fs.readFileSync(hookPath, "utf8");
 
-function runHook(platform) {
-  let buildCalls = 0;
+function runHook(platform, environment = {}) {
+  const buildCalls = [];
   const sandbox = {
     console: { log() {} },
     process: {
-      env: { TAURI_ENV_PLATFORM: platform },
+      env: { TAURI_ENV_PLATFORM: platform, ...environment },
       exit(code) {
         const error = new Error(`exit:${code}`);
         error.exitCode = code;
@@ -23,10 +23,9 @@ function runHook(platform) {
       assert.equal(id, "node:child_process");
       return {
         execFileSync(command, args) {
-          buildCalls += 1;
+          buildCalls.push(args[0]);
           assert.equal(command, "bash");
           assert.equal(args.length, 1);
-          assert.equal(args[0], "scripts/build-native-vault-provider.sh");
         },
       };
     },
@@ -40,9 +39,13 @@ function runHook(platform) {
   return buildCalls;
 }
 
-assert.equal(runHook("darwin"), 1, "Tauri's darwin target must build the provider");
-assert.equal(runHook("macos"), 1, "the macos target alias must build the provider");
-assert.equal(runHook("windows"), 0, "non-macOS targets must skip the provider");
-assert.equal(runHook("linux"), 0, "non-macOS targets must skip the provider");
+assert.deepEqual(runHook("darwin"), ["scripts/build-native-vault-provider.sh"], "Tauri's darwin target must build the provider");
+assert.deepEqual(runHook("macos"), ["scripts/build-native-vault-provider.sh"], "the macos target alias must build the provider");
+assert.deepEqual(runHook("darwin", { MATRX_NATIVE_VAULT_PROVIDER: "absent" }), [], "the host-only build must skip the provider");
+assert.deepEqual(runHook("darwin", { MATRX_SAFARI_WEB_EXTENSION: "sealed" }), ["scripts/build-native-vault-provider.sh", "scripts/build-safari-web-extension.sh"], "the sealed release must build both nested extensions");
+assert.deepEqual(runHook("darwin", { MATRX_SAFARI_WEB_EXTENSION: "absent" }), ["scripts/build-native-vault-provider.sh"], "the explicit Safari-absent mode must preserve ordinary builds");
+assert.throws(() => runHook("darwin", { MATRX_SAFARI_WEB_EXTENSION: "unexpected" }), /must be sealed/);
+assert.deepEqual(runHook("windows"), [], "non-macOS targets must skip the provider");
+assert.deepEqual(runHook("linux"), [], "non-macOS targets must skip the provider");
 
 console.log("native Vault provider hook platform checks passed");

@@ -23,8 +23,10 @@
 #      entitlement AND actually EXECUTES (exit 137 = AMFI SIGKILL)
 #   4. Native Vault provider has its own bundle identity, capability/profile,
 #      and never grants its provider-only Keychain group to the host
-#   5. spctl --assess (Gatekeeper accepts the app as notarized Developer ID)
-#   6. xcrun stapler validate (notarization ticket stapled)
+#   5. Native Vault provider remains a distinct app extension with its profile
+#   6. Safari Web Extension is present, independently signed, and pinned
+#   7. spctl --assess (Gatekeeper accepts the app as notarized Developer ID)
+#   8. xcrun stapler validate (notarization ticket stapled)
 #
 # Exit non-zero on any failure — in release.yml that keeps the draft release
 # unpublished.
@@ -66,6 +68,7 @@ echo "    Expected identifier: $PARENT_IDENTIFIER"
 HELPER_APP="$APP_PATH/Contents/Frameworks/Matrx Engine.app"
 [[ -d "$HELPER_APP" ]] || { echo "ERROR: nested helper missing at $HELPER_APP" >&2; exit 1; }
 VAULT_PROVIDER="$APP_PATH/Contents/PlugIns/AI Matrx Vault Provider.appex"
+SAFARI_EXTENSION="$APP_PATH/Contents/PlugIns/Matrx Extend Safari.appex"
 # Release CI sets MATRX_NATIVE_VAULT_PROVIDER=absent when the provider's
 # profiles were not supplied: the host then ships without the provider and an
 # unverified provider must not be present. Any other value keeps the provider
@@ -238,14 +241,20 @@ python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
 python3 "$REPO_ROOT/scripts/verify-apple-provisioning-profile.py" \
     --kind provider --profile "$PROVIDER_PROFILE" --code "$VAULT_PROVIDER"
 echo "    ✅ provider bundle, typed entitlement split, profiles, and signed certificates verified"
+
+# The Safari extension is separately signed before Tauri copies it as a custom
+# macOS bundle file. Its Developer ID contract deliberately has no profile and
+# is independent from the native Vault provider's profile-backed capability.
+echo "--- [6/8] Safari Web Extension boundary"
+"$REPO_ROOT/scripts/verify-safari-web-extension.sh" "$SAFARI_EXTENSION"
 fi
 
-# 6. Gatekeeper acceptance — proves notarization is visible to the OS.
-echo "--- [6/7] spctl --assess"
+# 7. Gatekeeper acceptance — proves notarization is visible to the OS.
+echo "--- [7/8] spctl --assess"
 spctl --assess --type execute -vv "$APP_PATH"
 
-# 7. Notarization ticket stapled to the artifact users download.
-echo "--- [7/7] stapler validate"
+# 8. Notarization ticket stapled to the artifact users download.
+echo "--- [8/8] stapler validate"
 xcrun stapler validate "$APP_PATH"
 
 echo "=== ✅ artifact verification passed"

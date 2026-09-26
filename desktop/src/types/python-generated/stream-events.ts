@@ -29,6 +29,7 @@ export const EventType = {
   INJECTION_CONSUMED: "injection_consumed",
   PROVIDER_RETRY: "provider_retry",
   CITATION: "citation",
+  CONTROL_TOKEN: "control_token",
 } as const;
 
 export type EventType = (typeof EventType)[keyof typeof EventType];
@@ -80,6 +81,12 @@ export interface ChunkPayload {
 export interface CitationPayload {
   block_index?: number | null;
   citation: Record<string, unknown>;
+}
+
+export interface ControlTokenPayload {
+  name: string;
+  value: string;
+  declared_by?: string | null;
 }
 
 export interface ReasoningChunkPayload {
@@ -382,7 +389,6 @@ export interface AudioOutputData {
   mime_type: string;
   file_id?: string | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
 }
 
@@ -406,7 +412,6 @@ export interface AudioStreamEndData {
   mime_type?: string;
   file_id?: string | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
   duration_ms?: number | null;
   sample_rate?: number;
@@ -440,6 +445,22 @@ export interface ClaudeManagedWarningData {
   code: string;
   runtime_id: string;
   session_id: string;
+}
+
+export interface CmsLogoFoundData {
+  type?: "cms_logo_found";
+  site_id: string;
+  found: boolean;
+  message: string;
+  asset_id?: string | null;
+  asset_url?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  width?: number | null;
+  height?: number | null;
+  mime_type?: string | null;
+  candidates_considered?: number;
+  rejected?: string[];
 }
 
 export interface ContextChangedData {
@@ -509,6 +530,58 @@ export interface ConversationLabeledData {
   title: string;
   description?: string;
   keywords?: string[];
+}
+
+export interface CutoverCopyAgainProgressData {
+  type?: "cutover_copy_again_progress";
+  organization_id: string;
+  table_id?: string | null;
+  table_name: string;
+  done: number;
+  total: number;
+  refused?: string | null;
+  says: string;
+}
+
+export interface CutoverCopyAgainReportData {
+  type?: "cutover_copy_again_report";
+  organization_id: string;
+  organization_name: string;
+  table_id?: string | null;
+  table_name?: string | null;
+  ok: boolean;
+  tables: number;
+  tables_refused?: string[];
+  rows_written?: number;
+  carried?: Record<string, number>;
+  named?: string[];
+  says: string;
+}
+
+export interface DecisionAnswerBlock {
+  __kind?: "decision_answer";
+  type: "noul" | "choice" | "score";
+  answer: boolean | number | string;
+  probability?: number | null;
+  probabilities?: Record<string, number> | null;
+  confidence: number;
+  legend?: Record<string, string> | null;
+}
+
+export interface DecisionUsageBlock {
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface DecisionAnswersData {
+  type?: "decision_answers";
+  __kind: "decision_answers";
+  model: string;
+  method: "native" | "verbalized" | "verbalized_calibrated";
+  answers?: Record<string, DecisionAnswerBlock>;
+  unanswerable?: Record<string, string>;
+  usage: DecisionUsageBlock;
+  cost_usd: number;
 }
 
 export interface DictionaryPublishCompleteData {
@@ -714,7 +787,6 @@ export interface ImageOutputData {
   mime_type: string;
   file_id?: string | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
 }
 
@@ -758,13 +830,20 @@ export interface ImageStudioVariantData {
   height?: number | null;
   quality?: number | null;
   size?: number | null;
-  signed_url?: string | null;
+  ephemeral_url?: string | null;
   expires_in?: number | null;
   compression_ratio?: number | null;
   notes?: string[];
   error?: string | null;
   completed?: number;
   total?: number;
+}
+
+export interface MediaSelectionJobProgressData {
+  type?: "job.progress";
+  job_id: string;
+  at: string;
+  totals?: Record<string, number>;
 }
 
 export interface LegalSyncEventData {
@@ -800,6 +879,124 @@ export interface LegalSyncEventData {
   error?: string | null;
 }
 
+export interface LibrarySyncClassifiedData {
+  type?: "library.sync.classified";
+  library_id: string;
+  seq: number;
+  at: string;
+  classifications?: Record<string, JsonValue>[];
+  from_cache: boolean;
+}
+
+export interface LibrarySyncCompletedData {
+  type?: "library.sync.completed";
+  library_id: string;
+  seq: number;
+  at: string;
+  total_listed: number;
+  elapsed_ms: number;
+  listed_ms: number;
+  quota_units_spent: number;
+  metrics?: Record<string, JsonValue>;
+  removed_count?: number;
+  retire_refused?: boolean;
+  skipped_by_reason?: Record<string, number>;
+  skipped_total?: number;
+}
+
+export interface LibrarySyncFailedData {
+  type?: "library.sync.failed";
+  library_id: string;
+  seq: number;
+  at: string;
+  code: string;
+  message: string;
+  partial_total?: number;
+  retryable?: boolean;
+}
+
+export interface LibrarySyncListedData {
+  type?: "library.sync.listed";
+  library_id: string;
+  seq: number;
+  at: string;
+  total_listed: number;
+  elapsed_ms: number;
+  deciding: number;
+  skipped_by_reason?: Record<string, number>;
+  skipped_total?: number;
+}
+
+export interface LibrarySyncPageData {
+  type?: "library.sync.page";
+  library_id: string;
+  seq: number;
+  at: string;
+  page_index: number;
+  page_size: number;
+  cumulative: number;
+  next_page_token_present: boolean;
+  videos?: Record<string, JsonValue>[];
+}
+
+export interface LibrarySyncPersistedData {
+  type?: "library.sync.persisted";
+  library_id: string;
+  seq: number;
+  at: string;
+  ids?: Record<string, string>;
+  count: number;
+}
+
+export interface LibrarySyncStartedData {
+  type?: "library.sync.started";
+  library_id: string;
+  seq: number;
+  at: string;
+  mode: string;
+  expected_total?: number | null;
+}
+
+export interface LibrarySyncUnavailableData {
+  type?: "library.sync.unavailable";
+  library_id: string;
+  seq: number;
+  at: string;
+  code: string;
+  message: string;
+  remedy?: string | null;
+  partial_total?: number;
+}
+
+export interface MasterworkAuditionOutcomeVerdictData {
+  type?: "masterwork_audition_outcome_verdict";
+  rulebook_id: string;
+  case_id: string;
+  run_scope: string;
+  verdict: string;
+  why?: string;
+  summary?: string;
+  judge_confidence?: number | null;
+  dangerous_branch?: boolean;
+  dangerous_branch_quote?: string;
+  decisive_question_seq?: number | null;
+  missed_cheaper_question?: string;
+  disclosures?: number;
+  asks?: number;
+  cost_points?: number;
+  risk_points?: number;
+  quality_score?: number | null;
+  weights?: Record<string, number>;
+  vanilla_compared?: boolean;
+  vanilla_verdict?: string | null;
+  vanilla_answer?: string | null;
+  vanilla_score?: number | null;
+  vanilla_model?: string | null;
+  vanilla_error?: string | null;
+  beat_vanilla?: boolean | null;
+  verdict_sentence?: string | null;
+}
+
 export interface MasterworkAuditionProgressData {
   type?: "masterwork_audition_progress";
   step: string;
@@ -829,11 +1026,64 @@ export interface MasterworkAuditionVerdictData {
   vanilla_findings?: AuditionRuleFinding[];
   vanilla_text?: string | null;
   vanilla_model?: string | null;
+  vanilla_note?: string | null;
   vanilla_error?: string | null;
   beat_vanilla_rules?: number | null;
   lost_to_vanilla_rules?: number | null;
   vanilla_rules_compared?: number | null;
   verdict_sentence?: string | null;
+}
+
+export interface MasterworkBenchArmData {
+  type?: "masterwork_bench_arm";
+  rulebook_id: string;
+  trial_id: string;
+  arm: string;
+  label: string;
+  ran?: boolean;
+  error?: string;
+  cost_usd?: number;
+  seconds?: number;
+  priced?: boolean;
+  model?: string;
+  note?: string;
+}
+
+export interface MasterworkBenchProgressData {
+  type?: "masterwork_bench_progress";
+  rulebook_id: string;
+  trial_id: string;
+  stage: string;
+  message: string;
+  arm?: string;
+}
+
+export interface MasterworkBenchVerdictData {
+  type?: "masterwork_bench_verdict";
+  rulebook_id: string;
+  trial_id: string;
+  passed?: boolean;
+  void?: boolean;
+  not_scored?: boolean;
+  void_reason?: string;
+  not_scored_reason?: string;
+  win_claimed?: string | null;
+  win_rationale?: string;
+  arm?: string;
+  budget_multiple?: number | null;
+  panel_winner?: string | null;
+  panel_votes?: number;
+  gt_in_pool?: boolean;
+  gt_won?: boolean;
+  c_cost_usd?: number | null;
+  c_seconds?: number | null;
+  total_cost_usd?: number;
+  record_path?: string | null;
+  report_path?: string | null;
+  row_id?: string | null;
+  stored?: boolean;
+  storage_note?: string;
+  headline?: string;
 }
 
 export interface MasterworkBuildCompleteData {
@@ -845,6 +1095,7 @@ export interface MasterworkBuildCompleteData {
   rulebook_slug: string;
   rulebook_version: number;
   agent_ids?: string[];
+  submit_label?: string | null;
 }
 
 export interface MasterworkBuildProgressData {
@@ -926,11 +1177,26 @@ export interface MasterworkDumpResourceOutcome {
   token?: string | null;
   id?: string | null;
   url?: string | null;
+  source_key?: string | null;
   title?: string | null;
   status: string;
   rules_added?: number;
   duplicates?: number;
   error?: string | null;
+  note?: string | null;
+  already_distilled?: MasterworkSourceAlreadyDistilled | null;
+  replaced_rules?: number;
+}
+
+export interface MasterworkSourceAlreadyDistilled {
+  source: string;
+  label?: string | null;
+  rules?: number;
+  draft_rules?: number;
+  approved_rules?: number;
+  run_ids?: string[];
+  message: string;
+  can_replace?: boolean;
 }
 
 export interface MasterworkDumpCompleteData {
@@ -942,6 +1208,8 @@ export interface MasterworkDumpCompleteData {
   quotes_verified?: number;
   quotes_unverified?: number;
   resources?: MasterworkDumpResourceOutcome[];
+  already_distilled?: MasterworkSourceAlreadyDistilled[];
+  replaced_rules?: number;
 }
 
 export interface MasterworkDumpProgressData {
@@ -959,6 +1227,15 @@ export interface MasterworkDumpProgressData {
   rules_added_total?: number;
 }
 
+export interface MasterworkSectionYield {
+  index: number;
+  label?: string;
+  words?: number;
+  chunks?: number;
+  rules?: number;
+  second_pass?: boolean;
+}
+
 export interface MasterworkIngestCompleteData {
   type?: "masterwork_ingest_complete";
   rulebook_id: string;
@@ -967,7 +1244,19 @@ export interface MasterworkIngestCompleteData {
   duplicates_skipped?: number;
   quotes_verified?: number;
   quotes_unverified?: number;
+  failed_chunks?: number;
+  skipped_words?: number;
+  packaging_set_aside?: number;
   followup_seed?: string | null;
+  already_distilled?: MasterworkSourceAlreadyDistilled[];
+  replaced_rules?: number;
+  narrowed_rules?: number;
+  corpus_item_id?: string | null;
+  sealed?: boolean;
+  timeline_steps?: number;
+  role?: string | null;
+  timeline?: Record<string, JsonValue> | null;
+  sections?: MasterworkSectionYield[];
 }
 
 export interface MasterworkIngestProgressData {
@@ -979,12 +1268,81 @@ export interface MasterworkIngestProgressData {
   rules_found?: number | null;
 }
 
+export interface MasterworkPairwiseArmFaithfulness {
+  side: string;
+  label: string;
+  rulebook_id: string;
+  verdict: string;
+  reasoning?: string;
+  confidence?: number | null;
+  departures?: MasterworkPairwiseRuleNote[];
+  honored_rule_ids?: string[];
+}
+
+export interface MasterworkPairwiseDifference {
+  aspect: string;
+  one_does?: string;
+  two_does?: string;
+  matters?: string;
+}
+
+export interface MasterworkPairwiseRuleNote {
+  rule_id: string;
+  winner: string;
+  note?: string;
+}
+
+export interface MasterworkPairwiseVerdictData {
+  type?: "masterwork_pairwise_verdict";
+  rulebook_id: string;
+  mode: string;
+  candidate_one_label: string;
+  candidate_two_label: string;
+  preferred?: string | null;
+  preferred_label?: string | null;
+  judge_verdict?: string;
+  judge_confidence?: number | null;
+  summary?: string;
+  differences?: MasterworkPairwiseDifference[];
+  rule_notes?: MasterworkPairwiseRuleNote[];
+  faithfulness?: MasterworkPairwiseArmFaithfulness[];
+  blind_key?: Record<string, string>;
+  blind_key_sealed_at?: string | null;
+  verdict_sentence?: string | null;
+}
+
+export interface MasterworkProbeRoundData {
+  type?: "masterwork_probe_round";
+  rulebook_id: string;
+  rulebook_version?: number;
+  round_index?: number;
+  round_count?: number;
+  done?: boolean;
+  done_reason?: string;
+  example_title?: string;
+  example_body?: string;
+  probe_label?: string;
+  rules_added?: number;
+  rule_ids?: string[];
+  duplicates_skipped?: number;
+  quotes_verified?: number;
+  quotes_unverified?: number;
+  already_distilled?: MasterworkSourceAlreadyDistilled[];
+  answered_rounds?: number;
+}
+
 export interface MasterworkRunData {
   type?: "masterwork_run";
   run_id: string;
   rulebook_id: string;
   operation: string;
   label?: string | null;
+}
+
+export interface MasterworkRunCancelledData {
+  type?: "masterwork_run_cancelled";
+  run_id: string;
+  error?: Record<string, unknown> | null;
 }
 
 export interface MasterworkRunFailedData {
@@ -1006,6 +1364,21 @@ export interface MasterworkRunSnapshotData {
   completed_at?: string | null;
 }
 
+export interface MasterworkSealedCaseDisclosureData {
+  type?: "masterwork_sealed_case_disclosure";
+  case_id: string;
+  run_scope: string;
+  seq: number;
+  event?: string;
+  question?: string;
+  answer?: string;
+  found?: boolean;
+  cost?: string | null;
+  risk?: string | null;
+  asked_kind?: string | null;
+  disclosures_so_far?: number;
+}
+
 export interface MasterworkShortlistItem {
   key: string;
   reason?: string;
@@ -1017,14 +1390,113 @@ export interface MasterworkShortlistData {
   considered?: number;
 }
 
+export interface MasterworkSortCase {
+  id: string;
+  text: string;
+  note?: string;
+}
+
+export interface MasterworkSortCasesReadyData {
+  type?: "masterwork_sort_cases_ready";
+  rulebook_id: string;
+  cases?: MasterworkSortCase[];
+  requested?: number;
+  repeats_dropped?: number;
+  pile_count?: number;
+  boundary_questions?: number;
+  voice_default_on?: boolean;
+}
+
+export interface MasterworkTeachBackRoundData {
+  type?: "masterwork_teach_back_round";
+  rulebook_id: string;
+  rulebook_version?: number;
+  run_id?: string;
+  round_index?: number;
+  round_count?: number;
+  done?: boolean;
+  done_reason?: string;
+  subject?: string;
+  explanation?: string;
+  basis?: string;
+  rule_ids_cited?: string[];
+  uncertain_part?: string;
+  distilled_round?: number;
+  rules_added?: number;
+  rule_ids?: string[];
+  duplicates_skipped?: number;
+  quotes_verified?: number;
+  quotes_unverified?: number;
+  signed_rule_ids?: string[];
+  signature_note?: string;
+  already_distilled?: MasterworkSourceAlreadyDistilled[];
+  answered_rounds?: number;
+}
+
+export interface MasterworkTriad {
+  id: string;
+  prompt: string;
+  items?: MasterworkTriadItem[];
+  mode?: string;
+}
+
+export interface MasterworkTriadItem {
+  key: string;
+  text: string;
+  note?: string;
+}
+
+export interface MasterworkTriadsReadyData {
+  type?: "masterwork_triads_ready";
+  rulebook_id: string;
+  triads?: MasterworkTriad[];
+  mode?: string;
+  requested?: number;
+  repeats_dropped?: number;
+  voice_default_on?: boolean;
+}
+
+export interface MasterworkTriageDecision {
+  rule_id: string;
+  name?: string;
+  verdict?: string;
+  reason?: string;
+  statement?: string;
+}
+
+export interface MasterworkTriageCompleteData {
+  type?: "masterwork_triage_complete";
+  rulebook_id: string;
+  rulebook_version: number;
+  drafts_considered?: number;
+  retired?: number;
+  kept?: number;
+  rewritten?: number;
+  refused?: string[];
+  failed_batches?: number;
+  drafts_unreviewed?: number;
+  dry_run?: boolean;
+  decisions?: MasterworkTriageDecision[];
+}
+
+export interface MasterworkTriageProgressData {
+  type?: "masterwork_triage_progress";
+  step: string;
+  message: string;
+  batch_index?: number | null;
+  batch_count?: number | null;
+  drafts_total?: number;
+  retired?: number;
+  kept?: number;
+  rewritten?: number;
+}
+
 export interface AudioBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
-  signed_url_expires_at?: number | null;
   parent_file_id?: string | null;
   derivation_kind?: string | null;
   external_url?: string | null;
@@ -1047,9 +1519,7 @@ export interface DocumentBlock {
   file_id?: string | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
-  signed_url_expires_at?: number | null;
   parent_file_id?: string | null;
   derivation_kind?: string | null;
   external_url?: string | null;
@@ -1072,9 +1542,7 @@ export interface ImageBlock {
   file_id?: string | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
-  signed_url_expires_at?: number | null;
   parent_file_id?: string | null;
   derivation_kind?: string | null;
   external_url?: string | null;
@@ -1098,9 +1566,7 @@ export interface VideoBlock {
   file_id?: string | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
-  signed_url_expires_at?: number | null;
   parent_file_id?: string | null;
   derivation_kind?: string | null;
   external_url?: string | null;
@@ -1125,9 +1591,7 @@ export interface YouTubeBlock {
   file_id?: string | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
-  signed_url_expires_at?: number | null;
   parent_file_id?: string | null;
   derivation_kind?: string | null;
   external_url?: string | null;
@@ -1595,6 +2059,58 @@ export interface PodcastTickEvent {
   total?: number;
 }
 
+export interface ProofEvaluatedData {
+  type?: "proof_evaluated";
+  run_id: string;
+  proof_id: string;
+  title: string;
+  status: "passed" | "failed" | "skipped";
+  required?: boolean;
+  detail?: string;
+  observed?: Record<string, JsonValue>;
+}
+
+export interface ProofRunCompletedData {
+  type?: "proof_run_completed";
+  run_id: string;
+  slug: string;
+  mode: "live" | "replay";
+  verdict: "pass" | "fail" | "inconclusive";
+  strength: "live_receipts" | "replay_only";
+  summary?: string;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  cost_usd?: number;
+  total_tokens?: number;
+  provider_calls?: number;
+  duration_ms?: number;
+}
+
+export interface ProofRunSkippedData {
+  type?: "proof_run_skipped";
+  slug: string;
+  reason: string;
+  month_to_date_usd?: number;
+}
+
+export interface ProofRunStartedData {
+  type?: "proof_run_started";
+  run_id: string;
+  slug: string;
+  label?: string;
+  mode: "live" | "replay";
+  gate_reason?: string;
+  conversation_id?: string | null;
+}
+
+export interface ProofRunStepData {
+  type?: "proof_run_step";
+  run_id: string;
+  message: string;
+  step?: number;
+}
+
 export interface RagVerifyClaimsData {
   type?: "rag_verify_claims";
   claims?: string[];
@@ -1672,7 +2188,6 @@ export interface VideoOutputData {
   mime_type: string;
   file_id?: string | null;
   cdn_url?: string | null;
-  signed_url?: string | null;
   download_url?: string | null;
 }
 
@@ -1702,6 +2217,7 @@ export type TypedDataPayload =
   | CategorizationResultData
   | ClaudeManagedSdkMessageData
   | ClaudeManagedWarningData
+  | CmsLogoFoundData
   | ContextChangedData
   | ContextConflictData
   | ContextDeltaData
@@ -1709,6 +2225,9 @@ export type TypedDataPayload =
   | ContextPersistedData
   | ConversationIdData
   | ConversationLabeledData
+  | CutoverCopyAgainProgressData
+  | CutoverCopyAgainReportData
+  | DecisionAnswersData
   | DictionaryPublishCompleteData
   | ExtractionIndexCompleteData
   | ExtractionIndexProgressData
@@ -1730,8 +2249,20 @@ export type TypedDataPayload =
   | ImageStudioProcessCompleteData
   | ImageStudioVariantData
   | LegalSyncEventData
+  | LibrarySyncClassifiedData
+  | LibrarySyncCompletedData
+  | LibrarySyncFailedData
+  | LibrarySyncListedData
+  | LibrarySyncPageData
+  | LibrarySyncPersistedData
+  | LibrarySyncStartedData
+  | LibrarySyncUnavailableData
+  | MasterworkAuditionOutcomeVerdictData
   | MasterworkAuditionProgressData
   | MasterworkAuditionVerdictData
+  | MasterworkBenchArmData
+  | MasterworkBenchProgressData
+  | MasterworkBenchVerdictData
   | MasterworkBuildCompleteData
   | MasterworkBuildProgressData
   | MasterworkCheckupCompleteData
@@ -1743,12 +2274,22 @@ export type TypedDataPayload =
   | MasterworkDumpProgressData
   | MasterworkIngestCompleteData
   | MasterworkIngestProgressData
+  | MasterworkPairwiseVerdictData
+  | MasterworkProbeRoundData
+  | MasterworkRunCancelledData
   | MasterworkRunData
   | MasterworkRunFailedData
   | MasterworkRunSnapshotData
+  | MasterworkSealedCaseDisclosureData
   | MasterworkShortlistData
+  | MasterworkSortCasesReadyData
+  | MasterworkTeachBackRoundData
+  | MasterworkTriadsReadyData
+  | MasterworkTriageCompleteData
+  | MasterworkTriageProgressData
   | MediaBlockData
   | MediaNoticeData
+  | MediaSelectionJobProgressData
   | MemoryBufferSpawnedData
   | MemoryContextInjectedData
   | MemoryErrorData
@@ -1790,6 +2331,11 @@ export type TypedDataPayload =
   | PodcastStageEvent
   | PodcastStageStartedEvent
   | PodcastTickEvent
+  | ProofEvaluatedData
+  | ProofRunCompletedData
+  | ProofRunSkippedData
+  | ProofRunStartedData
+  | ProofRunStepData
   | QuestionnaireDisplayData
   | RagVerifyClaimsData
   | RagVerifyResultData
@@ -1860,11 +2406,16 @@ export interface KeywordClassifyResult {
   updated?: number;
   skipped_error?: number;
   missing_keyword_ids?: string[];
+  facet_dimensions?: string[];
+  facet_dimensions_skipped?: string[];
+  facet_rows_written?: number;
+  rejected_unknown_value?: string[];
 }
 
 export interface KeywordResearchArtifact {
+  __kind?: "keyword_relationship_research";
   primary_keyword: string;
-  keyword_lists?: KeywordResearchList[];
+  keyword_lists: KeywordResearchList[];
 }
 
 export interface KeywordResearchIngestSummary {
@@ -1874,11 +2425,13 @@ export interface KeywordResearchIngestSummary {
   edges_written?: number;
   edges_skipped_rejected?: number;
   edges_skipped_self?: number;
+  site_keyword_values_created?: number;
 }
 
 export interface KeywordResearchList {
+  __kind?: "keyword_list";
   label: string;
-  keywords?: string[];
+  keywords: string[];
 }
 
 export interface KeywordVolumeBatchFailure {
@@ -1913,6 +2466,7 @@ export interface KeywordVolumeRejectedPhrase {
 export interface KeywordResearchResult {
   result_kind?: "keywords.relationship_research";
   primary_keyword: string;
+  site_id: string;
   research_doc_id: string;
   artifact: KeywordResearchArtifact;
   ingest: KeywordResearchIngestSummary;
@@ -2427,7 +2981,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2437,7 +2991,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2489,7 +3043,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -2499,7 +3053,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "high" | "medium" | "low" | null;
+  priority?: "low" | "medium" | "high" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -3336,6 +3890,14 @@ export interface SearchReplaceRenderData {
   language?: string | null;
 }
 
+export interface DirectiveReceiptRenderData {
+  directive: string;
+  outcome: "proposed" | "applied" | "already_applied" | "failed" | "blocked";
+  message: string;
+  resource_kind?: string;
+  resource_ids?: string[];
+}
+
 export interface UnknownDataEventData {
   [key: string]: unknown;
   _dataType: string;
@@ -3349,7 +3911,7 @@ export interface AudioOutputRenderBlock {
   metadata?: Record<string, unknown>;
 }
 
-/** Image output from the AI. Display priority: cdn_url → file handler (via file_id) → signed_url → url. */
+/** Image output from the AI. Display priority: cdn_url → file handler (via file_id) → url (durable). */
 export interface ImageOutputRenderBlock {
   type: "image_output";
   content: string;
@@ -3386,6 +3948,15 @@ export interface CategorizationResultRenderBlock {
   type: "categorization_result";
   content: string;
   data: CategorizationResultData;
+  metadata?: Record<string, unknown>;
+}
+
+/** A decision turn's answers — registered kind `decision_answers`. The LIVE arrival of the same part the assistant message persists, so a runner or a battle column shows the decision as it lands instead of only after a reload. `content` is null: the frontend commits the payload as a real `decision_answers` message part (the same part the server persists), never as reconstructed markdown. */
+export interface DecisionAnswersRenderBlock {
+  type: "decision_answers";
+  /** Always null — a non-null content would leak into committed message parts. The payload lives on `data`. */
+  content: null;
+  data: DecisionAnswersData;
   metadata?: Record<string, unknown>;
 }
 
@@ -3479,6 +4050,15 @@ export interface SearchReplaceRenderBlock {
   metadata?: Record<string, unknown>;
 }
 
+/** Kind Directive apply receipt — FE-synthesized from the kind-discriminated directive_apply.* events. Carries the SERVER's own sentence for the outcome (created / already applied / proposed / failed / blocked); never composed client-side. Never persisted to cx_message.content. */
+export interface DirectiveReceiptRenderBlock {
+  type: "directive_receipt";
+  /** Always null — a non-null content would leak into committed message parts. The payload lives on `data`. */
+  content: null;
+  data: DirectiveReceiptRenderData;
+  metadata?: Record<string, unknown>;
+}
+
 /** Fallback for data events whose type is not recognized; _dataType preserves the original type string. */
 export interface UnknownDataEventRenderBlock {
   type: "unknown_data_event";
@@ -3498,10 +4078,11 @@ export type ServerProtocolRenderBlock =
   | ScrapeBatchCompleteRenderBlock
   | ValueStoreStoredRenderBlock
   | ContextGroomedRenderBlock
-  | SearchReplaceRenderBlock;
+  | SearchReplaceRenderBlock
+  | DirectiveReceiptRenderBlock;
 
 export const SERVER_PROTOCOL_RENDER_BLOCK_TYPES = new Set<string>([
-  "function_result", "workflow_step", "search_error", "structured_input_warning", "podcast_stage", "podcast_complete", "scrape_batch_complete", "value_store_stored", "context_groomed", "search_replace",
+  "function_result", "workflow_step", "search_error", "structured_input_warning", "podcast_stage", "podcast_complete", "scrape_batch_complete", "value_store_stored", "context_groomed", "search_replace", "directive_receipt",
 ]);
 
 /** Generated-media delivery blocks — generic media primitives. */
@@ -3519,10 +4100,11 @@ export type ServerShapeRenderBlock =
   | SearchResultsRenderBlock
   | FetchResultsRenderBlock
   | CategorizationResultRenderBlock
+  | DecisionAnswersRenderBlock
   | DisplayQuestionnaireRenderBlock;
 
 export const SERVER_SHAPE_RENDER_BLOCK_TYPES = new Set<string>([
-  "search_results", "fetch_results", "categorization_result", "display_questionnaire",
+  "search_results", "fetch_results", "categorization_result", "decision_answers", "display_questionnaire",
 ]);
 
 /** Deliberately untyped catch-alls. */
@@ -3607,10 +4189,14 @@ export type ImageMediaPart = {
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
+  visibility?: string | null;
+  cdn_url?: string | null;
   type: "media";
   kind: "image";
   width?: number | null;
   height?: number | null;
+  role?: "subject" | "character" | "style" | "mask" | "edit_target" | "composition_control" | "first_frame" | "last_frame" | "asset" | null;
+  name?: string | null;
 } & ({
   url: string;
 } | {
@@ -3624,10 +4210,13 @@ export type AudioMediaPart = {
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
+  visibility?: string | null;
+  cdn_url?: string | null;
   type: "media";
   kind: "audio";
   duration_ms?: number | null;
   transcription_result?: string | null;
+  role?: "lip_sync" | null;
 } & ({
   url: string;
 } | {
@@ -3641,11 +4230,15 @@ export type VideoMediaPart = {
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
+  visibility?: string | null;
+  cdn_url?: string | null;
   type: "media";
   kind: "video";
   width?: number | null;
   height?: number | null;
   duration_ms?: number | null;
+  role?: "extend" | "restyle" | null;
+  name?: string | null;
 } & ({
   url: string;
 } | {
@@ -3659,6 +4252,8 @@ export type DocumentMediaPart = {
   url?: string | null;
   mime_type?: string | null;
   size_bytes?: number | null;
+  visibility?: string | null;
+  cdn_url?: string | null;
   type: "media";
   kind: "document";
   width?: number | null;
@@ -3997,6 +4592,66 @@ export interface ContextInputPart {
   editable?: boolean | null;
 }
 
+export interface DecisionQuestion {
+  __kind?: string;
+  name: string;
+  type: "noul" | "choice" | "score";
+  instructions: string;
+  criteria?: Record<string, string> | string[] | null;
+  suggested_threshold?: number | null;
+}
+
+export interface DecisionQuestionsPart {
+  metadata?: Record<string, unknown>;
+  type: "decision_questions";
+  __kind: "decision_questions";
+  questions: DecisionQuestion[];
+}
+
+export interface DecisionAnswer {
+  __kind?: "decision_answer";
+  type: "noul" | "choice" | "score";
+  answer: boolean | number | string;
+  probability?: number | null;
+  probabilities?: Record<string, number> | null;
+  confidence: number;
+  legend?: Record<string, string> | null;
+}
+
+export interface DecisionUsage {
+  __kind?: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface DecisionAnswersPart {
+  metadata?: Record<string, unknown>;
+  type: "decision_answers";
+  __kind: "decision_answers";
+  model: string;
+  method: "native" | "verbalized" | "verbalized_calibrated";
+  answers?: Record<string, DecisionAnswer>;
+  unanswerable?: Record<string, string>;
+  usage: DecisionUsage;
+  cost_usd: number;
+}
+
+export interface SpeechTurn {
+  __kind?: string;
+  speaker: string;
+  voice?: string | null;
+  text: string;
+  direction?: string | null;
+  pause_after_ms?: number | null;
+}
+
+export interface SpeechScriptPart {
+  metadata?: Record<string, unknown>;
+  type: "speech_script";
+  __kind: "speech_script";
+  turns: SpeechTurn[];
+}
+
 export type MessagePart =
   | TextPart
   | ThinkingPart
@@ -4023,7 +4678,10 @@ export type MessagePart =
   | TableInputPart
   | ListInputPart
   | DataInputPart
-  | ContextInputPart;
+  | ContextInputPart
+  | DecisionQuestionsPart
+  | DecisionAnswersPart
+  | SpeechScriptPart;
 
 interface MessagePartJsonSchema {
   [key: string]: unknown;
@@ -4299,6 +4957,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           "default": null,
           "title": "Size Bytes"
         },
+        "visibility": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visibility"
+        },
+        "cdn_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdn Url"
+        },
         "type": {
           "const": "media",
           "default": "media",
@@ -4334,6 +5016,19 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           ],
           "default": null,
           "title": "Transcription Result"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "const": "lip_sync",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
         }
       },
       "required": [
@@ -4749,6 +5444,304 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "title": "DbRecordRef",
       "type": "object"
     },
+    "DecisionAnswer": {
+      "additionalProperties": false,
+      "description": "One answer, with the holder's own uncertainty attached.",
+      "properties": {
+        "__kind": {
+          "const": "decision_answer",
+          "default": "decision_answer",
+          "description": "The registered kind this payload is an instance of.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "noul",
+            "choice",
+            "score"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Answer"
+        },
+        "probability": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probability"
+        },
+        "probabilities": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probabilities"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "legend": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Legend"
+        }
+      },
+      "required": [
+        "type",
+        "answer",
+        "confidence"
+      ],
+      "title": "DecisionAnswer",
+      "type": "object"
+    },
+    "DecisionAnswersPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "decision_answers",
+          "default": "decision_answers",
+          "title": "Type",
+          "type": "string"
+        },
+        "__kind": {
+          "const": "decision_answers",
+          "default": "decision_answers",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "method": {
+          "enum": [
+            "native",
+            "verbalized",
+            "verbalized_calibrated"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "answers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DecisionAnswer"
+          },
+          "title": "Answers",
+          "type": "object"
+        },
+        "unanswerable": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unanswerable",
+          "type": "object"
+        },
+        "usage": {
+          "$ref": "#/$defs/DecisionUsage"
+        },
+        "cost_usd": {
+          "minimum": 0.0,
+          "title": "Cost Usd",
+          "type": "number"
+        }
+      },
+      "required": [
+        "model",
+        "method",
+        "usage",
+        "cost_usd",
+        "type"
+      ],
+      "title": "DecisionAnswersPart",
+      "type": "object"
+    },
+    "DecisionQuestion": {
+      "additionalProperties": false,
+      "description": "One question. Not a kind: it has no meaning outside its batch.",
+      "properties": {
+        "__kind": {
+          "default": "",
+          "description": "The registered kind this payload is an instance of, when it is one.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "noul",
+            "choice",
+            "score"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "instructions": {
+          "minLength": 1,
+          "title": "Instructions",
+          "type": "string"
+        },
+        "criteria": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria"
+        },
+        "suggested_threshold": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Threshold"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "instructions"
+      ],
+      "title": "DecisionQuestion",
+      "type": "object"
+    },
+    "DecisionQuestionsPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "decision_questions",
+          "default": "decision_questions",
+          "title": "Type",
+          "type": "string"
+        },
+        "__kind": {
+          "const": "decision_questions",
+          "default": "decision_questions",
+          "title": "Kind",
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/DecisionQuestion"
+          },
+          "minItems": 1,
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "questions",
+        "type"
+      ],
+      "title": "DecisionQuestionsPart",
+      "type": "object"
+    },
+    "DecisionUsage": {
+      "additionalProperties": false,
+      "description": "What the decision call consumed. Zero is a real value, never a stand-in.",
+      "properties": {
+        "__kind": {
+          "default": "",
+          "description": "The registered kind this payload is an instance of, when it is one.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "title": "DecisionUsage",
+      "type": "object"
+    },
     "DocumentInputPart": {
       "additionalProperties": false,
       "properties": {
@@ -4930,6 +5923,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           ],
           "default": null,
           "title": "Size Bytes"
+        },
+        "visibility": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visibility"
+        },
+        "cdn_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdn Url"
         },
         "type": {
           "const": "media",
@@ -5153,6 +6170,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           "default": null,
           "title": "Size Bytes"
         },
+        "visibility": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visibility"
+        },
+        "cdn_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdn Url"
+        },
         "type": {
           "const": "media",
           "default": "media",
@@ -5188,6 +6229,41 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           ],
           "default": null,
           "title": "Height"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "subject",
+                "character",
+                "style",
+                "mask",
+                "edit_target",
+                "composition_control",
+                "first_frame",
+                "last_frame",
+                "asset"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         }
       },
       "required": [
@@ -5864,6 +6940,114 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "value"
       ],
       "title": "SnapshotValueResourceRefInput",
+      "type": "object"
+    },
+    "SpeechScriptPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "type": {
+          "const": "speech_script",
+          "default": "speech_script",
+          "title": "Type",
+          "type": "string"
+        },
+        "__kind": {
+          "const": "speech_script",
+          "default": "speech_script",
+          "title": "Kind",
+          "type": "string"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/$defs/SpeechTurn"
+          },
+          "minItems": 1,
+          "title": "Turns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "turns",
+        "type"
+      ],
+      "title": "SpeechScriptPart",
+      "type": "object"
+    },
+    "SpeechTurn": {
+      "additionalProperties": false,
+      "description": "One spoken turn. Not a kind: it has no meaning outside its script.",
+      "properties": {
+        "__kind": {
+          "default": "",
+          "description": "The registered kind this payload is an instance of, when it is one.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "speaker": {
+          "description": "The speaker's name. Turns with the same name are the same speaker. For multi-speaker vendors (Gemini) this is the transcript label.",
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Speaker",
+          "type": "string"
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The voice this speaker uses: a literal provider voice id from the model's catalog, or a {{variable}}. Empty = bound to the agent's Voice setting (tts_voice).",
+          "title": "Voice"
+        },
+        "text": {
+          "description": "What is said. Any {{variable}} is filled at run time.",
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free-text performance direction for this turn only (e.g. 'warm, a little amused').",
+          "title": "Direction"
+        },
+        "pause_after_ms": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Silence after this turn, in milliseconds.",
+          "title": "Pause After Ms"
+        }
+      },
+      "required": [
+        "speaker",
+        "text"
+      ],
+      "title": "SpeechTurn",
       "type": "object"
     },
     "TableCellBookmark": {
@@ -6642,6 +7826,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           "default": null,
           "title": "Size Bytes"
         },
+        "visibility": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visibility"
+        },
+        "cdn_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdn Url"
+        },
         "type": {
           "const": "media",
           "default": "media",
@@ -6689,6 +7897,34 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
           ],
           "default": null,
           "title": "Duration Ms"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "extend",
+                "restyle"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         }
       },
       "required": [
@@ -7057,6 +8293,15 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
     },
     {
       "$ref": "#/$defs/ContextInputPart"
+    },
+    {
+      "$ref": "#/$defs/DecisionQuestionsPart"
+    },
+    {
+      "$ref": "#/$defs/DecisionAnswersPart"
+    },
+    {
+      "$ref": "#/$defs/SpeechScriptPart"
     }
   ]
 };
@@ -7158,6 +8403,29 @@ export function parseMessageContent(content: unknown[]): MessagePart[] {
     return part;
   });
 }
+
+// --- Message wrapper (matrx_ai.config.message_flags) ---
+
+/** The translator flags a message can carry. */
+export const MESSAGE_FLAG_KEYS = ["prefill", "cache_boundary", "example"] as const;
+export type MessageFlagKey = (typeof MESSAGE_FLAG_KEYS)[number];
+/** Stored form (`MessageFlags.as_dict`): only `true` means anything; absence is false. */
+export type MessageFlags = Partial<Record<MessageFlagKey, true>>;
+/** Where a runtime message keeps its flags: `cx_message.metadata[MESSAGE_FLAGS_METADATA_KEY]`. */
+export const MESSAGE_FLAGS_METADATA_KEY = "flags";
+/** What a flag the model cannot honour becomes (org knob agents.messages / flag_compatibility_mode). */
+export const FLAG_COMPATIBILITY_MODES = ["refuse", "convert", "drop"] as const;
+export type FlagCompatibilityMode = (typeof FLAG_COMPATIBILITY_MODES)[number];
+export const DEFAULT_FLAG_COMPATIBILITY_MODE: FlagCompatibilityMode = "refuse";
+
+/** One message: its role, its parts, and its translator flags (top level on an
+ *  agent-definition message; `metadata.flags` on a runtime cx_message). */
+export interface MessageWrapper {
+  role: string;
+  content: MessagePart[];
+  flags?: MessageFlags | null;
+}
+
 
 export interface ChunkEvent {
   event: "chunk";
@@ -7279,6 +8547,11 @@ export interface CitationEvent {
   data: CitationPayload;
 }
 
+export interface ControlTokenEvent {
+  event: "control_token";
+  data: ControlTokenPayload;
+}
+
 /** Discriminated union — `event.event === "chunk"` narrows `data` automatically. */
 export type TypedStreamEvent =
   | ChunkEvent
@@ -7304,7 +8577,8 @@ export type TypedStreamEvent =
   | ContextTrimmedEvent
   | InjectionConsumedEvent
   | ProviderRetryEvent
-  | CitationEvent;
+  | CitationEvent
+  | ControlTokenEvent;
 
 /**
  * @deprecated Use `TypedStreamEvent` instead — it provides automatic type narrowing
@@ -7434,6 +8708,10 @@ export function isProviderRetryEvent(e: TypedStreamEvent): e is { event: "provid
 
 export function isCitationEvent(e: TypedStreamEvent): e is { event: "citation"; data: CitationPayload } {
   return e.event === "citation";
+}
+
+export function isControlTokenEvent(e: TypedStreamEvent): e is { event: "control_token"; data: ControlTokenPayload } {
+  return e.event === "control_token";
 }
 
 export function isCompactChunkEvent(e: unknown): e is CompactChunkEvent {

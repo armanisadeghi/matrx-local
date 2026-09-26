@@ -729,10 +729,51 @@ export function contentPartToExtracted(part: unknown): ExtractedContent {
     };
   }
 
+  const typed = typedPartText(type, record);
+  if (typed !== null) return { answer: typed, reasoning: "", diagnostics: [] };
+
   const fallback = extractTextFromRecord(record);
-  if (!fallback) return { answer: "", reasoning: "", diagnostics: [] };
-  const split = splitInlineReasoning(fallback);
-  return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
+  if (fallback) {
+    const split = splitInlineReasoning(fallback);
+    return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
+  }
+  // Nothing readable and no reader for this kind: say so, never drop the part.
+  return { answer: unshownPartLine(type), reasoning: "", diagnostics: [] };
+}
+
+/** The honest line for a part kind this app does not draw. */
+function unshownPartLine(type: string): string {
+  return `_[${humanizeToken(type)} — this part cannot be shown here]_`;
+}
+
+/**
+ * Typed parts with no text field that this app CAN read: the questions a
+ * decision turn put and the lines of a speech script. `null` = not one of
+ * these (the caller's generic fallback decides).
+ */
+function typedPartText(type: string, record: Record<string, unknown>): string | null {
+  if (type === "decision_questions") {
+    const questions = Array.isArray(record.questions) ? record.questions : [];
+    const lines = questions.flatMap((q) => {
+      const item = readRecord(q);
+      const name = readString(item?.name);
+      const ask = readString(item?.instructions);
+      return name || ask ? [`- ${[name, ask].filter(Boolean).join(": ")}`] : [];
+    });
+    return lines.length > 0 ? `Questions put:\n${lines.join("\n")}` : unshownPartLine(type);
+  }
+  if (type === "speech_script") {
+    const turns = Array.isArray(record.turns) ? record.turns : [];
+    const lines = turns.flatMap((t) => {
+      const turn = readRecord(t);
+      const text = readString(turn?.text);
+      if (!text) return [];
+      const speaker = readString(turn?.speaker);
+      return [speaker ? `**${speaker}:** ${text}` : text];
+    });
+    return lines.length > 0 ? lines.join("\n\n") : unshownPartLine(type);
+  }
+  return null;
 }
 
 function hasDisplayableContent(extracted: ExtractedContent): boolean {

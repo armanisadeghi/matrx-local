@@ -110,8 +110,13 @@ async def _authority_exchange(
     async with httpx.AsyncClient(
         follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
     ) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as response:
-            if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+        async with client.stream(
+            "POST", url, json=payload, headers=headers
+        ) as response:
+            if (
+                response.headers.get("content-encoding", "identity").strip().lower()
+                != "identity"
+            ):
                 raise TransportRefusal("transport_unavailable", 503)
             raw = await _read_response(response)
             # A complete, bounded authority answer is usable before HTTPX's
@@ -268,7 +273,9 @@ class CallbackLimits:
             "unknown": _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
         }
 
-    def _address_gate(self, address: str, operation: str | None) -> asyncio.Semaphore | None:
+    def _address_gate(
+        self, address: str, operation: str | None
+    ) -> asyncio.Semaphore | None:
         # Cleanup requires a grant and is idempotent.  Let it use the
         # fourth global slot while three callbacks from this address are busy.
         cleanup = operation == "cleanup"
@@ -284,7 +291,9 @@ class CallbackLimits:
     async def __aenter__(self) -> "CallbackLimits":
         raise RuntimeError("use acquire")
 
-    async def acquire(self, address: str, operation: str | None = None) -> "CapacityLease":
+    async def acquire(
+        self, address: str, operation: str | None = None
+    ) -> "CapacityLease":
         key = address if address and len(address) <= 128 else "unknown"
         bucket = (
             self._buckets.setdefault(
@@ -867,10 +876,7 @@ def _document(value: object) -> dict[str, str] | None:
     if not isinstance(value, dict) or set(value) != {"url", "document_id"}:
         return None
     url, document_id = value.get("url"), value.get("document_id")
-    if (
-        not isinstance(url, str)
-        or not valid_local_browser_document_id(document_id)
-    ):
+    if not isinstance(url, str) or not valid_local_browser_document_id(document_id):
         return None
     parsed = _safe_urlsplit(url)
     if (
@@ -890,6 +896,62 @@ def _command_digest(command_json: str) -> str:
     return hashlib.sha256(
         b"matrx.local-browser.command.v1\n" + command_json.encode("utf-8")
     ).hexdigest()
+
+
+def _valid_login_observation(value: object) -> bool:
+    facts = {
+        "password_field_present_before",
+        "password_field_present_after",
+        "otp_field_present_before",
+        "otp_field_present_after",
+        "captcha_present_before",
+        "captcha_present_after",
+        "login_form_present_before",
+        "login_form_present_after",
+        "success_url_prefix",
+        "success_selector",
+        "failure_selector",
+        "challenge_selector",
+    }
+    if not isinstance(value, dict) or set(value) != facts | {
+        "url_relation",
+        "url_flow",
+        "recipe_matches",
+    }:
+        return False
+    if not all(value[key] is None or type(value[key]) is bool for key in facts):
+        return False
+    if not isinstance(value["url_relation"], str) or value["url_relation"] not in {
+        "unchanged",
+        "changed",
+        "unknown",
+    }:
+        return False
+    if not isinstance(value["url_flow"], str) or value["url_flow"] not in {
+        "challenge",
+        "sign_in",
+        "other",
+        "unknown",
+    }:
+        return False
+    matches = value["recipe_matches"]
+    if (
+        not isinstance(matches, list)
+        or len(matches) > 128
+        or any(match is not None and type(match) is not bool for match in matches)
+    ):
+        return False
+    try:
+        return (
+            len(
+                json.dumps(
+                    value, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+                ).encode("utf-8")
+            )
+            <= 4 * 1024
+        )
+    except (TypeError, ValueError, UnicodeError):
+        return False
 
 
 def valid_terminal_receipt(value: object) -> bool:
@@ -917,8 +979,21 @@ def valid_terminal_receipt(value: object) -> bool:
     shapes = {
         "navigate": {"origin"},
         "inspect_login": {"origin", "form", "challenge"},
-        "vault_login": {"filled", "submitted", "verification"},
-        "authenticator": {"filled", "submitted", "challenge_detected", "verification"},
+        "vault_login": {
+            "filled",
+            "submitted",
+            "verification",
+            "observation",
+            "verification_digest",
+        },
+        "authenticator": {
+            "filled",
+            "submitted",
+            "challenge_detected",
+            "verification",
+            "observation",
+            "verification_digest",
+        },
     }
     if reason != "none" or not isinstance(data, dict) or set(data) != shapes[operation]:
         return False
@@ -944,11 +1019,22 @@ def valid_terminal_receipt(value: object) -> bool:
             "none",
             "ambiguous",
         } and data.get("challenge") in {"none", "mfa", "captcha", "unknown"}
+    receipt_digest = data.get("verification_digest")
+    if (
+        not isinstance(receipt_digest, str)
+        or len(receipt_digest) != 64
+        or any(char not in "0123456789abcdef" for char in receipt_digest)
+        or not _valid_login_observation(data.get("observation"))
+    ):
+        return False
+    verification = data.get("verification")
+    if not isinstance(verification, str):
+        return False
     if operation == "vault_login":
         return (
             type(data.get("filled")) is bool
             and type(data.get("submitted")) is bool
-            and data.get("verification")
+            and verification
             in {
                 "unverified",
                 "verified",
@@ -962,7 +1048,7 @@ def valid_terminal_receipt(value: object) -> bool:
             type(data.get(key)) is bool
             for key in {"filled", "submitted", "challenge_detected"}
         )
-        and data.get("verification")
+        and verification
         in {
             "unverified",
             "verified",

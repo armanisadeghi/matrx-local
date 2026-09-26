@@ -375,9 +375,114 @@ def test_authenticator_receipt_requires_real_verification_outcome() -> None:
     }
     assert transport.valid_terminal_receipt(receipt) is False
     receipt["data"]["verification"] = "verified"
+    receipt["data"]["observation"] = {
+        **{
+            key: None
+            for key in (
+                "password_field_present_before",
+                "password_field_present_after",
+                "otp_field_present_before",
+                "otp_field_present_after",
+                "captcha_present_before",
+                "captcha_present_after",
+                "login_form_present_before",
+                "login_form_present_after",
+                "success_url_prefix",
+                "success_selector",
+                "failure_selector",
+                "challenge_selector",
+            )
+        },
+        "url_relation": "unknown",
+        "url_flow": "unknown",
+        "recipe_matches": [],
+    }
+    receipt["data"]["verification_digest"] = "a" * 64
     assert transport.valid_terminal_receipt(receipt) is True
     receipt["data"]["verification"] = "made_up"
     assert transport.valid_terminal_receipt(receipt) is False
+
+
+@pytest.mark.parametrize("operation", ["vault_login", "authenticator"])
+def test_completed_login_receipt_preserves_bounded_verification_evidence(
+    operation: str,
+) -> None:
+    observation = {
+        **{
+            key: None
+            for key in (
+                "password_field_present_before",
+                "password_field_present_after",
+                "otp_field_present_before",
+                "otp_field_present_after",
+                "captcha_present_before",
+                "captcha_present_after",
+                "login_form_present_before",
+                "login_form_present_after",
+                "success_url_prefix",
+                "success_selector",
+                "failure_selector",
+                "challenge_selector",
+            )
+        },
+        "url_relation": "unknown",
+        "url_flow": "unknown",
+        "recipe_matches": [],
+    }
+    data = {
+        "filled": True,
+        "submitted": True,
+        "verification": "verified",
+        "observation": observation,
+        "verification_digest": "a" * 64,
+    }
+    if operation == "authenticator":
+        data["challenge_detected"] = False
+    receipt = {
+        "command_id": "00000000-0000-4000-8000-000000000002",
+        "operation": operation,
+        "outcome": "completed",
+        "reason": "none",
+        "data": data,
+    }
+    assert transport.valid_terminal_receipt(receipt) is True
+    assert (
+        transport.valid_terminal_receipt({**receipt, "data": {**data, "secret": "no"}})
+        is False
+    )
+    assert (
+        transport.valid_terminal_receipt(
+            {**receipt, "data": {**data, "verification_digest": "bad"}}
+        )
+        is False
+    )
+    assert (
+        transport.valid_terminal_receipt(
+            {
+                **receipt,
+                "data": {
+                    **data,
+                    "observation": {**observation, "raw_url": "https://example.com"},
+                },
+            }
+        )
+        is False
+    )
+    assert (
+        transport.valid_terminal_receipt(
+            {
+                **receipt,
+                "data": {**data, "observation": {**observation, "url_relation": []}},
+            }
+        )
+        is False
+    )
+    assert (
+        transport.valid_terminal_receipt(
+            {**receipt, "data": {**data, "verification": []}}
+        )
+        is False
+    )
 
 
 @pytest.mark.anyio

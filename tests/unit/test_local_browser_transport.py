@@ -990,6 +990,26 @@ async def test_detached_replay_retains_global_capacity_after_creator_cancels(
 
 
 @pytest.mark.anyio
+async def test_callback_limits_admit_three_overlapping_callbacks_from_one_owned_source(
+    monkeypatch,
+) -> None:
+    """Command, renewal, and MFA admission may briefly share a source address."""
+    diagnostics: list[str] = []
+    monkeypatch.setattr(transport, "_lifecycle_diagnostic", diagnostics.append)
+    limits = transport.CallbackLimits()
+    leases = [await limits.acquire("127.0.0.1") for _ in range(3)]
+    assert limits.global_gate._value == 1  # noqa: SLF001
+    with pytest.raises(transport.TransportRefusal) as refused:
+        await limits.acquire("127.0.0.1")
+    assert refused.value.reason == "rate_limited"
+    assert "rate_address_concurrency" in diagnostics
+    for lease in leases:
+        lease.release()
+    recovered = await limits.acquire("127.0.0.1")
+    recovered.release()
+
+
+@pytest.mark.anyio
 async def test_callback_limits_admit_complete_credential_burst_then_refill(monkeypatch):
     """A complete inspect, two-page password, MFA, and cleanup stays bounded."""
     diagnostics: list[str] = []

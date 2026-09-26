@@ -51,6 +51,9 @@ _MAX_COMMAND = 16 * 1024
 # journey admissible before grant verification; sustained abuse remains limited
 # by the unchanged refill rates and the concurrency gates below.
 _CANONICAL_CREDENTIAL_CALLBACK_BURST = 13
+# A local login may overlap the active command callback, its renewal/retry,
+# and authenticator admission from the same source. The global gate remains 4.
+_CANONICAL_CREDENTIAL_CALLBACK_PARALLELISM = 3
 _OPERATIONS = frozenset({"discover", "admit", "approve", "renew", "cleanup"})
 _REASONS = frozenset(
     {
@@ -268,7 +271,9 @@ class CallbackLimits:
         if address not in self._per_address:
             if len(self._per_address) >= 64:
                 return None
-            self._per_address[address] = asyncio.Semaphore(2)
+            self._per_address[address] = asyncio.Semaphore(
+                _CANONICAL_CREDENTIAL_CALLBACK_PARALLELISM
+            )
         return self._per_address[address]
 
     async def __aenter__(self) -> "CallbackLimits":

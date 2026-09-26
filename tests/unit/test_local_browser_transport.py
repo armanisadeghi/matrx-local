@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from contextlib import asynccontextmanager
 
@@ -50,6 +51,7 @@ async def test_authority_peer_close_cannot_stall_browser_control_loop(
         "extension_generation": "00000000-0000-0000-0000-000000000004",
         "connection_id": "00000000-0000-0000-0000-000000000005",
     }
+    closed = threading.Event()
 
     class Response:
         status_code = 200
@@ -67,13 +69,15 @@ async def test_authority_peer_close_cannot_stall_browser_control_loop(
 
         async def __aexit__(self, *_args):
             # Models HTTPX cleanup when the authority peer closes its socket.
-            time.sleep(0.2)
+            time.sleep(0.25)
+            closed.set()
 
         @asynccontextmanager
         async def stream(self, *_args, **_kwargs):
             yield Response()
 
     monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(transport, "_AUTHORITY_RESULT_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(
         transport, "get_aidream_server_url", lambda: "https://server.example"
     )
@@ -104,7 +108,9 @@ async def test_authority_peer_close_cannot_stall_browser_control_loop(
     finished = time.monotonic()
     await tick_task
     assert result["status"] == "accepted"
-    assert ticks and ticks[0] < finished
+    assert ticks and finished <= ticks[0]
+    assert not closed.is_set(), "response must return before slow pool cleanup"
+    assert await asyncio.to_thread(closed.wait, 1)
 
 
 @pytest.mark.anyio

@@ -91,17 +91,19 @@ logger = get_logger()
 
 # HTTPX can spend seconds closing a peer connection even when its request timeout
 # has expired. Keep the complete one-shot exchange, including pool teardown, off
-# the browser-control event loop. Two occupied workers fail closed instead of
-# allowing an unbounded queue of late authority checks.
-_AUTHORITY_WORKERS = concurrent.futures.ThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="local-browser-authority"
-)
+# the browser-control event loop. Two occupied daemon workers fail closed instead
+# of allowing an unbounded queue or preventing process shutdown.
 _AUTHORITY_SLOTS = threading.BoundedSemaphore(2)
+_AUTHORITY_SHUTTING_DOWN = False
+_AUTHORITY_RESULT_TIMEOUT_SECONDS = 5.0
 
 
 async def _authority_exchange(
-    url: str, payload: dict[str, str], headers: dict[str, str]
-) -> tuple[int, dict[str, str], bytes]:
+    url: str,
+    payload: dict[str, str],
+    headers: dict[str, str],
+    result: concurrent.futures.Future[tuple[int, dict[str, str], bytes]],
+) -> None:
     async with httpx.AsyncClient(
         follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
     ) as client:
@@ -109,18 +111,31 @@ async def _authority_exchange(
             if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
                 raise TransportRefusal("transport_unavailable", 503)
             raw = await _read_response(response)
-            return response.status_code, dict(response.headers), raw
+            # A complete, bounded authority answer is usable before HTTPX's
+            # response/client cleanup. The peer may stall that cleanup for many
+            # seconds; it must not turn a durable acceptance into a 503.
+            result.set_result((response.status_code, dict(response.headers), raw))
 
 
 def _authority_exchange_in_worker(
-    url: str, payload: dict[str, str], headers: dict[str, str]
-) -> tuple[int, dict[str, str], bytes]:
-    return asyncio.run(_authority_exchange(url, payload, headers))
+    url: str,
+    payload: dict[str, str],
+    headers: dict[str, str],
+    result: concurrent.futures.Future[tuple[int, dict[str, str], bytes]],
+) -> None:
+    try:
+        asyncio.run(_authority_exchange(url, payload, headers, result))
+    except BaseException as exc:
+        if not result.done():
+            result.set_exception(exc)
+    finally:
+        _AUTHORITY_SLOTS.release()
 
 
 async def shutdown_authority_client() -> None:
     """Stop accepting new checks when the desktop application shuts down."""
-    _AUTHORITY_WORKERS.shutdown(wait=False, cancel_futures=True)
+    global _AUTHORITY_SHUTTING_DOWN
+    _AUTHORITY_SHUTTING_DOWN = True
 
 
 class TransportRefusal(Exception):
@@ -542,21 +557,31 @@ async def _verify(
         "Accept-Encoding": "identity",
     }
     try:
+        if _AUTHORITY_SHUTTING_DOWN:
+            raise TransportRefusal("transport_unavailable", 503)
         if not _AUTHORITY_SLOTS.acquire(blocking=False):
             raise TransportRefusal("transport_unavailable", 503)
+        result: concurrent.futures.Future[tuple[int, dict[str, str], bytes]] = (
+            concurrent.futures.Future()
+        )
         try:
-            task = _AUTHORITY_WORKERS.submit(
-                _authority_exchange_in_worker,
-                f"{_base_url()}/browser-manager/local/transport/verify",
-                payload,
-                headers,
-            )
+            threading.Thread(
+                target=_authority_exchange_in_worker,
+                args=(
+                    f"{_base_url()}/browser-manager/local/transport/verify",
+                    payload,
+                    headers,
+                    result,
+                ),
+                daemon=True,
+                name="local-browser-authority",
+            ).start()
         except Exception:
             _AUTHORITY_SLOTS.release()
             raise
-        task.add_done_callback(lambda _task: _AUTHORITY_SLOTS.release())
         status_code, response_headers, raw = await asyncio.wait_for(
-            asyncio.wrap_future(task), timeout=5.0
+            asyncio.shield(asyncio.wrap_future(result)),
+            timeout=_AUTHORITY_RESULT_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         raise TransportRefusal("transport_unavailable", 503) from exc

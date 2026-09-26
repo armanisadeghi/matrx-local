@@ -221,3 +221,7 @@ desktop/src-tauri/macos-helpers/
 # Development-only unsigned Safari Web Extension output. Built by
 # scripts/build-safari-appex.sh; never a Tauri release input.
 .safari-appex/
+
+# Development-only signed Safari containing app. Built by
+# scripts/build-safari-test-app.sh; never a Tauri release input.
+.safari-test-app/

@@ -217,3 +217,7 @@ system/logs/
 # MXL-D-091: the dev-world home the E2E harness signed in (a path, machine-local).
 desktop/.harness-home
 desktop/src-tauri/macos-helpers/
+
+# Development-only unsigned Safari Web Extension output. Built by
+# scripts/build-safari-appex.sh; never a Tauri release input.
+.safari-appex/

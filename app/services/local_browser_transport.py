@@ -511,6 +511,11 @@ async def _verify(
                 follow_redirects=False,
                 trust_env=False,
                 timeout=httpx.Timeout(5.0),
+                # Authority verification is a one-shot callback. Keeping an idle
+                # connection here made httpx drain its pool during ``aclose`` on
+                # macOS, stalling the engine event loop long enough to lose a
+                # lifecycle renewal. Do not retain a pool beyond this callback.
+                limits=httpx.Limits(max_connections=1, max_keepalive_connections=0),
                 headers=headers,
             ) as client:
                 async with client.stream(

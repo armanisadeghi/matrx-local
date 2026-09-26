@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-16",
+ "generated_at": "2026-09-26",
  "schemas": {
   "ai": {
    "api": {
@@ -2825,6 +2825,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -2945,6 +2952,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3086,6 +3100,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3213,6 +3234,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3333,6 +3361,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3516,6 +3551,13 @@
       "name": "artifact_index",
       "nullable": true,
       "udt": "int2"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3664,6 +3706,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -3833,6 +3882,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -4206,6 +4262,13 @@
       "name": "metadata",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -4494,6 +4557,13 @@
       "name": "host_value_names",
       "nullable": false,
       "udt": "_text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -4900,6 +4970,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5013,6 +5090,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5203,6 +5287,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5421,6 +5512,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5590,6 +5688,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5745,6 +5850,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -5977,6 +6089,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -6153,6 +6272,13 @@
       "name": "workflow_definition_version",
       "nullable": true,
       "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -6518,6 +6644,13 @@
       "name": "claim_expires_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -6687,6 +6820,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -6761,7 +6901,7 @@
      },
      {
       "data_type": "smallint",
-      "default": "1",
+      "default": "0",
       "name": "iterations",
       "nullable": false,
       "udt": "int2"
@@ -6912,6 +7052,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -7255,6 +7402,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -7368,12 +7522,165 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
     "pk": [
      "user_id"
     ]
+   },
+   "vw_tool_gate_verdict": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "tool_call_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "conversation_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "call_id",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "tool_name",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "created_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "retained_output_chars",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "decided_by",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "reason",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "mandate_key",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "limits_source",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "result_format",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "numeric",
+      "default": null,
+      "name": "threshold",
+      "nullable": true,
+      "udt": "numeric"
+     },
+     {
+      "data_type": "bigint",
+      "default": null,
+      "name": "total_chars",
+      "nullable": true,
+      "udt": "int8"
+     },
+     {
+      "data_type": "bigint",
+      "default": null,
+      "name": "shown_chars",
+      "nullable": true,
+      "udt": "int8"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "section_count",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "kept_sections",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "withheld_sections_count",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "unjudged_kept_sections",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": null,
+      "name": "withheld_sections",
+      "nullable": true,
+      "udt": "jsonb"
+     }
+    ],
+    "kind": "view",
+    "pk": []
    },
    "vw_tool_refetch": {
     "columns": [
@@ -7799,7 +8106,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": null,
+      "default": "'internal'::platform.visibility",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -7930,6 +8237,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8043,6 +8357,13 @@
       "name": "page_id",
       "nullable": true,
       "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8149,6 +8470,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8262,6 +8590,13 @@
       "name": "metadata",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8345,6 +8680,13 @@
       "data_type": "jsonb",
       "default": "'{}'::jsonb",
       "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
      }
@@ -8551,6 +8893,27 @@
       "name": "client_modified_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "artifact_kind",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "provider_session_id",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8650,6 +9013,13 @@
       "name": "updated_by",
       "nullable": true,
       "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -8948,6 +9318,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9138,6 +9515,13 @@
       "name": "version",
       "nullable": false,
       "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9293,6 +9677,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9409,6 +9800,13 @@
       "name": "updated_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9689,6 +10087,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9830,6 +10235,13 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9894,6 +10306,13 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -9951,6 +10370,13 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10057,6 +10483,13 @@
       "name": "dispatched_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10197,8 +10630,15 @@
       "data_type": "uuid",
       "default": null,
       "name": "organization_id",
-      "nullable": true,
+      "nullable": false,
       "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10208,6 +10648,175 @@
    }
   },
   "workbench": {
+   "google_document": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "resource_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "external_id",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "external_url",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "title",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "mime_kind",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "owner_email",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "external_modified_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "body_text",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "synced_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "synced_via_connection_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": "'available'::text",
+      "name": "sync_status",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "sync_status_reason",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "'personal'::platform.visibility",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   },
    "heatmap_saves": {
     "columns": [
      {
@@ -10314,6 +10923,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10420,6 +11036,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10589,12 +11212,390 @@
       "name": "content_preview",
       "nullable": true,
       "udt": "text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
     "pk": [
      "id"
     ]
+   },
+   "pb_claim_appeals_fd31de": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "claim_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "reason",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "date",
+      "default": null,
+      "name": "filed_on",
+      "nullable": true,
+      "udt": "date"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "'internal'::platform.visibility",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   },
+   "pb_insurance_claims_fd31de": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "carrier",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "integer",
+      "default": null,
+      "name": "billed_cents",
+      "nullable": true,
+      "udt": "int4"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "status",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "'internal'::platform.visibility",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   },
+   "pick_list_item_live": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "list_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "label",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "description",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "help_text",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "group_name",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "icon_name",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "created_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "updated_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "lives_in",
+      "nullable": true,
+      "udt": "text"
+     }
+    ],
+    "kind": "view",
+    "pk": []
+   },
+   "pick_list_live": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "list_name",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "description",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "user_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "boolean",
+      "default": null,
+      "name": "is_public",
+      "nullable": true,
+      "udt": "bool"
+     },
+     {
+      "data_type": "boolean",
+      "default": null,
+      "name": "public_read",
+      "nullable": true,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "created_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "updated_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "lives_in",
+      "nullable": true,
+      "udt": "text"
+     }
+    ],
+    "kind": "view",
+    "pk": []
    },
    "product_capture_file": {
     "columns": [
@@ -10672,6 +11673,13 @@
       "data_type": "jsonb",
       "default": "'{}'::jsonb",
       "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
      }
@@ -10801,6 +11809,13 @@
       "name": "featured_file_id",
       "nullable": true,
       "udt": "uuid"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -10884,6 +11899,13 @@
       "data_type": "jsonb",
       "default": "'{}'::jsonb",
       "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
      }
@@ -11018,6 +12040,13 @@
       "data_type": "jsonb",
       "default": "'{}'::jsonb",
       "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
      }
@@ -11166,6 +12195,13 @@
       "data_type": "jsonb",
       "default": "'{}'::jsonb",
       "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
      }
@@ -11359,6 +12395,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11430,6 +12473,13 @@
       "name": "reason",
       "nullable": true,
       "udt": "text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11529,6 +12579,20 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "source_row_ref",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11614,6 +12678,13 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11692,6 +12763,13 @@
       "name": "updated_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11854,6 +12932,20 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": null,
+      "name": "sync_source",
+      "nullable": true,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -11911,6 +13003,13 @@
       "name": "created_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12045,6 +13144,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12179,6 +13285,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12292,6 +13405,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12349,6 +13469,13 @@
       "name": "created_at",
       "nullable": false,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12483,6 +13610,13 @@
       "name": "deleted_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",
@@ -12582,6 +13716,13 @@
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
      }
     ],
     "kind": "table",

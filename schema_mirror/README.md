@@ -14,7 +14,11 @@ that drift between local and cloud is mechanically detectable.
 
 When the cloud schema changes (or on suspicion of drift):
 
-1. Run this against the live DB (Supabase MCP `execute_sql` or psql):
+1. From an environment with the canonical `SUPABASE_MATRIX_HOST`,
+   `SUPABASE_MATRIX_PORT`, `SUPABASE_MATRIX_USER`, and
+   `SUPABASE_MATRIX_PASSWORD`, run `python scripts/refresh_mirror_snapshot.py`.
+   It reads this catalog query from the live DB and refuses removed columns or
+   changed table/primary-key identity until the retirement impact is reviewed:
 
 ```sql
 select table_schema, table_name, column_name, ordinal_position,
@@ -28,9 +32,9 @@ order by table_schema, table_name, ordinal_position;
    (`information_schema.table_constraints` / `key_column_usage`) — the
    snapshot stores `kind` and `pk` per relation.
 
-2. Rebuild `snapshot.json` (same shape: `schemas.<schema>.<table>` with
-   `kind`, `pk`, `columns[{name,udt,data_type,nullable,default}]`), bump
-   `generated_at`.
+2. The refresh command rebuilds `snapshot.json` (same shape:
+   `schemas.<schema>.<table>` with `kind`, `pk`,
+   `columns[{name,udt,data_type,nullable,default}]`) and bumps `generated_at`.
 
 3. When the refresh removes a column that an older app already mirrored, add
    it to `retired_columns.json`. This is a non-destructive local upgrade ledger:

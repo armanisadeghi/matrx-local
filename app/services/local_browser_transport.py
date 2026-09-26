@@ -284,10 +284,21 @@ class CallbackLimits:
             else self._buckets["unknown"]
         )
         now = time.monotonic()
-        if not self._global_bucket.take(now) or not bucket.take(now):
+        if not self._global_bucket.take(now):
+            _lifecycle_diagnostic("rate_global_bucket")
+            raise TransportRefusal("rate_limited", 429)
+        if not bucket.take(now):
+            _lifecycle_diagnostic("rate_address_bucket")
             raise TransportRefusal("rate_limited", 429)
         address_gate = self._address_gate(key)
-        if address_gate is None or self.global_gate.locked() or address_gate.locked():
+        if address_gate is None:
+            _lifecycle_diagnostic("rate_address_capacity")
+            raise TransportRefusal("rate_limited", 429)
+        if self.global_gate.locked():
+            _lifecycle_diagnostic("rate_global_concurrency")
+            raise TransportRefusal("rate_limited", 429)
+        if address_gate.locked():
+            _lifecycle_diagnostic("rate_address_concurrency")
             raise TransportRefusal("rate_limited", 429)
         await self.global_gate.acquire()
         try:

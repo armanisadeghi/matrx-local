@@ -992,6 +992,8 @@ async def test_detached_replay_retains_global_capacity_after_creator_cancels(
 @pytest.mark.anyio
 async def test_callback_limits_admit_complete_credential_burst_then_refill(monkeypatch):
     """A complete inspect, two-page password, MFA, and cleanup stays bounded."""
+    diagnostics: list[str] = []
+    monkeypatch.setattr(transport, "_lifecycle_diagnostic", diagnostics.append)
     now = transport.time.monotonic() + 1.0
     monkeypatch.setattr(transport.time, "monotonic", lambda: now)
     limits = transport.CallbackLimits()
@@ -1020,6 +1022,7 @@ async def test_callback_limits_admit_complete_credential_burst_then_refill(monke
     with pytest.raises(transport.TransportRefusal) as exhausted:
         await limits.acquire(address)
     assert exhausted.value.reason == "rate_limited"
+    assert "rate_global_bucket" in diagnostics
 
     now += 2.0
     capacity = await limits.acquire(address)
@@ -1027,6 +1030,7 @@ async def test_callback_limits_admit_complete_credential_burst_then_refill(monke
     with pytest.raises(transport.TransportRefusal) as refilled_once:
         await limits.acquire(address)
     assert refilled_once.value.reason == "rate_limited"
+    assert "rate_address_bucket" in diagnostics
 
 
 @pytest.mark.anyio

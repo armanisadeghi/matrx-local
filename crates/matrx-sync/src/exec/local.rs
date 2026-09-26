@@ -64,7 +64,41 @@ impl RealLocalIo {
         let mut current = self.root.clone();
         for segment in path_nfc.split('/').filter(|s| !s.is_empty()) {
             let literal = current.join(segment);
-            if literal.symlink_metadata().is_ok() {
+            if let Ok(literal_meta) = literal.symlink_metadata() {
+                // An exact NFC spelling does not make the lookup unambiguous on a
+                // normalization-sensitive volume: an NFD sibling may also exist.
+                // Check before returning the literal path so writes cannot silently
+                // choose one of two files with the same canonical key.
+                let entries = std::fs::read_dir(&current).map_err(|e| classify(path_nfc, &e))?;
+                for entry in entries {
+                    let entry = entry.map_err(|e| classify(path_nfc, &e))?;
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    if name != segment && nfc(name) == segment {
+                        // Normalization-insensitive filesystems can resolve
+                        // both spellings to the *same* file. Only a distinct
+                        // on-disk object makes the lookup ambiguous.
+                        // On Windows, the available file-ID helper follows
+                        // reparse points. Equal target IDs cannot prove that
+                        // two differently spelled directory entries are one.
+                        #[cfg(windows)]
+                        let same_file = false;
+                        #[cfg(not(windows))]
+                        let same_file =
+                            entry.path().symlink_metadata().ok().is_some_and(|meta| {
+                                same_complete_identity(
+                                    identity_of(&literal, &literal_meta),
+                                    identity_of(&entry.path(), &meta),
+                                )
+                            });
+                        if !same_file {
+                            return Err(ExecError::NameCollision {
+                                path: path_nfc.to_string(),
+                                kind: ConflictKind::UnicodeCollision,
+                            });
+                        }
+                    }
+                }
                 // The literal spelling resolved — but on a case-insensitive volume that proves
                 // nothing. APFS is case-insensitive by default, so `report.txt` happily opens the
                 // user's `Report.txt`, and writing the cloud's copy through that path destroys
@@ -451,6 +485,36 @@ fn identity_of(path: &Path, _meta: &std::fs::Metadata) -> (Option<String>, Optio
     // makes the same call for the same reason (`scan::identity`).
     let id = crate::scan::identity::identity_of_path(path);
     (id.volume_id, id.file_id)
+}
+
+fn same_complete_identity(
+    left: (Option<String>, Option<String>),
+    right: (Option<String>, Option<String>),
+) -> bool {
+    match (left, right) {
+        ((Some(left_volume), Some(left_file)), (Some(right_volume), Some(right_file))) => {
+            left_volume == right_volume && left_file == right_file
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::same_complete_identity;
+
+    #[test]
+    fn unknown_identities_never_prove_two_spellings_are_one_file() {
+        assert!(!same_complete_identity((None, None), (None, None)));
+        assert!(!same_complete_identity(
+            (Some("volume".into()), None),
+            (Some("volume".into()), None),
+        ));
+        assert!(same_complete_identity(
+            (Some("volume".into()), Some("file".into())),
+            (Some("volume".into()), Some("file".into())),
+        ));
+    }
 }
 
 #[cfg(unix)]

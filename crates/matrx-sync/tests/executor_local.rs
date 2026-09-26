@@ -168,6 +168,51 @@ async fn two_spellings_of_one_name_become_a_conflict_rather_than_a_silent_pick()
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn two_spellings_of_the_same_inode_are_one_file_not_a_collision() {
+    use unicode_normalization::UnicodeNormalization;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let local = io(dir.path(), false);
+    let nfc_name: String = "é.txt".nfc().collect();
+    let nfd_name: String = "é.txt".nfd().collect();
+    std::fs::write(dir.path().join(&nfd_name), b"one").expect("nfd");
+    if std::fs::hard_link(dir.path().join(&nfd_name), dir.path().join(&nfc_name)).is_err() {
+        // A normalization-insensitive volume cannot hold both spellings.
+        return;
+    }
+
+    let stat = local.stat(&nfc_name, false).await.expect("same inode is unambiguous");
+    assert!(stat.is_some());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn two_unicode_spellings_of_links_to_one_target_still_collide() {
+    use unicode_normalization::UnicodeNormalization;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let local = io(dir.path(), false);
+    let nfc_name: String = "é.txt".nfc().collect();
+    let nfd_name: String = "é.txt".nfd().collect();
+    let target = dir.path().join("target.txt");
+    std::fs::write(&target, b"shared target").expect("target");
+    if std::os::windows::fs::symlink_file(&target, dir.path().join(&nfd_name)).is_err()
+        || std::os::windows::fs::symlink_file(&target, dir.path().join(&nfc_name)).is_err()
+    {
+        // Symlink creation needs Developer Mode or an elevated token on some hosts;
+        // a filesystem that folds the spellings cannot represent this collision.
+        return;
+    }
+    let result = local.stat(&nfc_name, false).await;
+    assert!(matches!(
+        result,
+        Err(ExecError::NameCollision {
+            kind: ConflictKind::UnicodeCollision,
+            ..
+        })
+    ));
+}
+
 #[tokio::test]
 async fn on_a_case_insensitive_volume_a_case_only_difference_is_a_conflict() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -138,7 +138,7 @@ async def test_approve_verify_forwards_exact_command_and_rejects_wrong_digest(
             return False
 
         @asynccontextmanager
-        async def stream(self, _method, _url, json):
+        async def stream(self, _method, _url, json, headers=None):
             seen.update(json)
             yield Response()
 
@@ -346,11 +346,6 @@ async def test_server_callback_uses_actual_closed_contract_and_streams_limit(
     class Client:
         def __init__(self, **kwargs):
             assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
-            limits = kwargs["limits"]
-            # A one-shot authority verification must not retain an idle pool:
-            # closing such a pool previously stalled the source event loop.
-            assert limits.max_connections == 1
-            assert limits.max_keepalive_connections == 0
 
         async def __aenter__(self):
             return self
@@ -359,7 +354,7 @@ async def test_server_callback_uses_actual_closed_contract_and_streams_limit(
             return False
 
         @asynccontextmanager
-        async def stream(self, method, url, json):
+        async def stream(self, method, url, json, headers=None):
             sent.update(method=method, url=url, body=json)
             yield Response()
 

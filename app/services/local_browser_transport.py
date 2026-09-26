@@ -95,7 +95,7 @@ _AUTHORITY_CLIENT: httpx.AsyncClient | None = None
 
 def _authority_client() -> httpx.AsyncClient:
     global _AUTHORITY_CLIENT
-    if _AUTHORITY_CLIENT is None or _AUTHORITY_CLIENT.is_closed:
+    if _AUTHORITY_CLIENT is None or getattr(_AUTHORITY_CLIENT, "is_closed", False):
         _AUTHORITY_CLIENT = httpx.AsyncClient(
             follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
         )

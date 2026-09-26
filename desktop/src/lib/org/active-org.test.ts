@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * THE RULING UNDER TEST (Arman, 2026-09-19)
  *
  *   A saved "default organization" on the user's account is at most a display
- *   preference. Nothing that builds a request may read it, and the personal
- *   organization is never a fallback. What this device MAY remember is the
+ *   preference. Nothing that builds a request may read it, and no organization
+ *   is ever a fallback. What this device MAY remember is the
  *   organization the user THEMSELVES SET here. With nothing set, the request
  *   HOLDS, the picker appears, the user sets one, and the request proceeds.
  *
@@ -76,11 +76,11 @@ const STORAGE_KEY = "matrx-local.active-organization.v2";
 const LEGACY_STORAGE_KEY = "matrx-local.active-organization.v1";
 
 /** Seed THE persistent value the way the store writes it: per user, one key. */
-function seedStored(userId: string, org: { id: string; name: string; isPersonal?: boolean }) {
+function seedStored(userId: string, org: { id: string; name: string }) {
   const all = JSON.parse(storage.getItem(STORAGE_KEY) ?? '{"users":{}}') as {
     users: Record<string, unknown>;
   };
-  all.users[userId] = { id: org.id, name: org.name, isPersonal: org.isPersonal === true };
+  all.users[userId] = { id: org.id, name: org.name };
   storage.setItem(STORAGE_KEY, JSON.stringify(all));
 }
 
@@ -131,7 +131,7 @@ function mockMemberships(containerIds: string[]) {
  * resolver reaching for `user_preferences` cannot pass silently.
  */
 function mockOrganizationsTable(
-  rows: Array<{ id: string; name: string; is_personal?: boolean }>,
+  rows: Array<{ id: string; name: string }>,
 ) {
   const inFn = vi.fn().mockResolvedValue({ data: rows, error: null });
   const select = vi.fn().mockReturnValue({ in: inFn });
@@ -152,7 +152,7 @@ describe("resolveActiveOrganization", () => {
     const fetchSpy = vi.fn();
     (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch;
     mockMemberships(["org-1"]);
-    mockOrganizationsTable([{ id: "org-1", name: "Solo Org", is_personal: false }]);
+    mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
 
     const { resolveActiveOrganization } = await import("./active-org");
     expect((await resolveActiveOrganization())?.id).toBe("org-1");
@@ -167,7 +167,6 @@ describe("resolveActiveOrganization", () => {
     expect(await resolveActiveOrganization()).toEqual({
       id: "org-1",
       name: "Solo Org",
-      isPersonal: false,
     });
   });
 
@@ -188,11 +187,11 @@ describe("resolveActiveOrganization", () => {
     expect(storage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it("never falls back to the personal organization", async () => {
-    mockMemberships(["org-work", "org-personal"]);
+  it("never picks one of several memberships on its own — it HOLDS", async () => {
+    mockMemberships(["org-acme", "org-ddi"]);
     mockOrganizationsTable([
-      { id: "org-work", name: "Work", is_personal: false },
-      { id: "org-personal", name: "Arman", is_personal: true },
+      { id: "org-acme", name: "Acme Recycling" },
+      { id: "org-ddi", name: "Data Destruction Inc" },
     ]);
 
     const { resolveActiveOrganization } = await import("./active-org");

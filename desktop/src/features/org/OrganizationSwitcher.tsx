@@ -148,9 +148,6 @@ export function OrganizationSwitcher({ variant = "bar", className }: Organizatio
                 ) : null}
               </span>
               <span className="truncate">{org.name}</span>
-              {org.isPersonal && (
-                <span className="ml-auto text-xs text-muted-foreground">personal</span>
-              )}
             </DropdownMenuItem>
           ))
         )}

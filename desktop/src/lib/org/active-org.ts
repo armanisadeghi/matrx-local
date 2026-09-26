@@ -27,7 +27,7 @@
  *
  * A saved "default organization" on the user's ACCOUNT is at most a
  * per-client display preference. NOTHING that builds a request may read it,
- * and nothing may fall back to the personal organization.
+ * and nothing may fall back to an organization the person did not choose.
  *
  *     "one missed org check that should have just failed turns into 50 in a
  *     month and 5,000 in a year, and suddenly we don't have orgs any more,
@@ -45,7 +45,7 @@
  *   3. Otherwise `null`, ON PURPOSE — and `null` at a request boundary is a
  *      HOLD, not a failure: `requireActiveOrganizationId()` raises the
  *      picker, waits for the user to SET one, and the request then proceeds.
- *      Never "first", "personal", "most recent", or "system".
+ *      Never "first", "oldest", "most recent", or "system".
  *
  * The Python sidecar cannot read this device's `localStorage`, so every SET
  * is also pushed to the engine (`PUT /organization/active`) — that is how a
@@ -71,7 +71,6 @@ const CHANGE_EVENT = "matrx-local.active-organization.change";
 export interface MemberOrganization {
   id: string;
   name: string;
-  isPersonal: boolean;
 }
 
 interface StoredOrganizations {
@@ -229,7 +228,7 @@ function readStoredSelection(userId: string | null): MemberOrganization | null {
   const all = readStoredAll();
   const own = all.users[userId];
   if (own && typeof own.id === "string" && own.id) {
-    return { id: own.id, name: String(own.name ?? ""), isPersonal: own.isPersonal === true };
+    return { id: own.id, name: String(own.name ?? "") };
   }
   // One-time migration of the unscoped pre-2026-09-21 value: the first user
   // to read it on this device claims it (it was theirs — one account per
@@ -244,7 +243,6 @@ function readStoredSelection(userId: string | null): MemberOrganization | null {
         const migrated: MemberOrganization = {
           id: parsed.id,
           name: typeof parsed.name === "string" ? parsed.name : "",
-          isPersonal: false,
         };
         writeStoredSelection(userId, migrated, { silent: true });
         return migrated;
@@ -264,7 +262,7 @@ function writeStoredSelection(
   try {
     const all = readStoredAll();
     if (value === null) delete all.users[userId];
-    else all.users[userId] = { id: value.id, name: value.name, isPersonal: value.isPersonal };
+    else all.users[userId] = { id: value.id, name: value.name };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
   } catch {
     // localStorage unavailable / quota — the selection lives in memory for
@@ -315,7 +313,7 @@ export async function listMemberOrganizations(): Promise<MemberOrganization[]> {
       const { data: orgRows, error: orgError } = await supabase
         .schema("iam")
         .from("organizations")
-        .select("id,name,is_personal")
+        .select("id,name")
         .in("id", ids);
       if (orgError) {
         throw new Error(`Could not read your organizations: ${orgError.message}`);
@@ -323,7 +321,6 @@ export async function listMemberOrganizations(): Promise<MemberOrganization[]> {
       organizations = (orgRows ?? []).map((row) => ({
         id: String((row as { id: unknown }).id),
         name: String((row as { name?: unknown }).name ?? "Untitled organization"),
-        isPersonal: (row as { is_personal?: unknown }).is_personal === true,
       }));
     }
     // The stored name can go stale (an org renamed on the web); the live

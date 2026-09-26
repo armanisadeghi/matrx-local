@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * check:org-default-ban — nothing that builds a request may read a saved
- * "default organization", and nothing may fall back to the personal org.
+ * "default organization", and nothing may fall back to an organization type.
  *
  * THE RULING (Arman, 2026-09-19)
  *
@@ -19,10 +19,10 @@
  *
  *   1. Any read of `defaultOrganizationId` / `default_organization_id` — the
  *      user-level preference row. The rung this ruling deleted.
- *   2. Any `current_personal_org_id` call, or a `resolve`/`pick`-shaped
- *      function choosing by `is_personal` / `isPersonal`. The personal org is
- *      a LABEL on a row, never an answer to "which organization is this
- *      request for".
+ *   2. Any call to the deleted `current_personal_org_id` /
+ *      `ensure_personal_organization` RPCs, or a resolver choosing by
+ *      `is_personal` / `isPersonal`. Organizations are unlimited and equal
+ *      (access ladder); the column is dropped from `iam.organizations`.
  *   3. The phrase "default organization" in user-facing copy — a screen that
  *      says it teaches the user something that does not exist.
  *
@@ -31,8 +31,9 @@
  *   Comments and Python docstrings. This file, and the resolvers themselves,
  *   have to be able to NAME the thing they ban; a comment reads nothing and
  *   shows nobody anything. Code and string literals are what get scanned.
- *   `isPersonal` as a display flag (the picker's "(personal)" suffix) is
- *   fine — only a resolver CHOOSING by it is not.
+ *   `isPersonal` outside a resolver is not refused YET: the macOS Vault
+ *   provider still decodes it from the server's organizations report. Once
+ *   that wire field is gone, this becomes a ban everywhere.
  *
  *   A declared exemption: `org-default-exempt: <reason, 20+ chars>` on the
  *   offending line or the line above it. A test that has to NAME the banned
@@ -72,11 +73,10 @@ const SKIP =
   /(^|\/)(node_modules|dist|build|\.venv|venv|__pycache__|target|src-tauri\/gen)\//;
 
 const PREFERENCE_READ = /\bdefault_?[Oo]rganization_?[Ii]d\b/;
-const PERSONAL_RPC = /\bcurrent_personal_org_id\b/;
+const PERSONAL_RPC = /\b(?:current_personal_org_id|ensure_personal_organization)\b/;
 /**
  * The two files that answer "which organization is this request for". Only
- * here is `is_personal` in a BOOLEAN position a defect: everywhere else the
- * flag is a label (the picker's "(personal)" suffix, a column list).
+ * here is `is_personal` in a BOOLEAN position a defect.
  */
 const RESOLVER_FILES =
   /(desktop\/src\/lib\/org\/active-org|app\/services\/aidream\/organization)\.(ts|py)$/;
@@ -127,13 +127,13 @@ export function findingsIn(text, where) {
     );
   }
   if (PERSONAL_RPC.test(code)) {
-    out.push(`${where}: current_personal_org_id — the personal org is not a fallback`);
+    out.push(`${where}: calls a deleted personal-organization RPC — organizations are all equal`);
   }
   if (RESOLVER_FILES.test(where) || where.startsWith("planted-resolver")) {
     for (const [index, line] of code.split("\n").entries()) {
       if (PERSONAL_TOKEN.test(line) && BOOLEAN_POSITION.test(line)) {
         out.push(
-          `${where}:${index + 1}: the resolver chooses by is_personal — the personal org is a label, not an answer`,
+          `${where}:${index + 1}: the resolver chooses by is_personal — there is no organization type`,
         );
         break;
       }
@@ -190,6 +190,7 @@ function selfTest() {
     ["const id = prefs.organization.defaultOrganizationId;", "x.ts", 1, "TS preference read"],
     ['default_id = organization.get("default_organization_id")', "x.py", 1, "py preference read"],
     ['url = f"{BASE}/rpc/current_personal_org_id"', "x.py", 1, "personal org RPC"],
+    ['await supabase.rpc("ensure_personal_organization", { p_user_id: id });', "x.ts", 1, "ensure-personal-org RPC"],
     [
       "const personal = organizations.find((o) => o.isPersonal);",
       "planted-resolver.ts",
@@ -259,7 +260,7 @@ if (isMain) {
     console.error(
       "\n🚨 A DEFAULT ORGANIZATION IS BACK\n\n" +
         "Nothing that builds a request may read a saved default-organization preference,\n" +
-        "and the personal organization is never a fallback. If this device has nothing\n" +
+        "and no organization is ever a fallback. If this device has nothing\n" +
         "SET, HOLD the request, show the picker, and continue once the user picks.\n",
     );
     for (const f of findings) console.error("  ✗ " + f);
@@ -273,7 +274,7 @@ if (isMain) {
     process.exit(1);
   }
   console.log(
-    "check:org-default-ban: no saved default-organization read, no personal-org fallback,\n" +
+    "check:org-default-ban: no saved default-organization read, no personal-org RPC or fallback,\n" +
       '  and no "default organization" in user-facing copy.',
   );
 }

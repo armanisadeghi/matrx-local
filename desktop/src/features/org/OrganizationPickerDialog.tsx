@@ -191,7 +191,6 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
                 onClick={() => void pick(org.id)}
               >
                 {savingId === org.id ? "Selecting…" : org.name}
-                {org.isPersonal ? " (personal)" : ""}
               </Button>
             ))}
             {shownError && organizations === null && (

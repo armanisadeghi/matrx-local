@@ -106,7 +106,7 @@ let root: Root;
 let testUser = "";
 let testNo = 0;
 
-function mockMemberships(orgs: Array<{ id: string; name: string; is_personal?: boolean }>) {
+function mockMemberships(orgs: Array<{ id: string; name: string }>) {
   mocks.rpc.mockResolvedValue({
     data: orgs.map((o) => ({ container_id: o.id })),
     error: null,
@@ -211,7 +211,7 @@ describe("OrganizationSwitcher", () => {
   it("renders the stored organization for the signed-in user on mount", async () => {
     storage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ users: { [testUser]: { id: "org-1", name: "First Org", isPersonal: false } } }),
+      JSON.stringify({ users: { [testUser]: { id: "org-1", name: "First Org" } } }),
     );
     mockMemberships([
       { id: "org-1", name: "First Org" },

@@ -23,21 +23,46 @@ async def _save_to_server(
     content: dict[str, Any],
     char_count: int,
     auth_token: str | None,
-) -> None:
-    """Push scraped content to the server database. Errors are logged, not raised."""
+) -> dict[str, Any]:
+    """Push scraped content to the server, where it lands as a Source.
+
+    ``/content/save`` lands the page through the Sources door
+    (SOURCE-CONVERGENCE §4.4) and answers with the Source's
+    ``processed_document_id``. Returns ``{"saved", "processed_document_id",
+    "source_notices", "save_error"}`` — never raises, and never claims a save
+    that did not happen.
+    """
     try:
         from app.services.scraper.remote_client import get_remote_scraper
+        from app.services.scraper.scrape_store import _page_name_for_url
+
         client = get_remote_scraper()
-        await client.save_content(
+        response = await client.save_content(
             url=url,
+            page_name=_page_name_for_url(url),
             content=content,
             content_type="html",
             char_count=char_count,
             auth_token=auth_token,
         )
-        logger.info("[scraper.py] Saved to server: %s (%d chars)", url, char_count)
     except Exception as exc:
         logger.warning("[scraper.py] Failed to save to server for %s: %s", url, exc)
+        return {
+            "saved": False,
+            "processed_document_id": None,
+            "source_notices": [],
+            "save_error": f"{type(exc).__name__}: {exc}",
+        }
+    response = response if isinstance(response, dict) else {}
+    doc_id = response.get("processed_document_id")
+    notices = [n for n in (response.get("notices") or []) if isinstance(n, dict)]
+    logger.info("[scraper.py] Saved to server: %s (%d chars) → Source %s", url, char_count, doc_id)
+    return {
+        "saved": True,
+        "processed_document_id": doc_id if isinstance(doc_id, str) and doc_id else None,
+        "source_notices": notices,
+        "save_error": None,
+    }
 
 
 async def local_scrape(
@@ -55,7 +80,8 @@ async def local_scrape(
     Returns:
         Dict with keys:
           - results: list of per-URL result dicts
-          - saved: number of pages successfully saved to the server
+          - saved: number of pages the server confirmed it saved (each result
+            carries its Source's ``processed_document_id``)
           - failed: list of URLs that could not be scraped
     """
     from matrx_scraper.scrape_options import ScrapeOptions
@@ -102,13 +128,18 @@ async def local_scrape(
             char_count = len(
                 (content.get("text_data") or "") + (content.get("ai_research_content") or "")
             )
-            await _save_to_server(url, content, char_count, auth_token)
-            saved += 1
+            save = await _save_to_server(url, content, char_count, auth_token)
+            if save["saved"]:
+                saved += 1
             results.append({
                 "url": url,
                 "status": "success",
                 "char_count": char_count,
-                "saved_to_server": True,
+                "saved_to_server": save["saved"],
+                # The Source this page landed as (SOURCE-CONVERGENCE §4.4).
+                "processed_document_id": save["processed_document_id"],
+                "source_notices": save["source_notices"],
+                **({"save_error": save["save_error"]} if save["save_error"] else {}),
                 "content": content,
             })
         else:
@@ -122,7 +153,7 @@ async def local_scrape(
 
     logger.info(
         "[scraper.py] local_scrape: %d succeeded (%d saved), %d failed",
-        saved, saved, len(failed),
+        len(pages) - len(failed), saved, len(failed),
     )
     return {
         "results": results,

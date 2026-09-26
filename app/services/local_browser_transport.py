@@ -262,24 +262,29 @@ class CallbackLimits:
     def __init__(self) -> None:
         self.global_gate = asyncio.Semaphore(4)
         self._per_address: dict[str, asyncio.Semaphore] = {}
+        self._cleanup_per_address: dict[str, asyncio.Semaphore] = {}
         self._global_bucket = _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 1.0)
         self._buckets: dict[str, _Bucket] = {
             "unknown": _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
         }
 
-    def _address_gate(self, address: str) -> asyncio.Semaphore | None:
-        if address not in self._per_address:
-            if len(self._per_address) >= 64:
+    def _address_gate(self, address: str, operation: str | None) -> asyncio.Semaphore | None:
+        # Cleanup requires a grant and is idempotent.  Let it use the
+        # fourth global slot while three callbacks from this address are busy.
+        cleanup = operation == "cleanup"
+        gates = self._cleanup_per_address if cleanup else self._per_address
+        if address not in gates:
+            if len(gates) >= 64:
                 return None
-            self._per_address[address] = asyncio.Semaphore(
-                _CANONICAL_CREDENTIAL_CALLBACK_PARALLELISM
+            gates[address] = asyncio.Semaphore(
+                1 if cleanup else _CANONICAL_CREDENTIAL_CALLBACK_PARALLELISM
             )
-        return self._per_address[address]
+        return gates[address]
 
     async def __aenter__(self) -> "CallbackLimits":
         raise RuntimeError("use acquire")
 
-    async def acquire(self, address: str) -> "CapacityLease":
+    async def acquire(self, address: str, operation: str | None = None) -> "CapacityLease":
         key = address if address and len(address) <= 128 else "unknown"
         bucket = (
             self._buckets.setdefault(
@@ -295,7 +300,7 @@ class CallbackLimits:
         if not bucket.take(now):
             _lifecycle_diagnostic("rate_address_bucket")
             raise TransportRefusal("rate_limited", 429)
-        address_gate = self._address_gate(key)
+        address_gate = self._address_gate(key, operation)
         if address_gate is None:
             _lifecycle_diagnostic("rate_address_capacity")
             raise TransportRefusal("rate_limited", 429)
@@ -1133,7 +1138,7 @@ async def execute_lifecycle(
     request: dict[str, str], *, address: str = "unknown", raw_bytes: bytes | None = None
 ) -> dict[str, str]:
     ensure_context_subscription()
-    capacity = await _LIMITS.acquire(address)
+    capacity = await _LIMITS.acquire(address, request.get("operation"))
     handed_to_replay = False
     try:
         context = get_local_browser_context()

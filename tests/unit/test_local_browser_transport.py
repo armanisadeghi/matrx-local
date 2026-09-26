@@ -621,7 +621,7 @@ async def test_execute_rechecks_context_and_device_after_server_await(monkeypatc
             return Device()
 
     class Limits:
-        async def acquire(self, _address):
+        async def acquire(self, _address, _operation):
             return transport.CapacityLease(asyncio.Semaphore(1), asyncio.Semaphore(1))
 
     monkeypatch.setattr(transport, "_LIMITS", Limits())
@@ -1010,6 +1010,22 @@ async def test_callback_limits_admit_three_overlapping_callbacks_from_one_owned_
 
 
 @pytest.mark.anyio
+async def test_cleanup_keeps_one_bounded_slot_when_three_commands_overlap():
+    limits = transport.CallbackLimits()
+    address = "127.0.0.1"
+    commands = [await limits.acquire(address, "approve") for _ in range(3)]
+    cleanup = await limits.acquire(address, "cleanup")
+    assert limits.global_gate._value == 0  # noqa: SLF001
+    with pytest.raises(transport.TransportRefusal) as refused:
+        await limits.acquire(address, "cleanup")
+    assert refused.value.reason == "rate_limited"
+    cleanup.release()
+    for command in commands:
+        command.release()
+    assert limits.global_gate._value == 4  # noqa: SLF001
+
+
+@pytest.mark.anyio
 async def test_callback_limits_admit_complete_credential_burst_then_refill(monkeypatch):
     """A complete inspect, two-page password, MFA, and cleanup stays bounded."""
     diagnostics: list[str] = []
@@ -1043,6 +1059,9 @@ async def test_callback_limits_admit_complete_credential_burst_then_refill(monke
         await limits.acquire(address)
     assert exhausted.value.reason == "rate_limited"
     assert "rate_global_bucket" in diagnostics
+    with pytest.raises(transport.TransportRefusal) as cleanup_exhausted:
+        await limits.acquire(address, "cleanup")
+    assert cleanup_exhausted.value.reason == "rate_limited"
 
     now += 2.0
     capacity = await limits.acquire(address)

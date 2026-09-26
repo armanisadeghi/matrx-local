@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -163,6 +164,53 @@ def test_host_entitlements_without_profile_carry_no_restricted_keys() -> None:
     assert "embedded.provisionprofile" in sealed["bundle"]["macOS"]["files"]
     host_only = json.loads((src_tauri / "tauri.release.macos.host-only.conf.json").read_text(encoding="utf-8"))
     assert "entitlements" not in host_only["bundle"]["macOS"]
+
+
+def _release_profile_materialization_script() -> str:
+    """Extract the macOS profile gate that GitHub Actions executes."""
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    start = workflow.index("      - name: Materialize macOS host and Vault provider profiles")
+    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
+    end = workflow.index("\n      - name: Build Python sidecar binary", run_start)
+    return "\n".join(
+        line.removeprefix("          ") for line in workflow[run_start:end].splitlines()
+    )
+
+
+def test_release_refuses_missing_vault_provider_profiles() -> None:
+    """A signed release must stop before Tauri when either Vault profile is absent.
+
+    This executes the exact workflow shell gate, rather than merely asserting
+    its text. Before the regression fix, the no-profile case exited zero and
+    wrote ``MATRX_NATIVE_VAULT_PROVIDER=absent`` for a host-only release.
+    """
+    script = _release_profile_materialization_script()
+    for missing_name, profiles in (
+        ("both profiles", ("", "")),
+        ("host profile", ("", "provider-profile")),
+        ("provider profile", ("host-profile", "")),
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "APPLE_HOST_PROVISIONING_PROFILE": profiles[0],
+                    "APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE": profiles[1],
+                    "GITHUB_ENV": str(temp / "github-env"),
+                    "GITHUB_STEP_SUMMARY": str(temp / "summary"),
+                    "RUNNER_TEMP": temp_dir,
+                },
+                capture_output=True,
+                text=True,
+            )
+        assert result.returncode != 0, (
+            f"release must refuse a missing {missing_name}; stdout={result.stdout!r} "
+            f"stderr={result.stderr!r}"
+        )
+        assert "required for every signed macOS release" in result.stderr
 
 
 # ---------------------------------------------------------------------------

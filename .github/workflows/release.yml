@@ -252,12 +252,11 @@ jobs:
       # profile inputs off the checkout and make their CMS envelopes a release
       # prerequisite before Tauri performs the host's final signing pass.
       #
-      # The native Vault provider is not release-ready (its frozen design in
-      # common-docs says "no release workflow/job"), so its profiles are the
-      # provider's inputs, not the host's. Both absent → the host ships exactly
-      # as v1.4.89 did, without the provider, and says so in the job summary.
-      # Both present → the provider is sealed and every check below applies.
-      # One of the two → a half-configured release is refused.
+      # A signed macOS release always ships the native Vault provider. Its
+      # distinct bundle identifier and entitlement set require both profiles;
+      # missing either one is a release configuration error, never a reason to
+      # silently publish a host-only build. The host-only config remains for
+      # local smoke work, but is not a release path.
       - name: Materialize macOS host and Vault provider profiles
         if: matrix.platform == 'macos-15'
         env:
@@ -266,15 +265,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          if [[ -z "$APPLE_HOST_PROVISIONING_PROFILE" && -z "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]]; then
-            NOTICE="native Vault provider NOT shipped in this release: repository secrets APPLE_HOST_PROVISIONING_PROFILE and APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE are not set. The host app is built and verified without the provider. Set both secrets to seal the provider into the next release."
-            echo "::warning::$NOTICE"
-            echo "⚠️ $NOTICE" >> "$GITHUB_STEP_SUMMARY"
-            echo "MATRX_NATIVE_VAULT_PROVIDER=absent" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          [[ -n "$APPLE_HOST_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_HOST_PROVISIONING_PROFILE is required when APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is set (half-configured Vault provider release refused)." >&2; exit 1; }
-          [[ -n "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is required when APPLE_HOST_PROVISIONING_PROFILE is set (half-configured Vault provider release refused)." >&2; exit 1; }
+          [[ -n "$APPLE_HOST_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_HOST_PROVISIONING_PROFILE is required for every signed macOS release; native Vault provider releases cannot fall back to a host-only build." >&2; exit 1; }
+          [[ -n "$APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE" ]] || { echo "ERROR: APPLE_VAULT_PROVIDER_PROVISIONING_PROFILE is required for every signed macOS release; native Vault provider releases cannot fall back to a host-only build." >&2; exit 1; }
           HOST_PROFILE="desktop/src-tauri/release-signing/host.provisionprofile"
           PROVIDER_PROFILE="$RUNNER_TEMP/vault-provider.provisionprofile"
           mkdir -p "$(dirname "$HOST_PROFILE")"
@@ -632,12 +624,9 @@ jobs:
           # Retry the action's upload path before discarding a platform matrix job.
           uploadUpdaterJson: true
           retryAttempts: 10
-          # Sealed: the release config adds the provider + host profile. Absent:
-          # the host-only config REMOVES the provider mapping that
-          # tauri.macos.conf.json carries for dev builds (JSON Merge Patch:
-          # null deletes the key), so the bundle never references an appex
-          # that was not built.
-          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && (env.MATRX_NATIVE_VAULT_PROVIDER == 'sealed' && ' --config src-tauri/tauri.release.macos.conf.json' || ' --config src-tauri/tauri.release.macos.host-only.conf.json') || '' }}
+          # Release builds always use the provider + host-profile config. The
+          # host-only config is retained for local smoke work only.
+          args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
 
       # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
       # The build scripts sign; this step PROVES the shipped artifact honors

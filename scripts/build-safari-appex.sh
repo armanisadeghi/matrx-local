@@ -15,6 +15,19 @@ BUNDLE_IDENTIFIER="com.aimatrx.desktop.safari-development"
 OUTPUT_DIR="${MATRX_SAFARI_APPEX_OUTPUT_DIR:-$REPO_ROOT/.safari-appex}"
 OUTPUT_APPEX="$OUTPUT_DIR/$APP_NAME.appex"
 
+invalidate_previous_output() {
+    # A failed build must not leave a prior success-looking artifact available
+    # for acceptance. The newly built bundle is copied here only after every
+    # source, converter, Xcode, and plist check has passed.
+    if [[ -e "$OUTPUT_APPEX" || -L "$OUTPUT_APPEX" ]]; then
+        rm -rf "$OUTPUT_APPEX"
+    fi
+}
+
+# Invalidate before preflight: a missing sibling checkout or Xcode install is
+# still a failed build and must not leave a stale canonical .appex behind.
+invalidate_previous_output
+
 require() {
     command -v "$1" >/dev/null 2>&1 || {
         echo "ERROR: $1 is required to build the Safari development extension." >&2
@@ -112,8 +125,9 @@ PLIST_PATH="$APPEX_PATH/Contents/Info.plist"
     exit 1
 }
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST_PATH")"
-[[ "$BUNDLE_ID" == com.aimatrx.desktop* ]] || {
-    echo "ERROR: extension bundle identifier must begin with com.aimatrx.desktop; got $BUNDLE_ID." >&2
+EXPECTED_BUNDLE_ID="$BUNDLE_IDENTIFIER.Extension"
+[[ "$BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] || {
+    echo "ERROR: extension bundle identifier must be $EXPECTED_BUNDLE_ID; got $BUNDLE_ID." >&2
     exit 1
 }
 

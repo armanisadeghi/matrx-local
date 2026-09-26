@@ -5,9 +5,11 @@
 set -euo pipefail
 
 APPEX_PATH="${1:?usage: scripts/verify-safari-web-extension.sh <Safari-extension.appex>}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/desktop/scripts/safari-web-extension-source.sh"
 EXPECTED_BUNDLE_ID="com.aimatrx.desktop.safari.Extension"
-EXPECTED_SOURCE_REPOSITORY="https://github.com/armanisadeghi/matrx-extend.git"
-EXPECTED_SOURCE_REVISION="3426a37a0c848ec755bbd953d6ac12fcc54e69df"
+EXPECTED_SOURCE_REPOSITORY="$MATRX_SAFARI_EXTENSION_SOURCE_REPOSITORY"
+EXPECTED_SOURCE_REVISION="$MATRX_SAFARI_EXTENSION_SOURCE_REVISION"
 
 [[ -d "$APPEX_PATH" ]] || { echo "ERROR: Safari extension bundle is missing: $APPEX_PATH" >&2; exit 1; }
 INFO_PLIST="$APPEX_PATH/Contents/Info.plist"

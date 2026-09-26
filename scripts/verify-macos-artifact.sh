@@ -82,12 +82,12 @@ else
 fi
 
 # 1. Deep, strict signature verification (covers every nested code object).
-echo "--- [1/7] codesign --verify --deep --strict"
+echo "--- [1/8] codesign --verify --deep --strict"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 # 2. Designated-requirement equivalence: parent and helper must both carry
 #    the parent identifier and identical anchor clauses (same TCC identity).
-echo "--- [2/7] designated-requirement equivalence"
+echo "--- [2/8] designated-requirement equivalence"
 req_of() { codesign -dr - "$1" 2>&1 | sed -n 's/^designated => //p'; }
 anchor_of() { req_of "$1" | sed -E 's/^identifier "[^"]*" and //'; }
 PARENT_REQ="$(req_of "$APP_PATH")"
@@ -110,7 +110,7 @@ echo "    ✅ parent and helper share identifier + anchor (one TCC identity)"
 
 # 3. Helper entitlements: every key in the sidecar entitlements plist must be
 #    present in the signed helper.
-echo "--- [3/7] helper entitlements"
+echo "--- [3/8] helper entitlements"
 ENTITLEMENTS_FILE="$REPO_ROOT/desktop/src-tauri/sidecar/sidecar.entitlements.plist"
 if [[ -f "$ENTITLEMENTS_FILE" ]]; then
     HELPER_ENTS="$(codesign -d --entitlements - --xml "$HELPER_APP" 2>/dev/null || true)"
@@ -142,7 +142,7 @@ fi
 #    cloudflared, llama-server and uv, because tauri-bundler signs every
 #    `externalBin` with the HOST's entitlements file. Entitlement text alone
 #    is not proof — this step EXECS each helper.
-echo "--- [4/7] bundled helper entitlements + exec"
+echo "--- [4/8] bundled helper entitlements + exec"
 HOST_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")"
 HELPER_DYLIBS="$APP_PATH/Contents/Resources/binaries"
 HELPER_FAILED=0
@@ -194,7 +194,7 @@ echo "    ✅ $HELPER_COUNT bundled helpers carry no profile-backed entitlement 
 # Final release verification validates each profile's
 # Apple CMS signature, current validity, exact team/bundle/capabilities, and
 # the certificate that actually signed that code object.
-echo "--- [5/7] native Vault provider boundary"
+echo "--- [5/8] native Vault provider boundary"
 if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
     echo "    ⚠️  SKIPPED: provider not shipped in this artifact (release inputs absent)"
     # A host WITHOUT an embedded provisioning profile must not carry
@@ -211,8 +211,9 @@ if [[ "$NATIVE_VAULT_PROVIDER" == "absent" ]]; then
     [[ ! -e "$APP_PATH/Contents/embedded.provisionprofile" ]] || { echo "ERROR: host embeds a provisioning profile although release inputs were absent" >&2; exit 1; }
     echo "    ✅ host carries no profile-backed entitlements"
     if [[ "$DEV_MODE" == "--dev" ]]; then
-        echo "--- [6/7] spctl assess: SKIPPED (--dev)"
-        echo "--- [7/7] stapler validate: SKIPPED (--dev)"
+        echo "--- [6/8] Safari Web Extension boundary: SKIPPED (provider absent)"
+        echo "--- [7/8] spctl assess: SKIPPED (--dev)"
+        echo "--- [8/8] stapler validate: SKIPPED (--dev)"
         echo "=== ✅ artifact verification passed (dev mode: signature + identity only)"
         exit 0
     fi
@@ -226,8 +227,8 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }
 
 if [[ "$DEV_MODE" == "--dev" ]]; then
     echo "    (release-profile validation skipped for explicitly unsigned dev artifact)"
-    echo "--- [6/7] spctl assess: SKIPPED (--dev)"
-    echo "--- [7/7] stapler validate: SKIPPED (--dev)"
+    echo "--- [7/8] spctl assess: SKIPPED (--dev)"
+    echo "--- [8/8] stapler validate: SKIPPED (--dev)"
     echo "=== ✅ artifact verification passed (dev mode: signature + identity only)"
     exit 0
 fi
@@ -247,6 +248,14 @@ echo "    ✅ provider bundle, typed entitlement split, profiles, and signed cer
 # is independent from the native Vault provider's profile-backed capability.
 echo "--- [6/8] Safari Web Extension boundary"
 "$REPO_ROOT/scripts/verify-safari-web-extension.sh" "$SAFARI_EXTENSION"
+team_id_of() { codesign -dvv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
+HOST_TEAM_ID="$(team_id_of "$APP_PATH")"
+SAFARI_TEAM_ID="$(team_id_of "$SAFARI_EXTENSION")"
+[[ -n "$HOST_TEAM_ID" && "$HOST_TEAM_ID" == "$SAFARI_TEAM_ID" ]] || {
+    echo "ERROR: Safari extension signing team differs from its containing app." >&2
+    exit 1
+}
+echo "    ✅ Safari extension shares the containing app signing team"
 fi
 
 # 7. Gatekeeper acceptance — proves notarization is visible to the OS.

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+
 from app.api.extension_ws_manager import (
     current_local_browser_registration,
     create_local_browser_future,
@@ -85,6 +86,31 @@ _RECEIPTS = {
     "cleanup": frozenset({"closed", "already_absent", "unconfirmed"}),
 }
 logger = get_logger()
+
+# One retained, headerless client prevents the authority callback from closing a
+# connection pool while a lifecycle request owns the event loop. Request identity
+# remains per-call; no credential or organization is retained on this client.
+_AUTHORITY_CLIENT: httpx.AsyncClient | None = None
+
+
+def _authority_client() -> httpx.AsyncClient:
+    global _AUTHORITY_CLIENT
+    if _AUTHORITY_CLIENT is None or _AUTHORITY_CLIENT.is_closed:
+        _AUTHORITY_CLIENT = httpx.AsyncClient(
+            follow_redirects=False, trust_env=False, timeout=httpx.Timeout(5.0)
+        )
+    return _AUTHORITY_CLIENT
+
+
+async def shutdown_authority_client() -> None:
+    """Best-effort process teardown, never invoked by a lifecycle callback."""
+    global _AUTHORITY_CLIENT
+    client, _AUTHORITY_CLIENT = _AUTHORITY_CLIENT, None
+    if client is not None:
+        try:
+            await asyncio.wait_for(client.aclose(), timeout=2.0)
+        except Exception:
+            logger.warning("[local_browser_transport] authority client shutdown incomplete")
 
 
 class TransportRefusal(Exception):
@@ -507,30 +533,21 @@ async def _verify(
     }
     try:
         async with asyncio.timeout(5.0):
-            async with httpx.AsyncClient(
-                follow_redirects=False,
-                trust_env=False,
-                timeout=httpx.Timeout(5.0),
-                # Authority verification is a one-shot callback. Keeping an idle
-                # connection here made httpx drain its pool during ``aclose`` on
-                # macOS, stalling the engine event loop long enough to lose a
-                # lifecycle renewal. Do not retain a pool beyond this callback.
-                limits=httpx.Limits(max_connections=1, max_keepalive_connections=0),
+            client = _authority_client()
+            async with client.stream(
+                "POST",
+                f"{_base_url()}/browser-manager/local/transport/verify",
+                json=payload,
                 headers=headers,
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    f"{_base_url()}/browser-manager/local/transport/verify",
-                    json=payload,
-                ) as response:
-                    if (
-                        response.headers.get("content-encoding", "identity")
-                        .strip()
-                        .lower()
-                        != "identity"
-                    ):
-                        raise TransportRefusal("transport_unavailable", 503)
-                    raw = await _read_response(response)
+            ) as response:
+                if (
+                    response.headers.get("content-encoding", "identity")
+                    .strip()
+                    .lower()
+                    != "identity"
+                ):
+                    raise TransportRefusal("transport_unavailable", 503)
+                raw = await _read_response(response)
     except Exception as exc:
         raise TransportRefusal("transport_unavailable", 503) from exc
     if response.headers.get("cache-control", "").lower().find("no-store") < 0:

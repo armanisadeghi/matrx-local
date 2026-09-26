@@ -37,6 +37,7 @@ from app.services.local_browser_transport import (
     install_transport_subscriptions,
     protected_private_path,
     uninstall_transport_subscriptions,
+    shutdown_authority_client,
 )
 from app.launcher import get_registry as _get_launcher_registry
 from app.api.fetch_proxy_routes import router as fetch_proxy_router
@@ -1596,6 +1597,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(
         "[app/main.py] ── Matrx Local shutdown ────────────────────────────────────"
     )
+    await shutdown_authority_client()
     # Cascade shutdown: this is where the engine fulfills its half of the
     # ownership contract — Rust signaled us to stop, now we stop every child
     # we own in reverse-startup order. Rust must NOT pkill any of these

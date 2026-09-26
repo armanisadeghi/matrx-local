@@ -142,6 +142,7 @@ async def test_approve_verify_forwards_exact_command_and_rejects_wrong_digest(
             seen.update(json)
             yield Response()
 
+    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
     monkeypatch.setattr(
         transport, "get_aidream_server_url", lambda: "https://server.example"
@@ -362,6 +363,7 @@ async def test_server_callback_uses_actual_closed_contract_and_streams_limit(
             sent.update(method=method, url=url, body=json)
             yield Response()
 
+    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(transport.httpx, "AsyncClient", Client)
     monkeypatch.setattr(
         transport, "get_aidream_server_url", lambda: "https://server.example"
@@ -1067,6 +1069,7 @@ async def test_callback_negotiates_identity_instead_of_rejecting_requested_compr
         return httpx.Response(200, headers=headers, content=raw)
 
     real_client = httpx.AsyncClient
+    monkeypatch.setattr(transport, "_AUTHORITY_CLIENT", None)
     monkeypatch.setattr(
         transport.httpx,
         "AsyncClient",

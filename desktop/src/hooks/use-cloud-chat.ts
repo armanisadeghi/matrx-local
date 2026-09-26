@@ -82,6 +82,7 @@ import {
   type TypedDataPayload,
   type UntypedDataPayload,
 } from "@/types/python-generated/stream-events";
+import { decisionAnswersText, isDecisionAnswers } from "@/lib/decision-answers";
 
 const MAX_CONVERSATIONS = 100;
 const CLOUD_SOURCE_APP = "matrx-desktop";
@@ -166,7 +167,7 @@ interface CloudMessageRow {
   position?: number | null;
 }
 
-interface ExtractedContent {
+export interface ExtractedContent {
   answer: string;
   reasoning: string;
   diagnostics: string[];
@@ -660,7 +661,7 @@ function isReasoningBlockType(blockType: string): boolean {
   );
 }
 
-function contentPartToExtracted(part: unknown): ExtractedContent {
+export function contentPartToExtracted(part: unknown): ExtractedContent {
   if (typeof part === "string") {
     const split = splitInlineReasoning(part);
     return { answer: split.answer, reasoning: split.reasoning, diagnostics: [] };
@@ -670,6 +671,11 @@ function contentPartToExtracted(part: unknown): ExtractedContent {
   if (!record) return { answer: "", reasoning: "", diagnostics: [] };
 
   const type = readString(record.type) ?? "text";
+  // A decision turn is ONE typed part and no text: read it as its verdict,
+  // never fall through to the text fallback that found nothing and dropped it.
+  if (isDecisionAnswers(record)) {
+    return { answer: decisionAnswersText(record) ?? "", reasoning: "", diagnostics: [] };
+  }
   if (type === "thinking" || type === "reasoning" || type === "consolidated_reasoning") {
     return {
       answer: "",
@@ -2243,6 +2249,19 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                   blockBuilder.addStandaloneMarkdown(
                     `[Generated ${type.replace("_output", "")}](${urlValue})`,
                   );
+                  publishBlocks();
+                }
+              } else if (type === "decision_answers") {
+                // The server emits a decision turn's answers as this typed data
+                // event (and persists the same part); there is no text stream.
+                const verdict = decisionAnswersText(data);
+                if (verdict) {
+                  answerRenderBlocks.set(`data-${eventCount}-${type}`, {
+                    index: eventCount,
+                    text: verdict,
+                  });
+                  applyRenderAnswerBlocks();
+                  blockBuilder.addStandaloneMarkdown(verdict);
                   publishBlocks();
                 }
               } else if (

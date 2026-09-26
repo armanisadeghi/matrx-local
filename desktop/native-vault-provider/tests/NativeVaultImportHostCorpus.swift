@@ -12,7 +12,7 @@ private final class HostWire: NativeVaultPasskeyTransporting {
         let body: [String: Any]
         if path == "/api/auth/organizations" {
             // org-default-exempt: the strict synthetic server envelope names this inert field; host never decodes it as scope authority.
-            body = ["authenticated": true, "user_id": "host-subject", "organizations": [["id": organization.uuidString.lowercased(), "name": "Host corpus", "is_personal": false, "abbreviation": "HC"]], "default_organization_id": NSNull(), "default_preference_status": "unset", "warnings": [], "missing_organization_count": 0]
+            body = ["authenticated": true, "user_id": "host-subject", "organizations": [["id": organization.uuidString.lowercased(), "name": "Harbor Freight Logistics", "abbreviation": "HFL"]], "default_organization_id": NSNull(), "default_preference_status": "unset", "warnings": [], "missing_organization_count": 0]
         } else if path == "/api/vault/native/passkeys/import/capabilities" {
             body = ["protocol_version": 1, "activation_revision": 1, "max_source_bytes": 65_536, "max_request_body_bytes": 98_304, "max_transfer_items": 200, "max_file_bytes": 16_777_216]
         } else {
@@ -139,7 +139,7 @@ private func cxfFile(at url: URL, titles: [String]) throws {
         let anchor = NSWindow(contentRect: .init(x: 0, y: 0, width: 1, height: 1), styleMask: [.titled], backing: .buffered, defer: false)
 
         func host(file selected: URL, journal: URL, store: HostTransportStore, current: @escaping () -> Bool = { true }) -> NativeVaultImportHost {
-            NativeVaultImportHost(presentationAnchor: anchor, key: { "host-key" }, choose: { selected }, authentication: { _, _ in grant }, currentGrant: { _ in current() }, wire: HostWire(organization: organization), transportFactory: { _, _, _, _, _ in store.make() }, journalDirectory: journal)
+            NativeVaultImportHost(presentationAnchor: anchor, key: { "host-key" }, choose: { selected }, authentication: { _, _ in grant }, currentGrant: { _ in current() }, wire: HostWire(organization: organization), transportFactory: { _, _, _, scopes, _ in precondition(scopes == [organization: "user"], "an imported passkey is the person's own in every organization"); return store.make() }, journalDirectory: journal)
         }
 
         // A real CXF file must pass OS read + Rust parser before controller preview; wrong scope/digest cannot write.
@@ -188,6 +188,7 @@ private func cxfFile(at url: URL, titles: [String]) throws {
                 currentGrant: { _ in true },
                 wire: HostWire(organization: organization),
                 transportFactory: { grant, lifetime, access, scopes, current in
+                    precondition(scopes == [organization: "user"], "an imported passkey is the person's own in every organization")
                     productionLifetime = lifetime
                     productionWire.receiptAdmission = { productionLifetime?.isCurrent == true }
                     return NativeVaultImportTransport(grant: grant, lifetime: lifetime, sessionAccess: access, principalByScope: scopes, transport: productionWire, current: current)

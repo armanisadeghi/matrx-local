@@ -20,9 +20,12 @@
  *   1. Any read of `defaultOrganizationId` / `default_organization_id` — the
  *      user-level preference row. The rung this ruling deleted.
  *   2. Any call to the deleted `current_personal_org_id` /
- *      `ensure_personal_organization` RPCs, or a resolver choosing by
- *      `is_personal` / `isPersonal`. Organizations are unlimited and equal
- *      (access ladder); the column is dropped from `iam.organizations`.
+ *      `ensure_personal_organization` RPCs, and ANY `is_personal` /
+ *      `isPersonal` in code or a string literal, anywhere it scans (TS, JS,
+ *      Python, Swift, Rust). Organizations are unlimited and equal (access
+ *      ladder T-3); the column is dropped from `iam.organizations` and the
+ *      server's organizations report no longer carries it, so there is no
+ *      label, column list, or wire field left that may name it.
  *   3. The phrase "default organization" in user-facing copy — a screen that
  *      says it teaches the user something that does not exist.
  *
@@ -31,9 +34,6 @@
  *   Comments and Python docstrings. This file, and the resolvers themselves,
  *   have to be able to NAME the thing they ban; a comment reads nothing and
  *   shows nobody anything. Code and string literals are what get scanned.
- *   `isPersonal` outside a resolver is not refused YET: the macOS Vault
- *   provider still decodes it from the server's organizations report. Once
- *   that wire field is gone, this becomes a ban everywhere.
  *
  *   A declared exemption: `org-default-exempt: <reason, 20+ chars>` on the
  *   offending line or the line above it. A test that has to NAME the banned
@@ -69,19 +69,19 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
  * languages the last regression happened in is a guard for that regression.
  */
 const SCAN = /\.(ts|tsx|js|jsx|mjs|cjs|py|swift|rs)$/;
+/**
+ * `src/types/python-generated/` is a verbatim snapshot of the aidream server's
+ * OpenAPI schema; it is regenerated, never hand-edited, so a stale field there
+ * is fixed by regenerating, not here. It is skipped — and that is a blind spot:
+ * code that READS a generated `is_personal` still goes red where it reads it.
+ */
 const SKIP =
-  /(^|\/)(node_modules|dist|build|\.venv|venv|__pycache__|target|src-tauri\/gen)\//;
+  /(^|\/)(node_modules|dist|build|\.venv|venv|__pycache__|target|src-tauri\/gen|src\/types\/python-generated)\//;
 
 const PREFERENCE_READ = /\bdefault_?[Oo]rganization_?[Ii]d\b/;
 const PERSONAL_RPC = /\b(?:current_personal_org_id|ensure_personal_organization)\b/;
-/**
- * The two files that answer "which organization is this request for". Only
- * here is `is_personal` in a BOOLEAN position a defect.
- */
-const RESOLVER_FILES =
-  /(desktop\/src\/lib\/org\/active-org|app\/services\/aidream\/organization)\.(ts|py)$/;
+/** The retired organization type. Banned in code and literals everywhere. */
 const PERSONAL_TOKEN = /\b(is_personal|isPersonal)\b/;
-const BOOLEAN_POSITION = /(\bif\s*\(|\.find\(|\.filter\(|&&|\|\|)/;
 const COPY_PHRASE = /default\s+organization/i;
 const EXEMPT = /org-default-exempt:\s*\S.{19,}/;
 
@@ -129,14 +129,12 @@ export function findingsIn(text, where) {
   if (PERSONAL_RPC.test(code)) {
     out.push(`${where}: calls a deleted personal-organization RPC — organizations are all equal`);
   }
-  if (RESOLVER_FILES.test(where) || where.startsWith("planted-resolver")) {
-    for (const [index, line] of code.split("\n").entries()) {
-      if (PERSONAL_TOKEN.test(line) && BOOLEAN_POSITION.test(line)) {
-        out.push(
-          `${where}:${index + 1}: the resolver chooses by is_personal — there is no organization type`,
-        );
-        break;
-      }
+  for (const [index, line] of code.split("\n").entries()) {
+    if (PERSONAL_TOKEN.test(line)) {
+      out.push(
+        `${where}:${index + 1}: names is_personal — there is no organization type; organizations are all equal`,
+      );
+      break;
     }
   }
   for (const literal of stringLiterals(code)) {
@@ -200,20 +198,39 @@ function selfTest() {
     [
       "const personal = organizations.find((o) => o.isPersonal);",
       "desktop/src/features/org/OrganizationPickerDialog.tsx",
-      0,
-      "the same line outside a resolver (a label, not an answer)",
+      1,
+      "the same line outside a resolver (still an organization type)",
     ],
     [
       '.select("id,name,is_personal")',
       "desktop/src/lib/org/active-org.ts",
-      0,
+      1,
       "is_personal in a column list inside the resolver",
     ],
     ['throw new Error("No default organization is set.");', "x.ts", 1, "copy in a string"],
     ["// the default organization rung is gone; never read it", "x.ts", 0, "TS comment"],
     ['"""There is no default organization any more."""', "x.py", 0, "py docstring"],
     ["# no default organization is ever read here", "x.py", 0, "py comment"],
-    ['label = org.isPersonal ? `${org.name} (personal)` : org.name;', "x.ts", 0, "personal as a label"],
+    ['label = org.isPersonal ? `${org.name} (personal)` : org.name;', "x.ts", 1, "personal as a label"],
+    [
+      'principal: org.isPersonal ? "user" : "organization"',
+      "desktop/native-vault-provider/NativeVaultPasskey.swift",
+      1,
+      "the Vault provider choosing a principal by organization type (Swift)",
+    ],
+    [
+      'Set(["id", "name", "is_personal", "abbreviation"])',
+      "desktop/native-vault-provider/NativeVaultCodec.swift",
+      1,
+      "the wire key in a Swift decoder's key set",
+    ],
+    ["/// organizations carry no is_personal type any more", "x.swift", 0, "Swift doc comment"],
+    [
+      '// org-default-exempt: fixture names the retired key to prove the decoder refuses it\nlet row = "{\\"is_personal\\":true}"',
+      "desktop/native-vault-provider/tests/NativeVaultPasswordCorpus.swift",
+      0,
+      "declared exemption in a rejection fixture",
+    ],
     ["const id = readStoredSelection()?.id ?? null;", "x.ts", 0, "device selection"],
     [
       '// org-default-exempt: named here only so the fake client can refuse it\nBANNED = ("current_personal_org_id",)',
@@ -244,10 +261,10 @@ function selfTest() {
   }
   console.log(
     `check:org-default-ban self-test: ${bad === 0 ? "PASS" : `FAIL (${bad})`}\n` +
-      "  RED on a preference read (TS + py), the personal-org RPC, a resolver choosing\n" +
-      "  by is_personal, and the phrase in a user-facing string. GREEN on comments and\n" +
-      "  docstrings that name the ban, on isPersonal used as a label, and on this\n" +
-      "  device's own stored selection.",
+      "  RED on a preference read (TS + py + Swift + Rust), the personal-org RPC, any\n" +
+      "  is_personal/isPersonal in code or a literal (resolver, label, Swift decoder),\n" +
+      "  and the phrase in a user-facing string. GREEN on comments and docstrings that\n" +
+      "  name the ban, declared exemptions, and this device's own stored selection.",
   );
   return bad === 0 ? 0 : 1;
 }

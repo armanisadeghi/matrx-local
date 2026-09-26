@@ -222,10 +222,10 @@ final class NativeVaultPasskeyCoordinator {
                     guard preflightHTTP.statusCode == 200, try NativeVaultPasskeyCodec.matches(preflightData).matches.isEmpty, self.current(operation) else { throw EnrollmentError.message("A matching passkey already exists for this website.") }
                 }
                 let label = self.operationLabel.removeValue(forKey: operation.id) ?? defaultLabel
-                let mutation = UUID().uuidString.lowercased(); let empty = try self.exactBody(mutation: mutation, source: Data(), label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded)
+                let mutation = UUID().uuidString.lowercased(); let empty = try self.exactBody(mutation: mutation, source: Data(), label: label, principal: "user", excluded: excluded)
                 let usable = min(caps.maxSourceBytes, 3 * max(0, (caps.maxRequestBodyBytes - empty.count) / 4)); guard usable > 0 else { throw EnrollmentError.message("Passkey storage limit is unavailable. Try again.") }
                 let bridge = NativeOperation(); operation.bridgeOperation = bridge
-                let ceremony = NativeVaultAppleCeremony(operation: operation, coordinator: self, grant: grant, organization: org, mutation: mutation, label: label, principal: org.isPersonal ? "user" : "organization", excluded: excluded, maximum: usable, bodyLimit: caps.maxRequestBodyBytes)
+                let ceremony = NativeVaultAppleCeremony(operation: operation, coordinator: self, grant: grant, organization: org, mutation: mutation, label: label, principal: "user", excluded: excluded, maximum: usable, bodyLimit: caps.maxRequestBodyBytes)
                 let result = try await bridge.register(input: NativeRegistrationInput(rpId: identity.relyingPartyIdentifier, userHandle: identity.userHandle, username: identity.userName, displayName: nil, clientDataHash: request.clientDataHash, supportedAlgorithms: [-7], excludedCredentialIds: excluded), existingSources: [], maxSourceBytes: UInt32(usable), ceremony: ceremony)
                 guard await self.grantIsStillCurrent(grant, operation: operation) else { throw EnrollmentError.message("Your Vault account changed. Start again.") }
                 let credential = ASPasskeyRegistrationCredential(relyingParty: identity.relyingPartyIdentifier, clientDataHash: request.clientDataHash, credentialID: result.credentialId, attestationObject: result.attestationObject, extensionOutput: nil)

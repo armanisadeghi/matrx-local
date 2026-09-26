@@ -15,7 +15,7 @@ final class NativeVaultImportHost {
     struct PublicSlot: Codable { let slot_id: String; let title: String?; let disposition: String; let reason: String? }
     struct PublicPreview: Codable { let operation_id: String; let preview_digest: String; let offset: Int; let total: Int; let slots: [PublicSlot] }
     private struct Capability { let maxSource: Int; let maxBody: Int; let maxItems: Int; let maxFile: Int }
-    private struct Membership { let id: String; let isPersonal: Bool }
+    private struct Membership { let id: String }
     private final class Operation {
         let id = UUID(); let organization: UUID; let lifetime = NativeVaultRequestLifetime()
         var task: Task<Void, Never>?; var context: LAContext?; var parser: NativeVaultImportParser?; var controller: NativeVaultImportController?; var innerID: UUID?
@@ -98,10 +98,10 @@ final class NativeVaultImportHost {
             let grant = try await authenticate(op, access: access)
             let url = NativeVaultImportJournal.url(base: journalBase(), subject: grant.subject, generation: grant.generation)
             guard let journal = try NativeVaultImportJournal.load(from: url), journal.subject == grant.subject, journal.generation == grant.generation, current(op), grantCurrent(grant) else { throw CancellationError() }
-            let membership = try await membership(journal.organizationID, grant: grant)
+            _ = try await membership(journal.organizationID, grant: grant)
             let limits = try await capabilities(journal.organizationID, grant: grant)
             guard journal.entries.count <= limits.maxItems, current(op), grantCurrent(grant) else { throw CancellationError() }
-            let transport = transportFactory(grant, op.lifetime, access, [journal.organizationID: membership.isPersonal ? "user" : "organization"], { [weak self, weak op] in (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) })
+            let transport = transportFactory(grant, op.lifetime, access, [journal.organizationID: "user"], { [weak self, weak op] in (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) })
             let controller = NativeVaultImportController(parser: NativeVaultImportParser(), transport: transport, journalURL: journalBase(), maximumItems: limits.maxItems, currentBinding: { [weak self, weak op] in guard (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) else { return nil }; return (grant.subject, grant.generation) })
             op.controller = controller; op.innerID = journal.operationID
             _ = await controller.recoverJournal()
@@ -132,11 +132,11 @@ final class NativeVaultImportHost {
                               "mutation_id": UUID().uuidString.lowercased(),
                               "source": NativeVaultPasskeyCodec.base64url(candidate.canonicalSource),
                               "label": candidate.title,
-                              "principal_type": organization.isPersonal ? "user" : "organization",
+                              "principal_type": "user",
                               "format_version": "cxf1.0"
                           ], options: [.sortedKeys]).count <= limits.maxBody) == true
                   }) else { throw CancellationError() }
-            let transport = transportFactory(grant, op.lifetime, access, [op.organization: organization.isPersonal ? "user" : "organization"], { [weak self, weak op] in (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) })
+            let transport = transportFactory(grant, op.lifetime, access, [op.organization: "user"], { [weak self, weak op] in (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) })
             let controller = NativeVaultImportController(parser: NativeVaultImportParser(), transport: transport, journalURL: journalBase(), maximumItems: limits.maxItems, currentBinding: { [weak self, weak op] in guard (self?.current(op) ?? false) && (self?.grantCurrent(grant) ?? false) else { return nil }; return (grant.subject, grant.generation) })
             op.controller = controller; op.innerID = controller.beginInventory(inventory); sync(op.id)
         } catch is CancellationError { if current(op) { set(op, phase: "cancelled", message: "Passkey import cancelled.") } }
@@ -146,7 +146,7 @@ final class NativeVaultImportHost {
         let data = try await get("api/auth/organizations", grant: grant, organization: nil)
         let organizations = try NativeOrganizationCodec.organizations(data, subject: grant.subject)
         guard let selected = organizations.first(where: { $0.id == id.uuidString.lowercased() }) else { throw CancellationError() }
-        return .init(id: selected.id, isPersonal: selected.isPersonal)
+        return .init(id: selected.id)
     }
 
     private func capabilities(_ id: UUID, grant: NativeVaultSessionAccess.Grant) async throws -> Capability { let data = try await get("api/vault/native/passkeys/import/capabilities", grant: grant, organization: id); let object = try StrictEnvelope.object(data, required: ["protocol_version", "activation_revision", "max_source_bytes", "max_request_body_bytes", "max_transfer_items", "max_file_bytes"], optional: []); func integer(_ key: String, _ range: ClosedRange<Int>) -> Int? { guard case let .number(value)? = object[key], let result = Int(value), range.contains(result) else { return nil }; return result }; guard integer("protocol_version", 1...1) != nil, integer("activation_revision", 1...Int.max) != nil, let source = integer("max_source_bytes", 1...65_536), let body = integer("max_request_body_bytes", 1...98_304), let items = integer("max_transfer_items", 1...2_000), let file = integer("max_file_bytes", 1...16_777_216) else { throw CancellationError() }; return .init(maxSource: source, maxBody: body, maxItems: items, maxFile: file) }

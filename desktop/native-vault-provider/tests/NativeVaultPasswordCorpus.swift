@@ -52,7 +52,7 @@ struct NativeVaultPasswordCorpus {
         let org = "22222222-2222-4222-8222-222222222222"
         let item = "33333333-3333-4333-8333-333333333333"
         // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
-        let report = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        let report = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"abbreviation\":\"HFL\"}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
         let decoded = try! NativeOrganizationCodec.organizations(report, subject: subject)
         require(decoded.count == 1 && decoded[0].id == org, "valid organization report must decode")
         // THE SAVED DEFAULT IS INERT (Arman, 2026-09-19). This report names an
@@ -63,9 +63,21 @@ struct NativeVaultPasswordCorpus {
         // the person never chose on this Mac.
         let strangerOrg = "44444444-4444-4444-8444-444444444444"
         // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
-        let withStrangerDefault = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":\"P\"}],\"default_organization_id\":\"\(strangerOrg)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        let withStrangerDefault = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"abbreviation\":\"HFL\"}],\"default_organization_id\":\"\(strangerOrg)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
         let ignoring = try! NativeOrganizationCodec.organizations(withStrangerDefault, subject: subject)
         require(ignoring.count == 1 && ignoring[0].id == org, "the account-level default must not reach the caller")
+        // ORGANIZATIONS ARE UNLIMITED AND EQUAL (access ladder T-3): there is no
+        // organization type. A row still carrying the retired type key, or any
+        // other extra key, is a server this client does not know — refuse it.
+        // org-default-exempt: fixture names the retired type key to prove the decoder refuses it
+        let retiredTypeKey = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"is_personal\":true,\"abbreviation\":\"HFL\"}],\"default_organization_id\":null,\"default_preference_status\":\"unset\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        rejects({ _ = try NativeOrganizationCodec.organizations(retiredTypeKey, subject: subject) }, "an organization row carrying the retired type key must fail")
+        // org-default-exempt: the strict envelope must name the inert preference key to reach the row check
+        let extraKey = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"abbreviation\":\"HFL\",\"slug\":\"hfl\"}],\"default_organization_id\":null,\"default_preference_status\":\"unset\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        rejects({ _ = try NativeOrganizationCodec.organizations(extraKey, subject: subject) }, "an organization row with an unknown key must fail")
+        // org-default-exempt: the strict envelope must name the inert preference key to reach the row check
+        let missingKey = "{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\"}],\"default_organization_id\":null,\"default_preference_status\":\"unset\",\"warnings\":[],\"missing_organization_count\":0}".data(using: .utf8)!
+        rejects({ _ = try NativeOrganizationCodec.organizations(missingKey, subject: subject) }, "an organization row missing abbreviation must fail")
         let match = "{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}".data(using: .utf8)!
         require((try! NativePasswordCodec.matches(match)).matches.first?.itemID == item, "value-free match must decode")
         rejects({ _ = try NativePasswordCodec.matches("{\"matches\":[],\"matches\":[],\"truncated\":false,\"reason\":null}".data(using: .utf8)!) }, "duplicate response keys must fail")
@@ -92,7 +104,7 @@ struct NativeVaultPasswordCorpus {
         let response = { (json: String) in (json.data(using: .utf8)!, HTTPURLResponse(url: URL(string: "https://server.app.matrxserver.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!) }
         let transport = ScriptedPasswordTransport()
         // org-default-exempt: a fixture must NAME the inert field to prove it is ignored
-        transport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
+        transport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         let controller = CredentialProviderViewController(); controller.nativePasswordKeyOverride = "public-build-key"; controller.nativePasswordTransport = transport; controller.nativePasswordAuthorize = { $0(true) }; controller.nativePasswordAcquire = { $0(.success(grant)) }; controller.nativePasswordCurrentState = { NativePasswordCurrentState(generation: "generation-a", subject: subject) }; controller.nativePasswordOrganizationChoice = { _ in 0 }; controller.nativePasswordMatchChoice = { _ in 0 }
         var completed: [(String, String)] = []; var cancellations: [NSError] = []
         controller.nativePasswordCompleteSink = { credential, done in completed.append(credential); done() }; controller.nativePasswordCancelSink = { cancellations.append($0) }
@@ -107,7 +119,7 @@ struct NativeVaultPasswordCorpus {
         // organization and service digest. It never opens the generic picker.
         let selectedTransport = ScriptedPasswordTransport()
         // org-default-exempt: synthetic server envelope exercises rejection of saved-preference authority; never selects a request scope.
-        selectedTransport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Personal\",\"is_personal\":true,\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
+        selectedTransport.replies = [.success(response("{\"authenticated\":true,\"user_id\":\"\(subject)\",\"organizations\":[{\"id\":\"\(org)\",\"name\":\"Harbor Freight Logistics\",\"abbreviation\":null}],\"default_organization_id\":\"\(org)\",\"default_preference_status\":\"valid\",\"warnings\":[],\"missing_organization_count\":0}")), .success(response("{\"matches\":[{\"item_id\":\"\(item)\",\"display_name\":\"Example\",\"request_identifier_index\":0}],\"truncated\":false,\"reason\":null}")), .success(response("{\"username\":\"u\",\"password\":\"p\"}"))]
         let selected = CredentialProviderViewController(); selected.nativePasswordKeyOverride = "public-build-key"; selected.nativePasswordTransport = selectedTransport; selected.nativePasswordAuthorize = { $0(true) }; selected.nativePasswordAcquire = { $0(.success(grant)) }; selected.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }
         selected.nativeIdentityBindingOverride = { _ in NativeVaultIdentityBinding(item: item, kind: .password, organization: org, passkey: nil, serviceDigest: NativeVaultIdentityRecord.serviceDigest(type: "domain", identifier: "example.com")) }
         var selectedCompleted = 0; var selectedCancelled = 0

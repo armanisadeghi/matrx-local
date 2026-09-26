@@ -384,7 +384,6 @@ extension UUID { var canonical: String { uuidString.lowercased() } }
 struct NativeOrganization {
     let id: String
     let name: String
-    let isPersonal: Bool
 }
 
 /// Shared strict organization report decoder; never selects a saved preference.
@@ -407,13 +406,12 @@ enum NativeOrganizationCodec {
             let abbreviationIsValid: Bool
             switch value["abbreviation"] { case .null?, .string?: abbreviationIsValid = true; default: abbreviationIsValid = false }
             guard case let .object(value) = row,
-                  Set(value.keys) == Set(["id", "name", "is_personal", "abbreviation"]),
+                  Set(value.keys) == Set(["id", "name", "abbreviation"]),
                   case let .string(id)? = value["id"], id.canonicalUUID,
                   case let .string(name)? = value["name"], !name.isEmpty, name.unicodeScalars.count <= 256,
-                  case let .bool(personal)? = value["is_personal"],
                   abbreviationIsValid,
                   seen.insert(id).inserted else { throw rejected() }
-            organizations.append(NativeOrganization(id: id, name: name, isPersonal: personal))
+            organizations.append(NativeOrganization(id: id, name: name))
         }
         guard case let .string(status)? = object["default_preference_status"], ["valid", "unset", "stale", "malformed", "unavailable"].contains(status), case .array? = object["warnings"], case .number? = object["missing_organization_count"] else { throw rejected() }
         return organizations

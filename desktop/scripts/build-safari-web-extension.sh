@@ -43,6 +43,9 @@ invalidate_previous_output() {
     fi
 }
 
+# Clear the canonical staging path before every possible build failure.
+invalidate_previous_output
+
 require git
 require pnpm
 require xcodebuild
@@ -53,8 +56,6 @@ require plutil
 [[ "$(uname -s)" == "Darwin" ]] || { echo "ERROR: production Safari extension builds require macOS." >&2; exit 1; }
 [[ -x "$CONVERTER" ]] || { echo "ERROR: Safari converter not found at $CONVERTER. Set DEVELOPER_DIR to a full Xcode Developer directory." >&2; exit 1; }
 
-# Clear the canonical staging path before every possible build failure.
-invalidate_previous_output
 resolve_signing_identity
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/matrx-safari-production.XXXXXX")"

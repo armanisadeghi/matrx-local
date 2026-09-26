@@ -48,4 +48,18 @@ fi
 [[ ! -e "$STALE_APPEX" ]] || { echo "ERROR: invalid signing identity left a stale Safari extension bundle." >&2; exit 1; }
 grep -Fq "not a valid installed Developer ID Application identity" "$WORKDIR/invalid-identity.log"
 
+PREFLIGHT_OUTPUT="$WORKDIR/missing-converter"
+STALE_APPEX="$PREFLIGHT_OUTPUT/Matrx Extend Safari.appex"
+mkdir -p "$STALE_APPEX"
+touch "$STALE_APPEX/stale-marker"
+if DEVELOPER_DIR="$WORKDIR/not-xcode" \
+    MATRX_SAFARI_EXTENSION_SIGNING_IDENTITY="$IDENTITY" \
+    MATRX_SAFARI_WEB_EXTENSION_OUTPUT_DIR="$PREFLIGHT_OUTPUT" \
+    "$BUILDER" >"$WORKDIR/missing-converter.log" 2>&1; then
+    echo "ERROR: missing Safari converter unexpectedly succeeded." >&2
+    exit 1
+fi
+[[ ! -e "$STALE_APPEX" ]] || { echo "ERROR: missing Safari converter left a stale Safari extension bundle." >&2; exit 1; }
+grep -Fq "Safari converter not found" "$WORKDIR/missing-converter.log"
+
 echo "Safari production extension full-build and identity-failure probes passed."

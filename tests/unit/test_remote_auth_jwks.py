@@ -22,6 +22,7 @@ import json
 import threading
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import jwt
 import pytest
@@ -226,23 +227,34 @@ async def test_verified_token_is_never_cached_past_its_expiry(
     issuer, signing_key, monkeypatch
 ):
     """An expired token must be rechecked rather than accepted from a warm cache."""
-    expiry = int(time.time()) + 60
+    wall_now = time.time()
+    monotonic_now = time.monotonic()
+    # Keep this below the production positive-cache cap (60 seconds): a
+    # regression to a flat cache TTL must keep this test red.
+    expiry = int(wall_now) + 30
     token = mint(signing_key, exp=expiry)
     assert (await subject.verify_supabase_token_result(token)).status == "verified"
 
-    # Simulate the cache deadline passing without sleeping (and without
-    # depending on when a second-granular JWT was minted).
-    key = subject._token_key(token)
-    _cache_deadline, cached_user = subject._verify_cache[key]
-    subject._verify_cache[key] = (time.monotonic() - 1, cached_user)
+    # Keep the production-created cache entry intact and advance both auth
+    # clocks by the same amount. This crosses ``exp`` but not a flat 60-second
+    # cache, proving _positive_ttl_for caps the cache at JWT expiry.
+    expired_wall = expiry + 1
+    expired_monotonic = monotonic_now + (expired_wall - wall_now)
+    monkeypatch.setattr(
+        subject,
+        "time",
+        SimpleNamespace(
+            time=lambda: expired_wall,
+            monotonic=lambda: expired_monotonic,
+        ),
+    )
 
     class _ExpiredNow(datetime):
         @classmethod
         def now(cls, tz=None):
             return datetime.fromtimestamp(expiry + 1, tz=tz)
 
-    # PyJWT owns JWT expiry validation. Move only that clock beyond ``exp``;
-    # the cache has already been forced cold above.
+    # PyJWT owns JWT expiry validation, so advance that clock too.
     monkeypatch.setattr(jwt.api_jwt, "datetime", _ExpiredNow)
     assert (await subject.verify_supabase_token_result(token)).status == "invalid"
 

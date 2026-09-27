@@ -19,7 +19,7 @@ importers:
         version: 0.11.11(react@19.3.0)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.48.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.48.10(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.16.10(react@19.3.0)
@@ -257,8 +257,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.48.9':
-    resolution: {integrity: sha512-ZeGMsISHTJGzXk/hVxkQExTOHIOPFuylp56ecOChmxP+T90gDFD2zEiq9OYmVtpywsrFUfpoSVIczenqjOBXRw==}
+  '@ai-matrx/design-system@0.48.10':
+    resolution: {integrity: sha512-91siwyPUPyX26d7OhAl9PTp/vwWo4oT4DyuN8MvaIK16VN2IRpdBwIHR6dLBxE1F9PaTT3IZj4rAtvo3VA4b/Q==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -2976,7 +2976,7 @@ snapshots:
     dependencies:
       '@ai-matrx/associations': 0.13.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/data': 0.18.1(@supabase/supabase-js@2.117.2)(react@19.3.0)
-      '@ai-matrx/design-system': 0.48.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.48.10(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.16.10(react@19.3.0)
     optionalDependencies:
       react: 19.3.0
@@ -2988,7 +2988,7 @@ snapshots:
 
   '@ai-matrx/associations@0.13.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/design-system': 0.48.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.48.10(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.16.10(react@19.3.0)
     optionalDependencies:
       react: 19.3.0
@@ -3016,7 +3016,7 @@ snapshots:
       - '@supabase/supabase-js'
       - react-native
 
-  '@ai-matrx/design-system@0.48.9(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/design-system@0.48.10(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/kit': 0.16.10(react@19.3.0)
       '@dnd-kit/core': 6.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

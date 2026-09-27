@@ -153,14 +153,7 @@ function clientOver(rows: unknown[]): AgentCatalogClient {
     };
     return builder as ReturnType<AgentCatalogClient["rpc"]>;
   };
-  return {
-    rpc: call,
-    schema: () => ({
-      from: () => ({
-        update: () => ({ eq: async () => ({ error: null }) }),
-      }),
-    }),
-  };
+  return { rpc: call };
 }
 
 async function renderPicker(

@@ -24,7 +24,7 @@
  *                            `app/services/agent_catalog/FEATURE.md`).
  *
  * The structural client is a subset of `SupabaseClient` — `rpc()` (thenable,
- * `.order()`, `.range()`) and `schema().from().update().eq()` — exactly the
+ * `.order()`, `.range()`) — exactly the
  * seam the package already reads online. It is a TRANSPORT, never a second
  * implementation.
  *
@@ -53,7 +53,6 @@ import {
   type AgentCatalog,
   type AgentCatalogClient,
   type AgentCatalogRpcCall,
-  type AgentCatalogTableQuery,
   type AgentCatalogTransport,
   type PgResultLike,
 } from "@ai-matrx/agents/catalog";
@@ -234,25 +233,6 @@ function offlineRefusalCall(fn: string): AgentCatalogRpcCall {
   return call;
 }
 
-const offlineWriteTable: AgentCatalogTableQuery = {
-  update() {
-    return {
-      eq() {
-        return Promise.resolve({
-          error: {
-            message:
-              "Favourites cannot be changed while this chat is reading the " +
-              "offline catalog. There is no offline write queue on purpose — a " +
-              "star that silently disappeared on reconnect would be worse than " +
-              "this refusal. Reconnect, or star the agent in Cloud Chat.",
-            code: "matrx_local_offline_write",
-          },
-        });
-      },
-    };
-  },
-};
-
 /**
  * The LOCAL client: the sidecar's offline mirror, wearing the exact interface
  * the package already speaks to Supabase. Exported so its contract can be
@@ -261,13 +241,6 @@ const offlineWriteTable: AgentCatalogTableQuery = {
 export const localCatalogClient: AgentCatalogClient = {
   rpc(fn) {
     return fn === OFFLINE_RPC ? offlineListCall() : offlineRefusalCall(fn);
-  },
-  schema() {
-    return {
-      from() {
-        return offlineWriteTable;
-      },
-    };
   },
 };
 

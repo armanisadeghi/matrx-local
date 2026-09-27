@@ -73,16 +73,17 @@ describe("the offline catalog client", () => {
   });
 
   it("REFUSES the offline favourite write instead of faking success", async () => {
-    const { error } = await getLocalAgentCatalogClient()
-      .schema("agent")
-      .from("definition")
-      .update({ is_favorite: true })
-      .eq("id", "b");
+    // Stars are written through `ues_set` (package 0.16+); offline it must be
+    // refused loudly, never answered with a fake success.
+    const { error } = await getLocalAgentCatalogClient().rpc("ues_set", {
+      p_entity_type: "agent",
+      p_entity_id: "b",
+    });
 
     expect(error).not.toBeNull();
-    expect(error?.code).toBe("matrx_local_offline_write");
+    expect(error?.code).toBe("matrx_local_rpc_not_mirrored");
     // The refusal must carry the remedy, not just the fact.
-    expect(error?.message).toMatch(/Reconnect/i);
+    expect(error?.message).toContain("agx_get_list_full");
   });
 
   it("surfaces an unreachable mirror as a loud error, not as zero agents", async () => {

@@ -21,6 +21,7 @@ import http.server
 import json
 import threading
 import time
+from datetime import datetime
 
 import jwt
 import pytest
@@ -221,11 +222,28 @@ async def test_garbage_is_invalid(issuer):
 
 
 @pytest.mark.anyio
-async def test_verified_token_is_never_cached_past_its_expiry(issuer, signing_key):
-    """A short-lived token must not keep passing on a warm cache."""
-    token = mint(signing_key, exp=int(time.time()) + 1)
+async def test_verified_token_is_never_cached_past_its_expiry(
+    issuer, signing_key, monkeypatch
+):
+    """An expired token must be rechecked rather than accepted from a warm cache."""
+    expiry = int(time.time()) + 60
+    token = mint(signing_key, exp=expiry)
     assert (await subject.verify_supabase_token_result(token)).status == "verified"
-    time.sleep(1.2)
+
+    # Simulate the cache deadline passing without sleeping (and without
+    # depending on when a second-granular JWT was minted).
+    key = subject._token_key(token)
+    _cache_deadline, cached_user = subject._verify_cache[key]
+    subject._verify_cache[key] = (time.monotonic() - 1, cached_user)
+
+    class _ExpiredNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(expiry + 1, tz=tz)
+
+    # PyJWT owns JWT expiry validation. Move only that clock beyond ``exp``;
+    # the cache has already been forced cold above.
+    monkeypatch.setattr(jwt.api_jwt, "datetime", _ExpiredNow)
     assert (await subject.verify_supabase_token_result(token)).status == "invalid"
 
 

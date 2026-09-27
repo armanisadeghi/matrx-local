@@ -11,6 +11,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { FloatingLayer, useFloatingLayerZIndex } from "@ai-matrx/design-system";
 import { useMediaActions } from "./MediaActionsProvider";
 import { buildMediaMenu } from "./MediaMenuItems";
 import { mediaTitle, type MediaDescriptor } from "./types";
@@ -31,6 +32,7 @@ export function MediaContextMenu({
   const ref = useRef<HTMLDivElement | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [pos, setPos] = useState(position);
+  const layerZIndex = useFloatingLayerZIndex(10000);
 
   // Keep the menu on screen (a right-click near the bottom-right edge must not
   // open a menu the user cannot see or reach).
@@ -69,13 +71,14 @@ export function MediaContextMenu({
   const title = mediaTitle(item);
 
   return createPortal(
-    <div
-      ref={ref}
-      role="menu"
-      aria-label="Media actions"
-      style={{ left: pos.x, top: pos.y, width: MENU_WIDTH }}
-      className="fixed z-[10000] overflow-hidden rounded-lg border bg-popover py-1 text-popover-foreground shadow-xl animate-in fade-in zoom-in-95 duration-100"
-    >
+    <FloatingLayer>
+      <div
+        ref={ref}
+        role="menu"
+        aria-label="Media actions"
+        style={{ left: pos.x, top: pos.y, width: MENU_WIDTH, zIndex: layerZIndex }}
+        className="fixed overflow-hidden rounded-lg border bg-popover py-1 text-popover-foreground shadow-xl animate-in fade-in zoom-in-95 duration-100"
+      >
       <p
         className="truncate px-3 py-1.5 text-[10px] text-muted-foreground"
         title={title}
@@ -112,7 +115,8 @@ export function MediaContextMenu({
           </div>
         );
       })}
-    </div>,
+      </div>
+    </FloatingLayer>,
     document.body,
   );
 }

@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal } from "lucide-react";
+import { FloatingLayer, useFloatingLayerZIndex } from "@ai-matrx/design-system";
 import { useMediaActions } from "./MediaActionsProvider";
 import { buildMediaMenu } from "./MediaMenuItems";
 import type { MediaDescriptor } from "./types";
@@ -48,6 +49,7 @@ export function MediaOverflowMenu({
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const layerZIndex = useFloatingLayerZIndex(10000);
 
   useEffect(() => {
     if (!open) {
@@ -111,45 +113,52 @@ export function MediaOverflowMenu({
       {open &&
         pos &&
         createPortal(
-          <div
-            ref={menuRef}
-            role="menu"
-            aria-label="Media actions"
-            style={{ left: Math.max(EDGE_PAD, pos.x), top: pos.y, width: MENU_WIDTH }}
-            className="fixed z-[10000] overflow-hidden rounded-lg border bg-popover py-1 text-popover-foreground shadow-xl animate-in fade-in zoom-in-95 duration-100"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {entries.map((e) => {
-              const isDelete = e.id === "delete";
-              const armed = isDelete && confirmingDelete;
-              return (
-                <div key={e.id}>
-                  {e.separatorBefore && <div className="my-1 h-px bg-border" />}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      if (isDelete && !armed) {
-                        setConfirmingDelete(true);
-                        return;
-                      }
-                      e.run();
-                    }}
-                    className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
-                      e.danger
-                        ? "text-destructive hover:bg-destructive/10"
-                        : "hover:bg-muted"
-                    } ${armed ? "bg-destructive/10 font-medium" : ""}`}
-                  >
-                    {e.icon}
-                    <span className="min-w-0 flex-1 truncate">
-                      {armed ? "Click again to delete" : e.label}
-                    </span>
-                  </button>
-                </div>
-              );
-            })}
-          </div>,
+          <FloatingLayer>
+            <div
+              ref={menuRef}
+              role="menu"
+              aria-label="Media actions"
+              style={{
+                left: Math.max(EDGE_PAD, pos.x),
+                top: pos.y,
+                width: MENU_WIDTH,
+                zIndex: layerZIndex,
+              }}
+              className="fixed overflow-hidden rounded-lg border bg-popover py-1 text-popover-foreground shadow-xl animate-in fade-in zoom-in-95 duration-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {entries.map((e) => {
+                const isDelete = e.id === "delete";
+                const armed = isDelete && confirmingDelete;
+                return (
+                  <div key={e.id}>
+                    {e.separatorBefore && <div className="my-1 h-px bg-border" />}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        if (isDelete && !armed) {
+                          setConfirmingDelete(true);
+                          return;
+                        }
+                        e.run();
+                      }}
+                      className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
+                        e.danger
+                          ? "text-destructive hover:bg-destructive/10"
+                          : "hover:bg-muted"
+                      } ${armed ? "bg-destructive/10 font-medium" : ""}`}
+                    >
+                      {e.icon}
+                      <span className="min-w-0 flex-1 truncate">
+                        {armed ? "Click again to delete" : e.label}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </FloatingLayer>,
           document.body,
         )}
     </>

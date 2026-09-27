@@ -22,7 +22,7 @@ importers:
         version: 0.48.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit':
         specifier: latest
-        version: 0.16.8(react@19.3.0)
+        version: 0.16.9(react@19.3.0)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -252,8 +252,8 @@ packages:
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
 
-  '@ai-matrx/kit@0.16.8':
-    resolution: {integrity: sha512-QcnrBPyxGKvr4TzRMSZPSCXlEP80spSL6PYMR4vxRa+5W2RC5MsGLAv4rdL7W10PbF+jO7+sOpfuMsDDEvG6Mg==}
+  '@ai-matrx/kit@0.16.9':
+    resolution: {integrity: sha512-F8MmsxhA3DMLJ+j0tTta8sFG19mCaxcdKisydaWbPzWilEA5DDQy0nhNgI9r+o25KWjgpg7ZW7vF+qL1YRGOkg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -2964,7 +2964,7 @@ snapshots:
     dependencies:
       '@ai-matrx/data': 0.18.1(@supabase/supabase-js@2.117.2)(react@19.3.0)
       '@ai-matrx/design-system': 0.48.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@ai-matrx/kit': 0.16.8(react@19.3.0)
+      '@ai-matrx/kit': 0.16.9(react@19.3.0)
     optionalDependencies:
       react: 19.3.0
     transitivePeerDependencies:
@@ -2994,7 +2994,7 @@ snapshots:
 
   '@ai-matrx/design-system@0.48.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/kit': 0.16.8(react@19.3.0)
+      '@ai-matrx/kit': 0.16.9(react@19.3.0)
       '@dnd-kit/core': 6.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-accordion': 1.2.20(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-alert-dialog': 1.1.23(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3034,7 +3034,7 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@ai-matrx/kit@0.16.8(react@19.3.0)':
+  '@ai-matrx/kit@0.16.9(react@19.3.0)':
     dependencies:
       '@ai-matrx/content-ir': 0.19.18
       dompurify: 3.4.15

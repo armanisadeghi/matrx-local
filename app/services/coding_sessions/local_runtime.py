@@ -181,6 +181,8 @@ class _LocalRun:
     next_sequence: int = 1
     client: Any = None
     task: asyncio.Task[None] | None = None
+    identity_task: asyncio.Task[None] | None = None
+    terminal_published: bool = False
     events: deque[dict[str, Any]] = field(default_factory=deque)
     subscribers: list[asyncio.Queue[dict[str, Any] | None]] = field(
         default_factory=list
@@ -302,6 +304,11 @@ class LocalClaudeRuntime:
         self._lock = asyncio.Lock()
         self._discovery_lock = asyncio.Lock()
         self._hydrate_lock = asyncio.Lock()
+        # Identity discovery can be waiting on a filesystem or importer call
+        # while a provider execution reaches its own terminal deadline.  Keep
+        # those children strongly referenced until they cooperate with
+        # cancellation, then reap them instead of losing an orphan task.
+        self._identity_tasks: set[asyncio.Task[None]] = set()
         self._hydrated = False
 
     def _database(self):
@@ -346,6 +353,26 @@ class LocalClaudeRuntime:
             "field_sources": snapshot["field_sources"],
         }
 
+    def _track_identity_task(self, run: _LocalRun, task: asyncio.Task[None]) -> None:
+        run.identity_task = task
+        self._identity_tasks.add(task)
+
+        def _reap(completed: asyncio.Task[None]) -> None:
+            self._identity_tasks.discard(completed)
+            if run.identity_task is completed:
+                run.identity_task = None
+            # Retrieving an unexpected exception prevents an orphaned task
+            # warning without changing the run's already-settled truth.
+            with contextlib.suppress(asyncio.CancelledError):
+                completed.exception()
+
+        task.add_done_callback(_reap)
+
+    @staticmethod
+    def _identity_work_is_fenced(run: _LocalRun) -> bool:
+        """True only for identity work that resumed after terminal publication."""
+        return run.terminal_published and asyncio.current_task() is run.identity_task
+
     @staticmethod
     def _durable_execution_error(error: str | None) -> str | None:
         if error is None or error in _DURABLE_EXECUTION_ERRORS:
@@ -357,6 +384,7 @@ class LocalClaudeRuntime:
         if error is None or error in {
             "mirror_timeout",
             "transcript_identity_timeout",
+            "transcript_identity_cancel_timeout",
             "claude_account_unavailable",
             "no_matrx_user",
         }:
@@ -1225,6 +1253,7 @@ class LocalClaudeRuntime:
                 self._establish_identity(run),
                 name=f"claude-local-identity:{run.runtime_id}",
             )
+            self._track_identity_task(run, identity_task)
             saw_result = False
             try:
                 try:
@@ -1347,6 +1376,10 @@ class LocalClaudeRuntime:
                 exc_info=True,
             )
         finally:
+            # Fence a retained identity task before the terminal event enters
+            # durable history: a child that resumes after this point must not
+            # append a stale identity or mirror update.
+            run.terminal_published = True
             await self._emit(
                 run,
                 {
@@ -1372,15 +1405,23 @@ class LocalClaudeRuntime:
         config = run.runtime_config
         deadline = time.time() + float(config["identity_timeout_seconds"])
         while time.time() < deadline:
+            if self._identity_work_is_fenced(run):
+                return
             transcript = self._find_transcript(run.session_id)
             if transcript is not None:
+                if self._identity_work_is_fenced(run):
+                    return
                 self._bind_identity(run, transcript)
                 # First mirror as soon as the session exists, so the binding +
                 # conversation are minted early and the browser can open it.
                 await self._mirror_bounded(run)
+                if self._identity_work_is_fenced(run):
+                    return
                 run.identity_ready.set()
                 return
             await asyncio.sleep(float(config["identity_poll_seconds"]))
+        if self._identity_work_is_fenced(run):
+            return
         run.mirror_error = "transcript_identity_timeout"
         await self._persist_run(run)
         logger.warning(
@@ -1405,14 +1446,20 @@ class LocalClaudeRuntime:
 
     async def _mirror_bounded(self, run: _LocalRun, *, final: bool = False) -> None:
         """Bound mirror latency so provider settlement always reaches terminal."""
+        if not final and self._identity_work_is_fenced(run):
+            return
         self._ensure_run_config(run)
         try:
             async with asyncio.timeout(
                 float(run.runtime_config["mirror_timeout_seconds"])
             ):
                 await self._mirror(run, final=final)
+            if not final and self._identity_work_is_fenced(run):
+                return
             await self._persist_run(run)
         except TimeoutError:
+            if not final and self._identity_work_is_fenced(run):
+                return
             run.mirror_error = "mirror_timeout"
             await self._persist_run(run)
             logger.error(
@@ -1432,13 +1479,19 @@ class LocalClaudeRuntime:
         hashed; retried a few times, then left for the next turn boundary
         (or the capture reconciler, which closes any residual gap).
         """
+        if not final and self._identity_work_is_fenced(run):
+            return
         transcript = run.transcript_path or self._find_transcript(run.session_id)
         if transcript is None:
             return
         self._bind_identity(run, transcript)
+        if not final and self._identity_work_is_fenced(run):
+            return
         await self._persist_run(run)
         importer = self._importer or ClaudeHistoryImporter()
         account = await self._account_reader()
+        if not final and self._identity_work_is_fenced(run):
+            return
         if not account.available or account.account_key is None:
             run.mirror_error = account.reason or "claude_account_unavailable"
             return
@@ -1482,6 +1535,8 @@ class LocalClaudeRuntime:
                     ),
                     enqueue_origin="local_runtime",
                 )
+                if not final and self._identity_work_is_fenced(run):
+                    return
                 run.mirror_passes += 1
                 run.mirror_error = None
                 await self._emit(

@@ -42,6 +42,7 @@ from app.services.coding_sessions.workspace_discovery import WorkspaceDiscoveryN
 from app.services.coding_sessions import local_runtime as runtime_module
 from app.services.coding_sessions.service import CodingSessionBridgeOutbox
 from app.services.local_db.database import LocalDatabase
+from app.services.local_db.repositories import TokenRepo
 
 USER_ID = "00000000-0000-4000-8000-000000000001"
 
@@ -1085,11 +1086,11 @@ async def test_execution_timeout_does_not_wait_forever_for_identity_cleanup(
         assert run.identity_task is None
 
 
-async def test_retained_identity_mirror_cannot_persist_after_terminal_event(
+async def test_retained_identity_mirror_cannot_mutate_after_terminal_event(
     env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A cancellation-resistant identity mirror is fenced then reaped."""
-    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    """The real mirror path fences a cancellation-resistant token lookup."""
+    runtime, _outbox, config_dir, workspace_root, _settings, _db = env
     config = CodingSessionRuntimeConfig().model_dump(mode="json")
     config["mirror_timeout_seconds"] = 1.0
     run = _LocalRun(
@@ -1101,35 +1102,38 @@ async def test_retained_identity_mirror_cannot_persist_after_terminal_event(
         runtime_config=config,
         events=deque(maxlen=config["event_buffer_max"]),
     )
-    mirror_entered = asyncio.Event()
-    release_mirror = asyncio.Event()
+    run.transcript_path = _write_transcript(config_dir, run.session_id, [])
+    token_entered = asyncio.Event()
+    release_token = asyncio.Event()
     persisted_after_terminal: list[bool] = []
 
-    async def _delayed_mirror(_run: _LocalRun, *, final: bool = False) -> None:  # noqa: ARG001
-        mirror_entered.set()
+    async def _resistant_token_get(_self: Any) -> None:
+        token_entered.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            await release_mirror.wait()
+            await release_token.wait()
+        return None
 
     async def _record_persist(_run: _LocalRun) -> None:
         persisted_after_terminal.append(run.terminal_published)
 
-    monkeypatch.setattr(runtime, "_mirror", _delayed_mirror)
     monkeypatch.setattr(runtime, "_persist_run", _record_persist)
+    monkeypatch.setattr(TokenRepo, "get", _resistant_token_get)
     identity_task = asyncio.create_task(runtime._mirror_bounded(run))
     runtime._track_identity_task(run, identity_task)
 
-    await mirror_entered.wait()
+    await token_entered.wait()
     run.terminal_published = True
     identity_task.cancel()
     await asyncio.sleep(0)
     assert identity_task in runtime._identity_tasks
 
-    release_mirror.set()
+    release_token.set()
     await asyncio.wait_for(identity_task, timeout=0.2)
 
-    assert persisted_after_terminal == []
+    assert persisted_after_terminal == [False]
+    assert run.mirror_error is None
     assert not runtime._identity_tasks
     assert run.identity_task is None
 

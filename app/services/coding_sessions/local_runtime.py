@@ -1122,6 +1122,11 @@ class LocalClaudeRuntime:
             await self._emit_locked(run, event)
 
     async def _emit_locked(self, run: _LocalRun, event: dict[str, Any]) -> None:
+        # An identity task may have been queued behind another emitter while
+        # terminal settlement completed. Re-check under the emission lock so
+        # it cannot append stale mirror evidence after runtime_finished.
+        if self._identity_work_is_fenced(run):
+            return
         self._ensure_run_config(run)
         sequenced = dict(event)
         sequenced["sequence"] = run.next_sequence
@@ -1496,6 +1501,8 @@ class LocalClaudeRuntime:
             run.mirror_error = account.reason or "claude_account_unavailable"
             return
         token_row = await TokenRepo(self._database()).get()
+        if not final and self._identity_work_is_fenced(run):
+            return
         user_id = str(token_row.get("user_id")) if token_row else ""
         if not user_id:
             run.mirror_error = "no_matrx_user"
@@ -1522,6 +1529,8 @@ class LocalClaudeRuntime:
                 revision, _bytes, _mtime = await asyncio.to_thread(
                     _hash_source, projects_root, tuple(streams)
                 )
+                if not final and self._identity_work_is_fenced(run):
+                    return
                 result = await importer.import_selected(
                     ClaudeHistoryImportRequest(
                         provider_account_key=account.account_key,
@@ -1552,12 +1561,18 @@ class LocalClaudeRuntime:
                 )
                 return
             except ClaudeHistoryConflict as exc:
+                if not final and self._identity_work_is_fenced(run):
+                    return
                 run.mirror_error = str(exc)
                 if attempt + 1 < attempts:
                     await asyncio.sleep(
                         float(run.runtime_config["mirror_retry_delay_seconds"])
                     )
+                    if not final and self._identity_work_is_fenced(run):
+                        return
             except Exception as exc:  # noqa: BLE001
+                if not final and self._identity_work_is_fenced(run):
+                    return
                 run.mirror_error = str(exc)
                 logger.error(
                     "[local_runtime] mirror pass failed for %s: %s",

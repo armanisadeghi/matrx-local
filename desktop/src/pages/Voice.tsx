@@ -33,6 +33,10 @@ import { usePolishPresets } from "@/hooks/use-polish-presets";
 import type { PolishPreset } from "@/hooks/use-polish-presets";
 import { personStyleText, polishRunFor } from "@/lib/polish-presets";
 import {
+  customStylePolishOfferedValues,
+  transcriptPolishOfferedValues,
+} from "@/lib/transcription/polish-offer";
+import {
   Popover,
   PopoverTrigger,
   PopoverContent,
@@ -968,7 +972,18 @@ function TranscribeTab({
         // Every style is a Mandate: a built-in style's Holder carries its
         // instructions; a custom style runs local.polish_style_custom with the
         // person's own text as a variable.
-        const { mandateKey, vars } = await polishRunFor(preset, transcriptText);
+        const run = await polishRunFor(preset, transcriptText);
+        // The provision's offered values, by name. The run's own variables
+        // (`transcript`, `style_instructions`) are spread last so nothing can
+        // replace them.
+        const offerFacts = { session, transcript: transcriptText, styleName: preset.name };
+        const { mandateKey } = run;
+        const vars = {
+          ...(preset.mandateKey
+            ? transcriptPolishOfferedValues(offerFacts)
+            : customStylePolishOfferedValues(offerFacts)),
+          ...run.vars,
+        };
         const raw = await runPipeline<TranscriptPolishOutput>(mandateKey, vars);
         const result = parsePolishOutput(
           raw,

@@ -24,6 +24,7 @@ import { engine } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { TranscriptPolishOutput } from "@/hooks/use-llm-pipeline";
 import { LOCAL_MODEL_MANDATE_KEYS } from "@/lib/local-mandates";
+import { transcriptPolishOfferedValues } from "@/lib/transcription/polish-offer";
 import type {
   TranscriptionState,
   TranscriptionActions,
@@ -46,7 +47,7 @@ export function QuickTranscriptModal({
   onNavigateToVoice,
   userId,
 }: QuickTranscriptModalProps) {
-  const { actions: sessionsActions } = useSessionsContext();
+  const { state: sessionsState, actions: sessionsActions } = useSessionsContext();
   const [llmState] = useLlmApp();
   const llmPort = llmState.serverStatus?.port ?? null;
   const llmRunning = llmState.serverStatus?.running ?? false;
@@ -215,7 +216,16 @@ export function QuickTranscriptModal({
     try {
       const raw = await runPipeline<TranscriptPolishOutput>(
         LOCAL_MODEL_MANDATE_KEYS.polishTranscript,
-        { transcript: fullTranscript.trim() },
+        {
+          // local.transcript_polish offered values, by name (strings — the
+          // local plumbing is string-only). `transcript` is spread last so
+          // nothing can replace it.
+          ...transcriptPolishOfferedValues({
+            session: sessionsState.sessions.find((s) => s.id === sessionId),
+            transcript: fullTranscript.trim(),
+          }),
+          transcript: fullTranscript.trim(),
+        },
       );
       const result = parsePolishOutput(raw, "", fullTranscript.trim());
       sessionsActions.applyPolish(sessionId, {
@@ -237,6 +247,7 @@ export function QuickTranscriptModal({
     llmRunning,
     runPipeline,
     fullTranscript,
+    sessionsState.sessions,
     sessionsActions,
   ]);
 

@@ -46,6 +46,8 @@ The provider's v2 public status holds only selected organization/revision, fresh
 
 ## Change log
 
+- 2026-09-28 (Claude Opus 5.5, access ladder T-30): aidream now refuses `/vault/native/passwords/{id}/materialize` with 403 `fill_device_required` unless the request is signed by a registered native device key (Secure Enclave P-256 fits) with a one-time nonce over the provider's own live OAuth session; registering (`POST /api/vault/fill-devices`) needs the person's password. This provider does not sign yet — adopting the aidream `fill_devices.canonical_fill_message` v2 wire is required before password use works.
+
 - 2026-09-20: Added private one-shot file parser ABI and Swift adapter with original-key invariance and cancellation/reuse refusal checks.
 
 - 2026-09-20: Added dedicated native import transport with account/scope fencing, source-bound write receipts and cancellation-safe receipt lookup.

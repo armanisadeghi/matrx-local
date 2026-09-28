@@ -1005,6 +1005,82 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
     assert run.events[-1]["event"] == "runtime_finished"
 
 
+async def test_execution_timeout_does_not_wait_forever_for_identity_cleanup(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stuck identity mirror cannot suppress the provider's terminal event."""
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    config = CodingSessionRuntimeConfig().model_dump(mode="json")
+    config["execution_timeout_seconds"] = 0.03
+    config["interrupt_timeout_seconds"] = 0.01
+    config["mirror_timeout_seconds"] = 0.01
+    run = _LocalRun(
+        runtime_id="rt-identity-cleanup-timeout",
+        session_id=str(uuid4()),
+        workspace=workspace_root,
+        action="start",
+        status="starting",
+        runtime_config=config,
+        events=deque(maxlen=config["event_buffer_max"]),
+    )
+    await runtime._persist_run(run)
+    runtime._runs[run.runtime_id] = run
+    release_identity = asyncio.Event()
+    identity_tasks: list[asyncio.Task[None]] = []
+
+    async def _resist_cancelled_identity(_run: _LocalRun) -> None:
+        identity_tasks.append(asyncio.current_task())  # type: ignore[arg-type]
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release_identity.wait()
+
+    class _Options:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+    class _Client:
+        def __init__(self, options: Any) -> None:  # noqa: ARG002
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def query(self, _prompt: str, *, session_id: str) -> None:  # noqa: ARG002
+            await asyncio.Event().wait()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "claude_agent_sdk",
+        SimpleNamespace(
+            ClaudeAgentOptions=_Options,
+            ClaudeSDKClient=_Client,
+            ResultMessage=type("ResultMessage", (), {}),
+        ),
+    )
+    monkeypatch.setattr(runtime, "_establish_identity", _resist_cancelled_identity)
+
+    async def _no_mirror(_run: _LocalRun, *, final: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    monkeypatch.setattr(runtime, "_mirror", _no_mirror)
+    request = LocalRuntimeStartRequest(workspace=str(workspace_root), prompt="secret")
+
+    try:
+        await asyncio.wait_for(runtime._execute(run, request), timeout=0.2)
+        assert run.status == "failed"
+        assert "wall-clock limit" in (run.error or "")
+        assert run.mirror_error == "transcript_identity_cancel_timeout"
+        assert run.events[-1]["event"] == "runtime_finished"
+    finally:
+        release_identity.set()
+        if identity_tasks:
+            await asyncio.wait_for(asyncio.gather(*identity_tasks), timeout=0.2)
+
+
 # ------------------------------------------------------------------ registry
 
 

@@ -1282,8 +1282,27 @@ class LocalClaudeRuntime:
             finally:
                 run.client = None
                 identity_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await identity_task
+                try:
+                    # Identity discovery owns disk reads and a mirror pass.  It
+                    # normally observes cancellation immediately, but it must
+                    # never keep a provider timeout from becoming a terminal
+                    # runtime event when one of those dependencies stalls.
+                    # Shield the child from this timeout's cancellation: it was
+                    # already asked to stop above, and a second cancellation
+                    # would make asyncio wait for an uncooperative child.
+                    async with asyncio.timeout(
+                        float(run.runtime_config["interrupt_timeout_seconds"])
+                    ):
+                        await asyncio.shield(identity_task)
+                except asyncio.CancelledError:
+                    pass
+                except TimeoutError:
+                    run.mirror_error = "transcript_identity_cancel_timeout"
+                    logger.error(
+                        "[local_runtime] identity task did not settle for %s after %ss",
+                        run.runtime_id,
+                        run.runtime_config["interrupt_timeout_seconds"],
+                    )
             if run.cancel_requested:
                 run.status = "cancelled"
             elif not saw_result:

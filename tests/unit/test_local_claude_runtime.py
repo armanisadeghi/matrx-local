@@ -1138,6 +1138,65 @@ async def test_retained_identity_mirror_cannot_mutate_after_terminal_event(
     assert run.identity_task is None
 
 
+async def test_stale_identity_journal_write_cannot_replace_terminal_snapshot(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A journal write that ignores cancellation cannot roll terminal state back."""
+    runtime, _outbox, config_dir, workspace_root, _settings, db = env
+    config = CodingSessionRuntimeConfig().model_dump(mode="json")
+    config["mirror_timeout_seconds"] = 1.0
+    run = _LocalRun(
+        runtime_id="rt-stale-identity-journal",
+        session_id=str(uuid4()),
+        workspace=workspace_root,
+        action="start",
+        status="running",
+        runtime_config=config,
+        events=deque(maxlen=config["event_buffer_max"]),
+    )
+    run.transcript_path = _write_transcript(config_dir, run.session_id, [])
+    await runtime._persist_run(run)
+    journal_entered = asyncio.Event()
+    release_journal = asyncio.Event()
+    original_journal_write = runtime._journal_write
+    journal_calls = 0
+
+    async def _resistant_journal_write(statements: Any) -> None:
+        nonlocal journal_calls
+        journal_calls += 1
+        if journal_calls == 1:
+            journal_entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release_journal.wait()
+        await original_journal_write(statements)
+
+    monkeypatch.setattr(runtime, "_journal_write", _resistant_journal_write)
+    identity_task = asyncio.create_task(runtime._mirror_bounded(run))
+    runtime._track_identity_task(run, identity_task)
+
+    await journal_entered.wait()
+    run.status = "failed"
+    run.error = "Provider execution exceeded the configured wall-clock limit."
+    run.terminal_published = True
+    await runtime._emit(run, {"event": "runtime_finished"})
+    identity_task.cancel()
+    await asyncio.sleep(0)
+    release_journal.set()
+    await asyncio.wait_for(identity_task, timeout=0.2)
+
+    durable = await db.fetchone(
+        "SELECT status, next_sequence FROM coding_session_runtime_runs WHERE runtime_id=?",
+        (run.runtime_id,),
+    )
+    assert durable is not None
+    assert durable["status"] == "failed"
+    assert durable["next_sequence"] == 2
+    assert not runtime._identity_tasks
+    assert run.identity_task is None
+
+
 # ------------------------------------------------------------------ registry
 
 

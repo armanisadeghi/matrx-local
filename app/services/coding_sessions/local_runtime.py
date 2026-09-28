@@ -419,7 +419,14 @@ class LocalClaudeRuntime:
                    next_sequence=excluded.next_sequence,
                    restart_reason=excluded.restart_reason,
                    runtime_config_json=excluded.runtime_config_json,
-                   updated_at=datetime('now')""",
+                   updated_at=datetime('now')
+               WHERE excluded.next_sequence >= coding_session_runtime_runs.next_sequence
+                 AND (
+                   coding_session_runtime_runs.status NOT IN
+                     ('completed', 'failed', 'cancelled', 'interrupted')
+                   OR excluded.status IN
+                     ('completed', 'failed', 'cancelled', 'interrupted')
+                 )""",
             (
                 run.runtime_id,
                 run.session_id,
@@ -1493,6 +1500,8 @@ class LocalClaudeRuntime:
         if not final and self._identity_work_is_fenced(run):
             return
         await self._persist_run(run)
+        if not final and self._identity_work_is_fenced(run):
+            return
         importer = self._importer or ClaudeHistoryImporter()
         account = await self._account_reader()
         if not final and self._identity_work_is_fenced(run):

@@ -47,6 +47,12 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     // Narrow test boundary for actual selected-credential callbacks. Production
     // always parses the signed record under the ProviderStore lock.
     var nativeIdentityBindingOverride: ((String) -> NativeVaultIdentityBinding?)?
+    /// Access ladder T-30: the Secure Enclave key that signs every materialize.
+    var nativeFillDevice = NativeVaultFillDevice()
+    /// Asks for the AI Matrx password to turn filling on; nil = the person declined.
+    var nativeFillPasswordPrompt: ((String?) -> String?)?
+    /// Harness-only origin (a local aidream); the shipped extension uses the default.
+    var nativePasswordAPIOrigin: URL = nativeAPIOrigin
     let nativeIdentitySynchronizer = NativeVaultIdentitySynchronizer()
     lazy var nativePasskeyCoordinator = NativeVaultPasskeyCoordinator(
         sessionAccess: sessionAccess,

@@ -76,6 +76,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
   "$SOURCE/NativeVaultPrivateSession.swift" \
   "$SOURCE/NativeVaultSessionAccess.swift" \
   "$SOURCE/NativeVaultPassword.swift" \
+  "$SOURCE/NativeVaultFillDevice.swift" \
   "$SOURCE/NativeVaultPasskeyCodec.swift" \
   "$SOURCE/NativeVaultPasskey.swift" \
   "$SOURCE/NativeVaultIdentity.swift" \

@@ -44,7 +44,13 @@ The provider's v2 public status holds only selected organization/revision, fresh
 
 `NativeVaultImportParser.swift` adapts the one-shot provider-private Rust file parser into bounded Swift inventory records. Rust cancellation refuses before ABI materialization; the Swift corpus verifies original public-key identity across CXF-to-source conversion. These private generated bindings are not public host IPC. Complete file-import readiness still requires the native chooser, confirmed controller, server storage and RP acceptance.
 
+## Fill device (access ladder T-30)
+
+`NativeVaultFillDevice.swift` gives the provider its own fill credential: a Secure Enclave P-256 key (non-exportable; Keychain keeps only the enclave's wrapped handle and the server's device id, this-device-only). The first password fill asks for the person's AI Matrx password once and registers the public key at `POST /api/vault/fill-devices` over the provider's own OAuth session; every `/vault/native/passwords/{id}/materialize` is then signed with the extension's exact v2 wire (`matrx-vault-fill/v2`, surface `native_password_materialize`, fresh nonce, timestamp, SHA-256 of the sent body bytes, `X-Matrx-Fill-*` headers). A 403 `fill_device_required` (turned off, or a new sign-in) re-asks the password once; a revoked key is replaced with a new enclave key, never re-admitted. Macs without a Secure Enclave are told to use the browser extension. Corpus: `test-native-vault-password.sh` (software key stand-in). Live proof against a local aidream as admin@admin.com with the real enclave: `test-native-vault-fill-device-live.sh` (register, signed fill, replay and unsigned refused, revoke, reconnect and re-approve). Passkey approval (aidream T-30c, web relying party) is not yet offered by the provider.
+
 ## Change log
+
+- 2026-09-28 (Claude Opus 5.5, T-30 follow-up): the provider now registers a Secure Enclave device key with the password step-up and signs every materialize (v2 wire); live-proven on a local aidream. The organization decoder accepts the server's `archived_at` and never offers an archived organization.
 
 - 2026-09-28 (Claude Opus 5.5, access ladder T-30): aidream now refuses `/vault/native/passwords/{id}/materialize` with 403 `fill_device_required` unless the request is signed by a registered native device key (Secure Enclave P-256 fits) with a one-time nonce over the provider's own live OAuth session; registering (`POST /api/vault/fill-devices`) needs the person's password. This provider does not sign yet — adopting the aidream `fill_devices.canonical_fill_message` v2 wire is required before password use works.
 

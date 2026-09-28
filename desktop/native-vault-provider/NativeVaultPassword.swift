@@ -62,9 +62,12 @@ enum NativePasswordCodec {
               case let .string(password)? = object["password"], !password.isEmpty, password.utf8.count <= 16 * 1024 else { throw rejected() }
         return (username, password)
     }
+    static func errorCode(_ data: Data) -> String? {
+        (try? StrictEnvelope.object(data, required: ["detail"], optional: [])).flatMap { detail -> String? in guard case let .object(value)? = detail["detail"], Set(value.keys) == Set(["code"]), case let .string(code)? = value["code"] else { return nil }; return code }
+    }
     static func errorMessage(_ data: Data, status: Int) -> String {
-        let code = (try? StrictEnvelope.object(data, required: ["detail"], optional: [])).flatMap { detail -> String? in guard case let .object(value)? = detail["detail"], Set(value.keys) == Set(["code"]), case let .string(code)? = value["code"] else { return nil }; return code }
-        switch code {
+        switch errorCode(data) {
+        case "fill_device_required": return NativeVaultFillDeviceError.sessionEnded.errorDescription!
         case "item_unavailable": return "The selected password is no longer available."
         case "credential_unavailable": return "The saved password cannot be used right now."
         case "native_session_required": return "Vault connection needs reconnect."
@@ -145,7 +148,7 @@ extension CredentialProviderViewController {
         // must never be delayed by inventory work. Generic list callbacks may
         // refresh their existing selected scope in parallel.
         if nativePasswordSelectedBinding == nil { refreshSuggestionsForCredentialList(grant: grant, lifetime: nativeRequest) }
-        var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/auth/organizations")); request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent("api/auth/organizations")); request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedOrganizations(result, grant: grant, operation: operation) } }
     }
     private func sendPasswordRequest(_ request: URLRequest, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
@@ -197,7 +200,7 @@ extension CredentialProviderViewController {
         operation.phase = .loadingMatches
         let rows = operation.identifiers.map { ["type": $0.type, "identifier": $0.identifier] }
         guard JSONSerialization.isValidJSONObject(["identifiers": rows]), let body = try? JSONSerialization.data(withJSONObject: ["identifiers": rows]) else { return cancelPassword(operation, "The requested website is not supported.") }
-        var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/vault/native/passwords/matches")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent("api/vault/native/passwords/matches")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedMatches(result, organization: organization, grant: grant, operation: operation) } }
     }
     private func receivedMatches(_ result: Result<(Data, HTTPURLResponse), Error>, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
@@ -230,12 +233,100 @@ extension CredentialProviderViewController {
         operation.phase = .materializing
         let rows = operation.identifiers.map { ["type": $0.type, "identifier": $0.identifier] }
         guard let body = try? JSONSerialization.data(withJSONObject: ["identifiers": rows, "request_identifier_index": match.identifierIndex]) else { return cancelPassword(operation, "The selected password is no longer available.") }
-        var request = URLRequest(url: nativeAPIOrigin.appendingPathComponent("api/vault/native/passwords/\(match.itemID)/materialize")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
-        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedMaterial(result, grant: grant, operation: operation) } }
+        loadFillDevice(match, organization: organization, grant: grant, operation: operation, body: body, reapproved: false)
     }
-    private func receivedMaterial(_ result: Result<(Data, HTTPURLResponse), Error>, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
+
+    // ── access ladder T-30: the Secure Enclave device key signs every materialize ──
+
+    /// Read (or create) this person's enclave key off the main thread, then
+    /// either sign the request or turn filling on with the person's password.
+    private func loadFillDevice(_ match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, reapproved: Bool) {
+        let device = nativeFillDevice
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let state = Result { try device.current(subject: grant.subject) }
+            DispatchQueue.main.async {
+                guard let self, self.current(operation) else { return }
+                switch state {
+                case let .failure(error): self.cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!)
+                case let .success(state):
+                    if state.registered { self.sendSignedMaterialize(match, organization: organization, grant: grant, operation: operation, body: body, state: state, reapproved: reapproved) }
+                    else { self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: reapproved ? "This Mac needs your AI Matrx password again before it can fill saved passwords (filling was turned off here, or you connected again)." : nil, attempt: 0, replacedKey: false) }
+                }
+            }
+        }
+    }
+    private func fillPassword(_ notice: String?) -> String? {
+        if let prompt = nativeFillPasswordPrompt { return prompt(notice) }
+        let alert = NSAlert(); alert.messageText = "Turn on password filling on this Mac"
+        alert.informativeText = (notice.map { $0 + "\n\n" } ?? "") + "Enter your AI Matrx account password. It is sent once to confirm it is you and is never stored. This Mac's key stays in its Secure Enclave."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24)); alert.accessoryView = field
+        alert.addButton(withTitle: "Turn on"); alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return nil }
+        return field.stringValue
+    }
+    private func turnOnFilling(_ match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, state: NativeVaultFillDeviceState, notice: String?, attempt: Int, replacedKey: Bool, password known: String? = nil) {
         guard current(operation) else { return }
-        do { let (data, response) = try result.get(); guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }; let credential = try NativePasswordCodec.materialized(data); linearizedComplete(operation, grant: grant, credential: credential) } catch { cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? "Vault is temporarily unavailable. Try again.") }
+        guard let password = known ?? fillPassword(notice) else { return cancelPassword(operation, NativeVaultFillDeviceError.cancelled.errorDescription!) }
+        guard let registration = try? NativeVaultFillDevice.registrationBody(state, password: password, label: NativeVaultFillDevice.label) else { return cancelPassword(operation, NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+        var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent(NativeVaultFillWire.registerPath)); request.httpMethod = "POST"; request.httpBody = registration
+        request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in
+            guard let self, self.current(operation) else { return }
+            let outcome: NativeVaultFillDevice.RegistrationOutcome
+            switch result { case let .success((data, response)): outcome = NativeVaultFillDevice.registrationOutcome(data, status: response.statusCode); case .failure: outcome = .failed(.unavailable("Vault is temporarily unavailable. Try again.")) }
+            let device = self.nativeFillDevice
+            switch outcome {
+            case let .registered(deviceID):
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let saved = Result { try device.markRegistered(state, deviceID: deviceID) }
+                    DispatchQueue.main.async {
+                        guard self.current(operation) else { return }
+                        switch saved { case let .success(ready): self.sendSignedMaterialize(match, organization: organization, grant: grant, operation: operation, body: body, state: ready, reapproved: true); case .failure: self.cancelPassword(operation, NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+                    }
+                }
+            case .keyRevoked:
+                // This Mac's old key was turned off: it is never re-admitted, so
+                // make a new enclave key and register that (same password).
+                guard !replacedKey else { return self.cancelPassword(operation, NativeVaultFillDeviceError.sessionEnded.errorDescription!) }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let fresh = Result { try device.replaceKey(subject: grant.subject) }
+                    DispatchQueue.main.async {
+                        guard self.current(operation) else { return }
+                        switch fresh { case let .success(next): self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: next, notice: nil, attempt: attempt, replacedKey: true, password: password); case let .failure(error): self.cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+                    }
+                }
+            case let .wrongPassword(message):
+                guard attempt < 2 else { return self.cancelPassword(operation, message) }
+                self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: message, attempt: attempt + 1, replacedKey: replacedKey)
+            case let .failed(error): self.cancelPassword(operation, error.errorDescription ?? "Vault is temporarily unavailable. Try again.")
+            }
+        } }
+    }
+    private func sendSignedMaterialize(_ match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, state: NativeVaultFillDeviceState, reapproved: Bool) {
+        guard current(operation) else { return }
+        let headers: [String: String]
+        do { headers = try nativeFillDevice.signedHeaders(state, itemID: match.itemID, userID: grant.subject, body: body) }
+        catch { return cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+        var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent("api/vault/native/passwords/\(match.itemID)/materialize")); request.httpMethod = "POST"; request.httpBody = body; request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+        headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in self?.receivedMaterial(result, match: match, organization: organization, grant: grant, operation: operation, body: body, reapproved: reapproved) } }
+    }
+    private func receivedMaterial(_ result: Result<(Data, HTTPURLResponse), Error>, match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, reapproved: Bool) {
+        guard current(operation) else { return }
+        do {
+            let (data, response) = try result.get()
+            if response.statusCode == 403, NativePasswordCodec.errorCode(data) == "fill_device_required" {
+                // The server no longer accepts this Mac's registration (turned
+                // off, or a new sign-in). Once per request: ask for the password
+                // again; a second refusal right after approval is final.
+                nativeFillDevice.markUnregistered(subject: grant.subject)
+                guard !reapproved else { throw EnrollmentError.message(NativeVaultFillDeviceError.sessionEnded.errorDescription!) }
+                return loadFillDevice(match, organization: organization, grant: grant, operation: operation, body: body, reapproved: true)
+            }
+            guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
+            let credential = try NativePasswordCodec.materialized(data); linearizedComplete(operation, grant: grant, credential: credential)
+        } catch { cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? "Vault is temporarily unavailable. Try again.") }
     }
     private func withLiveGrant(_ operation: NativePasswordOperation, _ grant: NativeVaultSessionAccess.Grant, then: @escaping () -> Void) {
         guard current(operation) else { return }

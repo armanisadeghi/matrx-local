@@ -17,6 +17,7 @@ RUST_ARCH="${ARCH/arm64/aarch64}"
   "$ROOT/native-vault-provider/NativeVaultPrivateSession.swift" \
   "$ROOT/native-vault-provider/NativeVaultSessionAccess.swift" \
   "$ROOT/native-vault-provider/NativeVaultPassword.swift" \
+  "$ROOT/native-vault-provider/NativeVaultFillDevice.swift" \
   "$ROOT/native-vault-provider/NativeVaultPasskeyCodec.swift" \
   "$ROOT/native-vault-provider/NativeVaultPasskey.swift" \
   "$ROOT/native-vault-provider/NativeVaultIdentity.swift" \

@@ -406,11 +406,14 @@ enum NativeOrganizationCodec {
             let abbreviationIsValid: Bool
             switch value["abbreviation"] { case .null?, .string?: abbreviationIsValid = true; default: abbreviationIsValid = false }
             guard case let .object(value) = row,
-                  Set(value.keys) == Set(["id", "name", "abbreviation"]),
+                  Set(value.keys) == Set(["id", "name", "abbreviation"]) || Set(value.keys) == Set(["id", "name", "abbreviation", "archived_at"]),
                   case let .string(id)? = value["id"], id.canonicalUUID,
                   case let .string(name)? = value["name"], !name.isEmpty, name.unicodeScalars.count <= 256,
                   abbreviationIsValid,
                   seen.insert(id).inserted else { throw rejected() }
+            // The server marks archived organizations (archived_at); a password
+            // is never filled out of one, so it is not offered as a choice.
+            switch value["archived_at"] { case nil, .null?: break; case .string?: continue; default: throw rejected() }
             organizations.append(NativeOrganization(id: id, name: name))
         }
         guard case let .string(status)? = object["default_preference_status"], ["valid", "unset", "stale", "malformed", "unavailable"].contains(status), case .array? = object["warnings"], case .number? = object["missing_organization_count"] else { throw rejected() }

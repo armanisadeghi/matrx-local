@@ -897,11 +897,15 @@ fi
 # only anonymous lane); every literal reference is a conversion, and the per-file
 # baseline only shrinks. Self-test first so a green run means it can still fail.
 info "Checking no new code reference to the retiring row column (access ladder T-13)..."
-uv run --frozen python scripts/check_t13_row_column_source.py --self-test \
-    || fail "The T-13 row-column ratchet cannot fail — fix scripts/check_t13_row_column_source.py before releasing."
-uv run --frozen python scripts/check_t13_row_column_source.py \
-    || fail "New code reference to the row column access-ladder T-13 retires (lines above). Read published_to_web / shown_to instead; the baseline never grows."
-ok "No new reference to the retiring row column."
+# ADVISORY (pre-launch: a new blocking gate needs Arman's approval) — a finding is a warning with its
+# remedy, never a stop. Run the command directly and it still exits non-zero on a violation.
+if ! uv run --frozen python scripts/check_t13_row_column_source.py --self-test; then
+    warn "The T-13 row-column ratchet cannot fail — fix scripts/check_t13_row_column_source.py (advisory, release continues)."
+elif uv run --frozen python scripts/check_t13_row_column_source.py; then
+    ok "No new reference to the retiring row column."
+else
+    warn "New code reference to the row column access-ladder T-13 retires (lines above). Remedy: read published_to_web / shown_to instead; the baseline never grows (advisory, release continues)."
+fi
 
 # pyproject.toml is the one release authority. The other manifests are derived
 # copies required by their respective toolchains; never begin a release from a

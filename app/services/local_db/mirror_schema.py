@@ -6,8 +6,8 @@ Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
 Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
-SNAPSHOT_HASH = "646f83f46ca9a50b8f473eb2db69f26d5754f238c1157209d9fbbadad809baee"
-SNAPSHOT_GENERATED_AT = "2026-09-28"
+SNAPSHOT_HASH = "ea1eec6fd1fe85f23a8b041a6744c8256c73bbf1378b764d3aeefd865f575a2c"
+SNAPSHOT_GENERATED_AT = "2026-09-29"
 
 # Cloud columns removed after older app versions created them locally. The
 # mirror preserves their data but excludes them from every sync contract.

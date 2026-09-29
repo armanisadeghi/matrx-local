@@ -24,7 +24,6 @@
   "desktop/src/lib/api.ts": 1,
   "desktop/src/pages/BridgeTest.tsx": 2,
   "desktop/src/pages/Settings.tsx": 1,
-  "scripts/check_t13_row_column_source.py": 1,
   "tests/characterization/test_chat_mirror_characterization.py": 3,
   "tests/unit/test_artifact_service.py": 1
  }

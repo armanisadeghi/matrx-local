@@ -103,7 +103,10 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-_TERMINAL_ERROR_CODES = frozenset({"entry_mutated"})
+# ``already_mirrored_live``: the server keeps ONE copy of a Claude session, and
+# this one is already mirrored live by its hook — every retry is refused the
+# same way (aidream coding_session_bridge, 2026-09-28).
+_TERMINAL_ERROR_CODES = frozenset({"entry_mutated", "already_mirrored_live"})
 
 # Statuses that mean "the server understood and refused". They are quarantined
 # only after a long retry run, because a proxy or a mid-deploy server can emit
@@ -469,6 +472,15 @@ def _safe_delivery_error(raw_error: Any) -> dict[str, str] | None:
         }
     # The server's own refusal codes, each with what it means and what to do.
     # A bare "HTTP 409" told nobody anything (2026-09-08).
+    if '"already_mirrored_live"' in raw_error:
+        return {
+            "code": "already_mirrored_live",
+            "message": (
+                "AI Matrx already mirrors this session live from Claude Code, and it keeps "
+                "one copy of each chat, so this import is not needed. The conversation is "
+                "in AI Matrx; the full file stays on this computer (Full Download)."
+            ),
+        }
     if '"provider_account_conflict"' in raw_error:
         return {
             "code": "provider_account_conflict",

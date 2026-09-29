@@ -19,13 +19,22 @@ COMMANDS = {
     'native_vault_file_import',
 }
 SECURITY = {
-    'SecItemCopyMatching': 'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
-    'SecItemAdd': 'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
-    'SecItemDelete': 'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
-    'SecAccessControlCreateWithFlags': 'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
-    'SecRandomCopyBytes': 'desktop/native-vault-provider/CredentialProviderViewController.swift',
-    'SecTaskCreateFromSelf': 'desktop/src-tauri/src/native_vault_settings.rs',
-    'SecTaskCopyValueForEntitlement': 'desktop/src-tauri/src/native_vault_settings.rs',
+    'SecItemCopyMatching': {'desktop/native-vault-provider/NativeVaultPrivateSession.swift'},
+    'SecItemAdd': {'desktop/native-vault-provider/NativeVaultPrivateSession.swift'},
+    'SecItemDelete': {'desktop/native-vault-provider/NativeVaultPrivateSession.swift'},
+    # Both the protected OAuth session and the provider's non-exportable fill key
+    # create an explicit Keychain access-control policy.
+    'SecAccessControlCreateWithFlags': {
+        'desktop/native-vault-provider/NativeVaultPrivateSession.swift',
+        'desktop/native-vault-provider/NativeVaultFillDevice.swift',
+    },
+    # The credential controller and signed fill wire each require fresh entropy.
+    'SecRandomCopyBytes': {
+        'desktop/native-vault-provider/CredentialProviderViewController.swift',
+        'desktop/native-vault-provider/NativeVaultFillDevice.swift',
+    },
+    'SecTaskCreateFromSelf': {'desktop/src-tauri/src/native_vault_settings.rs'},
+    'SecTaskCopyValueForEntitlement': {'desktop/src-tauri/src/native_vault_settings.rs'},
 }
 EXCLUDED = {'.wt', 'target', 'build', 'vendor', 'node_modules', 'tests', '__tests__', '.venv'}
 
@@ -57,7 +66,7 @@ def census(sources: dict[str, str]) -> list[str]:
         errors.append('shipped command registration inventory changed; review containing-process custody before updating inventory')
     for path, text in sources.items():
         for symbol in set(re.findall(r'\bSec(?:Item|AccessControl|Random|Task)[A-Za-z0-9_]+\b', text)) if path.endswith((".swift", ".rs", ".c", ".h", ".m", ".mm", ".cc", ".cpp", ".hpp")) else set():
-            if SECURITY.get(symbol) != path:
+            if path not in SECURITY.get(symbol, set()):
                 errors.append(f'{path}: unreviewed Security symbol {symbol}')
         for symbol in re.findall(r'#\[tauri::command\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', text):
             if 'native_vault' in symbol:

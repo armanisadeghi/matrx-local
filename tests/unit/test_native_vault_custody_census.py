@@ -30,6 +30,14 @@ def test_new_private_or_command_reference_fails_even_through_alias(path, additio
     assert module.census(sources)
 
 
+@pytest.mark.parametrize('symbol', ['SecAccessControlCreateWithFlags', 'SecRandomCopyBytes'])
+def test_fill_device_security_symbols_remain_limited_to_the_reviewed_files(symbol):
+    sources = module.collect(ROOT)
+    path = 'desktop/native-vault-provider/NativeVaultTransport.swift'
+    sources[path] += f'\nlet unexpected = {symbol}'
+    assert any(f'{path}: unreviewed Security symbol {symbol}' == error for error in module.census(sources))
+
+
 def test_new_response_field_fails():
     sources = module.collect(ROOT)
     path = 'desktop/src-tauri/src/native_vault_exchange.rs'

@@ -892,6 +892,17 @@ else
     warn "The mirror snapshot check was incomplete (for example, no readable row). Release continues without claiming the snapshot is current."
 fi
 
+# ── Access ladder T-13: no new code reference to the retiring row column ─────
+# The row column retires into shown_to (list filter) and published_to_web (the
+# only anonymous lane); every literal reference is a conversion, and the per-file
+# baseline only shrinks. Self-test first so a green run means it can still fail.
+info "Checking no new code reference to the retiring row column (access ladder T-13)..."
+uv run --frozen python scripts/check_t13_row_column_source.py --self-test \
+    || fail "The T-13 row-column ratchet cannot fail — fix scripts/check_t13_row_column_source.py before releasing."
+uv run --frozen python scripts/check_t13_row_column_source.py \
+    || fail "New code reference to the row column access-ladder T-13 retires (lines above). Read published_to_web / shown_to instead; the baseline never grows."
+ok "No new reference to the retiring row column."
+
 # pyproject.toml is the one release authority. The other manifests are derived
 # copies required by their respective toolchains; never begin a release from a
 # drifted tree.

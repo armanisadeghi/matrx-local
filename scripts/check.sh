@@ -134,6 +134,12 @@ if ! $MODE_SMOKE_ONLY; then
   else
     record_pass "uv available"
 
+    # Access ladder T-13: no new code reference to the retiring row column (shrink-only).
+    run_step "t13 row-column ratchet can fail" \
+      uv run --frozen python scripts/check_t13_row_column_source.py --self-test
+    run_step "t13 row-column ratchet" \
+      uv run --frozen python scripts/check_t13_row_column_source.py
+
     # Import check — catches circular imports and missing deps
     run_step "python import check" \
       uv run --frozen python -c "import app.main; print('OK')"

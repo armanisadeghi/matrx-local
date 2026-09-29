@@ -49,10 +49,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 from app.common.system_logger import get_logger
+from app.services.coding_sessions.raw_backup_scheduler import schedule_notify
 from app.services.aidream.client import AIDreamClient, get_aidream_client
 from app.services.coding_sessions.claude_history import (
     MAX_IMPORT_BYTES,
@@ -333,6 +335,7 @@ class ClaudeCaptureReconciler:
             raise CaptureReconcileBlocked("account_identity_unavailable")
 
         era_start_ns = int(era_start.timestamp() * 1_000_000_000)
+        recent_cutoff_ns = int((time.time() - 2 * PASS_INTERVAL_SECONDS) * 1_000_000_000)
         attempts = await self._attempts()
 
         candidates: list[dict[str, Any]] = []
@@ -346,6 +349,11 @@ class ClaudeCaptureReconciler:
             # Both identity forms: a hook binding stores the raw UUID, an
             # import stores the composite. Either means it is already there.
             if raw_id in known or _sdk_identity(project_key, raw_id) in known:
+                # Already in AI Matrx. If it changed since the last pass, its
+                # full transcript is due for the owner's opt-in cloud backup
+                # (the scheduler asks the policy first; off = no bytes sent).
+                if not dry_run and source.latest_mtime_ns >= recent_cutoff_ns:
+                    schedule_notify("claude_code", raw_id, raw_id, project_key)
                 continue
             modified_ns = source.latest_mtime_ns
             if modified_ns < era_start_ns:

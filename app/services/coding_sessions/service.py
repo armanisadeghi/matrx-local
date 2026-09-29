@@ -2801,6 +2801,14 @@ class CodingSessionBridgeOutbox:
                     timeout=30.0,
                 )
                 _validate_upstream_acknowledgement(response, persisted_request)
+                # A delivered turn end / import is when an opted-in owner's full
+                # transcript is due for its cloud backup. Policy is asked first;
+                # with the knob off not one byte leaves this computer.
+                from app.services.coding_sessions.raw_backup_scheduler import (
+                    notify_from_request,
+                )
+
+                notify_from_request(persisted_request)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — the caller owns every path

@@ -22,6 +22,12 @@ enum NativeVaultFillWire {
     static let prefix = "matrx-vault-fill/v2"
     static let surface = "native_password_materialize"
     static let registerPath = "api/vault/fill-devices"
+    static let stepUpMethodsPath = "api/vault/fill-devices/step-up-methods"
+    /// The web app is the passkey's relying party: approval happens there
+    /// (the same page the browser extension opens), and that page also lets an
+    /// account with no passkey add one.
+    static let webOrigin = URL(string: "https://aimatrx.com")!
+    static let approvePagePath = "vault/approve-browser"
     static let headerDevice = "X-Matrx-Fill-Device"
     static let headerTimestamp = "X-Matrx-Fill-Timestamp"
     static let headerNonce = "X-Matrx-Fill-Nonce"
@@ -38,6 +44,22 @@ enum NativeVaultFillWire {
         var bytes = [UInt8](repeating: 0, count: 24)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
         return base64URL(Data(bytes))
+    }
+    /// RFC 7638 thumbprint (SHA-256 hex) — identical to aidream `jwk_thumbprint`
+    /// and the extension's `publicKeyThumbprint`.
+    static func thumbprint(_ jwk: [String: String]) -> String? {
+        guard let crv = jwk["crv"], let kty = jwk["kty"], let x = jwk["x"], let y = jwk["y"] else { return nil }
+        let canonical = "{\"crv\":\"\(crv)\",\"kty\":\"\(kty)\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
+        return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    /// The short code the approval page shows: first 16 hex in groups of four.
+    static func shortCode(_ thumbprint: String) -> String {
+        stride(from: 0, to: 16, by: 4).map { i in String(thumbprint.dropFirst(i).prefix(4)) }.joined(separator: " ").uppercased()
+    }
+    static func approvalURL(thumbprint: String, label: String, origin: URL = webOrigin) -> URL {
+        var components = URLComponents(url: origin.appendingPathComponent(approvePagePath), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "key", value: thumbprint), URLQueryItem(name: "label", value: label)]
+        return components.url!
     }
     /// The P-256 public JWK the server's `normalize_public_jwk` accepts.
     static func publicJWK(x963 raw: Data) -> [String: String]? {
@@ -80,7 +102,7 @@ private struct EnclaveFillKey: NativeVaultFillSigningKey {
 }
 
 enum NativeVaultFillDeviceError: LocalizedError, Equatable {
-    case noSecureEnclave, storeUnavailable, cancelled, sessionEnded, reconnect, refused(String), unavailable(String)
+    case noSecureEnclave, storeUnavailable, cancelled, sessionEnded, reconnect, turnedOff, noStepUpMethod, refused(String), unavailable(String)
     var errorDescription: String? {
         switch self {
         case .noSecureEnclave: return "This Mac has no Secure Enclave, so the AI Matrx password provider cannot fill saved passwords here. Use the AI Matrx browser extension instead."
@@ -88,9 +110,47 @@ enum NativeVaultFillDeviceError: LocalizedError, Equatable {
         case .cancelled: return "Password filling was not turned on for this Mac."
         case .sessionEnded: return "Filling from this Mac was turned off in your vault settings. Reconnect the AI Matrx Vault provider, then confirm your password to turn it back on."
         case .reconnect: return "Vault connection needs reconnect."
+        case .turnedOff: return NativeVaultFillDeviceError.turnedOffMessage
+        case .noStepUpMethod: return "Your AI Matrx account has no password or passkey yet, so this Mac cannot fill saved passwords. Add a passkey to your account on aimatrx.com, then fill again."
         case let .refused(message), let .unavailable(message): return message
         }
     }
+}
+
+extension NativeVaultFillDeviceError {
+    /// The person turned filling off for this Mac in the web Vault (the server
+    /// answers 401 `fill_device_revoked`, never a plain expiry).
+    static let turnedOffMessage = "Password filling was turned off for this Mac. Approve it again to keep filling."
+}
+
+/// How the signed-in person can confirm it is them (aidream `step_up_methods`).
+struct NativeFillStepUpMethods: Equatable {
+    var password: Bool
+    var passkey: Bool
+    /// Unknown (the check failed): offer both; the server still decides.
+    static let unknown = NativeFillStepUpMethods(password: true, passkey: true)
+    static func parse(_ data: Data, status: Int) -> NativeFillStepUpMethods {
+        guard status == 200, let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let password = o["password"] as? Bool, let passkey = o["passkey"] as? Bool else { return .unknown }
+        return NativeFillStepUpMethods(password: password, passkey: passkey)
+    }
+}
+
+/// What the Mac asks the person to turn filling on (or back on).
+struct NativeFillStepUpRequest {
+    let notice: String?
+    let methods: NativeFillStepUpMethods
+    /// The web page where this Mac's key is approved with the account passkey.
+    let approvalURL: URL
+    /// The code that page shows, so the person can check it is this Mac.
+    let code: String
+}
+
+enum NativeFillStepUp: Equatable {
+    case password(String)
+    /// The person says they approved this Mac's key on the web.
+    case passkeyApproved
+    case declined
 }
 
 /// One person's registration on this Mac.
@@ -210,13 +270,16 @@ final class NativeVaultFillDevice: @unchecked Sendable {
                 NativeVaultFillWire.headerNonce: nonce, NativeVaultFillWire.headerSignature: NativeVaultFillWire.base64URL(signature)]
     }
 
-    static func registrationBody(_ state: NativeVaultFillDeviceState, password: String, label: String) throws -> Data {
+    /// `password` nil = claim the passkey approval given on the web for this key.
+    static func registrationBody(_ state: NativeVaultFillDeviceState, password: String?, label: String) throws -> Data {
         let jwk = state.key.publicJWK
         guard jwk.count == 4 else { throw NativeVaultFillDeviceError.storeUnavailable }
-        return try JSONSerialization.data(withJSONObject: ["public_key_jwk": jwk, "label": label, "password": password], options: [.sortedKeys])
+        var body: [String: Any] = ["public_key_jwk": jwk, "label": label]
+        if let password { body["password"] = password }
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
-    enum RegistrationOutcome: Equatable { case registered(String), keyRevoked, wrongPassword(String), failed(NativeVaultFillDeviceError) }
+    enum RegistrationOutcome: Equatable { case registered(String), keyRevoked, wrongPassword(String), stepUpRequired(String), noStepUpMethod, failed(NativeVaultFillDeviceError) }
 
     /// Classify the server's answer to `POST /api/vault/fill-devices`.
     static func registrationOutcome(_ data: Data, status: Int) -> RegistrationOutcome {
@@ -234,6 +297,10 @@ final class NativeVaultFillDevice: @unchecked Sendable {
         switch (status, code) {
         case (403, "key_revoked"): return .keyRevoked
         case (403, "step_up_failed"): return .wrongPassword(message ?? "That password did not match your AI Matrx account.")
+        // No password sent and no passkey approval to claim (not approved yet,
+        // or the 5-minute approval expired).
+        case (403, "step_up_required"): return .stepUpRequired("No passkey approval for this Mac was found yet. Approve it on aimatrx.com with your passkey (check the code matches), then continue.")
+        case (403, "no_step_up_method"): return .noStepUpMethod
         case (403, "session_ended"): return .failed(.sessionEnded)
         case (403, _): return .failed(.refused(message ?? "This Mac could not be set up to fill saved passwords."))
         default: return .failed(.unavailable(message ?? "Vault is temporarily unavailable. Try again."))

@@ -11,11 +11,18 @@ KEY = env["SUPABASE_MATRIX_PUBLISHABLE_KEY"]
 CLIENT = "d8a02629-f5f2-4064-ab26-31da07f082fc"
 CALLBACK = "matrx-vault-provider://oauth/callback"
 out = sys.argv[1]
+WEB_ONLY = "--web" in sys.argv  # write the plain web sign-in token (the attacker's starting point)
 
 with httpx.Client(timeout=20, follow_redirects=False) as c:
     h = {"apikey": KEY}
     r = c.post(f"{URL}/token?grant_type=password", headers=h, json={"email": env["AI_ADMIN_USERNAME"], "password": env["AI_ADMIN_PASSWORD"]})
     r.raise_for_status(); web = r.json()["access_token"]
+    if WEB_ONLY:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"access_token": web}, f)
+        print(json.dumps({"minted": True, "web": True}))
+        sys.exit(0)
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(16)

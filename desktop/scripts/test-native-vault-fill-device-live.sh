@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# LIVE proof of the password provider's T-30 device key against a LOCAL aidream
-# (never production): `PORT=8731 uv run python run.py` in aidream first.
-# Signs in as admin@admin.com only. Usage: test-native-vault-fill-device-live.sh [origin] [org] [domain]
+# LIVE proof of the password provider's T-30 device key and T-30c passkey approval
+# against a LOCAL aidream (never production): `PORT=8731 uv run python run.py` in
+# aidream first. Signs in as admin@admin.com only; every device it registers is
+# turned off at the end. Usage: test-native-vault-fill-device-live.sh [origin] [org] [domain]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AIDREAM="${AIDREAM_DIR:-$ROOT/../../aidream}"
+export AIDREAM="${AIDREAM_DIR:-$ROOT/../../aidream}"
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 export FILL_LIVE_ORIGIN="${1:-http://127.0.0.1:8731}"
 export FILL_LIVE_ORG="${2:-884d1ce8-7b49-4fba-a2f3-0f7dd7c83d4f}"   # admin's Workspace
 export FILL_LIVE_DOMAIN="${3:-app.amplitude.com}"
-(cd "$AIDREAM" && uv run python "$ROOT/scripts/native-vault-mint-test-session.py" "$WORKDIR/g1.json" >/dev/null \
-  && uv run python "$ROOT/scripts/native-vault-mint-test-session.py" "$WORKDIR/g2.json" >/dev/null)
-export FILL_LIVE_GRANT1="$WORKDIR/g1.json" FILL_LIVE_GRANT2="$WORKDIR/g2.json"
+export FILL_LIVE_APPROVE="$ROOT/scripts/native-vault-passkey-approval-fixture.py"
+MINT="$ROOT/scripts/native-vault-mint-test-session.py"
+(cd "$AIDREAM" && for n in 1 2 3; do uv run python "$MINT" "$WORKDIR/g$n.json" >/dev/null; done \
+  && uv run python "$MINT" "$WORKDIR/web.json" --web >/dev/null)
+export FILL_LIVE_GRANT1="$WORKDIR/g1.json" FILL_LIVE_GRANT2="$WORKDIR/g2.json" FILL_LIVE_GRANT3="$WORKDIR/g3.json" FILL_LIVE_WEB="$WORKDIR/web.json"
 FILL_LIVE_PASSWORD="$(cd "$AIDREAM" && uv run python -c 'from dotenv import dotenv_values; print(dotenv_values(".env")["AI_ADMIN_PASSWORD"])')"
 export FILL_LIVE_PASSWORD
 SWIFTC="$(xcrun --find swiftc)"; SDK="$(xcrun --sdk macosx --show-sdk-path)"

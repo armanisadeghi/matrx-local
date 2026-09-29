@@ -326,10 +326,11 @@ struct NativeVaultPasswordCorpus {
         let orgs = Result<(Data, HTTPURLResponse), Error>.success((report, response("{}").1)); let matches = Result<(Data, HTTPURLResponse), Error>.success((match, response("{}").1))
         let secret = response("{\"username\":\"dispatch@harborfreight.example\",\"password\":\"p\"}")
         let deviceRequired = status(403, "{\"detail\":{\"code\":\"fill_device_required\"}}")
-        func run(_ device: NativeVaultFillDevice, _ replies: [Result<(Data, HTTPURLResponse), Error>], prompt: @escaping (String?) -> String?) -> (ScriptedPasswordTransport, Int, [NSError]) {
+        let methods = Result<(Data, HTTPURLResponse), Error>.success(status(200, "{\"password\":true,\"passkey\":true}"))
+        func run(_ device: NativeVaultFillDevice, _ replies: [Result<(Data, HTTPURLResponse), Error>], prompt: @escaping (String?) -> String?, stepUp: ((NativeFillStepUpRequest) -> NativeFillStepUp)? = nil, reapprove: ((String, @escaping (Bool) -> Void) -> Void)? = nil) -> (ScriptedPasswordTransport, Int, [NSError]) {
             let transport = ScriptedPasswordTransport(); transport.replies = replies
             let c = CredentialProviderViewController(); c.nativePasswordKeyOverride = "public-build-key"; c.nativePasswordTransport = transport; c.nativePasswordAuthorize = { $0(true) }; c.nativePasswordAcquire = { $0(.success(grant)) }; c.nativePasswordCurrentState = { NativePasswordCurrentState(generation: grant.generation, subject: subject) }; c.nativePasswordOrganizationChoice = { _ in 0 }; c.nativePasswordMatchChoice = { _ in 0 }
-            c.nativeFillDevice = device; c.nativeFillPasswordPrompt = prompt
+            c.nativeFillDevice = device; c.nativeFillPasswordPrompt = prompt; c.nativeFillStepUpPrompt = stepUp; c.nativeFillReapprove = reapprove
             var done = 0; var cancels: [NSError] = []
             c.nativePasswordCompleteSink = { _, finish in done += 1; finish() }; c.nativePasswordCancelSink = { cancels.append($0) }
             c.prepareCredentialList(for: [ASCredentialServiceIdentifier(identifier: "example.com", type: .domain)])
@@ -352,37 +353,68 @@ struct NativeVaultPasswordCorpus {
 
         // First use: no registration yet → password once → register → signed materialize.
         let fresh = fillDevice(subject: subject, deviceID: nil); var prompts = 0
-        (t, done, cancels) = run(fresh, [orgs, matches, registered(testFillDeviceID), .success(secret)], prompt: { notice in prompts += 1; require(notice == nil, "first use needs no warning"); return "correct horse" })
-        require(done == 1 && prompts == 1 && t.requests.count == 4 && t.requests[2].url!.path == "/api/vault/fill-devices" && header(t.requests[2], "X-Organization-Id") == org, "first use registers then fills")
-        let freshJWK = sentJWK(t.requests[2])
-        require(verifySigned(t.requests[3], jwk: freshJWK, item: item, subject: subject), "first fill is signed by the key just registered")
+        (t, done, cancels) = run(fresh, [orgs, matches, methods, registered(testFillDeviceID), .success(secret)], prompt: { notice in prompts += 1; require(notice == nil, "first use needs no warning"); return "correct horse" })
+        require(done == 1 && prompts == 1 && t.requests.count == 5 && t.requests[2].url!.path == "/api/vault/fill-devices/step-up-methods" && t.requests[3].url!.path == "/api/vault/fill-devices" && header(t.requests[3], "X-Organization-Id") == org, "first use checks the step-up methods, registers, then fills")
+        let freshJWK = sentJWK(t.requests[3])
+        require(verifySigned(t.requests[4], jwk: freshJWK, item: item, subject: subject), "first fill is signed by the key just registered")
         require((try! fresh.current(subject: subject)).record.device_id == testFillDeviceID, "the server's device id is kept")
 
         // Revocation: turned off on the web → 403 → password again → key_revoked → new key → fill.
         let revokedDevice = fillDevice(subject: subject, deviceID: testFillDeviceID)
         let oldJWK = try! revokedDevice.current(subject: subject).key.publicJWK
         let newID = "77777777-7777-4777-8777-777777777777"; var notices: [String?] = []
-        (t, done, cancels) = run(revokedDevice, [orgs, matches, .success(deviceRequired), .success(status(403, "{\"detail\":{\"error\":\"key_revoked\",\"message\":\"m\",\"user_message\":\"m\"}}")), registered(newID), .success(secret)], prompt: { notices.append($0); return "correct horse" })
-        require(done == 1 && t.requests.count == 6 && notices.count == 1 && notices[0]?.contains("again") == true, "revoked Mac re-approves with one password prompt and a clear reason")
-        let secondJWK = sentJWK(t.requests[4]); require(sentJWK(t.requests[3]) == oldJWK && secondJWK != oldJWK, "a revoked key is replaced, never re-admitted")
-        require(verifySigned(t.requests[5], jwk: secondJWK, item: item, subject: subject) && header(t.requests[5], "X-Matrx-Fill-Device") == newID, "fill after re-approval uses the new key")
+        (t, done, cancels) = run(revokedDevice, [orgs, matches, .success(deviceRequired), methods, .success(status(403, "{\"detail\":{\"error\":\"key_revoked\",\"message\":\"m\",\"user_message\":\"m\"}}")), registered(newID), .success(secret)], prompt: { notices.append($0); return "correct horse" })
+        require(done == 1 && t.requests.count == 7 && notices.count == 1 && notices[0]?.contains("again") == true, "revoked Mac re-approves with one password prompt and a clear reason")
+        let secondJWK = sentJWK(t.requests[5]); require(sentJWK(t.requests[4]) == oldJWK && secondJWK != oldJWK, "a revoked key is replaced, never re-admitted")
+        require(verifySigned(t.requests[6], jwk: secondJWK, item: item, subject: subject) && header(t.requests[6], "X-Matrx-Fill-Device") == newID, "fill after re-approval uses the new key")
 
         // Declining the password: no registration request, a plain sentence.
-        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches], prompt: { _ in nil })
-        require(done == 0 && t.requests.count == 2 && cancels.first?.localizedDescription == NativeVaultFillDeviceError.cancelled.errorDescription, "declining sends nothing and says so")
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, methods], prompt: { _ in nil })
+        require(done == 0 && t.requests.count == 3 && cancels.first?.localizedDescription == NativeVaultFillDeviceError.cancelled.errorDescription, "declining sends nothing and says so")
 
         // Wrong password: re-asked with the server's sentence, then accepted.
         var wrongNotices: [String?] = []
-        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, .success(status(403, "{\"detail\":{\"error\":\"step_up_failed\",\"message\":\"That password did not match.\",\"user_message\":\"That password did not match.\"}}")), registered(testFillDeviceID), .success(secret)], prompt: { wrongNotices.append($0); return "correct horse" })
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, methods, .success(status(403, "{\"detail\":{\"error\":\"step_up_failed\",\"message\":\"That password did not match.\",\"user_message\":\"That password did not match.\"}}")), registered(testFillDeviceID), .success(secret)], prompt: { wrongNotices.append($0); return "correct horse" })
         require(done == 1 && wrongNotices == [nil, "That password did not match."], "a wrong password is re-asked with the reason")
 
         // Turned off AND signed out on the server: clear message, no loop.
-        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: testFillDeviceID), [orgs, matches, .success(deviceRequired), .success(status(403, "{\"detail\":{\"error\":\"session_ended\",\"message\":\"m\",\"user_message\":\"m\"}}"))], prompt: { _ in "correct horse" })
-        require(done == 0 && t.requests.count == 4 && cancels.first?.localizedDescription == NativeVaultFillDeviceError.sessionEnded.errorDescription, "an ended session says reconnect and stops")
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: testFillDeviceID), [orgs, matches, .success(deviceRequired), methods, .success(status(403, "{\"detail\":{\"error\":\"session_ended\",\"message\":\"m\",\"user_message\":\"m\"}}"))], prompt: { _ in "correct horse" })
+        require(done == 0 && t.requests.count == 5 && cancels.first?.localizedDescription == NativeVaultFillDeviceError.sessionEnded.errorDescription, "an ended session says reconnect and stops")
 
         // A refusal right after approval is final (never an endless prompt loop).
-        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, registered(testFillDeviceID), .success(deviceRequired)], prompt: { _ in "correct horse" })
-        require(done == 0 && t.requests.count == 4 && cancels.count == 1, "second refusal after approval stops")
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, methods, registered(testFillDeviceID), .success(deviceRequired)], prompt: { _ in "correct horse" })
+        require(done == 0 && t.requests.count == 5 && cancels.count == 1, "second refusal after approval stops")
+        // Passkey approval (T-30c), the equal alternative: the prompt offers the web
+        // approval page for THIS key (thumbprint + code), and the registration then
+        // carries no password so the server claims the approval.
+        var seen: [NativeFillStepUpRequest] = []
+        let passkeyDevice = fillDevice(subject: subject, deviceID: nil)
+        (t, done, cancels) = run(passkeyDevice, [orgs, matches, .success(status(200, "{\"password\":false,\"passkey\":true}")), registered(testFillDeviceID), .success(secret)], prompt: { _ in fatalError("the password seam must not be used") }, stepUp: { seen.append($0); return .passkeyApproved })
+        let passkeyThumb = NativeVaultFillWire.thumbprint(try! passkeyDevice.current(subject: subject).key.publicJWK)!
+        let registerBody = try! JSONSerialization.jsonObject(with: t.requests[3].httpBody!) as! [String: Any]
+        require(done == 1 && seen.count == 1 && seen[0].methods == NativeFillStepUpMethods(password: false, passkey: true) && registerBody["password"] == nil && registerBody["public_key_jwk"] != nil, "a passkey-only account approves on the web and registers without a password")
+        let approval = URLComponents(url: seen[0].approvalURL, resolvingAgainstBaseURL: false)!
+        require(approval.host == "aimatrx.com" && approval.path == "/vault/approve-browser" && approval.queryItems?.first(where: { $0.name == "key" })?.value == passkeyThumb && seen[0].code == NativeVaultFillWire.shortCode(passkeyThumb), "the approval link names exactly this Mac's key")
+        // Not approved yet: the server's step_up_required re-asks with the reason, then succeeds.
+        seen = []
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, methods, .success(status(403, "{\"detail\":{\"error\":\"step_up_required\",\"message\":\"m\",\"user_message\":\"m\"}}")), registered(testFillDeviceID), .success(secret)], prompt: { _ in nil }, stepUp: { seen.append($0); return .passkeyApproved })
+        require(done == 1 && seen.count == 2 && seen[1].notice?.contains("No passkey approval") == true, "a missing approval is re-asked with a plain reason")
+        // Neither a password nor a passkey: told to add a passkey on aimatrx.com.
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: nil), [orgs, matches, .success(status(200, "{\"password\":false,\"passkey\":false}"))], prompt: { _ in nil }, stepUp: { request in require(!request.methods.password && !request.methods.passkey, "methods passed through"); return .declined })
+        require(done == 0 && t.requests.count == 3 && cancels.first?.localizedDescription.contains("Add a passkey to your account on aimatrx.com") == true, "an account with neither is told to add a passkey on aimatrx.com")
+
+        // Turned off in the web Vault: the server ends the session with 401
+        // fill_device_revoked. The Mac says exactly that and offers reconnect +
+        // approve; after reconnecting the same fill continues and asks to approve.
+        var offered: [String] = []
+        let turnedOff = Result<(Data, HTTPURLResponse), Error>.success(status(401, "{\"detail\":{\"code\":\"fill_device_revoked\"}}"))
+        (t, done, cancels) = run(fillDevice(subject: subject, deviceID: testFillDeviceID), [orgs, matches, turnedOff], prompt: { _ in nil }, reapprove: { message, resume in offered.append(message); resume(false) })
+        require(done == 0 && offered == ["Password filling was turned off for this Mac. Approve it again to keep filling."] && cancels.first?.localizedDescription == offered.first, "a turned-off Mac says so honestly (never 'needs reconnect')")
+        offered = []
+        let offDevice = fillDevice(subject: subject, deviceID: testFillDeviceID); let offJWK = try! offDevice.current(subject: subject).key.publicJWK
+        (t, done, cancels) = run(offDevice, [orgs, turnedOff, orgs, matches, methods, registered(newID), .success(secret)], prompt: { _ in "correct horse" }, reapprove: { message, resume in offered.append(message); resume(true) })
+        require(done == 1 && offered.count == 1 && t.requests.count == 7 && t.requests[5].url!.path == "/api/vault/fill-devices" && sentJWK(t.requests[5]) != offJWK, "one action — reconnect and approve — continues the same fill")
+        require(NativePasswordCodec.errorMessage(Data("{\"detail\":{\"code\":\"fill_device_revoked\"}}".utf8), status: 401) == NativeVaultFillDeviceError.turnedOffMessage, "the codec reads the turned-off code")
         require(NativeVaultFillDevice.registrationOutcome(Data("{}".utf8), status: 401) == .failed(.reconnect), "401 at registration means reconnect")
         require(NativeVaultFillDevice.registrationOutcome(Data("{\"error\":\"key_revoked\",\"message\":\"m\",\"user_message\":\"m\",\"details\":{}}".utf8), status: 403) == .keyRevoked, "a top-level refusal envelope is read too (the live server's shape)")
     }

@@ -68,6 +68,7 @@ enum NativePasswordCodec {
     static func errorMessage(_ data: Data, status: Int) -> String {
         switch errorCode(data) {
         case "fill_device_required": return NativeVaultFillDeviceError.sessionEnded.errorDescription!
+        case "fill_device_revoked": return NativeVaultFillDeviceError.turnedOffMessage
         case "item_unavailable": return "The selected password is no longer available."
         case "credential_unavailable": return "The saved password cannot be used right now."
         case "native_session_required": return "Vault connection needs reconnect."
@@ -122,6 +123,7 @@ extension CredentialProviderViewController {
         do { identifiers = try NativePasswordStage.identifiers(serviceIdentifiers) }
         catch { let rejected = nativePasswordCoordinator.begin([]); cancelPassword(rejected, "This website request is not supported."); return }
         let operation = nativePasswordCoordinator.begin(identifiers, lifetime: lifetime)
+        nativePasswordServices = serviceIdentifiers
         guard let key = nativePasswordKey, key.validToken else { return cancelPassword(operation, "This build has no public Vault configuration. Install an updated AI Matrx build.") }
         if let authorize = nativePasswordAuthorize, let acquire = nativePasswordAcquire {
             authorize { [weak self] allowed in Task { @MainActor in guard let self, self.current(operation) else { return }; guard allowed else { self.cancelPassword(operation, "Unlock Vault protection to continue."); return }; acquire { result in Task { @MainActor in self.receivedGrant(result, operation: operation) } } } }
@@ -208,7 +210,9 @@ extension CredentialProviderViewController {
     }
     private func processMatches(_ result: Result<(Data, HTTPURLResponse), Error>, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation) {
         do {
-            let (data, response) = try result.get(); guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
+            let (data, response) = try result.get()
+            if response.statusCode == 401, NativePasswordCodec.errorCode(data) == "fill_device_revoked" { return fillTurnedOff(operation, grant: grant) }
+            guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
             let decoded = try NativePasswordCodec.matches(data)
             let result: (matches: [NativePasswordMatch], truncated: Bool, reason: String?)
             if let expected = nativePasswordSelectedBinding {
@@ -250,25 +254,63 @@ extension CredentialProviderViewController {
                 case let .failure(error): self.cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!)
                 case let .success(state):
                     if state.registered { self.sendSignedMaterialize(match, organization: organization, grant: grant, operation: operation, body: body, state: state, reapproved: reapproved) }
-                    else { self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: reapproved ? "This Mac needs your AI Matrx password again before it can fill saved passwords (filling was turned off here, or you connected again)." : nil, attempt: 0, replacedKey: false) }
+                    else { self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: reapproved ? "Confirm it is you again before this Mac fills saved passwords (filling was turned off here, or you connected again)." : nil, attempt: 0, replacedKey: false) }
                 }
             }
         }
     }
-    private func fillPassword(_ notice: String?) -> String? {
-        if let prompt = nativeFillPasswordPrompt { return prompt(notice) }
+    /// Ask the person to confirm it is them — their AI Matrx password, or their
+    /// account passkey on aimatrx.com (the passkey's relying party; T-30c).
+    private func fillStepUp(_ request: NativeFillStepUpRequest) -> NativeFillStepUp {
+        if let prompt = nativeFillStepUpPrompt { return prompt(request) }
+        if let prompt = nativeFillPasswordPrompt { return prompt(request.notice).map(NativeFillStepUp.password) ?? .declined }
+        let lead = request.notice.map { $0 + "\n\n" } ?? ""
         let alert = NSAlert(); alert.messageText = "Turn on password filling on this Mac"
-        alert.informativeText = (notice.map { $0 + "\n\n" } ?? "") + "Enter your AI Matrx account password. It is sent once to confirm it is you and is never stored. This Mac's key stays in its Secure Enclave."
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24)); alert.accessoryView = field
-        alert.addButton(withTitle: "Turn on"); alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return nil }
-        return field.stringValue
+        if request.methods.password {
+            alert.informativeText = lead + "Enter your AI Matrx account password. It is sent once to confirm it is you and is never stored. This Mac's key stays in its Secure Enclave." + (request.methods.passkey ? " Or approve this Mac with your passkey on aimatrx.com." : "")
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24)); alert.accessoryView = field
+            alert.addButton(withTitle: "Turn on")
+            if request.methods.passkey { alert.addButton(withTitle: "Use passkey instead") }
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            let answer = alert.runModal()
+            if answer == .alertFirstButtonReturn { return field.stringValue.isEmpty ? .declined : .password(field.stringValue) }
+            guard request.methods.passkey, answer == .alertSecondButtonReturn else { return .declined }
+        } else {
+            alert.informativeText = lead + (request.methods.passkey
+                ? "Approve this Mac with your AI Matrx passkey on aimatrx.com."
+                : "Your AI Matrx account has no password or passkey yet. Add a passkey on aimatrx.com — the page walks you through it — then approve this Mac there.")
+            alert.addButton(withTitle: "Open aimatrx.com"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return .declined }
+        }
+        NSWorkspace.shared.open(request.approvalURL)
+        let wait = NSAlert(); wait.messageText = "Approve this Mac on aimatrx.com"
+        wait.informativeText = "On the page that opened, check it shows the code \(request.code), then approve with your passkey. Come back and choose Continue within 5 minutes."
+        wait.addButton(withTitle: "Continue"); wait.addButton(withTitle: "Cancel")
+        return wait.runModal() == .alertFirstButtonReturn ? .passkeyApproved : .declined
     }
-    private func turnOnFilling(_ match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, state: NativeVaultFillDeviceState, notice: String?, attempt: Int, replacedKey: Bool, password known: String? = nil) {
+    private func turnOnFilling(_ match: NativePasswordMatch, organization: NativeOrganization, grant: NativeVaultSessionAccess.Grant, operation: NativePasswordOperation, body: Data, state: NativeVaultFillDeviceState, notice: String?, attempt: Int, replacedKey: Bool, stepUp known: NativeFillStepUp? = nil, methods knownMethods: NativeFillStepUpMethods? = nil) {
         guard current(operation) else { return }
-        guard let password = known ?? fillPassword(notice) else { return cancelPassword(operation, NativeVaultFillDeviceError.cancelled.errorDescription!) }
-        guard let registration = try? NativeVaultFillDevice.registrationBody(state, password: password, label: NativeVaultFillDevice.label) else { return cancelPassword(operation, NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+        guard let methods = knownMethods else {
+            // Which step-ups this account has decides what the prompt offers.
+            var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent(NativeVaultFillWire.stepUpMethodsPath))
+            request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Accept")
+            return sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in
+                guard let self, self.current(operation) else { return }
+                let methods: NativeFillStepUpMethods = { if case let .success((data, response)) = result { return NativeFillStepUpMethods.parse(data, status: response.statusCode) }; return .unknown }()
+                self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: notice, attempt: attempt, replacedKey: replacedKey, stepUp: known, methods: methods)
+            } }
+        }
+        guard let thumbprint = NativeVaultFillWire.thumbprint(state.key.publicJWK) else { return cancelPassword(operation, NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+        let label = NativeVaultFillDevice.label
+        let choice = known ?? fillStepUp(NativeFillStepUpRequest(notice: notice, methods: methods, approvalURL: NativeVaultFillWire.approvalURL(thumbprint: thumbprint, label: label, origin: nativeFillWebOrigin), code: NativeVaultFillWire.shortCode(thumbprint)))
+        let password: String?
+        switch choice {
+        case .declined: return cancelPassword(operation, (!methods.password && !methods.passkey ? NativeVaultFillDeviceError.noStepUpMethod : .cancelled).errorDescription!)
+        case let .password(value): password = value
+        case .passkeyApproved: password = nil
+        }
+        guard let registration = try? NativeVaultFillDevice.registrationBody(state, password: password, label: label) else { return cancelPassword(operation, NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
         var request = URLRequest(url: nativePasswordAPIOrigin.appendingPathComponent(NativeVaultFillWire.registerPath)); request.httpMethod = "POST"; request.httpBody = registration
         request.setValue("Bearer \(grant.accessToken)", forHTTPHeaderField: "Authorization"); request.setValue(organization.id, forHTTPHeaderField: "X-Organization-Id"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         sendPasswordRequest(request, grant: grant, operation: operation) { [weak self] result in Task { @MainActor in
@@ -276,6 +318,9 @@ extension CredentialProviderViewController {
             let outcome: NativeVaultFillDevice.RegistrationOutcome
             switch result { case let .success((data, response)): outcome = NativeVaultFillDevice.registrationOutcome(data, status: response.statusCode); case .failure: outcome = .failed(.unavailable("Vault is temporarily unavailable. Try again.")) }
             let device = self.nativeFillDevice
+            let again = { (notice: String?, state: NativeVaultFillDeviceState, replaced: Bool, reuse: NativeFillStepUp?) in
+                self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: notice, attempt: attempt + 1, replacedKey: replaced, stepUp: reuse, methods: methods)
+            }
             switch outcome {
             case let .registered(deviceID):
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -287,18 +332,28 @@ extension CredentialProviderViewController {
                 }
             case .keyRevoked:
                 // This Mac's old key was turned off: it is never re-admitted, so
-                // make a new enclave key and register that (same password).
+                // make a new enclave key and register that. A password is reused;
+                // a passkey approval was for the OLD key, so the new one is
+                // approved once more (the page shows its new code).
                 guard !replacedKey else { return self.cancelPassword(operation, NativeVaultFillDeviceError.sessionEnded.errorDescription!) }
                 DispatchQueue.global(qos: .userInitiated).async {
                     let fresh = Result { try device.replaceKey(subject: grant.subject) }
                     DispatchQueue.main.async {
                         guard self.current(operation) else { return }
-                        switch fresh { case let .success(next): self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: next, notice: nil, attempt: attempt, replacedKey: true, password: password); case let .failure(error): self.cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!) }
+                        switch fresh {
+                        case let .success(next):
+                            if case .password = choice { again(nil, next, true, choice) }
+                            else { again("Filling was turned off for this Mac before, so it has a new key. Approve this new key once more.", next, true, nil) }
+                        case let .failure(error): self.cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? NativeVaultFillDeviceError.storeUnavailable.errorDescription!)
+                        }
                     }
                 }
-            case let .wrongPassword(message):
+            case let .wrongPassword(message), let .stepUpRequired(message):
                 guard attempt < 2 else { return self.cancelPassword(operation, message) }
-                self.turnOnFilling(match, organization: organization, grant: grant, operation: operation, body: body, state: state, notice: message, attempt: attempt + 1, replacedKey: replacedKey)
+                again(message, state, replacedKey, nil)
+            case .noStepUpMethod:
+                guard attempt < 2 else { return self.cancelPassword(operation, NativeVaultFillDeviceError.noStepUpMethod.errorDescription!) }
+                again(NativeVaultFillDeviceError.noStepUpMethod.errorDescription!, state, replacedKey, nil)
             case let .failed(error): self.cancelPassword(operation, error.errorDescription ?? "Vault is temporarily unavailable. Try again.")
             }
         } }
@@ -316,6 +371,7 @@ extension CredentialProviderViewController {
         guard current(operation) else { return }
         do {
             let (data, response) = try result.get()
+            if response.statusCode == 401, NativePasswordCodec.errorCode(data) == "fill_device_revoked" { return fillTurnedOff(operation, grant: grant) }
             if response.statusCode == 403, NativePasswordCodec.errorCode(data) == "fill_device_required" {
                 // The server no longer accepts this Mac's registration (turned
                 // off, or a new sign-in). Once per request: ask for the password
@@ -327,6 +383,53 @@ extension CredentialProviderViewController {
             guard response.statusCode == 200 else { throw EnrollmentError.message(NativePasswordCodec.errorMessage(data, status: response.statusCode)) }
             let credential = try NativePasswordCodec.materialized(data); linearizedComplete(operation, grant: grant, credential: credential)
         } catch { cancelPassword(operation, (error as? LocalizedError)?.errorDescription ?? "Vault is temporarily unavailable. Try again.") }
+    }
+    /// The person turned filling off for this Mac in the web Vault; the server
+    /// ended this provider sign-in with it (401 `fill_device_revoked`). Say so
+    /// plainly and offer the one fix: reconnect, then approve this Mac again,
+    /// then this same fill continues.
+    private func fillTurnedOff(_ operation: NativePasswordOperation, grant: NativeVaultSessionAccess.Grant) {
+        let message = NativeVaultFillDeviceError.turnedOffMessage
+        let device = nativeFillDevice
+        // The revoked key is never re-admitted: the next approval uses a new one.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = try? device.replaceKey(subject: grant.subject)
+            DispatchQueue.main.async {
+                guard let self, self.current(operation) else { return }
+                guard self.nativePasswordSelectedBinding == nil, let services = self.nativePasswordServices else { return self.cancelPassword(operation, message) }
+                let resume: (Bool) -> Void = { [weak self] reconnected in
+                    guard let self, self.current(operation) else { return }
+                    guard reconnected else { return self.cancelPassword(operation, message) }
+                    self.beginPasswordRequest(services)
+                }
+                if let reapprove = self.nativeFillReapprove { return reapprove(message, resume) }
+                self.presentReapproval(message, resume: resume)
+            }
+        }
+    }
+    private func presentReapproval(_ message: String, resume: @escaping (Bool) -> Void) {
+        let content = view
+        content.subviews.forEach { $0.removeFromSuperview() }
+        let title = NSTextField(labelWithString: "Password filling is off on this Mac"); title.font = .systemFont(ofSize: 18, weight: .semibold)
+        let text = NSTextField(wrappingLabelWithString: message + " Reconnect your AI Matrx account, then confirm it is you with your password or passkey."); text.textColor = .secondaryLabelColor
+        let status = NSTextField(wrappingLabelWithString: ""); status.textColor = .secondaryLabelColor
+        let reconnect = NSButton(title: "Reconnect and approve", target: self, action: #selector(beginConnect)); reconnect.keyEquivalent = "\r"
+        let notNow = NSButton(title: "Not now", target: self, action: #selector(declineReapproval))
+        let stack = NSStackView(views: [title, text, status, reconnect, notNow]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            text.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        connectionStatus = status; connectButton = reconnect
+        nativeFillPendingResume = resume
+    }
+    @objc private func declineReapproval() {
+        let resume = nativeFillPendingResume; nativeFillPendingResume = nil
+        resume?(false)
     }
     private func withLiveGrant(_ operation: NativePasswordOperation, _ grant: NativeVaultSessionAccess.Grant, then: @escaping () -> Void) {
         guard current(operation) else { return }

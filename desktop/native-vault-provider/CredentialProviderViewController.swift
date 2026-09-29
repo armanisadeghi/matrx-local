@@ -50,7 +50,22 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     /// Access ladder T-30: the Secure Enclave key that signs every materialize.
     var nativeFillDevice = NativeVaultFillDevice()
     /// Asks for the AI Matrx password to turn filling on; nil = the person declined.
+    /// (Password-only test seam; `nativeFillStepUpPrompt` takes precedence.)
     var nativeFillPasswordPrompt: ((String?) -> String?)?
+    /// Test seam for the whole step-up choice: password, passkey approval on the
+    /// web, or declined. Production shows the native prompt.
+    var nativeFillStepUpPrompt: ((NativeFillStepUpRequest) -> NativeFillStepUp)?
+    /// Test seam for "filling was turned off for this Mac": given the honest
+    /// sentence, reconnect the provider and report whether it worked.
+    /// Production shows that sentence with one action, Reconnect and approve.
+    var nativeFillReapprove: ((String, @escaping (Bool) -> Void) -> Void)?
+    /// The services the current password list request was opened for (so a
+    /// reconnect can continue the same fill).
+    var nativePasswordServices: [ASCredentialServiceIdentifier]?
+    /// Set while a password request waits on "Reconnect and approve".
+    var nativeFillPendingResume: ((Bool) -> Void)?
+    /// The web app (passkey relying party). Harness may point elsewhere.
+    var nativeFillWebOrigin: URL = NativeVaultFillWire.webOrigin
     /// Harness-only origin (a local aidream); the shipped extension uses the default.
     var nativePasswordAPIOrigin: URL = nativeAPIOrigin
     let nativeIdentitySynchronizer = NativeVaultIdentitySynchronizer()
@@ -89,8 +104,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     private var webSession: ASWebAuthenticationSession?
     private var window: NSWindow?
-    private var connectionStatus: NSTextField?
-    private var connectButton: NSButton?
+    var connectionStatus: NSTextField?
+    var connectButton: NSButton?
     private var retryButton: NSButton?
 
     override func prepareInterfaceForExtensionConfiguration() { replaceNativeRequest(); showConfiguration() }
@@ -158,6 +173,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         self.connectionStatus = status; self.connectButton = connect; self.retryButton = retry
         loadCurrentConnection()
     }
+    @objc func beginConnect() { begin() }
     @objc private func begin() {
         do {
             guard activeOperation == nil, !startingConnect else {
@@ -269,6 +285,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
                 }
                 DispatchQueue.main.async {
                     guard committed, let self, NativeVaultEnrollmentLifecycle.mayCompleteConfiguration(active: self.activeOperation, operationID: operation.id) else { return }
+                    if let resume = self.nativeFillPendingResume {
+                        // Reconnected from a password request whose Mac was
+                        // turned off: go straight back to that fill (it now asks
+                        // to approve this Mac), not to configuration completion.
+                        self.nativeFillPendingResume = nil
+                        self.finishOperation(operation.id, cancel: false)
+                        return resume(true)
+                    }
                     self.finishOperation(operation.id, cancel: false)
                     self.nativeRequest.cancel()
                     self.extensionContext.completeExtensionConfigurationRequest()
@@ -419,7 +443,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }
         loadCurrentConnection()
     }
-    private func setConnectionStatus(_ value: String) {
+    func setConnectionStatus(_ value: String) {
         let lifetime = nativeRequest
         DispatchQueue.main.async { [weak self] in guard lifetime.isCurrent else { return }; self?.connectionStatus?.stringValue = value }
     }

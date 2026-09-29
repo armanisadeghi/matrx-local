@@ -57,16 +57,19 @@ from app.services.local_db.mirror_schema import (  # noqa: E402
     MIRROR_TABLES,
     RETIRED_MIRROR_COLUMNS,
     SNAPSHOT_GENERATED_AT,
+    WITHHELD_MIRROR_COLUMNS,
 )
 
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 
 
 def known_columns(schema: str, table: str) -> set[str]:
-    """Every column name this build can store for one mirrored relation."""
+    """Every column name this build stores, or deliberately withholds, for one relation."""
     spec = MIRROR_TABLES[schema][table]
-    return set(spec["pg_types"]) | set(
-        RETIRED_MIRROR_COLUMNS.get(schema, {}).get(table, ())
+    return (
+        set(spec["pg_types"])
+        | set(RETIRED_MIRROR_COLUMNS.get(schema, {}).get(table, ()))
+        | set(WITHHELD_MIRROR_COLUMNS.get(schema, {}).get(table, ()))
     )
 
 

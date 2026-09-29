@@ -36,6 +36,7 @@ from app.services.local_db.mirror_schema import (
     MIRROR_TABLES,
     RETIRED_MIRROR_COLUMNS,
     SNAPSHOT_HASH,
+    WITHHELD_MIRROR_COLUMNS,
 )
 
 logger = get_logger()
@@ -256,7 +257,11 @@ async def _ensure_schema_tables(
         for idx_sql in spec["index_sql"]:
             await db.execute(idx_sql)
 
-        retired = set(RETIRED_MIRROR_COLUMNS.get(schema, {}).get(name, ()))
+        # Withheld cloud columns (access-ladder T-13's retiring row column) are kept
+        # exactly like retired ones in a file an older build created.
+        retired = set(RETIRED_MIRROR_COLUMNS.get(schema, {}).get(name, ())) | set(
+            WITHHELD_MIRROR_COLUMNS.get(schema, {}).get(name, ())
+        )
         for col in local_cols:
             if col not in expected:
                 if col in retired:

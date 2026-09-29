@@ -185,7 +185,6 @@ class MatrxFilesClient:
         content: bytes,
         filename: str,
         mime_type: str | None = None,
-        visibility: str = "private",
         metadata: dict[str, Any] | None = None,
         request_id: str | None = None,
         idempotency_key: str | None = None,
@@ -207,7 +206,6 @@ class MatrxFilesClient:
             "/files/upload",
             data={
                 "file_path": file_path,
-                "visibility": visibility,
                 **({"intent": intent} if intent else {}),
                 **({"reason": reason} if reason else {}),
                 **(

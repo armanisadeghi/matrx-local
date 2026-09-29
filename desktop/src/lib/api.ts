@@ -226,7 +226,6 @@ export interface ToolMediaArtifact {
   cdn_url?: string;
   signed_url?: string;
   download_url?: string;
-  visibility: "private" | "shared" | "public";
   capture: Record<string, unknown>;
 }
 

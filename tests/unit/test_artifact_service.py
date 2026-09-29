@@ -28,7 +28,6 @@ class _FilesClient:
             "size_bytes": len(kwargs["content"]),
             "checksum": "cloud-checksum",
             "signed_url": "https://files.example/signed",
-            "visibility": "private",
         }
 
 

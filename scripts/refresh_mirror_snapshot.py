@@ -13,17 +13,38 @@ import os
 from datetime import date
 from pathlib import Path
 
+import sys
+
 import psycopg
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = ROOT / "schema_mirror" / "snapshot.json"
+sys.path.insert(0, str(ROOT / "scripts"))
+from generate_mirror_schema import MIRRORED_SCHEMAS  # noqa: E402
+
+
+def is_mirrored(schema: str, relation: str) -> bool:
+    """True when the generator builds a local SQLite table for this relation.
+
+    Only those can hold local data an app upgrade must not lose; a column dropped from a
+    relation the device never mirrors (``files.sync_mappings``) needs no retirement review.
+    """
+    opts = MIRRORED_SCHEMAS.get(schema)
+    if opts is None:
+        return False
+    scope = opts.get("tables")
+    if scope is not None and relation not in scope:
+        return False
+    return relation not in opts.get("exclude_tables", ())
 
 
 def validate_non_destructive(old: dict, updated: dict) -> None:
     concerns = []
     for schema, tables in old["schemas"].items():
         for relation, details in tables.items():
+            if not is_mirrored(schema, relation):
+                continue
             live = updated["schemas"].get(schema, {}).get(relation)
             if live is None:
                 concerns.append(f"{schema}.{relation} (relation removed)")

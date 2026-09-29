@@ -284,7 +284,6 @@ class ArtifactService:
             content=content,
             filename=file_name,
             mime_type="image/png",
-            visibility="private",
             metadata={
                 "kind": "screenshot",
                 "artifact_id": artifact_id,
@@ -315,7 +314,6 @@ class ArtifactService:
             url=response.get("url"),
             cdn_url=response.get("cdn_url"),
             download_url=response.get("download_url"),
-            visibility=response.get("visibility") or "private",
             capture=capture,
         )
 
@@ -356,8 +354,8 @@ class ArtifactService:
                  artifact_id, kind, local_path, media_type, file_name, size_bytes,
                  checksum, source_width, source_height, capture_source,
                  capture_json, sync_state, cloud_file_id, url, cdn_url,
-                 download_url, visibility, sync_error, published_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 download_url, sync_error, published_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(artifact_id) DO UPDATE SET
                  local_path=COALESCE(excluded.local_path, local_artifacts.local_path),
                  sync_state=excluded.sync_state,
@@ -384,7 +382,6 @@ class ArtifactService:
                 artifact.url,
                 artifact.cdn_url,
                 artifact.download_url,
-                artifact.visibility,
                 sync_error,
                 datetime.now(UTC).isoformat()
                 if artifact.availability == ArtifactAvailability.CLOUD_READY
@@ -397,7 +394,7 @@ class ArtifactService:
         await self._db.execute(
             """UPDATE local_artifacts SET
                  sync_state='cloud_ready', cloud_file_id=?, url=?, cdn_url=?,
-                 download_url=?, visibility=?, size_bytes=?,
+                 download_url=?, size_bytes=?,
                  checksum=?, sync_error=NULL, published_at=?, updated_at=datetime('now')
                WHERE artifact_id=?""",
             (
@@ -405,7 +402,6 @@ class ArtifactService:
                 artifact.url,
                 artifact.cdn_url,
                 artifact.download_url,
-                artifact.visibility,
                 artifact.size_bytes,
                 artifact.checksum,
                 datetime.now(UTC).isoformat(),
@@ -515,7 +511,6 @@ class ArtifactService:
             url=row.get("url"),
             cdn_url=row.get("cdn_url"),
             download_url=row.get("download_url"),
-            visibility=row.get("visibility") or "private",
             capture=json.loads(row.get("capture_json") or "{}"),
         )
 

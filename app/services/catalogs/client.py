@@ -70,7 +70,7 @@ _MAX_TOTAL_ROWS = 5000
 # `GET /api/catalogs/{app}` publishes (`aidream/services/catalogs/service.py::_row_to_dict`),
 # and after DD-182 (2026-09-13) it is also exactly what the `anon` role is granted on the
 # table: the row carries `updated_by`, `created_by`, `organization_id`, `metadata`,
-# `version` and `visibility` that no client needs and that a signed-out caller must not
+# `version` and the row access columns that no client needs and that a signed-out caller must not
 # read. `select=*` asked Postgres for every column including those, so the two public
 # paths of one feature disagreed until the column grants were bounded — and a `*` here
 # would now be refused outright rather than quietly over-fetching.

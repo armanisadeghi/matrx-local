@@ -502,11 +502,11 @@ class ConversationsRepo:
             """INSERT INTO chat.conversation
                (id, title, config, status, initial_agent_id, source_app,
                 created_by, created_at, updated_at, message_count, is_favorite,
-                is_ephemeral, conversation_type, visibility, version,
+                is_ephemeral, conversation_type, version,
                 metadata, variables, overrides, cache_state,
                 source_feature, exclude_from_kg)
                VALUES (?, ?, ?, 'active', ?, 'matrx_local', ?, ?, ?, 0, 0,
-                       0, 'standard', 'private', 1, ?, '{}', '{}', '{}', '', 0)""",
+                       0, 'standard', 1, ?, '{}', '{}', '{}', '', 0)""",
             (
                 conv["id"],
                 conv.get("title", "New conversation"),

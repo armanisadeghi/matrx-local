@@ -888,7 +888,6 @@ class CodingSessionArtifactsLane:
                         content=content,
                         filename=Path(rel).name,
                         mime_type=mime,
-                        visibility="private",
                         metadata={
                             "kind": "coding_session_artifact",
                             "provider": session.provider,

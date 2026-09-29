@@ -13,7 +13,8 @@ default `public` profile.
 
 Column note (canonical base-entity shape on the remote side):
     - ownership   : `created_by` (uuid)         — replaced the old `user_id`.
-    - visibility  : `visibility` (enum)         — replaced the old `is_public`.
+    - row access  : `shown_to` (list filter) + `published_to_web` (the only
+                    anonymous lane) — access-ladder T-13; this client sets neither.
     - soft-delete : `deleted_at` (timestamptz)  — null = live; replaced the old
                                                   `is_deleted` boolean.
 The LOCAL SQLite mirror keeps its own column names; only the fields sent to and

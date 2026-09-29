@@ -293,7 +293,8 @@ def test_store_writes_canonical_rows_and_outbox(tmp_path: Path) -> None:
         assert conv["initial_agent_id"] == "ag1"
         assert conv["source_app"] == "matrx-local"
         assert conv["source_feature"] == "chat-route"
-        assert conv["visibility"] == "personal"
+        # Access-ladder T-13: the mirror withholds the retiring row column entirely.
+        assert "visibility" not in conv
         assert conv["organization_id"] == "11111111-1111-4111-8111-111111111111"
         # chat.conversation carries no project FK — the cloud dropped the
         # column, so the mirror has none and the writer must not invent one.
@@ -1402,14 +1403,15 @@ def test_postgrest_batches_only_contain_rows_with_matching_keys() -> None:
     )
 
 
-def test_outbound_payload_repairs_legacy_visibility_and_strips_credentials() -> None:
+def test_outbound_payload_never_pushes_row_column_and_strips_credentials() -> None:
     from app.services.chat_sync.engine import _normalize_outbound_payload
 
+    retiring_row_column = "visibility"  # access-ladder T-13: an older local row may hold it
     normalized = _normalize_outbound_payload(
         "conversation",
         {
             "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01",
-            "visibility": "private",
+            retiring_row_column: "private",
             "source_app": "matrx_local",
             "metadata": {
                 "remote_tool_request": {
@@ -1424,7 +1426,7 @@ def test_outbound_payload_repairs_legacy_visibility_and_strips_credentials() -> 
         },
     )
 
-    assert normalized["visibility"] == "personal"
+    assert retiring_row_column not in normalized
     assert normalized["source_app"] == "matrx-local"
     state = normalized["metadata"]["remote_tool_request"]["client"]["state"]
     assert state == {"surface": "matrx-user/chat"}

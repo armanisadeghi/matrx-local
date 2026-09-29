@@ -74,8 +74,10 @@ MATRX_ORG_ID = "39c38960-d30c-4840-b0c1-c9960de95582"
 DEFINITION_DEFAULTS = {
     "source_kind": "native",
     "tool_group": "core",
-    "visibility": "public",
 }
+# A matrx-local tool is catalogue data anyone may read: published to the web (access-ladder
+# T-13 — the row column it replaces is never written).
+DEFINITION_PUBLISHED_TO_WEB = True
 
 # The 49 cloud names bound to executor matrx-local, verified live 2026-07-10.
 # Used ONLY as a names-only fallback baseline when the aidream route is
@@ -359,7 +361,7 @@ def _sql_text_array(values: tuple[str, ...]) -> str:
 def _new_tool_sql(entry: CatalogEntry) -> str:
     cols = (
         "name, description, parameters, output_schema, category, tags, "
-        "source_kind, tool_group, organization_id, visibility, is_active"
+        "source_kind, tool_group, organization_id, published_to_web, is_active"
     )
     vals = ", ".join(
         [
@@ -372,7 +374,7 @@ def _new_tool_sql(entry: CatalogEntry) -> str:
             _sql_str(DEFINITION_DEFAULTS["source_kind"]),
             _sql_str(DEFINITION_DEFAULTS["tool_group"]),
             _sql_str(MATRX_ORG_ID),
-            _sql_str(DEFINITION_DEFAULTS["visibility"]),
+            "true" if DEFINITION_PUBLISHED_TO_WEB else "false",
             "true",
         ]
     )

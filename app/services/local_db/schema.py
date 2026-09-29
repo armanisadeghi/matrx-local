@@ -473,12 +473,12 @@ _V10_CHAT_MIRROR_CUTOVER = """
 INSERT OR IGNORE INTO chat.conversation
     (id, title, config, status, initial_agent_id, source_app, created_at,
      updated_at, message_count, is_favorite, is_ephemeral, conversation_type,
-     visibility, version, metadata, variables, overrides, cache_state,
+     version, metadata, variables, overrides, cache_state,
      source_feature, exclude_from_kg)
 SELECT id, title,
        json_object('mode', mode, 'route_mode', route_mode, 'model', COALESCE(model, '')),
        'active', agent_id, 'matrx_local', created_at, updated_at,
-       0, 0, 0, 'standard', 'private', 1,
+       0, 0, 0, 'standard', 1,
        CASE WHEN server_conversation_id IS NOT NULL
             THEN json_object('legacy_server_conversation_id', server_conversation_id)
             ELSE '{}' END,
@@ -749,7 +749,6 @@ CREATE TABLE IF NOT EXISTS local_artifacts (
     -- wide; durable url/cdn_url/download_url only). Existing local DBs keep a
     -- vestigial NULL column; nothing reads or writes it.
     download_url     TEXT,
-    visibility       TEXT NOT NULL DEFAULT 'private',
     sync_attempts    INTEGER NOT NULL DEFAULT 0,
     sync_error       TEXT,
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),

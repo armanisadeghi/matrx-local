@@ -60,7 +60,6 @@ async def publish_book(
         content=content,
         filename=f"{run.settings.app_name} capture {capture_id}.pdf",
         mime_type="application/pdf",
-        visibility="private",
         metadata={
             "kind": "book_capture",
             "capture_id": capture_id,

@@ -61,6 +61,17 @@ MIRRORED_SCHEMAS: dict[str, dict] = {
     "files": {"include_views": False, "tables": ("files", "folders")},
 }
 
+# Cloud columns the device never mirrors or syncs while the cloud still carries them
+# (``schema_mirror/withheld_columns.json``): access-ladder T-13's retiring row column, which
+# becomes ``shown_to`` (a list filter) and ``published_to_web`` (the only anonymous lane) —
+# common-docs projects/access-ladder/t13/PLAN.md phase 5. A client that no longer reads or
+# writes it is what lets phase 7 drop it; an older local SQLite file keeps the column (never
+# destroyed) exactly like a retired one, and pulled values for it are ignored, not drift.
+WITHHELD_COLUMNS_PATH = REPO_ROOT / "schema_mirror" / "withheld_columns.json"
+WITHHELD_CLOUD_COLUMNS: frozenset[str] = frozenset(
+    json.loads(WITHHELD_COLUMNS_PATH.read_text())["columns"]
+)
+
 # Postgres udt_name -> SQLite column type. Everything unlisted maps to TEXT
 # (uuids, enums, timestamps, json — all stored as their PostgREST JSON string
 # form so pulled rows round-trip losslessly).
@@ -93,7 +104,7 @@ _INDEX_CANDIDATES = ("conversation_id", "user_id", "created_by", "updated_at", "
 
 def build_table_entry(schema: str, name: str, spec: dict) -> dict:
     pk = spec["pk"]
-    cols = spec["columns"]
+    cols = [c for c in spec["columns"] if c["name"] not in WITHHELD_CLOUD_COLUMNS]
     col_defs = []
     for c in cols:
         typ = sqlite_type(c["udt"])
@@ -183,6 +194,7 @@ def generate(snapshot: dict) -> str:
     retired_columns = load_retired_columns(snapshot)
 
     mirror: dict[str, dict[str, dict]] = {}
+    withheld: dict[str, dict[str, list[str]]] = {}
     for schema, opts in MIRRORED_SCHEMAS.items():
         tables = snapshot["schemas"].get(schema)
         if tables is None:
@@ -198,11 +210,17 @@ def generate(snapshot: dict) -> str:
             if name in excluded:
                 continue
             mirror[schema][name] = build_table_entry(schema, name, spec)
+            held = sorted(
+                c["name"] for c in spec["columns"] if c["name"] in WITHHELD_CLOUD_COLUMNS
+            )
+            if held:
+                withheld.setdefault(schema, {})[name] = held
 
     body = json.dumps(mirror, indent=4, sort_keys=True)
     # Render as a Python literal (json booleans/nulls -> Python).
     body = body.replace(": true", ": True").replace(": false", ": False").replace(": null", ": None")
     retired_body = json.dumps(retired_columns, indent=4, sort_keys=True)
+    withheld_body = json.dumps(withheld, indent=4, sort_keys=True)
 
     return f'''"""GENERATED FILE — do not edit by hand.
 
@@ -218,6 +236,11 @@ SNAPSHOT_GENERATED_AT = "{snapshot["generated_at"]}"
 # Cloud columns removed after older app versions created them locally. The
 # mirror preserves their data but excludes them from every sync contract.
 RETIRED_MIRROR_COLUMNS = {retired_body}
+
+# Cloud columns the mirror withholds (scripts/generate_mirror_schema.py
+# WITHHELD_CLOUD_COLUMNS): never created, pulled or pushed; an older local
+# column of that name is kept like a retired one.
+WITHHELD_MIRROR_COLUMNS = {withheld_body}
 
 # schema -> table -> {{columns, pk, cursor_col, has_deleted_at, create_sql, index_sql}}
 MIRROR_TABLES = {body}

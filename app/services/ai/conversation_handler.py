@@ -187,11 +187,11 @@ class SQLiteConversationStore:
                     initial_agent_id, initial_agent_version_id,
                     source_app, source_feature, created_by,
                     created_at, updated_at, message_count, is_favorite,
-                    is_ephemeral, conversation_type, visibility, version,
+                    is_ephemeral, conversation_type, version,
                     metadata, cache_state, exclude_from_kg)
                    VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?,
                            ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'standard',
-                           'personal', 1, '{}', '{}', 0)""",
+                           1, '{}', '{}', 0)""",
                 (
                     conversation_id,
                     json.dumps(config, ensure_ascii=False),

@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-09-26",
+ "generated_at": "2026-09-28",
  "schemas": {
   "ai": {
    "api": {
@@ -27,7 +27,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.api'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -129,6 +129,41 @@
       "name": "description",
       "nullable": true,
       "udt": "text"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.api'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -161,7 +196,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.endpoint'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -284,6 +319,41 @@
       "name": "doc_sources",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.endpoint'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -567,7 +637,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.model_alias'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -648,6 +718,34 @@
       "name": "notes",
       "nullable": true,
       "udt": "text"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.model_alias'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -875,7 +973,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.model_definition'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -982,6 +1080,34 @@
       "data_type": "uuid",
       "default": null,
       "name": "successor_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.model_definition'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
       "nullable": true,
       "udt": "uuid"
      }
@@ -1489,7 +1615,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.offering'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -1570,6 +1696,41 @@
       "name": "pricing_verified_at",
       "nullable": true,
       "udt": "timestamptz"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.offering'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -1637,7 +1798,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.provider'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -1725,6 +1886,34 @@
       "name": "sync_policy",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.provider'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -1903,7 +2092,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.setting'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -1956,6 +2145,34 @@
       "name": "metadata",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.setting'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -2204,10 +2421,38 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('ai.voices'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('ai.voices'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -3096,7 +3341,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'personal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('chat.agent_run'::regclass, 'personal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -3107,6 +3352,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('chat.agent_run'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -7059,6 +7332,20 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "conversation_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "workflow_run_id",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -8106,10 +8393,45 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('files.account_tiers'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('files.account_tiers'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -8244,6 +8566,13 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -8749,7 +9078,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('files.files'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -8914,6 +9243,48 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "parent_record_type",
+      "nullable": true,
+      "udt": "text"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "parent_record_id",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('files.files'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -8960,7 +9331,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('files.folders'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -9020,6 +9391,41 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('files.folders'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -9215,10 +9621,38 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('files.machine_written_prefixes'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('files.machine_written_prefixes'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -9732,11 +10166,11 @@
    "structure": {
     "columns": [
      {
-      "data_type": "integer",
-      "default": "nextval('files.file_structure_id_seq'::regclass)",
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
       "name": "id",
       "nullable": false,
-      "udt": "int4"
+      "udt": "uuid"
      },
      {
       "data_type": "text",
@@ -9923,13 +10357,6 @@
      {
       "data_type": "uuid",
       "default": null,
-      "name": "user_id",
-      "nullable": false,
-      "udt": "uuid"
-     },
-     {
-      "data_type": "uuid",
-      "default": null,
       "name": "device_id",
       "nullable": false,
       "udt": "uuid"
@@ -10083,7 +10510,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'personal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('files.sync_mappings'::regclass, 'personal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -10094,6 +10521,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('files.sync_mappings'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -10639,6 +11094,41 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
      }
     ],
     "kind": "table",
@@ -10799,7 +11289,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'personal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.google_document'::regclass, 'personal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -10810,6 +11300,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.google_document'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -10919,7 +11437,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'public'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.heatmap_saves'::regclass, 'public'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -10930,6 +11448,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.heatmap_saves'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -11032,7 +11578,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.note_folders'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -11043,6 +11589,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.note_folders'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -11194,7 +11768,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.notes'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -11219,6 +11793,41 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": null,
+      "name": "search_engine_indexed",
+      "nullable": true,
+      "udt": "bool"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.notes'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -11314,7 +11923,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.pb_claim_appeals_fd31de'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -11325,6 +11934,27 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.pb_claim_appeals_fd31de'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -11420,7 +12050,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.pb_insurance_claims_fd31de'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -11431,6 +12061,27 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.pb_insurance_claims_fd31de'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -11682,6 +12333,13 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
      }
     ],
     "kind": "table",
@@ -11791,7 +12449,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'internal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.product_capture_item'::regclass, 'internal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -11816,6 +12474,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.product_capture_item'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -12204,6 +12890,133 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     }
+    ],
+    "kind": "table",
+    "pk": [
+     "id"
+    ]
+   },
+   "provlock_recall_visits_all8u5": {
+    "columns": [
+     {
+      "data_type": "uuid",
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "text",
+      "default": null,
+      "name": "patient_ref",
+      "nullable": false,
+      "udt": "text"
+     },
+     {
+      "data_type": "date",
+      "default": null,
+      "name": "due_on",
+      "nullable": true,
+      "udt": "date"
+     },
+     {
+      "data_type": "boolean",
+      "default": null,
+      "name": "booked",
+      "nullable": true,
+      "udt": "bool"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "organization_id",
+      "nullable": false,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "created_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "updated_by",
+      "nullable": true,
+      "udt": "uuid"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "created_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": "now()",
+      "name": "updated_at",
+      "nullable": false,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "integer",
+      "default": "1",
+      "name": "version",
+      "nullable": false,
+      "udt": "int4"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": "platform._t13_transitional_row_column_default('workbench.provlock_recall_visits_all8u5'::regclass, 'internal'::platform.visibility)",
+      "name": "visibility",
+      "nullable": false,
+      "udt": "visibility"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "custom_fields",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.provlock_recall_visits_all8u5'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -12770,6 +13583,20 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "jsonb",
+      "default": "'{}'::jsonb",
+      "name": "metadata",
+      "nullable": false,
+      "udt": "jsonb"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "deleted_at",
+      "nullable": true,
+      "udt": "timestamptz"
      }
     ],
     "kind": "table",
@@ -12946,6 +13773,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.udt_datasets'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -13151,6 +14006,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.udt_documents'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -13412,6 +14295,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.udt_structured_lists'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -13557,9 +14468,9 @@
      },
      {
       "data_type": "jsonb",
-      "default": null,
+      "default": "'{}'::jsonb",
       "name": "metadata",
-      "nullable": true,
+      "nullable": false,
       "udt": "jsonb"
      },
      {
@@ -13617,6 +14528,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.udt_workbooks'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",
@@ -13712,7 +14651,7 @@
      },
      {
       "data_type": "USER-DEFINED",
-      "default": "'personal'::platform.visibility",
+      "default": "platform._t13_transitional_row_column_default('workbench.working_documents'::regclass, 'personal'::platform.visibility)",
       "name": "visibility",
       "nullable": false,
       "udt": "visibility"
@@ -13723,6 +14662,34 @@
       "name": "custom_fields",
       "nullable": false,
       "udt": "jsonb"
+     },
+     {
+      "data_type": "USER-DEFINED",
+      "default": null,
+      "name": "shown_to",
+      "nullable": true,
+      "udt": "shown_to"
+     },
+     {
+      "data_type": "boolean",
+      "default": "platform._t13_transitional_published_default('workbench.working_documents'::regclass)",
+      "name": "published_to_web",
+      "nullable": false,
+      "udt": "bool"
+     },
+     {
+      "data_type": "timestamp with time zone",
+      "default": null,
+      "name": "published_to_web_at",
+      "nullable": true,
+      "udt": "timestamptz"
+     },
+     {
+      "data_type": "uuid",
+      "default": null,
+      "name": "published_to_web_by",
+      "nullable": true,
+      "udt": "uuid"
      }
     ],
     "kind": "table",

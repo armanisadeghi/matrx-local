@@ -1,0 +1,4 @@
+{
+ "_what": "Cloud columns the local SQLite mirror never creates, pulls or pushes while the cloud still carries them. An older local file that already has one keeps it (like retired_columns.json). Access-ladder T-13 (common-docs/projects/access-ladder/t13/PLAN.md phase 5): the row column retiring into shown_to + published_to_web; phase 7 drops it from the cloud, then it moves to retired_columns.json.",
+ "columns": ["visibility"]
+}

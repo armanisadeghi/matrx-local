@@ -37,7 +37,7 @@ from app.common.system_logger import get_logger
 from app.services.chat_sync.client import ChatSyncHTTPError, SupabaseChatClient
 from app.services.local_db.database import get_db
 from app.services.local_db.mirror_codec import decode_remote_row, encode_local_row
-from app.services.local_db.mirror_schema import MIRROR_TABLES
+from app.services.local_db.mirror_schema import MIRROR_TABLES, WITHHELD_MIRROR_COLUMNS
 from app.services.local_db.repositories import SyncMetaRepo, TokenRepo
 
 logger = get_logger()
@@ -84,7 +84,7 @@ _PUSH_COLUMNS: dict[str, frozenset[str]] = {
             "is_ephemeral", "initial_agent_id", "initial_agent_version_id",
             "is_favorite", "cache_state", "last_context_breakdown",
             "last_request_status", "last_request_id", "exclude_from_kg",
-            "conversation_type", "visibility",
+            "conversation_type",
         }
     ),
     "user_request": frozenset(
@@ -292,12 +292,9 @@ def _normalize_outbound_payload(
     """Repair legacy local vocabulary and enforce the cloud metadata boundary."""
     normalized = dict(payload)
     if table == "conversation":
-        if normalized.get("visibility") == "private":
-            logger.warning(
-                "[chat_sync] normalized legacy conversation visibility "
-                "'private' -> 'personal' before cloud push"
-            )
-            normalized["visibility"] = "personal"
+        # The row access column is never pushed (access-ladder T-13): chat.conversation is
+        # a Private table, so the cloud carries no row control for it at all.
+        normalized.pop("visibility", None)
         if normalized.get("source_app") == "matrx_local":
             normalized["source_app"] = "matrx-local"
 
@@ -1270,7 +1267,8 @@ class ChatSyncEngine:
             )
             return False
 
-        unknown = [c for c in remote if c not in spec["pg_types"]]
+        withheld = WITHHELD_MIRROR_COLUMNS.get(_SCHEMA, {}).get(table, ())
+        unknown = [c for c in remote if c not in spec["pg_types"] and c not in withheld]
         if unknown:
             _report_snapshot_drift(table, unknown)
 

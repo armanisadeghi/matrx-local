@@ -841,7 +841,12 @@ info "Checking live matrx-local tool-registry drift (non-blocking)..."
 if uv run --frozen python scripts/check_tool_db_drift.py; then
     ok "Tool registry matches the executable dispatcher contracts."
 else
-    warn "Tool-registry drift detected — release continues, but treat the report above as a bug."
+    registry_status=$?
+    if [[ "$registry_status" -eq 2 ]]; then
+        warn "Tool registry could not be measured — release continues, but it did not verify a match."
+    else
+        warn "Tool-registry drift detected — release continues, but treat the report above as a bug."
+    fi
 fi
 
 # ── Mandate references (loud, deliberately non-blocking — ruling D23) ────────

@@ -14,10 +14,12 @@ from scripts.check_tool_db_drift import (
     LocalTool,
     RegistryState,
     SURFACE_BINDING_ALLOWLIST,
+    UNMEASURED_EXIT_CODE,
     compare_tool,
     compute_drift,
     fetch_registry_state,
     load_local_tools,
+    main,
 )
 
 
@@ -230,6 +232,24 @@ def test_fetch_registry_targets_tool_schema_and_active_executor_tree(
     assert binding_query["is_active"] == "eq.true"
     assert "executor_name.eq.matrx-local" in binding_query["or"]
     assert "executor_name.like.matrx-local.*" in binding_query["or"]
+
+
+def test_unmeasured_live_registry_is_not_a_success(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    request = httpx.Request("GET", "https://db.matrxserver.com/rest/v1/binding")
+    response = httpx.Response(401, request=request)
+
+    def unauthorized(_client: httpx.Client) -> RegistryState:
+        raise httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr("scripts.check_tool_db_drift.load_local_tools", lambda: ())
+    monkeypatch.setattr("scripts.check_tool_db_drift.fetch_registry_state", unauthorized)
+
+    assert main() == UNMEASURED_EXIT_CODE
+    captured = capsys.readouterr()
+    assert "COULD NOT VERIFY" in captured.err
+    assert "UNMEASURED" in captured.err
 
 
 def test_mega_tool_handler_runs_the_underlying_pydantic_validator() -> None:

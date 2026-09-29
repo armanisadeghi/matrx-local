@@ -2,9 +2,9 @@
 """Report drift between matrx-local's executable tool contracts and Supabase.
 
 This is deliberately loud and non-blocking at the integration points. The
-script exits 1 when it finds drift so callers receive a useful signal, while
-release/CI callers explicitly continue. An unavailable registry exits 0 after
-a prominent warning: "could not verify" is not evidence of drift.
+script exits 1 when it finds drift and 2 when it cannot measure the registry;
+release/CI callers explicitly continue. An unavailable registry is never a
+successful "matches" result.
 
 The database is the source of truth. This script is read-only and never emits
 or applies database changes.
@@ -37,6 +37,7 @@ SURFACE_NAME = "matrx-local/desktop"
 # matrx-ai-core, not matrx-local. It therefore must not have a matrx-local
 # binding. Every other always_include_tools entry needs an active local binding.
 SURFACE_BINDING_ALLOWLIST = frozenset({"load_desktop_tools"})
+UNMEASURED_EXIT_CODE = 2
 
 
 @dataclass(frozen=True)
@@ -440,9 +441,13 @@ def main() -> int:
             file=sys.stderr,
         )
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        print("This is not reported as drift; release/CI remains non-blocking.", file=sys.stderr)
+        print(
+            "This is not reported as drift, but the registry is UNMEASURED; "
+            "release/CI must not call it a match.",
+            file=sys.stderr,
+        )
         print("!" * 76, file=sys.stderr)
-        return 0
+        return UNMEASURED_EXIT_CODE
 
     report = compute_drift(local_tools, registry)
     print_report(report, local_count=len(local_tools), registry=registry)

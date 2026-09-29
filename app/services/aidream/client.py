@@ -273,6 +273,8 @@ class AIDreamClient:
         headers: dict[str, str],
         timeout: float,
         json: Any = None,
+        content: bytes | None = None,
+        params: Optional[dict[str, str]] = None,
     ) -> httpx.Response:
         """Send once; on a wire-level failure, retry once on a NEW connection.
 
@@ -288,7 +290,12 @@ class AIDreamClient:
                     timeout=timeout, transport=self._transport
                 ) as http:
                     response = await http.request(
-                        method, url, headers=headers, json=json
+                        method,
+                        url,
+                        headers=headers,
+                        json=json,
+                        content=content,
+                        params=params,
                     )
             except httpx.TimeoutException as exc:
                 raise AIDreamTimeoutError(
@@ -406,6 +413,46 @@ class AIDreamClient:
                 body=_json_body_or_none(resp),
             )
 
+        return resp.json()
+
+    async def post_bytes(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        params: Optional[dict[str, str]] = None,
+        content_type: str = "application/octet-stream",
+        jwt: Optional[str] = None,
+        timeout: float = 300.0,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
+        """POST raw bytes to ``/api{path}`` (a file body, not JSON); returns parsed JSON.
+
+        Not replay-safe (a POST outside ``_REPLAY_SAFE_POST_PATHS``), so a wire
+        failure is raised on the first attempt like every other POST.
+        """
+        url = f"{self._base_url}/api{path}"
+        merged = await self._build_headers(
+            {"Accept": "application/json", "Content-Type": content_type},
+            jwt,
+            headers,
+            path=path,
+        )
+        resp = await self._send(
+            "POST",
+            url,
+            path=path,
+            headers=merged,
+            timeout=timeout,
+            content=content,
+            params=params,
+        )
+        if not resp.is_success:
+            raise AIDreamError(
+                resp.status_code,
+                f"[aidream_client] {path} → HTTP {resp.status_code}: {resp.text[:1000]}",
+                body=_json_body_or_none(resp),
+            )
         return resp.json()
 
     async def put(

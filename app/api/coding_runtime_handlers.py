@@ -132,3 +132,50 @@ async def coding_session_reconcile(
             ),
         }
     return {"found": True, **result}
+
+
+# ---------------------------------------------------------------------------
+# Full Download — the THIS-COMPUTER half (Arman, 2026-09-28: "look on your
+# computer first and get it directly first if it's available and then go to s3
+# if it's not"). The web page asks the owning computer over the same bridge
+# channel; a timeout is the honest "that computer is not reachable" answer and
+# the page then falls back to the cloud backup, when the owner turned it on.
+
+
+@register("coding_session.full_download")
+async def coding_session_full_download(
+    args: Dict[str, Any], req: Optional[Request]
+) -> Dict[str, Any]:
+    from app.services.coding_sessions.raw_transcript import (
+        backup_to_cloud,
+        locate,
+        save_to_downloads,
+    )
+
+    provider = args.get("provider")
+    native_session_id = args.get("native_session_id")
+    if provider not in {"claude_code", "codex"}:
+        return {
+            "found": False,
+            "detail": f"Full Download from this computer does not read {provider!r} transcripts.",
+        }
+    if not isinstance(native_session_id, str) or not native_session_id:
+        raise ValueError("native_session_id is required")
+    transcript_path = args.get("transcript_path")
+    located = locate(
+        provider,
+        native_session_id,
+        transcript_path if isinstance(transcript_path, str) else None,
+    )
+    if located is None:
+        return {
+            "found": False,
+            "detail": "The full transcript file is not on this computer.",
+        }
+    result: Dict[str, Any] = {"found": True, **save_to_downloads(located, provider, native_session_id)}
+    provider_session_id = args.get("provider_session_id")
+    if args.get("backup") is True and isinstance(provider_session_id, str) and provider_session_id:
+        result["backup"] = await backup_to_cloud(
+            located, provider=provider, provider_session_id=provider_session_id
+        )
+    return result

@@ -13,12 +13,15 @@ or applies database changes.
 from __future__ import annotations
 
 import json
+import argparse
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import httpx
+from dotenv import dotenv_values
 
 # Direct script execution sets sys.path[0] to scripts/, not the repository
 # root. Make the documented `python scripts/...` command import the real app.
@@ -38,6 +41,7 @@ SURFACE_NAME = "matrx-local/desktop"
 # binding. Every other always_include_tools entry needs an active local binding.
 SURFACE_BINDING_ALLOWLIST = frozenset({"load_desktop_tools"})
 UNMEASURED_EXIT_CODE = 2
+ADMIN_TEST_EMAIL = "admin@admin.com"
 
 
 @dataclass(frozen=True)
@@ -225,10 +229,53 @@ def load_local_tools() -> tuple[LocalTool, ...]:
     return tuple(sorted(tools, key=lambda tool: tool.name))
 
 
-def _headers() -> dict[str, str]:
+def _admin_credentials(admin_env_file: Path | None = None) -> tuple[str, str] | None:
+    """Return the canonical developer test identity without shipping it.
+
+    The checker has no service key.  A short-lived JWT for the established
+    admin test account lets RLS authorize the read in a developer release or
+    protected CI job.  An env file is opt-in so ordinary unit tests and
+    consumer executions never discover local credentials implicitly.
+    """
+
+    email = os.getenv("AI_ADMIN_USERNAME")
+    password = os.getenv("AI_ADMIN_PASSWORD")
+    if admin_env_file is not None and (not email or not password):
+        values = dotenv_values(admin_env_file)
+        email = email or values.get("AI_ADMIN_USERNAME")
+        password = password or values.get("AI_ADMIN_PASSWORD")
+    if not email and not password:
+        return None
+    if not email or not password:
+        raise RuntimeError("admin registry-read credentials are incomplete")
+    if email != ADMIN_TEST_EMAIL:
+        raise RuntimeError("registry verification accepts only the canonical admin test account")
+    return email, password
+
+
+def _admin_jwt(client: httpx.Client, admin_env_file: Path | None = None) -> str | None:
+    credentials = _admin_credentials(admin_env_file)
+    if credentials is None:
+        return None
+    email, password = credentials
+    response = client.post(
+        f"{SUPABASE_URL.rstrip('/')}/auth/v1/token?grant_type=password",
+        headers={"apikey": SUPABASE_PUBLISHABLE_KEY, "Content-Type": "application/json"},
+        json={"email": email, "password": password},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("access_token")
+    actual_email = payload.get("user", {}).get("email")
+    if not isinstance(token, str) or actual_email != ADMIN_TEST_EMAIL:
+        raise RuntimeError("admin registry-read login did not return the canonical test identity")
+    return token
+
+
+def _headers(access_token: str | None = None) -> dict[str, str]:
     return {
         "apikey": SUPABASE_PUBLISHABLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_PUBLISHABLE_KEY}",
+        "Authorization": f"Bearer {access_token or SUPABASE_PUBLISHABLE_KEY}",
         "Accept": "application/json",
         # The registry lives in the exposed `tool` schema. Without this header
         # PostgREST resolves names against its default schema and returns PGRST205.
@@ -236,11 +283,14 @@ def _headers() -> dict[str, str]:
     }
 
 
-def fetch_registry_state(client: httpx.Client) -> RegistryState:
+def fetch_registry_state(
+    client: httpx.Client, admin_env_file: Path | None = None
+) -> RegistryState:
     base = f"{SUPABASE_URL.rstrip('/')}/rest/v1"
+    headers = _headers(_admin_jwt(client, admin_env_file))
     bindings_response = client.get(
         f"{base}/binding",
-        headers=_headers(),
+        headers=headers,
         params={
             "or": (
                 f"(executor_name.eq.{EXECUTOR_NAME},"
@@ -264,7 +314,7 @@ def fetch_registry_state(client: httpx.Client) -> RegistryState:
     if binding_ids:
         definitions_response = client.get(
             f"{base}/definition",
-            headers=_headers(),
+            headers=headers,
             params={
                 "id": f"in.({','.join(sorted(binding_ids))})",
                 "select": (
@@ -281,7 +331,7 @@ def fetch_registry_state(client: httpx.Client) -> RegistryState:
 
     surface_response = client.get(
         f"{base}/surface_defaults",
-        headers=_headers(),
+        headers=headers,
         params={
             "surface_name": f"eq.{SURFACE_NAME}",
             "select": "surface_name,always_include_tools,never_include_tools,is_active",
@@ -429,11 +479,18 @@ def print_report(
     print(bar)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--admin-env-file",
+        type=Path,
+        help="developer-only dotenv path for the canonical admin test account",
+    )
+    args = parser.parse_args(argv)
     try:
         local_tools = load_local_tools()
         with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-            registry = fetch_registry_state(client)
+            registry = fetch_registry_state(client, args.admin_env_file)
     except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError) as exc:
         print("!" * 76, file=sys.stderr)
         print(

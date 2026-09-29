@@ -178,7 +178,13 @@ def test_fetch_registry_targets_tool_schema_and_active_executor_tree(
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/token"):
+            return httpx.Response(
+                200,
+                json={"access_token": "admin-test-token", "user": {"email": "admin@admin.com"}},
+            )
         if request.url.path.endswith("/binding"):
+            assert request.headers["authorization"] == "Bearer admin-test-token"
             return httpx.Response(
                 200,
                 json=[
@@ -222,13 +228,19 @@ def test_fetch_registry_targets_tool_schema_and_active_executor_tree(
     monkeypatch.setattr(
         "scripts.check_tool_db_drift.SUPABASE_PUBLISHABLE_KEY", "publishable-test"
     )
+    monkeypatch.setattr(
+        "scripts.check_tool_db_drift._admin_credentials",
+        lambda _admin_env_file: ("admin@admin.com", "not-printed"),
+    )
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         state = fetch_registry_state(client)
 
     assert state.active_binding_count == 1
     assert {tool.name for tool in state.tools} == {"local_file"}
-    assert all(request.headers["accept-profile"] == "tool" for request in requests)
-    binding_query = requests[0].url.params
+    registry_requests = [request for request in requests if "/rest/v1/" in request.url.path]
+    assert all(request.headers["accept-profile"] == "tool" for request in registry_requests)
+    binding_request = next(request for request in registry_requests if request.url.path.endswith("/binding"))
+    binding_query = binding_request.url.params
     assert binding_query["is_active"] == "eq.true"
     assert "executor_name.eq.matrx-local" in binding_query["or"]
     assert "executor_name.like.matrx-local.*" in binding_query["or"]
@@ -240,13 +252,13 @@ def test_unmeasured_live_registry_is_not_a_success(
     request = httpx.Request("GET", "https://db.matrxserver.com/rest/v1/binding")
     response = httpx.Response(401, request=request)
 
-    def unauthorized(_client: httpx.Client) -> RegistryState:
+    def unauthorized(_client: httpx.Client, _admin_env_file: Any = None) -> RegistryState:
         raise httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
 
     monkeypatch.setattr("scripts.check_tool_db_drift.load_local_tools", lambda: ())
     monkeypatch.setattr("scripts.check_tool_db_drift.fetch_registry_state", unauthorized)
 
-    assert main() == UNMEASURED_EXIT_CODE
+    assert main([]) == UNMEASURED_EXIT_CODE
     captured = capsys.readouterr()
     assert "COULD NOT VERIFY" in captured.err
     assert "UNMEASURED" in captured.err

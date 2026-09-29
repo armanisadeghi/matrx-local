@@ -838,7 +838,7 @@ ok "@ai-matrx packages are npm latest; the one agent picker holds; archived item
 # step stays visible; release.sh warns and continues, matching the other
 # platform consumers' release posture.
 info "Checking live matrx-local tool-registry drift (non-blocking)..."
-if uv run --frozen python scripts/check_tool_db_drift.py; then
+if uv run --frozen python scripts/check_tool_db_drift.py --admin-env-file desktop/.env; then
     ok "Tool registry matches the executable dispatcher contracts."
 else
     registry_status=$?

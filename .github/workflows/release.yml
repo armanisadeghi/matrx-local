@@ -52,6 +52,11 @@ jobs:
       - name: Tool registry drift (non-blocking signal)
         continue-on-error: true
         run: uv run --frozen python scripts/check_tool_db_drift.py
+        env:
+          # A short-lived RLS-scoped JWT is minted only for this read from the
+          # canonical disposable admin test account. Never add a service key.
+          AI_ADMIN_USERNAME: ${{ secrets.AI_ADMIN_USERNAME }}
+          AI_ADMIN_PASSWORD: ${{ secrets.AI_ADMIN_PASSWORD }}
 
       - name: Runtime import, authorization, parity, and unit test gate
         run: uv run --frozen pytest tests/smoke tests/parity tests/unit -q

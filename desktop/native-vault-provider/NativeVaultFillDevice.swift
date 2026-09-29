@@ -58,7 +58,9 @@ enum NativeVaultFillWire {
     }
     static func approvalURL(thumbprint: String, label: String, origin: URL = webOrigin) -> URL {
         var components = URLComponents(url: origin.appendingPathComponent(approvePagePath), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "key", value: thumbprint), URLQueryItem(name: "label", value: label)]
+        // `kind=mac` tells the approve page this is the native Mac password app,
+        // not a browser extension, so its copy says "this Mac" correctly.
+        components.queryItems = [URLQueryItem(name: "key", value: thumbprint), URLQueryItem(name: "label", value: label), URLQueryItem(name: "kind", value: "mac")]
         return components.url!
     }
     /// The P-256 public JWK the server's `normalize_public_jwk` accepts.

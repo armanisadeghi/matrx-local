@@ -21,10 +21,10 @@ An issue is done only when it is **verified**: fixed in source, released, instal
 never for "too noisy". The fix itself follows the `diagnose` and `forcing-function-tests` skills.
 
 ## Scan
-- 2026-09-30T18:10Z · window 24h (evidence from 2026-07-10T04:22Z)
+- 2026-09-30T18:11Z · window 24h (evidence from 2026-07-10T04:22Z)
 - installed **1.4.253** · latest release **v1.4.255** · behind by 2
 - engine: reachable, health `ok`, version 1.4.253, failed none, degraded none
-- window: 3 critical · 20 errors · 420 warnings · outbox 128 queued (128 without identity)
+- window: 3 critical · 20 errors · 422 warnings · outbox 128 queued (128 without identity)
 - issues: open 45 · fixed 3 — 14 need an agent now (the rest are quiet this window or below the warning threshold)
 - new this scan: none
 
@@ -74,9 +74,9 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 - **MXL-R-004** WARNING `sync_engine` — models sync failed — AIDreamError: [aidream_client] /ai-models → HTTP <n>  
   window 10 · total 10 · last 2026-09-30T18:08 · builds 1.4.253×10 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 - **MXL-R-006** WARNING `engine` — matrx-ai: authenticated server tool refresh failed; local tools remain available and the session listener will retry — AIDreamError: [aidream_client]   
-  window 168 · total 168 · last 2026-09-30T18:10 · builds 1.4.253×168 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+  window 169 · total 169 · last 2026-09-30T18:10 · builds 1.4.253×169 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 - **MXL-R-007** WARNING `engine` — Session services could not reconnect; will retry — AIDreamError: [aidream_client] /ai-tools → HTTP <n>  
-  window 168 · total 168 · last 2026-09-30T18:10 · builds 1.4.253×168 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+  window 169 · total 169 · last 2026-09-30T18:10 · builds 1.4.253×169 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 
 ## Installed, verifying
 

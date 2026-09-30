@@ -60,6 +60,11 @@ from app.services.delegation.client import (
     DelegationApiError,
     ResumeOutcome,
 )
+from app.services.delegation.mirror import (
+    SqliteToolCallMirror,
+    ToolCallMirror,
+    settled_result,
+)
 from app.services.delegation.outbox import DelegationOutbox, SqliteDelegationOutbox
 from app.services.delegation.user_review import (
     REVIEW_KINDS,
@@ -168,6 +173,7 @@ class DelegationEngine:
         client: DelegationApiClient | None = None,
         poll_interval: float | None = None,
         outbox: DelegationOutbox | None = None,
+        mirror: ToolCallMirror | None = None,
     ) -> None:
         # URL captured at engine construction from the app-config accessor
         # (env override > remote > cache > compiled default). A mid-session
@@ -177,6 +183,9 @@ class DelegationEngine:
             poll_interval if poll_interval is not None else DEFAULT_POLL_INTERVAL
         )
         self._outbox = outbox or SqliteDelegationOutbox()
+        # This desktop's own copy of each chat.tool_call row. Settled by the
+        # delivery funnel itself — see mirror.py for why.
+        self._mirror = mirror or SqliteToolCallMirror()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -302,7 +311,13 @@ class DelegationEngine:
     def ui_conversation_state(self, conversation_id: str) -> dict[str, Any]:
         """Snapshot for the local UI poller: per-call execution state plus
         the pending continuation (user_request_id) once the last sibling
-        result lands. Never includes arguments or result bodies."""
+        result lands. Never includes arguments.
+
+        An answered call carries ``result`` ({is_error, error_message,
+        output, duration_ms}) — the ONLY way the open Cloud Chat card can
+        learn its own call finished, because aidream sends no completion
+        event for a delegated call (see mirror.py). ``state`` still gates the
+        composer and the resume; ``result`` only settles the card."""
         facts = self._conversation_facts.get(conversation_id, {})
         calls = list(facts.get("calls", {}).values())
         outstanding = [c for c in calls if c.get("state") in UNSETTLED_CALL_STATES]
@@ -445,12 +460,17 @@ class DelegationEngine:
         facts = self._conversation_facts.setdefault(
             conversation_id, {"calls": {}, "continuation": None}
         )
-        facts["calls"][call_id] = {
+        previous = facts["calls"].get(call_id)
+        entry: dict[str, Any] = {
             "call_id": call_id,
             "tool_name": tool_name,
             "state": state,
             "ts": time.time(),
         }
+        if previous is not None and "result" in previous:
+            # A later state note (delivered, review_*) never erases an answer.
+            entry["result"] = previous["result"]
+        facts["calls"][call_id] = entry
         if state in UNSETTLED_CALL_STATES:
             # The turn suspended again: whatever continuation was recorded for
             # this conversation belongs to the previous suspend and has either
@@ -1027,9 +1047,48 @@ class DelegationEngine:
     # Delivery + continuation
     # ------------------------------------------------------------------
 
+    async def _settle_locally(
+        self, conversation_id: str, call_id: str, result_payload: dict[str, Any]
+    ) -> None:
+        """This desktop answered the call — settle its OWN copies of it now.
+
+        Called first thing in :meth:`_deliver`, the one funnel every answer
+        path (executed, refused, user-reviewed, retried, restored) goes
+        through. Idempotent: re-delivery re-settles to the same answer, and a
+        mirror row the server already marked terminal is never touched.
+        """
+        facts = self._conversation_facts.setdefault(
+            conversation_id, {"calls": {}, "continuation": None}
+        )
+        call = facts["calls"].get(call_id)
+        if call is None:
+            # Restored from the outbox after a restart: facts were lost with
+            # the process. "answered" is deliberately NOT an unsettled state —
+            # recording the answer must never re-hold the composer or resume.
+            self._note_call(
+                conversation_id,
+                call_id,
+                str(result_payload.get("tool_name", "")),
+                "answered",
+            )
+            call = facts["calls"][call_id]
+        call["result"] = settled_result(result_payload)
+        try:
+            await self._mirror.settle(conversation_id, call_id, result_payload)
+        except Exception as exc:
+            # The pull converges the row with server truth; say so loudly.
+            logger.warning(
+                "[delegation] local mirror settle failed for call_id=%s (%s) — "
+                "chat.tool_call stays unsettled until the next chat pull",
+                call_id,
+                exc,
+            )
+            self._event("mirror_settle_failed", call_id=call_id, error=str(exc))
+
     async def _deliver(
         self, conversation_id: str, call_id: str, result_payload: dict[str, Any]
     ) -> None:
+        await self._settle_locally(conversation_id, call_id, result_payload)
         jwt = await self._get_credentials()
         if jwt is None:
             logger.warning(

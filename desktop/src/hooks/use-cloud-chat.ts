@@ -34,7 +34,9 @@ import {
   outstandingCalls,
   readDelegationState,
   releaseDelegationUi,
+  settleAnsweredDelegatedCalls,
   waitForDelegatedContinuation,
+  type EngineDelegationState,
 } from "@/lib/cloud-chat-delegation";
 import {
   CloudChatAuthHydrationGuard,
@@ -1982,6 +1984,21 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         });
       };
 
+      // A delegated call gets NO completion event from the server — this
+      // desktop answered it, so it settles its own card from the engine's
+      // record of that answer. The one reader of that record for the live
+      // message; both continuation waits feed it.
+      const settleAnsweredCalls = (state: EngineDelegationState) => {
+        const settled = settleAnsweredDelegatedCalls(state, blockBuilder, liveToolParts);
+        if (!settled) return;
+        liveToolParts = settled;
+        updateAssistant({
+          tool_calls: liveToolParts.calls,
+          tool_results: liveToolParts.results,
+        });
+        publishBlocks();
+      };
+
       const setStatus = (status: string) => {
         lastStatus = status;
         updateAssistant({ streamStatus: status });
@@ -2642,6 +2659,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 getFreshAccessToken,
                 abort.signal,
                 setStatus,
+                settleAnsweredCalls,
               );
               if (retryRequestId) {
                 requestBody = { ...requestBody, user_request_id: retryRequestId };
@@ -2716,6 +2734,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
             getFreshAccessToken,
             abort.signal,
             setStatus,
+            settleAnsweredCalls,
           );
           if (!userRequestId) {
             if (!abort.signal.aborted) {

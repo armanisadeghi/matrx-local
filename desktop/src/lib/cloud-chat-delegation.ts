@@ -1,14 +1,30 @@
 import { conversationPendingCallsPath } from "@/lib/api/routes/ai";
+import type { StreamBlockBuilder } from "@/lib/chat-blocks";
+import {
+  reduceLiveToolEvent,
+  type ExtractedToolParts,
+} from "@/features/filesystem/tool-results";
+import type { ToolEventPayload } from "@/types/python-generated/stream-events";
 
 const DELEGATION_POLL_MS = 1000;
 const DELEGATION_CLAIM_TTL_SECONDS = 20;
 // Longest mega-tool execution timeout is Shell at 900s; add headroom.
 const DELEGATION_WAIT_CAP_MS = 16 * 60 * 1000;
 
+/** The answer this desktop posted for a call (engine `settled_result`). */
+export interface DelegationCallResult {
+  is_error: boolean;
+  error_message?: string | null;
+  output?: unknown;
+  duration_ms?: number | null;
+}
+
 export interface DelegationCall {
   call_id: string;
   tool_name: string;
   state: string;
+  /** Present once this desktop answered the call (executed, refused, reviewed). */
+  result?: DelegationCallResult;
 }
 
 /**
@@ -27,6 +43,62 @@ export const UNSETTLED_CALL_STATES = new Set([
 export function outstandingCalls(state: EngineDelegationState | null): DelegationCall[] {
   if (state?.outstanding) return state.outstanding;
   return (state?.calls ?? []).filter((call) => UNSETTLED_CALL_STATES.has(call.state));
+}
+
+/**
+ * The completion event aidream never sends for a delegated call.
+ *
+ * The server hard-suspends and ends the stream when it delegates, and a
+ * `/resume` segment does not replay the answered call — so the open card only
+ * finishes because THIS desktop, which answered it, tells itself. The engine's
+ * one delivery funnel records the answer (app/services/delegation/mirror.py);
+ * this turns it into the same event shape the stream would have carried.
+ */
+export function answeredCallEvents(state: EngineDelegationState | null): ToolEventPayload[] {
+  return (state?.calls ?? [])
+    .filter((call): call is DelegationCall & { result: DelegationCallResult } =>
+      Boolean(call.result),
+    )
+    .map((call) =>
+      call.result.is_error
+        ? {
+            event: "tool_error",
+            call_id: call.call_id,
+            tool_name: call.tool_name,
+            message: call.result.error_message || "The tool reported an error.",
+            data: { detail: call.result.error_message ?? null },
+          }
+        : {
+            event: "tool_completed",
+            call_id: call.call_id,
+            tool_name: call.tool_name,
+            data: { result: call.result.output ?? null },
+          },
+    );
+}
+
+/**
+ * Settle every call this desktop answered in the live message's two stores —
+ * the ordered block (card phase) and the rich result list. Idempotent and
+ * never a downgrade: a call already terminal in the block is left untouched,
+ * so a real stream completion always wins. Returns the new parts, or null
+ * when nothing changed.
+ */
+export function settleAnsweredDelegatedCalls(
+  state: EngineDelegationState | null,
+  builder: StreamBlockBuilder,
+  parts: ExtractedToolParts,
+): ExtractedToolParts | null {
+  let next = parts;
+  let changed = false;
+  for (const event of answeredCallEvents(state)) {
+    if (!builder.settleToolCall(event)) continue;
+    changed = true;
+    if (!next.results.some((result) => result.tool_call_id === event.call_id)) {
+      next = reduceLiveToolEvent(next, event);
+    }
+  }
+  return changed ? next : null;
 }
 
 /**
@@ -143,6 +215,8 @@ export async function waitForDelegatedContinuation(
   accessToken: DelegationAccessToken,
   signal: AbortSignal,
   onStatus: (status: string) => void,
+  /** Every engine snapshot, so the caller can settle answered calls. */
+  onSnapshot?: (state: EngineDelegationState) => void,
 ): Promise<string | null> {
   let deadline = Date.now() + DELEGATION_WAIT_CAP_MS;
   while (!signal.aborted && Date.now() < deadline) {
@@ -152,6 +226,7 @@ export async function waitForDelegatedContinuation(
       await resolveAccessToken(accessToken),
     );
     if (state) {
+      onSnapshot?.(state);
       const outstanding = outstandingCalls(state);
       const continuation = state.continuation;
       if (

@@ -142,6 +142,19 @@ execution path. Do not add one.
   it on the next sweep, so nothing is stranded. This is the defect that ended
   the owner's run on 2026-09-22 (conversation 60b6f5e7…, call
   `toolu_01KCH6aM36tYXNk6CBExGmEZ`).
+- **The desktop settles a call it answered in its OWN stores, at delivery.**
+  aidream sends no completion event for a delegated call (it suspended and
+  ended the stream; `/resume` does not replay it), so nothing but this
+  desktop can finish the card. `_deliver` — the one funnel for executed,
+  refused, reviewed, retried and restored answers — first calls
+  `_settle_locally`: the answer goes on `ui_conversation_state` as
+  `calls[i].result` (the Cloud Chat folds it in via
+  `settleAnsweredDelegatedCalls`, `desktop/src/lib/cloud-chat-delegation.ts`)
+  and `mirror.py` settles the `chat.tool_call` mirror row. Never a downgrade
+  of a terminal row; no push, no `updated_at` bump — the next pull applies
+  the server row over it. `state` still gates composer and resume; `result`
+  only settles the card. Before 2026-09-30 the card spun "running on this
+  computer…" after the agent moved on.
 - **The resume body declares `surface: matrx-local/desktop` +
   `desktop-native`** so the continuation keeps this engine as an active
   executor — without it a re-delegated desktop tool is dropped pre-flight.
@@ -272,3 +285,6 @@ subscription; the poller is independent of it.
 dispatcher)→tool_results→resume, error results, foreign-tool skip, dedup,
 409 handling, undelivered/result-obligation retry, fatal resume-stream errors,
 browser-first grace, and idle-without-credentials.
+`tests/unit/test_delegation_local_settle.py` pins the local settle (snapshot
+result + mirror row, every answer path, never-downgrade, real SQLite UPDATE);
+`desktop/src/lib/cloud-chat-settle-answered.test.ts` pins the card side.

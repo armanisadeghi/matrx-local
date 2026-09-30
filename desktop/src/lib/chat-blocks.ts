@@ -290,6 +290,22 @@ export class StreamBlockBuilder {
     this.blocks.push(block);
   }
 
+  /**
+   * Settle a call THIS desktop answered (see `settleAnsweredDelegatedCalls`).
+   * Never creates a block and never downgrades one: a block that already
+   * reached complete/error through a real stream event is left alone.
+   * Returns true when the block changed.
+   */
+  settleToolCall(payload: ToolEventPayload): boolean {
+    if (payload.event !== "tool_completed" && payload.event !== "tool_error") return false;
+    const idx = this.toolIndex.get(payload.call_id);
+    if (idx === undefined) return false;
+    const block = this.blocks[idx] as ChatToolBlock;
+    if (block.phase === "complete" || block.phase === "error") return false;
+    this.applyToolEvent(payload);
+    return true;
+  }
+
   /** Force-terminate every non-terminal tool block (stream died / aborted). */
   failPendingTools(message: string): void {
     for (const block of this.blocks) {

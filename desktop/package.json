@@ -29,6 +29,7 @@
     "check:matrx-packages": "node scripts/check-matrx-packages.mjs",
     "check:matrx-latest": "node scripts/check-matrx-packages.mjs",
     "sync:matrx-packages": "pnpm update -r \"@ai-matrx/*\" --latest && pnpm check:matrx-packages",
+    "postinstall": "node scripts/check-matrx-packages.mjs --duplicates",
     "check:archived-items-law": "node scripts/check-archived-items-law.mjs",
     "check:archived-items-law:self-test": "node scripts/check-archived-items-law.mjs --self-test",
     "check:canonical-pickers": "node scripts/check-canonical-pickers.mjs",
@@ -120,5 +121,11 @@
     "typescript": "^7.0.2",
     "vite": "^6.4.3",
     "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "@ai-matrx/associations": "latest",
+      "@ai-matrx/design-system": "latest"
+    }
   }
 }

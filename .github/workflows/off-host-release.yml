@@ -1,5 +1,5 @@
 name: Off-host Release
-run-name: "off-host release: ${{ inputs.version || inputs.bump }}"
+run-name: "off-host release: ${{ inputs.version || inputs.bump }} (${{ inputs.request_id || github.run_id }})"
 
 on:
   workflow_dispatch:
@@ -27,6 +27,10 @@ on:
         required: true
         type: boolean
         default: false
+      request_id:
+        description: "Unique caller token used to observe this exact request"
+        required: false
+        type: string
 
 # Serialize version-bump requests with each other. release.yml owns its own
 # build/publish lane; the guards below reject a stale or competing dispatch

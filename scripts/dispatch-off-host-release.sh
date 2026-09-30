@@ -62,8 +62,9 @@ for workflow in release.yml "$WORKFLOW"; do
     done
 done
 
+REQUEST_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 args=(--repo "$REPO" --ref main -f "bump=$BUMP" -f "message=$MESSAGE" \
-    -f "refresh_matrx_packages=true")
+    -f "refresh_matrx_packages=true" -f "request_id=$REQUEST_ID")
 if [[ -n "$VERSION" ]]; then
     args+=(-f "version=$VERSION")
 fi
@@ -71,4 +72,25 @@ fi
 output="$(gh workflow run "$WORKFLOW" "${args[@]}" 2>&1)" \
     || fail "GitHub rejected the hosted release dispatch: $output"
 [[ -n "$output" ]] && echo "$output"
-echo "dispatch-off-host-release: hosted release requested; no heavy work ran locally"
+echo "dispatch-off-host-release: request $REQUEST_ID accepted; waiting for its hosted result"
+
+# workflow_dispatch does not return a run ID. The unique request token makes
+# this caller observe its exact run, so a queued duplicate or stale request
+# cannot be reported as a successful release dispatch.
+RUN_ID=""
+for _ in $(seq 1 30); do
+    RUN_ID="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" \
+        --event workflow_dispatch --limit 100 --json databaseId,displayTitle \
+        --jq ".[] | select(.displayTitle | contains(\"$REQUEST_ID\")) | .databaseId" \
+        2>/dev/null | head -1)" \
+        || fail "could not locate hosted release request $REQUEST_ID"
+    [[ -n "$RUN_ID" ]] && break
+    sleep 2
+done
+[[ "$RUN_ID" =~ ^[0-9]+$ ]] \
+    || fail "GitHub accepted request $REQUEST_ID but its run did not appear"
+
+if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 10; then
+    fail "hosted release request $REQUEST_ID failed or was superseded (run $RUN_ID)"
+fi
+echo "dispatch-off-host-release: hosted release requested successfully after hosted path completed (run $RUN_ID); no heavy work ran locally"

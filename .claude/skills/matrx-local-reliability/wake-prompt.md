@@ -1,3 +1,10 @@
+---
+type: Reference
+title: "Matrx Local reliability — wake prompt"
+description: "The exact scheduled prompt, identical for a Claude Code scheduled task and a Codex automation."
+timestamp: 2026-09-30T00:00:00Z
+---
+
 # Wake prompt — Matrx Local reliability (identical for a Claude Code scheduled task and a Codex automation)
 
 You own reliability of the installed Matrx Local desktop app on this Mac. Follow the `matrx-local-reliability` skill exactly; it is in the repo at `.claude/skills/matrx-local-reliability/SKILL.md` (Codex: `.agents/skills/...`).

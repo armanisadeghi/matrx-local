@@ -18,7 +18,7 @@
 
 import { MATRX_AI_API_VERSION_DEFAULT, applyAiApiVersion } from "@ai-matrx/agents/matrx";
 
-import { mandateKeyFromAgentRef } from "@/lib/mandates";
+import { type AnyMandateKey, mandateKeyFromAgentRef } from "@/lib/mandates";
 
 /** Which side of the desktop's split an AI request is going to. */
 export type AiExecutionTarget = "cloud" | "local";
@@ -68,12 +68,12 @@ export const agentExecutePath = (agentId: string): string =>
   `/ai/agents/${encodeURIComponent(agentId)}`;
 
 /** POST /ai/mandates/{mandate_key} (promoted to /v2 on cloud) — resolve the Holder server-side and start it. */
-export const mandateExecutePath = (mandateKey: string): string =>
+export const mandateExecutePath = (mandateKey: AnyMandateKey): string =>
   `/ai/mandates/${encodeURIComponent(mandateKey)}`;
 
 /** Route a concrete Agent id or a `mandate:*` UI reference correctly. */
 export const agentTargetExecutePath = (target: string): string => {
-  const mandateKey = mandateKeyFromAgentRef(target);
+  const mandateKey: AnyMandateKey | null = mandateKeyFromAgentRef(target);
   return mandateKey ? mandateExecutePath(mandateKey) : agentExecutePath(target);
 };
 

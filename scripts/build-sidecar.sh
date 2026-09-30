@@ -60,25 +60,35 @@ fi
 # (app/ python, desktop/ TypeScript, crates/ + desktop/src-tauri Rust). It scans
 # the whole repository from the git root whichever directory it is invoked from.
 #
-# 🚨 THE VERSION IS PINNED EXACTLY, ON PURPOSE. "Always latest" is the law for
-# @ai-matrx NPM packages; this is a python release gate whose findings are
-# compared between revisions, so what it measures may not drift underneath the
-# comparison. Bump the pin deliberately.
-#
-# It NEVER blocks: `check` always exits 0 without --strict, and `|| true` covers
-# a crash inside uvx itself. A missing uv says so instead of being silent.
+# It NEVER blocks or stalls the build: `check` always exits 0 without --strict,
+# and a missing uv, a crash inside uvx or a scan still running after 300 s is a
+# loud WARNING. The scanner runs @latest, like every client.
 echo ""
 echo "── Mandate references (loud, non-blocking) ──────────────────────────────"
 # mandate-scan-step:begin
-# `matrx-mandate-scan wiring` runs this block with a failing, timing-out and
-# missing fake scanner and fails loudly if it can change the exit code.
-if command -v uvx &>/dev/null; then
-    uvx --from matrx-mandate-scan@latest matrx-mandate-scan check || true
-else
-    echo "WARNING: uvx not found, so this sidecar build reported NO mandate references." >&2
-    echo "         Install uv (https://astral.sh/uv) so the fleet board stops calling" >&2
-    echo "         matrx-local unmeasured. The build continues (D23)." >&2
-fi
+# `matrx-mandate-scan wiring` runs this block with a failing, timing-out,
+# hanging and missing fake scanner and fails loudly if it can block or stall.
+mandate_scan_step() {
+    local rc runner=()
+    if ! command -v uvx &>/dev/null; then
+        echo "WARNING: uvx not found, so this sidecar build reported NO mandate references." >&2
+        echo "         Install uv (https://astral.sh/uv) so the fleet board stops calling" >&2
+        echo "         matrx-local unmeasured. The build continues (D23)." >&2
+        return 0
+    fi
+    if command -v timeout &>/dev/null; then runner=(timeout 300)
+    elif command -v gtimeout &>/dev/null; then runner=(gtimeout 300)
+    else echo "WARNING: neither timeout nor gtimeout is installed, so the mandate scan runs unbounded (brew install coreutils)." >&2; fi
+    # An `if` condition, so `set -e` never ends the script on the scanner's exit.
+    if ${runner[@]+"${runner[@]}"} uvx --from matrx-mandate-scan@latest matrx-mandate-scan check; then rc=0; else rc=$?; fi
+    if [[ "$rc" == 124 ]]; then
+        echo "WARNING: the mandate reference scan timed out after 300 s — UNMEASURED; the build continues (D23)." >&2
+    elif [[ "$rc" != 0 ]]; then
+        echo "WARNING: the mandate reference scan did not complete (exit $rc) — UNMEASURED; the build continues (D23)." >&2
+    fi
+    return 0
+}
+mandate_scan_step || true
 # mandate-scan-step:end
 
 # Detect platform triple

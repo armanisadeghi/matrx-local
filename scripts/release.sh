@@ -859,29 +859,41 @@ fi
 # every place intelligence is reached outside a Mandate. The fleet board at
 # /administration/mandates/references is what reads it.
 #
-# It may NEVER block a release (D23, and law 1 of
-# common-docs/systems/intelligence/mandates/REGISTER.md): `check`
-# always exits 0 without --strict, and `|| true` covers a crash inside uvx.
-#
-# 🚨 THE VERSION IS PINNED EXACTLY, ON PURPOSE. The "always latest" law governs
-# @ai-matrx NPM packages (check:matrx-packages above enforces it). This is a
-# PYTHON release gate whose findings are compared between revisions —
-# reconciliation is keyed on (identity, revision_kind, revision) and the identity
-# hash includes the scanner's own classification — so what it measures must not
-# drift underneath the comparison. Bump the pin in a commit that says why.
+# It may NEVER block OR STALL a release (D23, and law 1 of
+# common-docs/systems/intelligence/mandates/REGISTER.md): `check` always exits 0
+# without --strict, and every other path — a missing uvx, a crash inside the
+# install, a scan still running after 300 s — is a loud WARNING, never the exit
+# code. Until 2026-09-30 nothing bounded the scan, so a hung uvx would have
+# stalled this release forever; a stall is a block. The scanner runs @latest,
+# like every client (the "always latest" law).
 #
 # Without a SUPABASE_SECRET_KEY in the environment it still scans and still
 # screams; it says UNMEASURED-for-report loudly rather than pretending it filed.
 # mandate-scan-step:begin
-# `matrx-mandate-scan wiring` runs this block with a failing, timing-out and
-# missing fake scanner and fails loudly if it can change the exit code.
-info "Scanning and reporting mandate references (non-blocking)..."
-if command -v uvx >/dev/null 2>&1; then
-    uvx --from matrx-mandate-scan@latest matrx-mandate-scan check || true
-    ok "Mandate references scanned (findings above, if any, never block)."
-else
-    warn "uvx not found — this release reported NO mandate references. Install uv (https://astral.sh/uv) so the fleet board stops calling matrx-local unmeasured."
-fi
+# `matrx-mandate-scan wiring` runs this block with a failing, timing-out,
+# hanging and missing fake scanner and fails loudly if it can block or stall.
+mandate_scan_step() {
+    local rc runner=()
+    info "Scanning and reporting mandate references (non-blocking)..."
+    if ! command -v uvx >/dev/null 2>&1; then
+        warn "uvx not found — this release reported NO mandate references. Install uv (https://astral.sh/uv) so the fleet board stops calling matrx-local unmeasured."
+        return 0
+    fi
+    if command -v timeout >/dev/null 2>&1; then runner=(timeout 300)
+    elif command -v gtimeout >/dev/null 2>&1; then runner=(gtimeout 300)
+    else warn "neither timeout nor gtimeout is installed, so the mandate scan runs unbounded (brew install coreutils)."; fi
+    # An `if` condition, so `set -e` never ends the script on the scanner's exit.
+    if ${runner[@]+"${runner[@]}"} uvx --from matrx-mandate-scan@latest matrx-mandate-scan check; then rc=0; else rc=$?; fi
+    if [[ "$rc" == 124 ]]; then
+        warn "The mandate reference scan timed out after 300 s — this release is UNMEASURED on the fleet board; the release continued (D23)."
+    elif [[ "$rc" != 0 ]]; then
+        warn "The mandate reference scan did not complete (exit $rc) — this release is UNMEASURED on the fleet board; the release continued (D23)."
+    else
+        ok "Mandate references scanned (findings above, if any, never block)."
+    fi
+    return 0
+}
+mandate_scan_step || true
 # mandate-scan-step:end
 
 # ── Mirror snapshot drift (confirmed drift blocks; unavailable is loud) ──────

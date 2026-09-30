@@ -59,7 +59,10 @@ class FakeAIDreamClient:
         self._models = models or []
         self._offline = offline
 
-    async def fetch_models(self) -> list[dict[str, Any]]:
+    async def fetch_models(self, *, jwt: str) -> list[dict[str, Any]]:
+        # /ai-models is an authenticated read; anonymous is a server 401.
+        assert jwt, "the model catalog was read anonymously"
+        self.model_reads = getattr(self, "model_reads", 0) + 1
         if self._offline:
             raise AIDreamOfflineError("server unreachable (fake)")
         return self._models
@@ -278,7 +281,11 @@ def test_sync_models_filters_and_maps_providers(
         assert meta is not None and meta["status"] == "success"
 
     run_scenario(
-        tmp_path, monkeypatch, scenario, client=FakeAIDreamClient(models=_RAW_MODELS)
+        tmp_path,
+        monkeypatch,
+        scenario,
+        client=FakeAIDreamClient(models=_RAW_MODELS),
+        signed_in=True,
     )
 
 
@@ -297,6 +304,22 @@ def test_sync_models_removes_models_missing_from_feed(
         await engine.sync_models()
         rows = await db.fetchall("SELECT id FROM ai_models")
         assert [r["id"] for r in rows] == ["m-claude"]
+
+    run_scenario(tmp_path, monkeypatch, scenario, client=client, signed_in=True)
+
+
+def test_sync_models_signed_out_skips_without_asking_the_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/ai-models answers 401 to an anonymous read; a signed-out sync records
+    the truthful skip and never spends that round trip."""
+    client = FakeAIDreamClient(models=list(_RAW_MODELS))
+
+    async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
+        await engine.sync_models()
+        assert getattr(client, "model_reads", 0) == 0
+        meta = await _sync_status(db, "models")
+        assert meta is not None and meta["status"] == "skipped"
 
     run_scenario(tmp_path, monkeypatch, scenario, client=client)
 
@@ -526,16 +549,17 @@ def test_sync_all_reports_offline_per_entity(
 ) -> None:
     async def scenario(engine: SyncEngine, db: LocalDatabase) -> None:
         results = await engine.sync_all()
-        # models raises AIDreamOfflineError → "offline". agents never reaches
-        # the network: the JWT gate fires first (no stored token) and returns
-        # normally, so sync_all reports "success" with the truthful skip in
-        # sync_meta. tools is purely local and always succeeds.
-        assert results == {"models": "offline", "agents": "success", "tools": "success"}
-        agents_meta = await _sync_status(db, "agents")
-        assert agents_meta is not None and agents_meta["status"] == "skipped"
+        # Signed in, models raises AIDreamOfflineError → "offline". tools is
+        # purely local and always succeeds.
+        assert results["models"] == "offline"
+        assert results["tools"] == "success"
 
     run_scenario(
-        tmp_path, monkeypatch, scenario, client=FakeAIDreamClient(offline=True)
+        tmp_path,
+        monkeypatch,
+        scenario,
+        client=FakeAIDreamClient(offline=True),
+        signed_in=True,
     )
 
 

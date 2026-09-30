@@ -185,7 +185,26 @@ class SyncEngine:
             )
             return
 
-        models_raw = await client.fetch_models()
+        # The model catalog is an authenticated read (anonymous = HTTP 401).
+        token_row = await self._token_repo.get()
+        jwt: str | None = None
+        if token_row and not self._token_repo.is_expired(token_row):
+            jwt = token_row.get("access_token")
+        if not jwt:
+            reason = "stored JWT is expired" if token_row else "no stored JWT"
+            logger.info(
+                "[sync_engine] models sync skipped — %s; /ai-models is read as "
+                "the signed-in user. Keeping the previously cached models.",
+                reason,
+            )
+            await self._sync_meta.set_last_sync(
+                "models",
+                status="skipped",
+                error_message=f"/ai-models requires authentication — {reason}",
+            )
+            return
+
+        models_raw = await client.fetch_models(jwt=jwt)
 
         endpoint_map = {
             "anthropic_chat": "anthropic",

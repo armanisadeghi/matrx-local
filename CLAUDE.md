@@ -1,6 +1,7 @@
 # CLAUDE.md — Matrx Local
 
 <!-- nine-laws:start -->
+
 ## The ten laws (SYNCED — canonical: `common-docs/policies/the-nine-laws.md`; edit there, run `meta/scripts/sync_skills.py`, never edit here)
 
 🚨 **MANDATORY: before launching, coordinating, or working any large build or campaign, READ the full doctrine — it is IN THIS REPO at `.claude/skills/campaign-pattern/SKILL.md`.**
@@ -24,6 +25,8 @@
 
 **Agents never author agents.** No agent creates, rewrites, or tunes a platform agent's instructions or a mandate's prompt on its own authority — the loop runs problem → Arman vision session → mandate brief → the agent-generation agent → results read with him on small real data → he edits and re-runs (Arman, 2026-09-18: *"a single agent performs better than that entire [Masterwork] system combined… pure slop"*). `common-docs/policies/agents-never-author-agents.md`.
 <!-- nine-laws:end -->
+
+- 🚨 **The active organization is never a list filter** (Arman, 2026-09-30): lists and reads show everything the person can see across all their organizations; an org filter is a visible page-local control defaulting to **All organizations**; the active org is only where new things are saved and which org a server call runs in — every write/API call must carry it. Law: `../common-docs/policies/active-org-is-never-a-list-filter.md`.
 
 **Cloud task autonomy:** A task request authorizes routine in-scope edits, verification, exact-path commits, and pushes. Continue without a conversational confirmation pause; honor explicit hold points and human-only gates. [Completion policy](../common-docs/policies/defect-ownership.md).
 

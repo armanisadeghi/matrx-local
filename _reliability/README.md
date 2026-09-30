@@ -21,11 +21,11 @@ An issue is done only when it is **verified**: fixed in source, released, instal
 never for "too noisy". The fix itself follows the `diagnose` and `forcing-function-tests` skills.
 
 ## Scan
-- 2026-09-30T18:09Z · window 24h (evidence from 2026-07-10T04:22Z)
+- 2026-09-30T18:10Z · window 24h (evidence from 2026-07-10T04:22Z)
 - installed **1.4.253** · latest release **v1.4.255** · behind by 2
 - engine: reachable, health `ok`, version 1.4.253, failed none, degraded none
-- window: 3 critical · 20 errors · 412 warnings · outbox 128 queued (128 without identity)
-- issues: open 45 · fixed 3
+- window: 3 critical · 20 errors · 420 warnings · outbox 128 queued (128 without identity)
+- issues: open 45 · fixed 3 — 14 need an agent now (the rest are quiet this window or below the warning threshold)
 - new this scan: none
 
 ## PROBLEMS
@@ -74,9 +74,9 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 - **MXL-R-004** WARNING `sync_engine` — models sync failed — AIDreamError: [aidream_client] /ai-models → HTTP <n>  
   window 10 · total 10 · last 2026-09-30T18:08 · builds 1.4.253×10 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 - **MXL-R-006** WARNING `engine` — matrx-ai: authenticated server tool refresh failed; local tools remain available and the session listener will retry — AIDreamError: [aidream_client]   
-  window 165 · total 165 · last 2026-09-30T18:08 · builds 1.4.253×165 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+  window 168 · total 168 · last 2026-09-30T18:10 · builds 1.4.253×168 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 - **MXL-R-007** WARNING `engine` — Session services could not reconnect; will retry — AIDreamError: [aidream_client] /ai-tools → HTTP <n>  
-  window 165 · total 165 · last 2026-09-30T18:08 · builds 1.4.253×165 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+  window 168 · total 168 · last 2026-09-30T18:10 · builds 1.4.253×168 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 
 ## Installed, verifying
 
@@ -85,8 +85,8 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 
 
 ## Quiet open issues (no occurrence this window, or below threshold): 31
-- MXL-R-013 WARNING `chat_sync` — hydration for chat.tool_call hit the <n>-page cap; continuing next cycle (total 14)
-- MXL-R-011 WARNING `chat_sync` — hydration for chat.conversation hit the <n>-page cap; continuing next cycle (total 9)
+- MXL-R-013 WARNING `chat_sync` — hydration for chat.tool_call hit the <n>-page cap; continuing next cycle (total 15)
+- MXL-R-011 WARNING `chat_sync` — hydration for chat.conversation hit the <n>-page cap; continuing next cycle (total 10)
 - MXL-R-009 WARNING `app.services.cloud_sync.settings_sync` — push_to_cloud failed: HTTP <n> — {"code":"[REDACTED]","details":null,"hint":null,"message":"new row  (total 6)
 - MXL-R-012 WARNING `chat_sync` — pull for chat.message hit the <n>-page cap this cycle — more rows remain; the next cycle continues f (total 6)
 - MXL-R-010 WARNING `app.services.cloud_sync.settings_sync` — Cloud sync failed: push_to_cloud failed: HTTP <n> — {"code":"[REDACTED]","details":null,"hint":null, (total 4)

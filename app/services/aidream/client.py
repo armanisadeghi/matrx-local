@@ -153,6 +153,25 @@ _ORGANIZATION_SELF_RESOLVED_PATHS: tuple[str, ...] = (
 )
 
 
+# Authenticated catalog reads the server admits WITHOUT an organization
+# (aidream declares them ``authenticated_resource_bootstrap`` since 2026-09-29:
+# a person is required, an organization is optional). The transport still
+# names the active organization when one is set; when none is, it sends the
+# read anyway instead of refusing locally — the server answers it by access.
+_ORGANIZATION_OPTIONAL_READ_PATHS: tuple[str, ...] = (
+    "/ai-tools",
+    "/ai-models",
+)
+
+
+def _is_organization_optional_read(path: str) -> bool:
+    bare = path.split("?", 1)[0].rstrip("/")
+    for prefix in _ORGANIZATION_OPTIONAL_READ_PATHS:
+        if bare == prefix or bare.startswith(prefix + "/"):
+            return True
+    return False
+
+
 def _is_organization_self_resolved(path: str) -> bool:
     bare = path.split("?", 1)[0].rstrip("/")
     for prefix in _ORGANIZATION_SELF_RESOLVED_PATHS:
@@ -168,11 +187,8 @@ class AIDreamClient:
 
         client = get_aidream_client()
 
-        # public endpoint — no JWT needed
-        models = await client.get("/ai-models")
-
-        # authenticated endpoint — pass user JWT
-        models = await client.fetch_models()
+        # every catalog read is authenticated — pass the user JWT
+        models = await client.fetch_models(jwt=jwt)
     """
 
     def __init__(
@@ -239,6 +255,8 @@ class AIDreamClient:
         try:
             merged["X-Organization-Id"] = await resolve_active_organization_id(jwt)
         except OrganizationNotResolvedError as exc:
+            if _is_organization_optional_read(path):
+                return merged
             from app.services.aidream.organization import organization_refusal
 
             refusal = organization_refusal(exc)
@@ -496,9 +514,10 @@ class AIDreamClient:
     # Named helpers for each endpoint group
     # ------------------------------------------------------------------
 
-    async def fetch_models(self) -> list[dict[str, Any]]:
-        """GET /api/ai-models — public, no auth needed."""
-        data = await self.get("/ai-models")
+    async def fetch_models(self, *, jwt: str) -> list[dict[str, Any]]:
+        """GET /api/ai-models as the signed-in person (the server answers 401
+        to an anonymous read; an organization is optional)."""
+        data = await self.get("/ai-models", jwt=jwt)
         return data.get("models", [])
 
     async def fetch_agent_execution_definition(
@@ -522,14 +541,17 @@ class AIDreamClient:
             )
         return data
 
-    async def fetch_tools(self) -> list[dict[str, Any]]:
-        """GET /api/ai-tools — public, no auth needed."""
-        data = await self.get("/ai-tools")
+    async def fetch_tools(self, *, jwt: str) -> list[dict[str, Any]]:
+        """GET /api/ai-tools as the signed-in person (the server answers 401
+        to an anonymous read; an organization is optional)."""
+        data = await self.get("/ai-tools", jwt=jwt)
         return data.get("tools", [])
 
-    async def fetch_tools_for_app(self, source_app: str) -> list[dict[str, Any]]:
-        """GET /api/ai-tools/app/{source_app}/all — public, no auth needed."""
-        data = await self.get(f"/ai-tools/app/{source_app}/all")
+    async def fetch_tools_for_app(
+        self, source_app: str, *, jwt: str
+    ) -> list[dict[str, Any]]:
+        """GET /api/ai-tools/app/{source_app}/all as the signed-in person."""
+        data = await self.get(f"/ai-tools/app/{source_app}/all", jwt=jwt)
         return data.get("tools", [])
 
 

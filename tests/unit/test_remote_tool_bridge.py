@@ -17,6 +17,18 @@ from app.services.aidream.client import AIDreamClient
 
 
 
+@pytest.fixture(autouse=True)
+def _signed_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catalog refresh is an authenticated read; these tests run signed in.
+    A test that needs another token overrides ``_stored_jwt`` itself."""
+    from app.services.ai import remote_tool_bridge as bridge_module
+
+    async def _token() -> str:
+        return "signed-in-jwt"
+
+    monkeypatch.setattr(bridge_module, "_stored_jwt", _token)
+
+
 class _FakeRegistry:
     def __init__(self) -> None:
         self.tools: dict[str, object] = {}
@@ -50,7 +62,8 @@ class _FakeClient:
         self.response = response
         self.posts: list[tuple] = []
 
-    async def fetch_tools(self):
+    async def fetch_tools(self, *, jwt):
+        assert jwt, "the tool catalog was read anonymously"
         return self.rows
 
     async def post(self, path, payload, *, jwt, headers=None, timeout=130.0):

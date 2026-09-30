@@ -46,7 +46,18 @@ class RemoteToolBridge:
             if client is None:
                 raise AIDreamOfflineError("AIDream server URL is not configured")
 
-            rows = await client.fetch_tools()
+            # The server's tool catalog is an authenticated read: asked
+            # anonymously it is a guaranteed 401, which the session listener
+            # would retry forever. Signed out, say so without a round trip.
+            jwt = await _stored_jwt()
+            if not jwt:
+                raise AIDreamError(
+                    401,
+                    "[remote_tool_bridge] no signed-in session — the server "
+                    "tool catalog is read as the signed-in person; sign in "
+                    "to load server-owned tools",
+                )
+            rows = await client.fetch_tools(jwt=jwt)
             from app.tools.catalog import get_catalog
             from matrx_ai.tools.external_handlers import ExternalHandlerRegistry
             from matrx_ai.tools.registry import ToolRegistry

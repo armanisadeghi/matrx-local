@@ -3,6 +3,8 @@
 
 Run it from the repo root:   python3 scripts/sync-main.py
 Options:                       --no-push   do everything locally, push nothing (for testing)
+                               --skip-matrx-packages
+                                           leave package refresh to another execution environment
 Replay a past sync (for re-testing how conflicts get resolved; commits locally, never pushes):
     python3 scripts/sync-main.py --replay <sync merge commit> <path> [<path> ...]
 
@@ -21,7 +23,7 @@ WHAT IT DOES (Arman's sequence, 2026-09-24)
         version is saved as _conflicts/<stamp>/<path>.held, listed in _conflicts/README.md,
         with FACTS: when each side last changed it, its commit message, which side is newer, and
         exactly which lines each side has that the other lacks. Facts only; never a decision.
-  4. every @ai-matrx package to npm latest: in each folder whose package.json defines
+  4. unless --skip-matrx-packages is set, every @ai-matrx package to npm latest: in each folder whose package.json defines
      "sync:matrx-packages" (repo root and one level down, e.g. desktop/), run it and commit the
      changed package.json / lockfile. Our packages are not external: a release on stale ones
      breaks (Arman, 2026-09-26). Once per sync; a failed update is announced, never silent.
@@ -818,6 +820,7 @@ def main():
         replay(sys.argv[2:])
         return
     push = "--no-push" not in sys.argv[1:]
+    skip_matrx_packages = "--skip-matrx-packages" in sys.argv[1:]
     _, top, _ = git("rev-parse", "--show-toplevel")
     os.chdir(top.strip())
     # Show where we started, so the terminal holds the before-state if anything goes wrong.
@@ -872,7 +875,7 @@ def main():
             msg = "Merge %s/%s (sync-main): %d auto-fixed, %d docs/comments flagged, %d held" % (
                 REMOTE, BRANCH, len(f), len(d), len(h))
             git("commit", "--no-verify", "-q", "-m", msg)
-        if packages is None:
+        if packages is None and not skip_matrx_packages:
             packages = update_matrx_packages() or ""
         if not push:
             break
@@ -888,6 +891,8 @@ def main():
                total_local, pulled, "" if push else " (--no-push: nothing pushed)"))
     if packages:
         say(packages)
+    elif skip_matrx_packages:
+        say("@ai-matrx packages: refresh skipped here (the hosted release owns it)")
 
 
 if __name__ == "__main__":

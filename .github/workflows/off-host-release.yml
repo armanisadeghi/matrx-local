@@ -1,5 +1,5 @@
 name: Off-host Release
-run-name: "off-host release: ${{ inputs.bump }}"
+run-name: "off-host release: ${{ inputs.version || inputs.bump }}"
 
 on:
   workflow_dispatch:
@@ -13,6 +13,10 @@ on:
           - patch
           - minor
           - major
+      version:
+        description: "Exact X.Y.Z version (overrides bump when set)"
+        required: false
+        type: string
       message:
         description: "Release commit message (the script adds [skip actions])"
         required: false
@@ -24,11 +28,11 @@ on:
         type: boolean
         default: false
 
-# Serialize the hosted version bump with the build/publish workflow. The
-# release script dispatches release.yml before this run exits; that run queues
-# behind this short wrapper and takes ownership of the same lane next.
+# Serialize version-bump requests with each other. release.yml owns its own
+# build/publish lane; the guards below reject a stale or competing dispatch
+# before this workflow performs any release mutation.
 concurrency:
-  group: matrx-local-release
+  group: matrx-local-version-bump
   cancel-in-progress: false
 
 permissions:
@@ -53,11 +57,37 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Refuse a stale or competing release request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          CURRENT_MAIN="$(git rev-parse origin/main)"
+          if [[ "$CURRENT_MAIN" != "$DISPATCH_SHA" ]]; then
+            echo "main moved after this request was queued; refusing a second or stale release." >&2
+            echo "requested=$DISPATCH_SHA current=$CURRENT_MAIN" >&2
+            exit 1
+          fi
+
+          for status in queued pending waiting in_progress requested action_required; do
+            COUNT="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml \
+              --status "$status" --limit 100 --json databaseId --jq length)"
+            [[ "$COUNT" =~ ^[0-9]+$ ]] || {
+              echo "Invalid release-slot response for status $status." >&2
+              exit 1
+            }
+            if [[ "$COUNT" -gt 0 ]]; then
+              echo "release.yml already has an active or queued run; refusing a competing release." >&2
+              exit 1
+            fi
+          done
+
       - name: Configure release commit identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
           git merge --ff-only origin/main
 
       - name: Install uv
@@ -112,8 +142,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_BUMP: ${{ inputs.bump }}
+          RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_MESSAGE: ${{ inputs.message }}
         run: |
           set -euo pipefail
           RELEASE_MESSAGE="${RELEASE_MESSAGE:-release: off-host}"
-          ./scripts/release.sh "--${RELEASE_BUMP}" --message "$RELEASE_MESSAGE"
+          if [[ -n "$RELEASE_VERSION" ]]; then
+            [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "Exact version must have the form X.Y.Z." >&2
+              exit 1
+            }
+            RELEASE_SELECTOR=("$RELEASE_VERSION")
+          else
+            RELEASE_SELECTOR=("--${RELEASE_BUMP}")
+          fi
+          ./scripts/release.sh "${RELEASE_SELECTOR[@]}" --message "$RELEASE_MESSAGE"

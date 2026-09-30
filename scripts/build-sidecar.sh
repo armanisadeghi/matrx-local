@@ -69,6 +69,9 @@ fi
 # a crash inside uvx itself. A missing uv says so instead of being silent.
 echo ""
 echo "── Mandate references (loud, non-blocking) ──────────────────────────────"
+# mandate-scan-step:begin
+# `matrx-mandate-scan wiring` runs this block with a failing, timing-out and
+# missing fake scanner and fails loudly if it can change the exit code.
 if command -v uvx &>/dev/null; then
     uvx --from matrx-mandate-scan@latest matrx-mandate-scan check || true
 else
@@ -76,6 +79,7 @@ else
     echo "         Install uv (https://astral.sh/uv) so the fleet board stops calling" >&2
     echo "         matrx-local unmeasured. The build continues (D23)." >&2
 fi
+# mandate-scan-step:end
 
 # Detect platform triple
 detect_target() {

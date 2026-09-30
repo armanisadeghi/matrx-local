@@ -872,6 +872,9 @@ fi
 #
 # Without a SUPABASE_SECRET_KEY in the environment it still scans and still
 # screams; it says UNMEASURED-for-report loudly rather than pretending it filed.
+# mandate-scan-step:begin
+# `matrx-mandate-scan wiring` runs this block with a failing, timing-out and
+# missing fake scanner and fails loudly if it can change the exit code.
 info "Scanning and reporting mandate references (non-blocking)..."
 if command -v uvx >/dev/null 2>&1; then
     uvx --from matrx-mandate-scan@latest matrx-mandate-scan check || true
@@ -879,6 +882,7 @@ if command -v uvx >/dev/null 2>&1; then
 else
     warn "uvx not found — this release reported NO mandate references. Install uv (https://astral.sh/uv) so the fleet board stops calling matrx-local unmeasured."
 fi
+# mandate-scan-step:end
 
 # ── Mirror snapshot drift (confirmed drift blocks; unavailable is loud) ──────
 # The cloud schema is the spec for the local chat replica, and schema_mirror/

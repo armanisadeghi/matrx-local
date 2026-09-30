@@ -29,7 +29,7 @@ _TYPE_MAP: dict[type, str] = {
 TOOL_CATEGORIES: dict[str, list[str]] = {
     "File Operations": ["Read", "Write", "Edit", "Glob", "Grep"],
     "Execution": ["Bash", "BashOutput", "TaskStop"],
-    "System": ["SystemInfo", "Screenshot", "ListScreens", "ListDirectory", "OpenUrl", "OpenPath"],
+    "System": ["SystemInfo", "Screenshot", "ListScreens", "BookCapture", "ListDirectory", "OpenUrl", "OpenPath"],
     "Clipboard": ["ClipboardRead", "ClipboardWrite"],
     "Notifications": ["Notify"],
     "Network": ["FetchUrl", "FetchWithBrowser", "Scrape", "Search", "Research"],

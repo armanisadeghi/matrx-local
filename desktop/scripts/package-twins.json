@@ -13,7 +13,7 @@
     "Register: common-docs /projects/npm-package-extraction/DUPLICATION-CENSUS.md (common-docs).",
     "A SHAPE rule (`shapeWhy` + `shapeAllow` + `shapeCensus` on a row) catches the same capability under an UNREGISTERED name, or with no name at all. `shapeAllow` = provably NOT this capability, silent. `shapeCensus` = pre-existing bodies that ARE it and are not collapsed yet: loud every run, shrink-only, and a stale entry fails the guard."
   ],
-  "$catalogFloor": 179,
+  "$catalogFloor": 189,
   "twins": [
     {
       "name": "isUuidShape",
@@ -141,6 +141,18 @@
       "name": "isRfc4122Uuid",
       "package": "@ai-matrx/kit/uuid",
       "why": "The STRICT RFC-4122 predicate (version 1-5, variant 8/9/a/b) \u2014 the right question for a validation door on a public route, and it REJECTS what isUuidShape accepts (the nil UUID, v6/v7/v8). Eight host copies collapsed 2026-09-07: six invite/notify API doors plus the two voice readiness doors that had been ALLOWLISTED here because the package shipped only the lax predicate. Never swap one predicate for the other to make a test pass.",
+      "allow": []
+    },
+    {
+      "name": "isRfc9562Uuid",
+      "package": "@ai-matrx/kit/uuid",
+      "why": "The STRICT modern UUID predicate: version 1\u20138 + variant 8/9/a/b, the current RFC 9562 set (kit, 2026-09-30). The UUID collapse census found 8 sites (6 matrx-frontend, 2 matrx-extend) hand-writing `[1-8]` regexes because isRfc4122Uuid (1\u20135) rejects v6/v7/v8 and isUuidShape accepts nil and any version. A local body under this name is a re-grown copy.",
+      "allow": []
+    },
+    {
+      "name": "isLowercaseUuidShape",
+      "package": "@ai-matrx/kit/uuid",
+      "why": "UUID shape, LOWER-case only (kit, 2026-09-30): the canonical spelling a wire protocol compares by string equality. matrx-extend's local-browser protocol held three copies of the regex inside zod schemas; both peers (matrx-local, aidream) reject any other spelling. A local body under this name is a re-grown copy.",
       "allow": []
     },
     {
@@ -1207,6 +1219,54 @@
       "name": "base64ByteLength",
       "package": "@ai-matrx/kit/base64",
       "why": "THE decoded byte length of base64 text (kit 0.13.5, 2026-09-12). There is exactly ONE honest way to compute it and five live sites had written it five ways: `b64.length * 3 / 4` OVERSTATES every padded payload by one or two bytes, because four base64 characters carry three bytes and a trailing `=` / `==` is exactly the bytes that were never there. A sixth adversarial review fixed three sites by hand; a seventh found a FOURTH still wrong (matrx-extend tools/handlers/read.ts, feeding size_bytes) and two of the repairs living as private copies under this same name in aidream's dashboard and in matrx-local. A capability re-derived from memory at every call site is a package export nobody had written yet. The number it returns is real BYTES, which is what formatFileSize wants \u2014 the input lane exists because a base64 STRING LENGTH reaching that formatter prints a confident, wrong \" KB\". NOTE 2026-09-12: the module landed in this repo for kit 0.13.5 but is NOT in the published 0.13.5 tarball \u2014 that release was cut from a tree that predated it. The two npm consumers (matrx-extend, matrx-local) therefore still carry censused local copies, and they are blocked on a kit release that actually contains the module, not on a version number.",
+      "allow": []
+    },
+    {
+      "name": "computeLineChanges",
+      "package": "@ai-matrx/diff/text",
+      "why": "frontend audit 2026-09-29 diff-001: three hand-rolled line-LCS engines (two unbounded code-editor generateDiff.ts copies and the notes conflict analyzer's body) were deleted 2026-09-30 when @ai-matrx/diff 0.3.10 grew computeLineChanges / analyzeTextChange; features/notes/utils/diffAnalysis.ts is now a wrapper that binds the notes 250,000-cell cap and writes the summary sentence.",
+      "allow": []
+    },
+    {
+      "name": "analyzeTextChange",
+      "package": "@ai-matrx/diff/text",
+      "why": "frontend audit 2026-09-29 diff-001: three hand-rolled line-LCS engines (two unbounded code-editor generateDiff.ts copies and the notes conflict analyzer's body) were deleted 2026-09-30 when @ai-matrx/diff 0.3.10 grew computeLineChanges / analyzeTextChange; features/notes/utils/diffAnalysis.ts is now a wrapper that binds the notes 250,000-cell cap and writes the summary sentence.",
+      "allow": []
+    },
+    {
+      "name": "diffRecordFields",
+      "package": "@ai-matrx/diff/structural",
+      "why": "frontend audit 2026-09-29 review-diff-001: the table row-history viewer's local top-level field comparator (VersionHistoryViewer computeDiff + shallowEqual) was deleted 2026-09-30 when @ai-matrx/diff 0.3.10 grew diffRecordFields with its exact semantics.",
+      "allow": []
+    },
+    {
+      "name": "useDetailCore",
+      "package": "@ai-matrx/detail/react",
+      "why": "frontend audit 2026-09-29 detail-001: lib/detail/** was a maintained 15-module MIRROR of @ai-matrx/detail held even by a byte-parity test; the mirror and the parity mechanism were deleted 2026-09-30 when the frontend adopted the package (0.1.3). A local body of the Detail primitive is a re-grown mirror.",
+      "allow": []
+    },
+    {
+      "name": "useOpenDetail",
+      "package": "@ai-matrx/detail/react",
+      "why": "frontend audit 2026-09-29 detail-001: lib/detail/** was a maintained 15-module MIRROR of @ai-matrx/detail held even by a byte-parity test; the mirror and the parity mechanism were deleted 2026-09-30 when the frontend adopted the package (0.1.3). A local body of the Detail primitive is a re-grown mirror.",
+      "allow": []
+    },
+    {
+      "name": "trimListContext",
+      "package": "@ai-matrx/detail",
+      "why": "frontend audit 2026-09-29 detail-001: lib/detail/** was a maintained 15-module MIRROR of @ai-matrx/detail held even by a byte-parity test; the mirror and the parity mechanism were deleted 2026-09-30 when the frontend adopted the package (0.1.3). A local body of the Detail primitive is a re-grown mirror.",
+      "allow": []
+    },
+    {
+      "name": "finalPanelUrlLength",
+      "package": "@ai-matrx/detail",
+      "why": "frontend audit 2026-09-29 detail-001: lib/detail/** was a maintained 15-module MIRROR of @ai-matrx/detail held even by a byte-parity test; the mirror and the parity mechanism were deleted 2026-09-30 when the frontend adopted the package (0.1.3). A local body of the Detail primitive is a re-grown mirror.",
+      "allow": []
+    },
+    {
+      "name": "fieldsFromRow",
+      "package": "@ai-matrx/detail",
+      "why": "frontend audit 2026-09-29 detail-001: lib/detail/** was a maintained 15-module MIRROR of @ai-matrx/detail held even by a byte-parity test; the mirror and the parity mechanism were deleted 2026-09-30 when the frontend adopted the package (0.1.3). A local body of the Detail primitive is a re-grown mirror.",
       "allow": []
     }
   ]

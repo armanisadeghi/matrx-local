@@ -25,6 +25,8 @@
 #   ./scripts/release.sh --monitor    # push then poll GitHub Actions until done
 #   ./scripts/release.sh --monitor-only # just monitor the latest tag (no release)
 #   ./scripts/release.sh X.Y.Z       # set exact version
+#   gh workflow run off-host-release.yml --ref main -f bump=patch
+#                                   # run the same release path on GitHub Linux
 set -euo pipefail
 
 VERSION_MUTATION_STARTED=false

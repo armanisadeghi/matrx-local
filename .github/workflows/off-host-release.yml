@@ -1,0 +1,85 @@
+name: Off-host Release
+run-name: "off-host release: ${{ inputs.bump }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semantic version increment"
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      message:
+        description: "Release commit message (the script adds [skip actions])"
+        required: false
+        type: string
+        default: "release: off-host"
+
+# Serialize the hosted version bump with the build/publish workflow. The
+# release script dispatches release.yml before this run exits; that run queues
+# behind this short wrapper and takes ownership of the same lane next.
+concurrency:
+  group: matrx-local-release
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Require the canonical main branch
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          if [[ "$DISPATCH_REF" != "refs/heads/main" ]]; then
+            echo "Off-host releases must be dispatched from main (received $DISPATCH_REF)." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure release commit identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the canonical release path
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BUMP: ${{ inputs.bump }}
+          RELEASE_MESSAGE: ${{ inputs.message }}
+        run: |
+          set -euo pipefail
+          RELEASE_MESSAGE="${RELEASE_MESSAGE:-release: off-host}"
+          ./scripts/release.sh "--${RELEASE_BUMP}" --message "$RELEASE_MESSAGE"

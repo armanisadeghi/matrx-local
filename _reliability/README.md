@@ -21,11 +21,11 @@ An issue is done only when it is **verified**: fixed in source, released, instal
 never for "too noisy". The fix itself follows the `diagnose` and `forcing-function-tests` skills.
 
 ## Scan
-- 2026-09-30T18:03Z · window 24h (evidence from 2026-07-10T04:22Z)
+- 2026-09-30T18:09Z · window 24h (evidence from 2026-07-10T04:22Z)
 - installed **1.4.253** · latest release **v1.4.255** · behind by 2
 - engine: reachable, health `ok`, version 1.4.253, failed none, degraded none
-- window: 3 critical · 19 errors · 390 warnings · outbox 128 queued (128 without identity)
-- issues: open 48
+- window: 3 critical · 20 errors · 412 warnings · outbox 128 queued (128 without identity)
+- issues: open 45 · fixed 3
 - new this scan: none
 
 ## PROBLEMS
@@ -38,7 +38,7 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 - **MXL-R-046** ERROR `db/downloads` — failed download: Download failed after <n> attempts. Last error: Server error '<n> Internal Server Error' for url '<url>  
   window 57 · total 57 · last 2026-09-20T21:55 · builds ?
 - **MXL-R-008** ERROR `sync_engine` — Agent catalog sync FAILED (agx_get_list_full returned more than <n> rows — refusing the payload as a runaway read) — keeping the previously mirrored c  
-  window 9 · total 9 · last 2026-09-30T17:58 · builds 1.4.253×9
+  window 10 · total 10 · last 2026-09-30T18:08 · builds 1.4.253×10
 - **MXL-R-014** ERROR `chat_sync` — chat.user_request: the cloud sends ['conversation_id', 'workflow_run_id'] and this build has no column for them, so those values are NOT being stored   
   window 1 · total 1 · last 2026-09-30T16:46 · builds 1.4.253×1
 - **MXL-R-015** CRITICAL `app.services.documents.sync_engine` — [delete-breaker] BLOCKED cloud delete of note <uuid> — breaker tripped at <ts> after <n> deletes. Local tombstone kept; propagation resumes only after  
@@ -65,16 +65,18 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
   window 1 · total 1 · last 2026-07-19T23:35 · builds ?
 
 ## Open — warnings above threshold
-- **MXL-R-006** WARNING `engine` — matrx-ai: authenticated server tool refresh failed; local tools remain available and the session listener will retry — AIDreamError: [aidream_client]   
-  window 155 · total 155 · last 2026-09-30T18:03 · builds 1.4.253×155
-- **MXL-R-007** WARNING `engine` — Session services could not reconnect; will retry — AIDreamError: [aidream_client] /ai-tools → HTTP <n>  
-  window 155 · total 155 · last 2026-09-30T18:03 · builds 1.4.253×155
+
 
 ## Claimed
 
 
 ## Fixed, awaiting install
-
+- **MXL-R-004** WARNING `sync_engine` — models sync failed — AIDreamError: [aidream_client] /ai-models → HTTP <n>  
+  window 10 · total 10 · last 2026-09-30T18:08 · builds 1.4.253×10 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+- **MXL-R-006** WARNING `engine` — matrx-ai: authenticated server tool refresh failed; local tools remain available and the session listener will retry — AIDreamError: [aidream_client]   
+  window 165 · total 165 · last 2026-09-30T18:08 · builds 1.4.253×165 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
+- **MXL-R-007** WARNING `engine` — Session services could not reconnect; will retry — AIDreamError: [aidream_client] /ai-tools → HTTP <n>  
+  window 165 · total 165 · last 2026-09-30T18:08 · builds 1.4.253×165 — owner: standard-lane proof run 2026-09-30; fix 0375c08f9 (not in a release yet)
 
 ## Installed, verifying
 
@@ -82,9 +84,8 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 ## Needs Arman
 
 
-## Quiet open issues (no occurrence this window, or below threshold): 32
-- MXL-R-013 WARNING `chat_sync` — hydration for chat.tool_call hit the <n>-page cap; continuing next cycle (total 13)
-- MXL-R-004 WARNING `sync_engine` — models sync failed — AIDreamError: [aidream_client] /ai-models → HTTP <n> (total 9)
+## Quiet open issues (no occurrence this window, or below threshold): 31
+- MXL-R-013 WARNING `chat_sync` — hydration for chat.tool_call hit the <n>-page cap; continuing next cycle (total 14)
 - MXL-R-011 WARNING `chat_sync` — hydration for chat.conversation hit the <n>-page cap; continuing next cycle (total 9)
 - MXL-R-009 WARNING `app.services.cloud_sync.settings_sync` — push_to_cloud failed: HTTP <n> — {"code":"[REDACTED]","details":null,"hint":null,"message":"new row  (total 6)
 - MXL-R-012 WARNING `chat_sync` — pull for chat.message hit the <n>-page cap this cycle — more rows remain; the next cycle continues f (total 6)
@@ -98,6 +99,7 @@ never for "too noisy". The fix itself follows the `diagnose` and `forcing-functi
 - MXL-R-044 ERROR `outbox/tauri` — [traceback] exception details follow (total 2)
 - MXL-R-016 WARNING `app.services.documents.sync_engine` — full_sync duplicate guard fired: adopted=<n> skipped_duplicate=<n> — local files whose bytes already (total 1)
 - MXL-R-018 WARNING `shutdown` — Received SIGTERM (pid=<n>) — beginning graceful shutdown: uvicorn drain (≤<n>) → lifespan teardown → (total 1)
+- MXL-R-024 WARNING `mirror` — chat.agent_run missing column published_to_web — adding (cloud schema moved ahead) (total 1)
 
 ## Verified (kept 7 days)
 

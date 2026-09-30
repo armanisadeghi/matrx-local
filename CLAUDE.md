@@ -45,7 +45,7 @@ push small batches to `origin/main` continuously; never run tree-wide destructiv
 never request your own branch/worktree/PR. Canonical:
 `/Users/armanisadeghi/code/common-docs/policies/shared-checkout.md`.
 
-**Release: you run it.** This repo is NOT on the twice-hourly release train (only `aidream` and
+**Release: you run it.** (Observed 2026-09-30, Claude: the `ship-all-repos` heartbeat now runs `./ship.sh` here every 90 minutes and cut 139 tags since 09-15, so this repo IS on a release train; scheduled reliability wakes never release — see `.claude/skills/matrx-local-reliability`. Line below is due an update.) This repo is NOT on the twice-hourly release train (only `aidream` and
 `ai-matrx` are). Whoever works here releases their own work: when your change is verified,
 run `scripts/release.sh` from `origin/main` before you finish — do not leave it for "the
 release agent"; there is none for this repo. Expected cadence is about one release a day. A

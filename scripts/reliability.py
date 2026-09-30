@@ -328,6 +328,17 @@ def save_ledger(led: dict) -> None:
     LEDGER.write_text(json.dumps(led, indent=1, sort_keys=True) + "\n")
 
 
+def commit_ledger(action: str) -> None:
+    """Commit _reliability/ by pathspec so the shared checkout never carries it dirty (the sync pushes)."""
+    if os.environ.get("MATRX_RELIABILITY_NO_COMMIT"):
+        return
+    rel = str(LEDGER_DIR.relative_to(REPO))
+    git("add", "--", rel)
+    if subprocess.run(["git", "diff", "--cached", "--quiet", "--", rel], cwd=REPO).returncode == 0:
+        return  # nothing changed
+    subprocess.run(["git", "commit", "-q", "-m", f"reliability: {action}", "--", rel], cwd=REPO, capture_output=True)
+
+
 def find_issue(led: dict, ident: str) -> dict:
     ident = ident.upper()
     if ident in led["issues"]:
@@ -497,7 +508,7 @@ def write_readme(led: dict, s: dict) -> None:
                 if eng.get("reachable") else f"**NOT REACHABLE** ({eng.get('error')})")
     problems = []
     if s["installed_behind_by"] > INSTALL_LAG_RELEASES:
-        problems.append(f"installed app {s['installed_version']} is {s['installed_behind_by']} releases behind {s['latest_release']} — the release watch's install step is not keeping up")
+        problems.append(f"installed app {s['installed_version']} is {s['installed_behind_by']} releases behind {s['latest_release']} — the app's auto-updater (desktop/src/hooks/use-auto-update.ts, lib.rs updater) or the release watch's install step is not keeping up")
     if not eng.get("reachable"):
         problems.append("installed engine not reachable on its port — the app is not running or discovery is broken")
     if eng.get("failed"):
@@ -521,7 +532,8 @@ def write_readme(led: dict, s: dict) -> None:
                f"- engine: {eng_line}\n"
                f"- window: {wc.get('CRITICAL', 0)} critical · {wc.get('ERROR', 0)} errors · {wc.get('WARNING', 0)} warnings · "
                f"outbox {s['outbox']['total']} queued ({s['outbox']['without_identity']} without identity)\n"
-               f"- issues: " + " · ".join(f"{k} {v}" for k, v in s["issues_by_status"].items() if v) + "\n"
+               f"- issues: " + " · ".join(f"{k} {v}" for k, v in s["issues_by_status"].items() if v)
+               + f" — {len(open_err) + len(open_warn) + len(sections[0][1])} need an agent now (the rest are quiet this window or below the warning threshold)\n"
                f"- new this scan: {', '.join(s['new_issues']) or 'none'}\n")
     out.append("## PROBLEMS\n" + ("\n".join(f"- {p}" for p in problems) if problems else "- none") + "\n")
     for title, items in sections:
@@ -566,6 +578,7 @@ def transition(ident: str, status: str, **fields) -> None:
     save_ledger(led)
     if LATEST.exists():
         write_readme(led, json.loads(LATEST.read_text()))
+    commit_ledger(f"{iss['id']} {status}")
     print(f"{iss['id']} → {status}")
 
 
@@ -583,12 +596,12 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "scan":
         s = scan(a.hours)
+        commit_ledger(f"scan {NOW.strftime('%Y-%m-%d %H:%M')}Z")
         if a.json:
             print(json.dumps(s, indent=1))
-        else:
-            print(f"wrote {README.relative_to(REPO)} and {LATEST}")
-            cmd_status()
-        return 0
+            return 0
+        print(f"wrote {README.relative_to(REPO)} and {LATEST}")
+        return cmd_status()  # exit 1 while an agent has work, same as `status`
     if a.cmd == "status":
         return cmd_status()
     if a.cmd == "claim":
@@ -604,13 +617,16 @@ def main(argv: list[str]) -> int:
         save_ledger(led)
         if LATEST.exists():
             write_readme(led, json.loads(LATEST.read_text()))
-        print(f"{iss['id']} → fixed by {full[:9]}" + (f", released in {fv}" if fv else ", not released yet")); return 0
+        commit_ledger(f"{iss['id']} fixed by {full[:9]}")
+        print(f"{iss['id']} → fixed by {full[:9]}" + (f", already in release {fv}" if fv else
+              ". Not released yet: the sync pushes it and the release watch ships and installs it — do nothing more for this issue."))
+        return 0
     if a.cmd == "ignore":
         transition(a.id, "ignored", reason=a.reason); return 0
     if a.cmd == "arman":
         transition(a.id, "needs_arman", question=a.question); return 0
     if a.cmd == "note":
-        led = load_ledger(); iss = find_issue(led, a.id); stamp(iss, a.text); save_ledger(led); print("noted"); return 0
+        led = load_ledger(); iss = find_issue(led, a.id); stamp(iss, a.text); save_ledger(led); commit_ledger(f"{iss['id']} note"); print("noted"); return 0
     if a.cmd == "reopen":
         transition(a.id, "open", owner=None); return 0
     return 2

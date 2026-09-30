@@ -20,8 +20,8 @@ The script does every mechanical step. You do the one thing a script cannot: fin
 **One file to read:** `matrx-local/_reliability/README.md`. The script rewrites it from the installed app's own evidence: `~/Library/Logs/MatrxLocal/*.log`, `~/.matrx/diagnostics/*.json`, the local database's failure tables, `GET /health` on port 22140, the installed bundle version and the release tags. Every failure signature becomes one stable issue `MXL-R-nnn` that is counted across builds. A log line is never an issue; an issue is a cause.
 
 ```
-python3 scripts/reliability.py scan            # rewrite README + ledger from live evidence (read-only, ~4 s)
-python3 scripts/reliability.py status          # two lines; exit 1 while an agent has work
+python3 scripts/reliability.py scan            # rewrite README + ledger from live evidence (read-only, ~4 s); exit 1 while an agent has work
+python3 scripts/reliability.py status          # the same two lines and exit code without rescanning
 python3 scripts/reliability.py claim ID --owner "<your session or name>"
 python3 scripts/reliability.py fix ID --commit <sha>          # after the repairing commit exists locally
 python3 scripts/reliability.py ignore ID --reason "..."       # expected state / external / duplicate of ID
@@ -30,16 +30,18 @@ python3 scripts/reliability.py note ID "..."
 python3 scripts/reliability.py reopen ID
 ```
 
-The ledger `_reliability/issues.json` is committed; the sync ships it, so every agent on every machine sees the same state. `~/.matrx/reliability/latest.json` is the last scan.
+Every command commits `_reliability/` by itself (pathspec-only, `reliability: ...`), so the shared checkout never carries it dirty and the sync ships it; every agent on every machine sees the same ledger. `~/.matrx/reliability/latest.json` is the last scan.
+
+**This skill wins over the repo's older release lines.** `CLAUDE.md § Release: you run it` predates the sync; on a reliability wake you commit locally by pathspec and never run `release.sh`, never push, never install. The `ship-all` sweep pushes and releases; the app's auto-updater installs.
 
 ## The loop, every time you wake
 
 1. **Scan.** `python3 scripts/reliability.py scan` from the repo root. Read `_reliability/README.md` top to bottom.
 2. **PROBLEMS first.** Each line names its own fix path:
-   - *installed app is N releases behind* → the release watch's install step failed. Read its last run (`~/.codex/automations/matrx-local-release-watch/memory.md`, `~/.matrx/ship-all/latest.json`) and fix what stopped it. Never install by hand and never restart his app.
+   - *installed app is N releases behind* → the app's auto-updater (`desktop/src/hooks/use-auto-update.ts`, `lib.rs` updater) or the release watch's install step failed. Read `lifecycle.log` `[update]` lines, `~/.codex/automations/matrx-local-release-watch/memory.md` and `~/.matrx/ship-all/latest.json`; fix the class in source. Never install by hand and never restart his app.
    - *engine not reachable* → discovery or startup is broken on the installed build. Diagnose from `lifecycle.log`, `engine-stderr.log`, the newest `~/.matrx/diagnostics/*.json`. Fix the class in source.
    - *failed services* / *outbox without identity* → a code defect; treat like an open error.
-3. **Regressed, then Open errors by count, then warnings above threshold.** For each: `claim` it, then follow the `diagnose` skill (proven cause, siblings, guard shown failing then passing per `forcing-function-tests`), fix the class in source, run the checks the landing checklist names for the files you touched, commit locally by pathspec, then `fix ID --commit <sha>`. Adjacent issues with the same timestamp and component are usually one cause; fix once and record the same commit on each.
+3. **Regressed, then Open errors by count, then warnings above threshold.** For each: `claim` it, then follow the `diagnose` skill (proven cause, siblings, guard shown failing then passing per `forcing-function-tests`), fix the class in source, run the checks `.matrx/LANDING_CHECKLIST.md` names for the files you touched, commit locally by pathspec, then `fix ID --commit <sha>`. **Runtime proof:** a change to a server-facing, startup, sync or lifecycle path gets one real run on a dev engine before `fix` is recorded, unless the guard itself exercises the real boundary (a live probe against the real server counts; a fake client does not). If `./scripts/dev.sh` refuses to start because a `~/.matrx-dev` cache link escapes the dev home, run it with `--fresh`; that refusal is the isolation guard working, not a blocker. Adjacent issues with the same timestamp and component are usually one cause; fix once and record the same commit on each.
 4. **Leave Claimed alone** when the owner is not you, unless it has no note for 24 hours: then reopen and take it.
 5. **Ignore only with a real reason**: an expected state (a gated model the user has not authorized, a permission the user declined), an external outage, or a duplicate of another issue. "Noisy" is not a reason; a noisy warning gets its rate fixed at the producer.
 6. **Needs Arman** is for decisions only a human can make. One plain sentence a stranger could answer in seconds. Never for "should I fix this".

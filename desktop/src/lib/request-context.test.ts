@@ -83,7 +83,7 @@ describe("context_receipt", () => {
           chars: row.chars,
           include: row.include,
           max_inline_chars: row.max_inline_chars,
-          delivery: row.delivery,
+          delivery: row.delivery === "server" ? "on_request" : row.delivery,
           decided_by: row.decided_by,
           user_rule: null,
           clamped: false,

@@ -148,9 +148,18 @@ export function describeContextReceipt(receipt: ContextReceipt): string {
   let onRequest = 0;
   let off = 0;
   for (const row of receipt.rows) {
-    if (row.delivery === "inline") inline += 1;
-    else if (row.delivery === "on_request") onRequest += 1;
-    else off += 1;
+    // Receipt rows carry the server's final delivery (never "server").
+    switch (row.delivery) {
+      case "inline":
+        inline += 1;
+        break;
+      case "on_request":
+        onRequest += 1;
+        break;
+      case "off":
+        off += 1;
+        break;
+    }
   }
   return `Context: ${inline} inline · ${onRequest} on request · ${off} off.`;
 }

@@ -519,6 +519,42 @@ export interface ContextPersistedData {
   materialized?: boolean;
 }
 
+export interface ContextDecidedBy {
+  include: "default" | "page" | "agent" | "you";
+  max_inline_chars: "default" | "page" | "agent" | "you";
+}
+
+export interface ContextReceiptRow {
+  key: string;
+  label: string;
+  surface_key: string;
+  origin: "client" | "server" | "surroundings" | "rule";
+  chars?: number | null;
+  include: boolean;
+  max_inline_chars: number;
+  delivery: "inline" | "on_request" | "off";
+  decided_by: ContextDecidedBy;
+  user_rule?: ContextRule | null;
+  clamped?: boolean;
+  client_sent_excluded?: boolean;
+  blocked_by?: "model" | null;
+}
+
+export interface ContextRule {
+  include?: boolean | null;
+  max_inline_chars?: number | null;
+}
+
+export interface ContextReceiptData {
+  type?: "context_receipt";
+  version?: 1;
+  surface?: string | null;
+  cap: number;
+  model_reads_context?: boolean;
+  rows?: ContextReceiptRow[];
+  rules_error?: string | null;
+}
+
 export interface ConversationIdData {
   type?: "conversation_id";
   conversation_id: string;
@@ -555,6 +591,36 @@ export interface CutoverCopyAgainReportData {
   rows_written?: number;
   carried?: Record<string, number>;
   named?: string[];
+  says: string;
+}
+
+export interface CutoverFinalSwitchCopyAgainResultData {
+  type?: "cutover_final_switch_copy_again_result";
+  run_id: string;
+  resumed?: boolean;
+  ok: boolean;
+  says: string;
+  organizations?: Record<string, unknown>[];
+  still_needs?: string[];
+  timings_ms?: Record<string, number>;
+}
+
+export interface CutoverFinalSwitchResultData {
+  type?: "cutover_final_switch_result";
+  direction: "new" | "old";
+  ok: boolean;
+  reason?: string | null;
+  says: string;
+  press_id?: string | null;
+  counts?: Record<string, unknown>;
+  timings_ms?: Record<string, number>;
+  copied_again?: string[];
+  not_carried?: string[];
+}
+
+export interface CutoverFinalSwitchStageData {
+  type?: "cutover_final_switch_stage";
+  stage: string;
   says: string;
 }
 
@@ -1494,6 +1560,8 @@ export interface MasterworkTriageProgressData {
 export interface AudioBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
+  published_to_web?: boolean | null;
+  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
@@ -1517,6 +1585,8 @@ export interface AudioBlock {
 export interface DocumentBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
+  published_to_web?: boolean | null;
+  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
@@ -1540,6 +1610,8 @@ export interface DocumentBlock {
 export interface ImageBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
+  published_to_web?: boolean | null;
+  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
@@ -1564,6 +1636,8 @@ export interface ImageBlock {
 export interface VideoBlock {
   origin: "matrx" | "external";
   file_id?: string | null;
+  published_to_web?: boolean | null;
+  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
@@ -1589,6 +1663,8 @@ export interface VideoBlock {
 export interface YouTubeBlock {
   origin?: "external";
   file_id?: string | null;
+  published_to_web?: boolean | null;
+  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
   visibility?: "personal" | "internal" | "link" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
@@ -1622,6 +1698,77 @@ export interface MediaNoticeData {
   provider?: string | null;
   model?: string | null;
   metadata?: Record<string, unknown>;
+}
+
+export interface MediaResearchAnchor {
+  title?: string | null;
+  url: string;
+  published_at?: string | null;
+}
+
+export interface MediaResearchProfile {
+  name: string;
+  outlet?: string | null;
+  url?: string | null;
+  published_at?: string | null;
+}
+
+export interface MediaResearchRow {
+  party_id: string;
+  name: string;
+  outlet?: string | null;
+  status: "fit" | "soft_fit" | "research_needed" | "cut";
+  rank?: number;
+  why_them?: string;
+  anchor?: MediaResearchAnchor | null;
+  pitch_note?: string | null;
+  cut_reason?: string | null;
+  contact_state?: "verified" | "quarantined" | "unresolved";
+  contact_address?: string | null;
+  contact_note?: string | null;
+  first_wave?: boolean;
+  fit_check?: string | null;
+  on_list?: boolean;
+}
+
+export interface MediaResearchProgressData {
+  type?: "media_research_progress";
+  run_key: string;
+  stage: "approved" | "search" | "resolve" | "judge" | "contacts" | "first_wave" | "save";
+  percent: number;
+  says: string;
+  found?: number;
+  target?: number;
+  judged?: number;
+  new_profiles?: MediaResearchProfile[];
+  rows?: MediaResearchRow[];
+}
+
+export interface MediaResearchSummaryData {
+  requested: number;
+  research_target: number;
+  multiplier: number;
+  multiplier_reason: string;
+  resolved?: number;
+  judged?: number;
+  first_wave?: number;
+  added_to_list?: number;
+  already_on_list?: number;
+  gaps?: string[];
+}
+
+export interface MediaResearchResultData {
+  type?: "media_research_result";
+  run_key: string;
+  list_id: string;
+  status: "complete" | "partial";
+  reused?: boolean;
+  says: string;
+  summary: MediaResearchSummaryData;
+  rows?: MediaResearchRow[];
+  cuts?: MediaResearchRow[];
+  problems?: string[];
+  next_action?: string;
 }
 
 export interface MemoryBufferSpawnedData {
@@ -2209,6 +2356,16 @@ export interface WorkflowStepData {
   data?: Record<string, unknown>;
 }
 
+export interface YouTubeTranscriptSourceData {
+  type?: "youtube_transcript_source";
+  processed_document_id: string;
+  transcript_id: string;
+  video_id: string;
+  title: string;
+  segment_count: number;
+  reused_existing: boolean;
+}
+
 export type TypedDataPayload =
   | AssignmentProgressData
   | AudioOutputData
@@ -2223,10 +2380,14 @@ export type TypedDataPayload =
   | ContextDeltaData
   | ContextPersistFailedData
   | ContextPersistedData
+  | ContextReceiptData
   | ConversationIdData
   | ConversationLabeledData
   | CutoverCopyAgainProgressData
   | CutoverCopyAgainReportData
+  | CutoverFinalSwitchCopyAgainResultData
+  | CutoverFinalSwitchResultData
+  | CutoverFinalSwitchStageData
   | DecisionAnswersData
   | DictionaryPublishCompleteData
   | ExtractionIndexCompleteData
@@ -2289,6 +2450,8 @@ export type TypedDataPayload =
   | MasterworkTriageProgressData
   | MediaBlockData
   | MediaNoticeData
+  | MediaResearchProgressData
+  | MediaResearchResultData
   | MediaSelectionJobProgressData
   | MemoryBufferSpawnedData
   | MemoryContextInjectedData
@@ -2346,7 +2509,8 @@ export type TypedDataPayload =
   | StructuredInputWarningData
   | VideoOutputData
   | WorkflowNodeTestResultData
-  | WorkflowStepData;
+  | WorkflowStepData
+  | YouTubeTranscriptSourceData;
 
 /** Fallback for data events whose `type` isn't in TypedDataPayload. */
 export interface UntypedDataPayload {
@@ -2658,6 +2822,7 @@ export function isTypedCompletionEvent(e: CompletionPayload): e is CompletionPay
 
 export interface ToolStartedData {
   arguments?: Record<string, unknown>;
+  display_name?: string | null;
 }
 
 export interface ToolProgressData {
@@ -2703,6 +2868,7 @@ export type TypedToolEventData =
 
 export interface ToolStartedData {
   arguments?: Record<string, unknown>;
+  display_name?: string | null;
 }
 
 export interface ToolStartedToolEvent {
@@ -2981,7 +3147,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -2991,7 +3157,7 @@ export interface ProgressItem {
   id: string;
   text: string;
   completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   estimatedHours?: number | null;
   optional?: boolean;
   category?: string | null;
@@ -3043,7 +3209,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -3053,7 +3219,7 @@ export interface TroubleshootingSolution {
   id: string;
   title: string;
   description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
+  priority?: "high" | "medium" | "low" | null;
   successRate?: number | null;
   tags?: string[];
   steps?: TroubleshootingStep[];
@@ -3136,6 +3302,7 @@ export interface FlashcardItem {
 export interface FlashcardsBlockData {
   cards: FlashcardItem[];
   isComplete?: boolean;
+  title?: string | null;
 }
 
 export interface TranscriptSegment {

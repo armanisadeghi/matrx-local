@@ -104,6 +104,13 @@ class LocalScopedRequest(BaseModel):
     # too). Wire it in _apply_request_scope (local_ai_task.py) as part of the
     # next matrx-* catch-up wave — tracked in FOUND_DEFECTS.md.
     initiation: Literal["user", "auto"] | None = None
+    # DECLARED, NOT SILENTLY DROPPED (context-delivery RULES.md, "nothing fails
+    # silently"): the local runtime has no context gate, no saved-rule read and
+    # no receipt, so a local-model turn carries NO context values. A request
+    # that sends any is accepted, the drop is logged, and the turn streams a
+    # `context_not_delivered` warning naming the keys (local_ai_task.py).
+    # Contract: common-docs/systems/scopes-context/context-delivery/RULES.md.
+    context: dict[str, Any] | None = None
 
 
 class LocalAgentStartRequest(LocalScopedRequest):
@@ -131,7 +138,8 @@ class LocalAgentStartRequest(LocalScopedRequest):
     max_retries_per_iteration: int = 2
 
     # Accepted-but-unused aidream fields ride through pydantic's default
-    # ignore-extras behavior (client, user, sandbox, context, memory, ...).
+    # ignore-extras behavior (user, sandbox, memory, ...). `context` is NOT
+    # one of them — it is declared on LocalScopedRequest and its drop is loud.
 
 
 class LocalConversationContinueRequest(LocalScopedRequest):

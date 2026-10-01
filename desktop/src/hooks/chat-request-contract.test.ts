@@ -3,6 +3,7 @@ import {
   buildCloudChatRequest,
   type CloudChatRunControls,
 } from "@/hooks/use-cloud-chat";
+import { buildRequestContext } from "@/lib/request-context";
 import {
   buildEngineChatRequest,
   type Conversation,
@@ -149,14 +150,16 @@ describe("Cloud Chat request contract", () => {
         null,
         RUN_CONTROLS,
         [],
-        {},
+        buildRequestContext({ directives: { __google_files: [] } }).context,
       );
       expect(request.body).not.toHaveProperty("context");
     }
   });
 
   it("sends attached Google files as a raw id array under __google_files", () => {
-    const context = { __google_files: ["file-a", "file-b"] };
+    const { context } = buildRequestContext({
+      directives: { __google_files: ["file-a", "file-b"] },
+    });
 
     // Bare chat start.
     const start = buildCloudChatRequest(

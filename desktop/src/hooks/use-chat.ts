@@ -19,6 +19,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import type { ContextReceipt, ContextReceiptMismatch } from "@ai-matrx/agents/context";
 import { isTauri } from "@/lib/sidecar";
 import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";
@@ -75,6 +76,10 @@ export interface ChatMessage {
   streamStatus?: string;
   streamDiagnostics?: string[];
   reasoning?: string;
+  /** The server's per-turn `context_receipt` (context-delivery RULES.md §5). */
+  contextReceipt?: ContextReceipt;
+  /** Where the receipt differs from what the request was built from (§6). */
+  contextMismatches?: ContextReceiptMismatch[];
 }
 
 /**

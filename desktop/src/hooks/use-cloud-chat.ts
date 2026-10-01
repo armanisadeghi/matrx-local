@@ -85,6 +85,16 @@ import {
   type UntypedDataPayload,
 } from "@/types/python-generated/stream-events";
 import { decisionAnswersText, isDecisionAnswers } from "@/lib/decision-answers";
+import type { ContextReceiptData } from "@/types/python-generated/stream-events";
+import {
+  buildRequestContext,
+  checkContextReceipt,
+  describeContextReceipt,
+  toContextReceipt,
+  type RequestContextWire,
+} from "@/lib/request-context";
+import type { ResolvedContextRow } from "@ai-matrx/agents/context";
+import { enqueueDurableClientError } from "@/lib/error-outbox";
 
 const MAX_CONVERSATIONS = 100;
 const CLOUD_SOURCE_APP = "matrx-desktop";
@@ -267,12 +277,13 @@ export function buildCloudChatRequest(
   runControls: CloudChatRunControls,
   attachments: ChatAttachment[],
   /**
-   * Top-level agent-run context (reserved keys like `__google_files`). Sent
-   * only when non-empty — the exact conditional spread the web client uses in
-   * matrx-frontend
-   * `features/agents/redux/execution-system/thunks/execute-instance.thunk.ts`.
+   * The request's `context` — ONLY from `buildRequestContext` (the branded
+   * type refuses a plain object). Values go through the package's
+   * `buildContextWire`; reserved directives (`__google_files`) ride verbatim.
+   * Sent only when present. Contract:
+   * common-docs/systems/scopes-context/context-delivery/RULES.md.
    */
-  context?: Record<string, unknown>,
+  context?: RequestContextWire,
 ): {
   url: string;
   body: Record<string, unknown>;
@@ -328,8 +339,7 @@ export function buildCloudChatRequest(
   // turn. Cloud requests only — the local engine IS the desktop already.
   const clientEnvelope =
     target === "cloud" && clientContext ? { client: clientContext } : {};
-  const contextEnvelope =
-    context && Object.keys(context).length > 0 ? { context } : {};
+  const contextEnvelope = context ? { context } : {};
 
   if (conversationId) {
     return {
@@ -516,6 +526,10 @@ function describeDataEvent(data: TypedDataPayload | UntypedDataPayload): string 
       return `Context ${humanizeToken(type.replace("context_", ""))}.`;
     case "context_persist_failed":
       return `Context persist failed: ${readString(readRecord(data)?.error) ?? "Unknown error"}`;
+    case "context_receipt":
+      return describeContextReceipt(
+        toContextReceipt(readRecord(data) as unknown as ContextReceiptData),
+      );
     case "function_result": {
       const record = readRecord(data);
       const name = readString(record?.function_name) ?? "function";
@@ -1928,6 +1942,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         ),
       );
 
+      // The rows this turn's request `context` was built from — what the
+      // server's `context_receipt` is checked against.
+      let expectedContextRows: ResolvedContextRow[] = [];
+
       const updateAssistant = (patch: Partial<ChatMessage>) => {
         setConversations((prev) =>
           prev.map((conversation) => {
@@ -2116,10 +2134,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 .slice(0, MAX_ATTACHED_GOOGLE_FILES)
                 .map((file) => file.fileId)
             : [];
-        const requestContext: Record<string, unknown> =
-          googleFileIds.length > 0
-            ? { [GOOGLE_FILES_CONTEXT_KEY]: googleFileIds }
-            : {};
+        // The turn's context through the one door. No context VALUES ride a
+        // desktop turn today (only the directive), so `rows` is empty; a value
+        // added later becomes a `sources` row here and is checked against the
+        // server's receipt below.
+        const requestContext = buildRequestContext({
+          directives: { [GOOGLE_FILES_CONTEXT_KEY]: googleFileIds },
+        });
+        expectedContextRows = requestContext.rows;
         const { url, body, startedConversationId } = buildCloudChatRequest(
           requestConversation,
           trimmed,
@@ -2133,7 +2155,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           clientContext,
           runControls,
           attachments,
-          requestContext,
+          requestContext.context,
         );
 
         const existingTargetConversationId =
@@ -2321,6 +2343,29 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                   applyRenderAnswerBlocks();
                   blockBuilder.addStandaloneMarkdown(verdict);
                   publishBlocks();
+                }
+              } else if (type === "context_receipt" && record) {
+                // RULES.md §5–6: what the server did with this turn's context,
+                // checked against the rows the request was built from.
+                const receipt = toContextReceipt(record as unknown as ContextReceiptData);
+                const mismatches = checkContextReceipt(expectedContextRows, receipt);
+                updateAssistant({ contextReceipt: receipt, contextMismatches: mismatches });
+                if (mismatches.length > 0) {
+                  const summary = mismatches
+                    .slice(0, 6)
+                    .map(
+                      (m) =>
+                        `${m.key}.${m.field}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`,
+                    )
+                    .join("; ");
+                  console.error("[context-rules] receipt mismatch", { mismatches, receipt });
+                  addDiagnostic(`Context sent differently than shown: ${summary}`);
+                  enqueueDurableClientError({
+                    level: "error",
+                    source: "context_truth_mismatch",
+                    message: `context_truth_mismatch (${mismatches.length}): ${summary}`.slice(0, 1000),
+                    causalSignature: "context_truth_mismatch",
+                  });
                 }
               } else if (
                 type === "search_error" ||

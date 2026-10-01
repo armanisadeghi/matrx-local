@@ -994,7 +994,7 @@
                 "type": "null"
               }
             ],
-            "default": 0.0,
+            "default": 0,
             "title": "Cost"
           }
         },
@@ -1184,7 +1184,7 @@
             "title": "Total Cost"
           },
           "known_cost_subtotal": {
-            "default": 0.0,
+            "default": 0,
             "title": "Known Cost Subtotal",
             "type": "number"
           },
@@ -1352,7 +1352,7 @@
             "type": "null"
           }
         ],
-        "default": 0.0,
+        "default": 0,
         "title": "Cost"
       }
     },
@@ -1542,7 +1542,7 @@
         "title": "Total Cost"
       },
       "known_cost_subtotal": {
-        "default": 0.0,
+        "default": 0,
         "title": "Known Cost Subtotal",
         "type": "number"
       },
@@ -1952,7 +1952,7 @@
         "type": "integer"
       },
       "progress": {
-        "default": 0.0,
+        "default": 0,
         "title": "Progress",
         "type": "number"
       },
@@ -2152,6 +2152,36 @@
             ],
             "default": null,
             "title": "File Id"
+          },
+          "published_to_web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published To Web"
+          },
+          "shown_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "only_me",
+                  "my_team",
+                  "everyone",
+                  "everyone_on_ai_matrx"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shown To"
           },
           "visibility": {
             "anyOf": [
@@ -2392,6 +2422,36 @@
             "default": null,
             "title": "File Id"
           },
+          "published_to_web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published To Web"
+          },
+          "shown_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "only_me",
+                  "my_team",
+                  "everyone",
+                  "everyone_on_ai_matrx"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shown To"
+          },
           "visibility": {
             "anyOf": [
               {
@@ -2630,6 +2690,36 @@
             ],
             "default": null,
             "title": "File Id"
+          },
+          "published_to_web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published To Web"
+          },
+          "shown_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "only_me",
+                  "my_team",
+                  "everyone",
+                  "everyone_on_ai_matrx"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shown To"
           },
           "visibility": {
             "anyOf": [
@@ -2882,6 +2972,36 @@
             ],
             "default": null,
             "title": "File Id"
+          },
+          "published_to_web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published To Web"
+          },
+          "shown_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "only_me",
+                  "my_team",
+                  "everyone",
+                  "everyone_on_ai_matrx"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shown To"
           },
           "visibility": {
             "anyOf": [
@@ -3143,6 +3263,36 @@
             ],
             "default": null,
             "title": "File Id"
+          },
+          "published_to_web": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published To Web"
+          },
+          "shown_to": {
+            "anyOf": [
+              {
+                "enum": [
+                  "only_me",
+                  "my_team",
+                  "everyone",
+                  "everyone_on_ai_matrx"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shown To"
           },
           "visibility": {
             "anyOf": [
@@ -4339,7 +4489,7 @@
         "type": "string"
       },
       "elapsed_seconds": {
-        "default": 0.0,
+        "default": 0,
         "title": "Elapsed Seconds",
         "type": "number"
       },
@@ -4894,6 +5044,52 @@
     "title": "ScrapeBatchCompleteData",
     "type": "object"
   },
+  "YouTubeTranscriptSourceData": {
+    "additionalProperties": false,
+    "description": "``POST /media/youtube/transcript``'s result: the Source the transcript landed as.\n\n``processed_document_id`` is the Source (one ``segment`` portion per timed segment, with\n``t0_ms``/``t1_ms`` locators); ``transcript_id`` is its ``transcripts.transcripts`` row.\n``reused_existing`` is true when the organization already held this video's transcript.",
+    "properties": {
+      "type": {
+        "const": "youtube_transcript_source",
+        "default": "youtube_transcript_source",
+        "title": "Type",
+        "type": "string"
+      },
+      "processed_document_id": {
+        "title": "Processed Document Id",
+        "type": "string"
+      },
+      "transcript_id": {
+        "title": "Transcript Id",
+        "type": "string"
+      },
+      "video_id": {
+        "title": "Video Id",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      },
+      "segment_count": {
+        "title": "Segment Count",
+        "type": "integer"
+      },
+      "reused_existing": {
+        "title": "Reused Existing",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "processed_document_id",
+      "transcript_id",
+      "video_id",
+      "title",
+      "segment_count",
+      "reused_existing"
+    ],
+    "title": "YouTubeTranscriptSourceData",
+    "type": "object"
+  },
   "FetchResultsData": {
     "$defs": {
       "FetchResultItem": {
@@ -5388,6 +5584,242 @@
     "title": "ContextPersistFailedData",
     "type": "object"
   },
+  "ContextReceiptData": {
+    "$defs": {
+      "ContextDecidedBy": {
+        "additionalProperties": false,
+        "description": "Which layer decided each knob of one context value.",
+        "properties": {
+          "include": {
+            "enum": [
+              "default",
+              "page",
+              "agent",
+              "you"
+            ],
+            "title": "Include",
+            "type": "string"
+          },
+          "max_inline_chars": {
+            "enum": [
+              "default",
+              "page",
+              "agent",
+              "you"
+            ],
+            "title": "Max Inline Chars",
+            "type": "string"
+          }
+        },
+        "required": [
+          "include",
+          "max_inline_chars"
+        ],
+        "title": "ContextDecidedBy",
+        "type": "object"
+      },
+      "ContextReceiptRow": {
+        "additionalProperties": false,
+        "description": "One context value this turn: whether it reached the model, and how.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "surface_key": {
+            "title": "Surface Key",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "client",
+              "server",
+              "surroundings",
+              "rule"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Chars"
+          },
+          "include": {
+            "title": "Include",
+            "type": "boolean"
+          },
+          "max_inline_chars": {
+            "title": "Max Inline Chars",
+            "type": "integer"
+          },
+          "delivery": {
+            "enum": [
+              "inline",
+              "on_request",
+              "off"
+            ],
+            "title": "Delivery",
+            "type": "string"
+          },
+          "decided_by": {
+            "$ref": "#/$defs/ContextDecidedBy"
+          },
+          "user_rule": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ContextRule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "clamped": {
+            "default": false,
+            "title": "Clamped",
+            "type": "boolean"
+          },
+          "client_sent_excluded": {
+            "default": false,
+            "title": "Client Sent Excluded",
+            "type": "boolean"
+          },
+          "blocked_by": {
+            "anyOf": [
+              {
+                "const": "model",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blocked By"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "surface_key",
+          "origin",
+          "include",
+          "max_inline_chars",
+          "delivery",
+          "decided_by"
+        ],
+        "title": "ContextReceiptRow",
+        "type": "object"
+      },
+      "ContextRule": {
+        "additionalProperties": false,
+        "description": "A person's saved rule for one context value (``users.user_surface_state``,\n``feature='context_rules'``). Each field is optional: a rule that sets one knob leaves the\nother to the lower layers. In a receipt, it is what the server READ (valid fields only).",
+        "properties": {
+          "include": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Include"
+          },
+          "max_inline_chars": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Inline Chars"
+          }
+        },
+        "title": "ContextRule",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "The per-turn context receipt, streamed before any model output.\n\nDerived from the final context objects, never computed separately; the same\nreceipt is persisted at ``chat.message.model_context.delivery.receipt``.",
+    "properties": {
+      "type": {
+        "const": "context_receipt",
+        "default": "context_receipt",
+        "title": "Type",
+        "type": "string"
+      },
+      "version": {
+        "const": 1,
+        "default": 1,
+        "title": "Version",
+        "type": "integer"
+      },
+      "surface": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Surface"
+      },
+      "cap": {
+        "title": "Cap",
+        "type": "integer"
+      },
+      "model_reads_context": {
+        "default": true,
+        "title": "Model Reads Context",
+        "type": "boolean"
+      },
+      "rows": {
+        "items": {
+          "$ref": "#/$defs/ContextReceiptRow"
+        },
+        "title": "Rows",
+        "type": "array"
+      },
+      "rules_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Rules Error"
+      }
+    },
+    "required": [
+      "cap"
+    ],
+    "title": "ContextReceiptData",
+    "type": "object"
+  },
   "MemoryContextInjectedData": {
     "additionalProperties": false,
     "description": "Prior observations were prepended to the system prompt for this turn.\n\nEmitted once per memory-enabled turn, BEFORE the LLM call, if any\nobservations exist yet. ``observation_chars`` is the raw character\nlength of the injected block — useful for sizing UI badges.",
@@ -5451,7 +5883,7 @@
         "type": "integer"
       },
       "cost": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost",
         "type": "number"
       },
@@ -5511,7 +5943,7 @@
         "type": "integer"
       },
       "cost": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost",
         "type": "number"
       },
@@ -6479,7 +6911,7 @@
         "title": "Bottom Left"
       },
       "confidence": {
-        "default": 0.0,
+        "default": 0,
         "title": "Confidence",
         "type": "number"
       },
@@ -9851,12 +10283,12 @@
         "type": "string"
       },
       "cost_usd": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost Usd",
         "type": "number"
       },
       "seconds": {
-        "default": 0.0,
+        "default": 0,
         "title": "Seconds",
         "type": "number"
       },
@@ -10014,7 +10446,7 @@
         "title": "C Seconds"
       },
       "total_cost_usd": {
-        "default": 0.0,
+        "default": 0,
         "title": "Total Cost Usd",
         "type": "number"
       },
@@ -10201,7 +10633,7 @@
             "type": "object"
           },
           "confidence": {
-            "default": 0.0,
+            "default": 0,
             "title": "Confidence",
             "type": "number"
           },
@@ -10331,7 +10763,7 @@
             "type": "object"
           },
           "confidence": {
-            "default": 0.0,
+            "default": 0,
             "title": "Confidence",
             "type": "number"
           },
@@ -12497,7 +12929,7 @@
         "type": "integer"
       },
       "cost_usd": {
-        "default": 0.0,
+        "default": 0,
         "title": "Cost Usd",
         "type": "number"
       },
@@ -12546,7 +12978,7 @@
         "type": "string"
       },
       "month_to_date_usd": {
-        "default": 0.0,
+        "default": 0,
         "title": "Month To Date Usd",
         "type": "number"
       }
@@ -13199,6 +13631,804 @@
     "title": "CutoverCopyAgainReportData",
     "type": "object"
   },
+  "CutoverFinalSwitchStageData": {
+    "additionalProperties": false,
+    "description": "One stage of the final switch (lane FINAL-SWITCH): copying again, pressing, undoing.",
+    "properties": {
+      "type": {
+        "const": "cutover_final_switch_stage",
+        "default": "cutover_final_switch_stage",
+        "title": "Type",
+        "type": "string"
+      },
+      "stage": {
+        "title": "Stage",
+        "type": "string"
+      },
+      "says": {
+        "title": "Says",
+        "type": "string"
+      }
+    },
+    "required": [
+      "stage",
+      "says"
+    ],
+    "title": "CutoverFinalSwitchStageData",
+    "type": "object"
+  },
+  "CutoverFinalSwitchResultData": {
+    "additionalProperties": false,
+    "description": "What the final switch (or its undo) did, in the database's own sentence, with its counts.",
+    "properties": {
+      "type": {
+        "const": "cutover_final_switch_result",
+        "default": "cutover_final_switch_result",
+        "title": "Type",
+        "type": "string"
+      },
+      "direction": {
+        "enum": [
+          "new",
+          "old"
+        ],
+        "title": "Direction",
+        "type": "string"
+      },
+      "ok": {
+        "title": "Ok",
+        "type": "boolean"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reason"
+      },
+      "says": {
+        "title": "Says",
+        "type": "string"
+      },
+      "press_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Press Id"
+      },
+      "counts": {
+        "additionalProperties": true,
+        "title": "Counts",
+        "type": "object"
+      },
+      "timings_ms": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "title": "Timings Ms",
+        "type": "object"
+      },
+      "copied_again": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Copied Again",
+        "type": "array"
+      },
+      "not_carried": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Not Carried",
+        "type": "array"
+      }
+    },
+    "required": [
+      "direction",
+      "ok",
+      "says"
+    ],
+    "title": "CutoverFinalSwitchResultData",
+    "type": "object"
+  },
+  "CutoverFinalSwitchCopyAgainResultData": {
+    "additionalProperties": false,
+    "description": "What a Copy again run before the final switch did (lane FINAL-SWITCH): resumable, per organization.",
+    "properties": {
+      "type": {
+        "const": "cutover_final_switch_copy_again_result",
+        "default": "cutover_final_switch_copy_again_result",
+        "title": "Type",
+        "type": "string"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "resumed": {
+        "default": false,
+        "title": "Resumed",
+        "type": "boolean"
+      },
+      "ok": {
+        "title": "Ok",
+        "type": "boolean"
+      },
+      "says": {
+        "title": "Says",
+        "type": "string"
+      },
+      "organizations": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Organizations",
+        "type": "array"
+      },
+      "still_needs": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Still Needs",
+        "type": "array"
+      },
+      "timings_ms": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "title": "Timings Ms",
+        "type": "object"
+      }
+    },
+    "required": [
+      "run_id",
+      "ok",
+      "says"
+    ],
+    "title": "CutoverFinalSwitchCopyAgainResultData",
+    "type": "object"
+  },
+  "MediaResearchProgressData": {
+    "$defs": {
+      "MediaResearchAnchor": {
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "MediaResearchAnchor",
+        "type": "object"
+      },
+      "MediaResearchProfile": {
+        "additionalProperties": false,
+        "description": "One newly usable named journalist, as research finds them.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outlet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outlet"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MediaResearchProfile",
+        "type": "object"
+      },
+      "MediaResearchRow": {
+        "additionalProperties": false,
+        "description": "One journalist, judged. The table the person reads.",
+        "properties": {
+          "party_id": {
+            "title": "Party Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outlet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outlet"
+          },
+          "status": {
+            "enum": [
+              "fit",
+              "soft_fit",
+              "research_needed",
+              "cut"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "rank": {
+            "default": 0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "why_them": {
+            "default": "",
+            "title": "Why Them",
+            "type": "string"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MediaResearchAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pitch_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pitch Note"
+          },
+          "cut_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cut Reason"
+          },
+          "contact_state": {
+            "default": "unresolved",
+            "enum": [
+              "verified",
+              "quarantined",
+              "unresolved"
+            ],
+            "title": "Contact State",
+            "type": "string"
+          },
+          "contact_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Address"
+          },
+          "contact_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Note"
+          },
+          "first_wave": {
+            "default": false,
+            "title": "First Wave",
+            "type": "boolean"
+          },
+          "fit_check": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fit Check"
+          },
+          "on_list": {
+            "default": false,
+            "title": "On List",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "party_id",
+          "name",
+          "status"
+        ],
+        "title": "MediaResearchRow",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "A meaningful change in a media-list research run — never an identical poll.",
+    "properties": {
+      "type": {
+        "const": "media_research_progress",
+        "default": "media_research_progress",
+        "title": "Type",
+        "type": "string"
+      },
+      "run_key": {
+        "title": "Run Key",
+        "type": "string"
+      },
+      "stage": {
+        "enum": [
+          "approved",
+          "search",
+          "resolve",
+          "judge",
+          "contacts",
+          "first_wave",
+          "save"
+        ],
+        "title": "Stage",
+        "type": "string"
+      },
+      "percent": {
+        "title": "Percent",
+        "type": "integer"
+      },
+      "says": {
+        "title": "Says",
+        "type": "string"
+      },
+      "found": {
+        "default": 0,
+        "title": "Found",
+        "type": "integer"
+      },
+      "target": {
+        "default": 0,
+        "title": "Target",
+        "type": "integer"
+      },
+      "judged": {
+        "default": 0,
+        "title": "Judged",
+        "type": "integer"
+      },
+      "new_profiles": {
+        "items": {
+          "$ref": "#/$defs/MediaResearchProfile"
+        },
+        "title": "New Profiles",
+        "type": "array"
+      },
+      "rows": {
+        "items": {
+          "$ref": "#/$defs/MediaResearchRow"
+        },
+        "title": "Rows",
+        "type": "array"
+      }
+    },
+    "required": [
+      "run_key",
+      "stage",
+      "percent",
+      "says"
+    ],
+    "title": "MediaResearchProgressData",
+    "type": "object"
+  },
+  "MediaResearchResultData": {
+    "$defs": {
+      "MediaResearchAnchor": {
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published At"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "MediaResearchAnchor",
+        "type": "object"
+      },
+      "MediaResearchRow": {
+        "additionalProperties": false,
+        "description": "One journalist, judged. The table the person reads.",
+        "properties": {
+          "party_id": {
+            "title": "Party Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outlet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outlet"
+          },
+          "status": {
+            "enum": [
+              "fit",
+              "soft_fit",
+              "research_needed",
+              "cut"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "rank": {
+            "default": 0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "why_them": {
+            "default": "",
+            "title": "Why Them",
+            "type": "string"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MediaResearchAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pitch_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pitch Note"
+          },
+          "cut_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cut Reason"
+          },
+          "contact_state": {
+            "default": "unresolved",
+            "enum": [
+              "verified",
+              "quarantined",
+              "unresolved"
+            ],
+            "title": "Contact State",
+            "type": "string"
+          },
+          "contact_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Address"
+          },
+          "contact_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Note"
+          },
+          "first_wave": {
+            "default": false,
+            "title": "First Wave",
+            "type": "boolean"
+          },
+          "fit_check": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fit Check"
+          },
+          "on_list": {
+            "default": false,
+            "title": "On List",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "party_id",
+          "name",
+          "status"
+        ],
+        "title": "MediaResearchRow",
+        "type": "object"
+      },
+      "MediaResearchSummaryData": {
+        "additionalProperties": false,
+        "properties": {
+          "requested": {
+            "title": "Requested",
+            "type": "integer"
+          },
+          "research_target": {
+            "title": "Research Target",
+            "type": "integer"
+          },
+          "multiplier": {
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "multiplier_reason": {
+            "title": "Multiplier Reason",
+            "type": "string"
+          },
+          "resolved": {
+            "default": 0,
+            "title": "Resolved",
+            "type": "integer"
+          },
+          "judged": {
+            "default": 0,
+            "title": "Judged",
+            "type": "integer"
+          },
+          "first_wave": {
+            "default": 0,
+            "title": "First Wave",
+            "type": "integer"
+          },
+          "added_to_list": {
+            "default": 0,
+            "title": "Added To List",
+            "type": "integer"
+          },
+          "already_on_list": {
+            "default": 0,
+            "title": "Already On List",
+            "type": "integer"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "requested",
+          "research_target",
+          "multiplier",
+          "multiplier_reason"
+        ],
+        "title": "MediaResearchSummaryData",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "The run's answer: the outcome first, then the table, then the cuts.",
+    "properties": {
+      "type": {
+        "const": "media_research_result",
+        "default": "media_research_result",
+        "title": "Type",
+        "type": "string"
+      },
+      "run_key": {
+        "title": "Run Key",
+        "type": "string"
+      },
+      "list_id": {
+        "title": "List Id",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "complete",
+          "partial"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "reused": {
+        "default": false,
+        "title": "Reused",
+        "type": "boolean"
+      },
+      "says": {
+        "title": "Says",
+        "type": "string"
+      },
+      "summary": {
+        "$ref": "#/$defs/MediaResearchSummaryData"
+      },
+      "rows": {
+        "items": {
+          "$ref": "#/$defs/MediaResearchRow"
+        },
+        "title": "Rows",
+        "type": "array"
+      },
+      "cuts": {
+        "items": {
+          "$ref": "#/$defs/MediaResearchRow"
+        },
+        "title": "Cuts",
+        "type": "array"
+      },
+      "problems": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Problems",
+        "type": "array"
+      },
+      "next_action": {
+        "default": "",
+        "title": "Next Action",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_key",
+      "list_id",
+      "status",
+      "says",
+      "summary"
+    ],
+    "title": "MediaResearchResultData",
+    "type": "object"
+  },
   "ToolStartedData": {
     "additionalProperties": false,
     "properties": {
@@ -13206,6 +14436,18 @@
         "additionalProperties": true,
         "title": "Arguments",
         "type": "object"
+      },
+      "display_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Display Name"
       }
     },
     "title": "ToolStartedData",

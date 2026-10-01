@@ -266,6 +266,35 @@ def _with_local_desktop_capability(client: Any, *, advertise: bool = True) -> An
     )
 
 
+#: ctx.metadata key carrying the context keys a local turn did NOT deliver.
+CONTEXT_NOT_DELIVERED_METADATA_KEY = "context_not_delivered"
+
+
+def context_keys_not_delivered(request: Any) -> list[str]:
+    """Every key of the request's ``context`` — all of them, because the local
+    runtime delivers none (no gate, no saved-rule read, no receipt). Reserved
+    directives such as ``__google_files`` are included: the local engine has
+    no executor for them either."""
+    context = getattr(request, "context", None)
+    if not isinstance(context, dict):
+        return []
+    return sorted(str(key) for key in context)
+
+
+def context_not_delivered_warning(keys: list[str]) -> WarningPayload:
+    """The stream warning a local turn sends when its request carried context."""
+    return WarningPayload(
+        code="context_not_delivered",
+        system_message=(
+            "Local runtime carries no context; not delivered: " + ", ".join(keys)
+        ),
+        user_message="Local models don't receive context. Switch to Cloud to send it.",
+        level="medium",
+        recoverable=True,
+        metadata={"keys": list(keys)},
+    )
+
+
 def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
     overrides = {
         name: value
@@ -278,9 +307,22 @@ def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
         )
         if (value := getattr(request, name, None)) is not None
     }
+    metadata: dict[str, Any] | None = None
     scope_ids = getattr(request, "scope_ids", None)
     if scope_ids is not None:
-        overrides["metadata"] = {**ctx.metadata, "scope_ids": list(scope_ids)}
+        metadata = {**ctx.metadata, "scope_ids": list(scope_ids)}
+    dropped = context_keys_not_delivered(request)
+    if dropped:
+        logger.warning(
+            "[local_ai_task] local runtime carries no context — not delivered: %s",
+            dropped,
+        )
+        metadata = {
+            **(metadata if metadata is not None else ctx.metadata),
+            CONTEXT_NOT_DELIVERED_METADATA_KEY: dropped,
+        }
+    if metadata is not None:
+        overrides["metadata"] = metadata
     return ctx.with_overrides(**overrides) if overrides else ctx
 
 
@@ -892,6 +934,10 @@ async def run_local_ai_task(
                     metadata={"unrecognized_keys": list(unrecognized)},
                 )
             )
+
+        not_delivered = ctx.metadata.get(CONTEXT_NOT_DELIVERED_METADATA_KEY)
+        if not_delivered:
+            await emitter.send_warning(context_not_delivered_warning(list(not_delivered)))
 
         completed = await execute_ai_request(
             config,

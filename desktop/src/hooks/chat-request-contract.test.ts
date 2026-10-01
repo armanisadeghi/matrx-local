@@ -150,14 +150,37 @@ describe("Cloud Chat request contract", () => {
         null,
         RUN_CONTROLS,
         [],
-        buildRequestContext({ directives: { __google_files: [] } }).context,
+        buildRequestContext({ directives: { __google_files: [] } }),
       );
       expect(request.body).not.toHaveProperty("context");
+      expect(request.body.context_withheld).toEqual([]);
     }
   });
 
+  it("names withheld keys on cloud requests only", () => {
+    const built = buildRequestContext();
+    const args = (target: "cloud" | "local") =>
+      buildCloudChatRequest(
+        conversation(),
+        "hi",
+        "test-model",
+        target,
+        null,
+        "http://127.0.0.1:22240",
+        "https://api.example.test",
+        undefined,
+        [],
+        null,
+        RUN_CONTROLS,
+        [],
+        built,
+      );
+    expect(args("cloud").body.context_withheld).toEqual([]);
+    expect(args("local").body).not.toHaveProperty("context_withheld");
+  });
+
   it("sends attached Google files as a raw id array under __google_files", () => {
-    const { context } = buildRequestContext({
+    const context = buildRequestContext({
       directives: { __google_files: ["file-a", "file-b"] },
     });
 
@@ -178,6 +201,8 @@ describe("Cloud Chat request contract", () => {
       context,
     );
     expect(start.body.context).toEqual({ __google_files: ["file-a", "file-b"] });
+    // The cloud request also names what it withheld — nothing, here.
+    expect(start.body.context_withheld).toEqual([]);
 
     // Agent start.
     const agentStart = buildCloudChatRequest(
@@ -195,7 +220,7 @@ describe("Cloud Chat request contract", () => {
       [],
       context,
     );
-    expect(agentStart.body.context).toEqual(context);
+    expect(agentStart.body.context).toEqual(context.context);
 
     // Continuation.
     const followUp = buildCloudChatRequest(
@@ -213,7 +238,7 @@ describe("Cloud Chat request contract", () => {
       [],
       context,
     );
-    expect(followUp.body.context).toEqual(context);
+    expect(followUp.body.context).toEqual(context.context);
   });
 
   it("uses the same required start contract for local execution", () => {

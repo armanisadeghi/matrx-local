@@ -91,7 +91,7 @@ import {
   checkContextReceipt,
   describeContextReceipt,
   toContextReceipt,
-  type RequestContextWire,
+  type RequestContext,
 } from "@/lib/request-context";
 import type { ResolvedContextRow } from "@ai-matrx/agents/context";
 import { enqueueDurableClientError } from "@/lib/error-outbox";
@@ -283,7 +283,7 @@ export function buildCloudChatRequest(
    * Sent only when present. Contract:
    * common-docs/systems/scopes-context/context-delivery/RULES.md.
    */
-  context?: RequestContextWire,
+  context?: Pick<RequestContext, "context" | "withheld">,
 ): {
   url: string;
   body: Record<string, unknown>;
@@ -339,7 +339,12 @@ export function buildCloudChatRequest(
   // turn. Cloud requests only — the local engine IS the desktop already.
   const clientEnvelope =
     target === "cloud" && clientContext ? { client: clientContext } : {};
-  const contextEnvelope = context ? { context } : {};
+  // Cloud requests also say which keys were withheld (`context_withheld`,
+  // from the same rows), so the receipt lists rule rows only for those.
+  const contextEnvelope = {
+    ...(context?.context !== undefined ? { context: context.context } : {}),
+    ...(context && target === "cloud" ? { context_withheld: context.withheld } : {}),
+  };
 
   if (conversationId) {
     return {
@@ -2155,7 +2160,7 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           clientContext,
           runControls,
           attachments,
-          requestContext.context,
+          requestContext,
         );
 
         const existingTargetConversationId =

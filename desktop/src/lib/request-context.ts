@@ -24,6 +24,7 @@ import {
   buildContextWire,
   compareReceipt,
   resolveContextRow,
+  withheldKeys,
   type ContextReceipt,
   type ContextReceiptMismatch,
   type ContextRowSource,
@@ -51,6 +52,8 @@ export interface RequestContext {
   rows: ResolvedContextRow[];
   /** The request body's `context`, or undefined when nothing rides. */
   context: RequestContextWire | undefined;
+  /** The request body's `context_withheld` — `withheldKeys` of the same rows. */
+  withheld: string[];
 }
 
 export function buildRequestContext(input: {
@@ -77,6 +80,7 @@ export function buildRequestContext(input: {
     rows,
     context:
       Object.keys(wire).length > 0 ? (wire as unknown as RequestContextWire) : undefined,
+    withheld: withheldKeys(rows),
   };
 }
 
@@ -110,7 +114,9 @@ export function toContextReceipt(data: ContextReceiptData): ContextReceipt {
         : null,
       clamped: row.clamped ?? false,
       client_sent_excluded: row.client_sent_excluded ?? false,
-      blocked_by: row.blocked_by ?? null,
+      // The package models only "model"; a "self_check" strip still surfaces
+      // as an include/delivery difference in compareReceipt.
+      blocked_by: row.blocked_by === "model" ? "model" : null,
     })),
   };
 }

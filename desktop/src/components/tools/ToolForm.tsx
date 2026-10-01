@@ -20,7 +20,8 @@ import type { ToolFieldSchema, ToolUISchema } from "@/types/tool-schema";
 
 /** JSON textarea field with live syntax validation feedback */
 function JsonField({ field }: { field: ToolFieldSchema }) {
-  const { control } = useFormContext();
+  const { control, formState: { errors } } = useFormContext();
+  const formError = errors[field.name]?.message as string | undefined;
   const [jsonError, setJsonError] = useState<string | null>(null);
 
   return (
@@ -65,9 +66,11 @@ function JsonField({ field }: { field: ToolFieldSchema }) {
           />
         )}
       />
-      {jsonError && (
+      {jsonError ? (
         <p className="text-xs text-destructive">JSON error: {jsonError}</p>
-      )}
+      ) : formError ? (
+        <p className="text-xs text-destructive">{formError}</p>
+      ) : null}
       {field.description && !jsonError && (
         <p className="text-xs text-muted-foreground">{field.description}</p>
       )}
@@ -114,11 +117,12 @@ function coerceValue(value: unknown, field: ToolFieldSchema): unknown {
     }
 
     case "tags": {
-      // Tags are already string[] — but if items need to be numbers, handle that
-      if (Array.isArray(value)) return value;
-      if (typeof value === "string" && value)
-        return value.split(",").map((s) => s.trim());
-      return [];
+      const items = Array.isArray(value)
+        ? value
+        : typeof value === "string" && value
+          ? value.split(",").map((s) => s.trim())
+          : [];
+      return field.itemType ? items.map((v) => Number(v)) : items;
     }
 
     default:
@@ -203,7 +207,7 @@ export function ToolForm({ schema, onSubmit, loading }: ToolFormProps) {
 
   return (
     <FormProvider {...methods}>
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} noValidate className="space-y-4">
         {schema.fields.map(renderField)}
         <input type="submit" hidden disabled={loading} />
       </form>

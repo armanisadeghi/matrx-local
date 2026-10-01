@@ -1,0 +1,5087 @@
+[
+ {
+  "category": "OS Integration",
+  "description": "Run an AppleScript command (macOS only). Enables deep OS integration:",
+  "input_schema": {
+   "properties": {
+    "script": {
+     "description": "AppleScript code to execute (macOS only). Can control Finder, Mail, Calendar, Safari, and any scriptable app.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds before the script is forcefully terminated.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "script"
+   ],
+   "type": "object"
+  },
+  "name": "AppleScript"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Create an archive (zip or tar.gz) from files/directories.",
+  "input_schema": {
+   "properties": {
+    "compression": {
+     "default": "deflate",
+     "description": "Compression algorithm (only used for 'zip' format).",
+     "enum": [
+      "deflate",
+      "store",
+      "bzip2",
+      "lzma"
+     ],
+     "type": "string"
+    },
+    "format": {
+     "default": "zip",
+     "description": "Archive format.",
+     "enum": [
+      "zip",
+      "tar",
+      "tar.gz",
+      "tar.bz2"
+     ],
+     "type": "string"
+    },
+    "output_path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Output archive path. Auto-generated in the working directory if omitted."
+    },
+    "source_paths": {
+     "description": "List of file or directory paths to include in the archive.",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "type": "array"
+    }
+   },
+   "required": [
+    "source_paths"
+   ],
+   "type": "object"
+  },
+  "name": "ArchiveCreate"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Extract an archive (zip, tar, tar.gz, tar.bz2, 7z).",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "description": "Path to the archive to extract (zip, tar, tar.gz, tar.bz2, 7z).",
+     "type": "string"
+    },
+    "output_dir": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Directory to extract into. Defaults to the archive's directory."
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "ArchiveExtract"
+ },
+ {
+  "category": "Actions",
+  "description": "Audio devices, recording, playback, and transcription. Actions \u2014 devices: List available audio input (microphones) and output (speakers) devices; play: Play an audio file through speakers; record: Record audio from microphone for specified duration; speech_locales: List all locales supported by SFSpeechRecognizer on this device (macOS only); transcribe: Transcribe audio file to text using OpenAI Whisper (local model); transcribe_with_speech: Transcribe an audio file using Apple's on-device SFSpeechRecognizer (macOS only).",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "devices",
+      "play",
+      "record",
+      "speech_locales",
+      "transcribe",
+      "transcribe_with_speech"
+     ],
+     "type": "string"
+    },
+    "audio_path": {
+     "description": "Absolute path to the audio file (WAV, M4A, MP3, AIFF, etc.). Used with action(s): transcribe_with_speech.",
+     "type": "string"
+    },
+    "channels": {
+     "default": 1,
+     "description": "Used with action(s): record.",
+     "type": "integer"
+    },
+    "device_index": {
+     "description": "Used with action(s): play, record.",
+     "type": "integer"
+    },
+    "duration_seconds": {
+     "default": 5,
+     "description": "Used with action(s): record.",
+     "type": "integer"
+    },
+    "file_path": {
+     "description": "Used with action(s): play, transcribe.",
+     "type": "string"
+    },
+    "format": {
+     "default": "wav",
+     "description": "Used with action(s): record.",
+     "type": "string"
+    },
+    "language": {
+     "description": "Used with action(s): transcribe.",
+     "type": "string"
+    },
+    "locale": {
+     "default": "en-US",
+     "description": "BCP-47 locale code for the language (e.g. \"en-US\", \"es-ES\", \"fr-FR\"). Used with action(s): transcribe_with_speech.",
+     "type": "string"
+    },
+    "model": {
+     "default": "base",
+     "description": "Used with action(s): transcribe.",
+     "type": "string"
+    },
+    "sample_rate": {
+     "description": "Used with action(s): record.",
+     "type": "integer"
+    },
+    "timeout": {
+     "default": 60.0,
+     "description": "Maximum seconds to wait for transcription (default 60, max 300). Used with action(s): transcribe_with_speech.",
+     "type": "number"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_audio"
+ },
+ {
+  "category": "Execution",
+  "description": "Execute the Bash tool.",
+  "input_schema": {
+   "properties": {
+    "command": {
+     "description": "Shell command to execute.",
+     "type": "string"
+    },
+    "description": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional human-readable label for what this command does."
+    },
+    "run_in_background": {
+     "default": false,
+     "description": "If true, start the command in the background and return immediately with a bash_id. Use BashOutput to read its output.",
+     "type": "boolean"
+    },
+    "timeout": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Timeout in milliseconds (default 120000, max 600000)."
+    }
+   },
+   "required": [
+    "command"
+   ],
+   "type": "object"
+  },
+  "name": "Bash"
+ },
+ {
+  "category": "Execution",
+  "description": "Execute the BashOutput tool.",
+  "input_schema": {
+   "properties": {
+    "bash_id": {
+     "description": "The bash_id returned by Bash when run_in_background=true.",
+     "type": "string"
+    },
+    "filter": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional substring to filter output lines."
+    }
+   },
+   "required": [
+    "bash_id"
+   ],
+   "type": "object"
+  },
+  "name": "BashOutput"
+ },
+ {
+  "category": "System Monitoring",
+  "description": "Get battery level, charging status, and time remaining.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "BatteryStatus"
+ },
+ {
+  "category": "WiFi & Bluetooth",
+  "description": "List paired and nearby Bluetooth devices.",
+  "input_schema": {
+   "properties": {
+    "scan_duration": {
+     "default": 5,
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "BluetoothDevices"
+ },
+ {
+  "category": "System",
+  "description": "Page through an open e-book on this Mac, capture every page, and file it.",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "description": "The reader application holding the open book, e.g. 'Books', 'Kindle', 'Preview'. The book must already be open on screen.",
+     "type": "string"
+    },
+    "crop_bottom": {
+     "default": 0.0,
+     "description": "Fraction of the window height to trim off the bottom, to remove the page slider.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_left": {
+     "default": 0.0,
+     "description": "Fraction of the window width to trim off the left edge.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_right": {
+     "default": 0.0,
+     "description": "Fraction of the window width to trim off the right edge.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_top": {
+     "default": 0.0,
+     "description": "Fraction of the window height to trim off the top, to remove the reader's toolbar.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "end_repeat_threshold": {
+     "default": 3,
+     "description": "How many unchanged frames in a row mean the book has ended. Two can fire on one slow render, so three is the safe floor.",
+     "maximum": 20,
+     "minimum": 2,
+     "type": "integer"
+    },
+    "max_pages": {
+     "default": 400,
+     "description": "Hard ceiling on captured pages. The capture normally stops on its own when the page stops changing; this is the safety stop.",
+     "maximum": 5000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "next_page_key": {
+     "default": "right",
+     "description": "Key that turns the page in this reader: right, left, down, up, space, page_down, page_up or return.",
+     "type": "string"
+    },
+    "ocr": {
+     "default": true,
+     "description": "Add a searchable text layer when an OCR engine is available. The result always states whether the text layer was actually written.",
+     "type": "boolean"
+    },
+    "page_change_threshold": {
+     "default": 0.001,
+     "description": "Fraction of the page that must change to count as a new page. Lower it for books whose pages differ by only a few words, such as an index or a page of verse.",
+     "exclusiveMaximum": 1.0,
+     "exclusiveMinimum": 0.0,
+     "type": "number"
+    },
+    "page_delay_seconds": {
+     "default": 0.9,
+     "description": "Seconds to wait after each page turn before capturing, so the reader finishes animating and re-renders the text.",
+     "maximum": 30.0,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "send_to_library": {
+     "default": true,
+     "description": "Upload the assembled PDF to the user's AI Matrx library as one Source. When false the PDF is only written to this Mac.",
+     "type": "boolean"
+    },
+    "window_title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional text from the reader window's title, when the app has more than one window open and the largest is not the book."
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  },
+  "name": "BookCapture"
+ },
+ {
+  "category": "Actions",
+  "description": "Local Playwright browser automation on the user's machine. Actions \u2014 click: Click an element on the current browser page by CSS selector; close: Close the browser instance(s) and free resources; eval: Execute JavaScript in the current browser page context; extract: Extract text, HTML, attributes, or form values from the current browser page; navigate: Navigate the local Playwright-controlled browser to a URL; screenshot: Take a screenshot of the current browser page or a specific element; tabs: Manage browser tabs: list, open new, close, or switch to a tab; type_text: Type text into an input element on the current browser page.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "click",
+      "close",
+      "eval",
+      "extract",
+      "navigate",
+      "screenshot",
+      "tabs",
+      "type_text"
+     ],
+     "type": "string"
+    },
+    "all_matches": {
+     "default": false,
+     "description": "If true, return a list of all matching elements; otherwise return the first. Used with action(s): extract.",
+     "type": "boolean"
+    },
+    "attribute": {
+     "default": null,
+     "description": "HTML attribute name to extract when extract_type='attribute'. Used with action(s): extract.",
+     "type": "string"
+    },
+    "browser": {
+     "description": "Used with action(s): close.",
+     "type": "string"
+    },
+    "clear_first": {
+     "default": true,
+     "description": "Clear the field before typing. Used with action(s): type_text.",
+     "type": "boolean"
+    },
+    "extract_type": {
+     "default": "text",
+     "description": "What to extract: 'text' (visible text), 'html' (innerHTML), 'attribute' (requires attribute param), 'value' (form field value). Used with action(s): extract.",
+     "enum": [
+      "text",
+      "html",
+      "attribute",
+      "value"
+     ],
+     "type": "string"
+    },
+    "full_page": {
+     "default": false,
+     "description": "If true, capture the full scrollable page instead of just the viewport. Used with action(s): screenshot.",
+     "type": "boolean"
+    },
+    "javascript": {
+     "description": "JavaScript expression to evaluate in the page context. The return value is serialized. Used with action(s): eval.",
+     "type": "string"
+    },
+    "press_enter": {
+     "default": false,
+     "description": "Press Enter after typing. Used with action(s): type_text.",
+     "type": "boolean"
+    },
+    "selector": {
+     "description": "CSS selector of the element to click. Used with action(s): click, extract, screenshot, type_text.",
+     "type": "string"
+    },
+    "tab_action": {
+     "default": "list",
+     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (focus tab at tab_index). Used with action(s): tabs.",
+     "enum": [
+      "list",
+      "new",
+      "close",
+      "switch"
+     ],
+     "type": "string"
+    },
+    "tab_index": {
+     "default": null,
+     "description": "Zero-based tab index, required for 'close' and 'switch' actions. Used with action(s): tabs.",
+     "type": "integer"
+    },
+    "text": {
+     "description": "Text to type. Used with action(s): type_text.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to wait for the element to appear before clicking. Used with action(s): click, navigate, type_text.",
+     "maximum": 60,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "url": {
+     "description": "URL to navigate to (must include scheme: http/https). Used with action(s): navigate, tabs.",
+     "type": "string"
+    },
+    "wait_for": {
+     "default": null,
+     "description": "CSS selector to wait for after navigation before returning. Useful for SPAs or pages with lazy-loaded content. Used with action(s): navigate.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_browser"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Click an element on the current page by CSS selector.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "selector": {
+     "description": "CSS selector of the element to click.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to wait for the element to appear before clicking.",
+     "maximum": 60,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "selector"
+   ],
+   "type": "object"
+  },
+  "name": "BrowserClick"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Close the browser instance(s) and free resources.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "BrowserClose"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Execute JavaScript in the current browser page and return the result.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "javascript": {
+     "description": "JavaScript expression to evaluate in the page context. The return value is serialized.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "javascript"
+   ],
+   "type": "object"
+  },
+  "name": "BrowserEval"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Extract content from the current page.",
+  "input_schema": {
+   "properties": {
+    "all_matches": {
+     "default": false,
+     "description": "If true, return a list of all matching elements; otherwise return the first.",
+     "type": "boolean"
+    },
+    "attribute": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "HTML attribute name to extract when extract_type='attribute'."
+    },
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "extract_type": {
+     "default": "text",
+     "description": "What to extract: 'text' (visible text), 'html' (innerHTML), 'attribute' (requires attribute param), 'value' (form field value).",
+     "enum": [
+      "text",
+      "html",
+      "attribute",
+      "value"
+     ],
+     "type": "string"
+    },
+    "selector": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "CSS selector to scope extraction. If omitted, extracts from full page."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "BrowserExtract"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Navigate to a URL in a controlled browser. Optionally wait for a CSS selector.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds to wait for the page to load.",
+     "maximum": 120,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "url": {
+     "description": "URL to navigate to (must include scheme: http/https).",
+     "type": "string"
+    },
+    "wait_for": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "CSS selector to wait for after navigation before returning. Useful for SPAs or pages with lazy-loaded content."
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  },
+  "name": "BrowserNavigate"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Take a screenshot of the current browser page or a specific element.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "full_page": {
+     "default": false,
+     "description": "If true, capture the full scrollable page instead of just the viewport.",
+     "type": "boolean"
+    },
+    "selector": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "CSS selector of a specific element to screenshot."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "BrowserScreenshot"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Manage browser tabs. Actions: list, new, close, switch.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "default": "list",
+     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (focus tab at tab_index).",
+     "enum": [
+      "list",
+      "new",
+      "close",
+      "switch"
+     ],
+     "type": "string"
+    },
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "tab_index": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Zero-based tab index, required for 'close' and 'switch' actions."
+    },
+    "url": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "URL to load when action='new'."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "BrowserTabs"
+ },
+ {
+  "category": "Browser Automation",
+  "description": "Type text into an input element by CSS selector.",
+  "input_schema": {
+   "properties": {
+    "browser": {
+     "default": "chromium",
+     "type": "string"
+    },
+    "clear_first": {
+     "default": true,
+     "description": "Clear the field before typing.",
+     "type": "boolean"
+    },
+    "press_enter": {
+     "default": false,
+     "description": "Press Enter after typing.",
+     "type": "boolean"
+    },
+    "selector": {
+     "description": "CSS selector of the input element to type into.",
+     "type": "string"
+    },
+    "text": {
+     "description": "Text to type.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to wait for the element.",
+     "maximum": 60,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "selector",
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "BrowserType"
+ },
+ {
+  "category": "Scheduler",
+  "description": "Cancel a scheduled task.",
+  "input_schema": {
+   "properties": {
+    "task_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "task_id"
+   ],
+   "type": "object"
+  },
+  "name": "CancelScheduled"
+ },
+ {
+  "category": "Actions",
+  "description": "System clipboard access. Actions \u2014 read: Read the current contents of the system clipboard; write: Write text to the system clipboard.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "read",
+      "write"
+     ],
+     "type": "string"
+    },
+    "content": {
+     "description": "Text to write to the clipboard. Used with action(s): write.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_clipboard"
+ },
+ {
+  "category": "Clipboard",
+  "description": "Execute the ClipboardRead tool.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ClipboardRead"
+ },
+ {
+  "category": "Clipboard",
+  "description": "Execute the ClipboardWrite tool.",
+  "input_schema": {
+   "properties": {
+    "content": {
+     "description": "Text to write to the clipboard.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "content"
+   ],
+   "type": "object"
+  },
+  "name": "ClipboardWrite"
+ },
+ {
+  "category": "WiFi & Bluetooth",
+  "description": "List all connected peripheral devices (USB, Bluetooth, monitors, etc.).",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ConnectedDevices"
+ },
+ {
+  "category": "Other",
+  "description": "Execute the Copy tool.",
+  "input_schema": {
+   "properties": {
+    "destination": {
+     "description": "Target path. Copying a file into an existing directory keeps the file's name.",
+     "type": "string"
+    },
+    "overwrite": {
+     "default": false,
+     "description": "Replace the destination if it already exists.",
+     "type": "boolean"
+    },
+    "source": {
+     "description": "Path of the file or directory to copy.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "source",
+    "destination"
+   ],
+   "type": "object"
+  },
+  "name": "Copy"
+ },
+ {
+  "category": "Calendar",
+  "description": "Create a new calendar event.",
+  "input_schema": {
+   "properties": {
+    "all_day": {
+     "default": false,
+     "description": "Whether this is an all-day event.",
+     "type": "boolean"
+    },
+    "calendar": {
+     "description": "Calendar name to add the event to. Defaults to the default calendar.",
+     "type": "string"
+    },
+    "end": {
+     "description": "End datetime in ISO 8601 format.",
+     "type": "string"
+    },
+    "notes": {
+     "description": "Optional notes/description.",
+     "type": "string"
+    },
+    "start": {
+     "description": "Start datetime in ISO 8601 format (e.g. \"2026-03-15T10:00:00\").",
+     "type": "string"
+    },
+    "title": {
+     "description": "Event title.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "start",
+    "end"
+   ],
+   "type": "object"
+  },
+  "name": "CreateEvent"
+ },
+ {
+  "category": "Calendar",
+  "description": "Create a new reminder in macOS Reminders.",
+  "input_schema": {
+   "properties": {
+    "due": {
+     "description": "Due date/time in ISO 8601 format (e.g. \"2026-03-20T09:00:00\").",
+     "type": "string"
+    },
+    "list_name": {
+     "description": "Reminders list to add it to. Defaults to the default list.",
+     "type": "string"
+    },
+    "notes": {
+     "description": "Optional notes.",
+     "type": "string"
+    },
+    "title": {
+     "description": "Reminder title.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title"
+   ],
+   "type": "object"
+  },
+  "name": "CreateReminder"
+ },
+ {
+  "category": "Other",
+  "description": "Execute the Delete tool.",
+  "input_schema": {
+   "properties": {
+    "path": {
+     "description": "Path of the file or directory to delete.",
+     "type": "string"
+    },
+    "permanent": {
+     "default": false,
+     "description": "If false (default), move to the OS trash (recoverable). If true, delete permanently \u2014 NOT recoverable.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "Delete"
+ },
+ {
+  "category": "System Monitoring",
+  "description": "Get disk usage for all mounted volumes or a specific path.",
+  "input_schema": {
+   "properties": {
+    "path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Specific path to analyze. If omitted, returns stats for all mounted volumes."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "DiskUsage"
+ },
+ {
+  "category": "Actions",
+  "description": "The user's managed document library. Actions \u2014 folders: List all folders in the local document store; list: List documents in the local document store (~/.matrx/documents/); read: Read the full content of a document from the local document store; search: Search document content in the local store by keyword; write: Create or update a Markdown document in the local document store.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "folders",
+      "list",
+      "read",
+      "search",
+      "write"
+     ],
+     "type": "string"
+    },
+    "content": {
+     "description": "Markdown content to write. Used with action(s): write.",
+     "type": "string"
+    },
+    "file_path": {
+     "default": null,
+     "description": "Absolute path to the document file. Used with action(s): read.",
+     "type": "string"
+    },
+    "folder": {
+     "default": null,
+     "description": "Folder name to filter by. Lists all documents if omitted. Used with action(s): list, read, write.",
+     "type": "string"
+    },
+    "label": {
+     "default": null,
+     "description": "Document label/title. Used together with folder to locate the document. Used with action(s): read, write.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Search string to look for across all document contents. Used with action(s): search.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_documents"
+ },
+ {
+  "category": "File Transfer",
+  "description": "Execute the DownloadFile tool.",
+  "input_schema": {
+   "properties": {
+    "save_path": {
+     "type": "string"
+    },
+    "timeout": {
+     "default": 120,
+     "type": "integer"
+    },
+    "url": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  },
+  "name": "DownloadFile"
+ },
+ {
+  "category": "File Operations",
+  "description": "Execute the Edit tool.",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "description": "Path to the file to edit.",
+     "type": "string"
+    },
+    "new_string": {
+     "description": "Replacement string.",
+     "type": "string"
+    },
+    "old_string": {
+     "description": "Exact string to find and replace. Must match exactly including whitespace. Must be unique in the file unless replace_all is true.",
+     "type": "string"
+    },
+    "replace_all": {
+     "default": false,
+     "description": "Replace every occurrence instead of requiring a unique match.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "file_path",
+    "old_string",
+    "new_string"
+   ],
+   "type": "object"
+  },
+  "name": "Edit"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Read Windows Event Log entries (Windows only).",
+  "input_schema": {
+   "properties": {
+    "count": {
+     "default": 20,
+     "type": "integer"
+    },
+    "level": {
+     "default": "Error",
+     "type": "string"
+    },
+    "log_name": {
+     "default": "System",
+     "type": "string"
+    },
+    "source": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "EventLog"
+ },
+ {
+  "category": "Local NER",
+  "description": "Extract named entities from text using a local GLiNER / GLiNER2 model.",
+  "input_schema": {
+   "properties": {
+    "labels": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      }
+     ],
+     "description": "Entity labels, or a mapping of label to description for higher precision."
+    },
+    "max_chars": {
+     "default": 6000,
+     "description": "Maximum characters per inference chunk for long documents.",
+     "maximum": 100000,
+     "minimum": 500,
+     "type": "integer"
+    },
+    "model_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional NER model id from /ner/models. Defaults to the active GLiNER2-base model."
+    },
+    "overlap_chars": {
+     "default": 500,
+     "description": "Character overlap between long-document chunks.",
+     "maximum": 20000,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "text": {
+     "description": "Text to scan for named entities.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "threshold": {
+     "default": 0.5,
+     "description": "Minimum confidence score to return when the model emits confidence.",
+     "maximum": 1.0,
+     "minimum": 0.0,
+     "type": "number"
+    }
+   },
+   "required": [
+    "text",
+    "labels"
+   ],
+   "type": "object"
+  },
+  "name": "ExtractEntities"
+ },
+ {
+  "category": "Local NER",
+  "description": "Extract common PII entities from text using the local NER service.",
+  "input_schema": {
+   "properties": {
+    "model_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional NER model id from /ner/models. Defaults to the active GLiNER2-base model."
+    },
+    "text": {
+     "description": "Text to scan for common PII entities.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "threshold": {
+     "default": 0.5,
+     "maximum": 1.0,
+     "minimum": 0.0,
+     "type": "number"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "ExtractPII"
+ },
+ {
+  "category": "Network",
+  "description": "Execute the FetchUrl tool.",
+  "input_schema": {
+   "properties": {
+    "body": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Request body (for POST/PUT/PATCH). Typically JSON."
+    },
+    "follow_redirects": {
+     "default": true,
+     "description": "Follow HTTP redirects.",
+     "type": "boolean"
+    },
+    "headers": {
+     "anyOf": [
+      {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Additional request headers."
+    },
+    "method": {
+     "default": "GET",
+     "description": "HTTP method.",
+     "enum": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD"
+     ],
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds before the request times out.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "url": {
+     "description": "URL to fetch.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  },
+  "name": "FetchUrl"
+ },
+ {
+  "category": "Network",
+  "description": "Render one page in a real browser and return its HTML or text.",
+  "input_schema": {
+   "properties": {
+    "extract_text": {
+     "default": false,
+     "description": "If true, return plain text instead of full HTML.",
+     "type": "boolean"
+    },
+    "url": {
+     "description": "URL to fetch using a headless browser.",
+     "type": "string"
+    },
+    "wait_for": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "CSS selector to wait for after page load."
+    },
+    "wait_timeout": {
+     "default": 30000,
+     "description": "Milliseconds to wait for wait_for selector.",
+     "maximum": 120000,
+     "minimum": 1000,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  },
+  "name": "FetchWithBrowser"
+ },
+ {
+  "category": "Actions",
+  "description": "Filesystem operations on the user's machine. Actions \u2014 copy: Copy a file or directory on the local filesystem (recursive for directories, metadata pre\u2026; delete: Delete a file or directory; edit: Apply a precise string replacement to a file; find: Find files and directories on the user's machine using the progressive metadata index; glob: Find files matching a glob pattern on the local filesystem; grep: Search file contents for a regex pattern on the local filesystem; list: List the contents of a directory on the local filesystem; mkdir: Create a directory on the local filesystem, including missing parent directories by defau\u2026; move: Move a file or directory to a new location on the local filesystem; places: Return the user's local Home, standard folders, configured priority roots, and accessible\u2026; read: Read a file from the local filesystem; rename: Rename a file or directory in place (same parent directory); semantic_find: Find local files by meaning using the optional background embedding index; write: Write content to a file on the local filesystem.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "copy",
+      "delete",
+      "edit",
+      "find",
+      "glob",
+      "grep",
+      "list",
+      "mkdir",
+      "move",
+      "places",
+      "read",
+      "rename",
+      "semantic_find",
+      "write"
+     ],
+     "type": "string"
+    },
+    "content": {
+     "description": "Content to write to the file. Used with action(s): write.",
+     "type": "string"
+    },
+    "create_directories": {
+     "default": true,
+     "description": "Create parent directories if they don't exist. Used with action(s): write.",
+     "type": "boolean"
+    },
+    "cursor": {
+     "default": null,
+     "description": "Cursor from a previous result page. Used with action(s): find, list.",
+     "type": "string"
+    },
+    "destination": {
+     "description": "Target path. Copying a file into an existing directory keeps the file's name. Used with action(s): copy, move.",
+     "type": "string"
+    },
+    "file_path": {
+     "description": "Path to the file to edit. Used with action(s): edit, read, write.",
+     "type": "string"
+    },
+    "include": {
+     "default": null,
+     "description": "Glob pattern to restrict which files are searched (e.g. '*.py'). Used with action(s): grep.",
+     "type": "string"
+    },
+    "limit": {
+     "default": 100,
+     "description": "Maximum results in this page. Used with action(s): find, list, read, semantic_find.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "max_results": {
+     "default": 100,
+     "description": "Maximum number of matching lines to return. Used with action(s): grep.",
+     "maximum": 2000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "new_name": {
+     "description": "New bare name (no path separators). Use Move to relocate. Used with action(s): rename.",
+     "type": "string"
+    },
+    "new_string": {
+     "description": "Replacement string. Used with action(s): edit.",
+     "type": "string"
+    },
+    "offset": {
+     "default": null,
+     "description": "1-based line number to start reading from. Used with action(s): read.",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "old_string": {
+     "description": "Exact string to find and replace. Must match exactly including whitespace. Must be unique in the file unless replace_all is true. Used with action(s): edit.",
+     "type": "string"
+    },
+    "overwrite": {
+     "default": false,
+     "description": "Replace the destination if it already exists. Used with action(s): copy, move.",
+     "type": "boolean"
+    },
+    "parents": {
+     "default": true,
+     "description": "Create missing parent directories as needed. Used with action(s): mkdir.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "Path of the file or directory to delete. Used with action(s): delete, find, glob, grep, list, mkdir, rename.",
+     "type": "string"
+    },
+    "pattern": {
+     "description": "Glob pattern to match (e.g. '**/*.py', 'src/*.ts'). Used with action(s): glob, grep.",
+     "type": "string"
+    },
+    "permanent": {
+     "default": false,
+     "description": "If false (default), move to the OS trash (recoverable). If true, delete permanently \u2014 NOT recoverable. Used with action(s): delete.",
+     "type": "boolean"
+    },
+    "query": {
+     "description": "File or directory name/path text to find. Used with action(s): find, semantic_find.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "replace_all": {
+     "default": false,
+     "description": "Replace every occurrence instead of requiring a unique match. Used with action(s): edit.",
+     "type": "boolean"
+    },
+    "show_hidden": {
+     "default": false,
+     "description": "If true, include hidden files and directories (names starting with '.'). Used with action(s): list.",
+     "type": "boolean"
+    },
+    "source": {
+     "description": "Path of the file or directory to copy. Used with action(s): copy, move.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_file"
+ },
+ {
+  "category": "Other",
+  "description": "Return semantic roots on the user's real local filesystem.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "FilesystemPlaces"
+ },
+ {
+  "category": "Other",
+  "description": "Find local paths by name/path using the progressive metadata index.",
+  "input_schema": {
+   "properties": {
+    "cursor": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Cursor from a previous result page."
+    },
+    "limit": {
+     "default": 100,
+     "description": "Maximum results in this page.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional root to constrain the search. Omit to search the progressive machine index."
+    },
+    "query": {
+     "description": "File or directory name/path text to find.",
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "FindPaths"
+ },
+ {
+  "category": "Process Management",
+  "description": "Bring an application window to the foreground.",
+  "input_schema": {
+   "properties": {
+    "application": {
+     "description": "Application name to bring to the foreground (e.g. 'Finder', 'notepad', 'chrome').",
+     "type": "string"
+    }
+   },
+   "required": [
+    "application"
+   ],
+   "type": "object"
+  },
+  "name": "FocusApp"
+ },
+ {
+  "category": "Window Management",
+  "description": "Focus/activate a specific window by app name and optional title.",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "description": "Application whose window should be focused.",
+     "type": "string"
+    },
+    "window_title": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional window title substring for disambiguation when an app has multiple windows."
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  },
+  "name": "FocusWindow"
+ },
+ {
+  "category": "Contacts",
+  "description": "Get a single contact by its unique CNContact identifier.",
+  "input_schema": {
+   "properties": {
+    "identifier": {
+     "description": "The CNContact identifier string (from search_contacts results).",
+     "type": "string"
+    }
+   },
+   "required": [
+    "identifier"
+   ],
+   "type": "object"
+  },
+  "name": "GetContact"
+ },
+ {
+  "category": "Mail",
+  "description": "List configured Mail.app accounts and their mailboxes.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "GetEmailAccounts"
+ },
+ {
+  "category": "OS Integration",
+  "description": "List installed applications on the system. Optionally filter by name.",
+  "input_schema": {
+   "properties": {
+    "filter": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional substring filter applied to application names."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "GetInstalledApps"
+ },
+ {
+  "category": "Location",
+  "description": "Get the device's current GPS/network location via CoreLocation.",
+  "input_schema": {
+   "properties": {
+    "timeout": {
+     "default": 15.0,
+     "description": "Seconds to wait for a location fix (default 15, max 60).",
+     "type": "number"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "GetLocation"
+ },
+ {
+  "category": "Photos",
+  "description": "Get a single photo asset with a thumbnail by its identifier.",
+  "input_schema": {
+   "properties": {
+    "identifier": {
+     "description": "The PHAsset localIdentifier (from search_photos results).",
+     "type": "string"
+    },
+    "thumbnail_size": {
+     "default": 512,
+     "description": "Max thumbnail dimension in pixels (default 512, max 2048).",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "identifier"
+   ],
+   "type": "object"
+  },
+  "name": "GetPhoto"
+ },
+ {
+  "category": "File Operations",
+  "description": "Execute the Glob tool.",
+  "input_schema": {
+   "properties": {
+    "path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Base directory to search from. Defaults to working directory."
+    },
+    "pattern": {
+     "description": "Glob pattern to match (e.g. '**/*.py', 'src/*.ts').",
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ],
+   "type": "object"
+  },
+  "name": "Glob"
+ },
+ {
+  "category": "File Operations",
+  "description": "Execute the Grep tool.",
+  "input_schema": {
+   "properties": {
+    "include": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Glob pattern to restrict which files are searched (e.g. '*.py')."
+    },
+    "max_results": {
+     "default": 100,
+     "description": "Maximum number of matching lines to return.",
+     "maximum": 2000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "File or directory path to search in. Defaults to working directory."
+    },
+    "pattern": {
+     "description": "Regular expression pattern to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ],
+   "type": "object"
+  },
+  "name": "Grep"
+ },
+ {
+  "category": "Scheduler",
+  "description": "Get the status of the heartbeat/scheduler system including all scheduled tasks,",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "HeartbeatStatus"
+ },
+ {
+  "category": "Input Automation",
+  "description": "Send a keyboard shortcut. Format: modifier+key (e.g., 'cmd+c', 'ctrl+shift+s', 'alt+tab').",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional application name to focus before sending the hotkey."
+    },
+    "keys": {
+     "description": "Key combination in modifier+key format. Examples: 'cmd+c', 'ctrl+shift+s', 'alt+tab', 'cmd+space'. Modifiers: cmd/command, ctrl/control, alt/option, shift.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "keys"
+   ],
+   "type": "object"
+  },
+  "name": "Hotkey"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Extract text from an image using OCR (Optical Character Recognition).",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "description": "Path to the image file (PNG, JPEG, TIFF, BMP, etc.).",
+     "type": "string"
+    },
+    "language": {
+     "default": "eng",
+     "description": "Tesseract language code (e.g. 'eng', 'fra', 'deu', 'spa'). Multiple languages can be combined with '+' (e.g. 'eng+fra').",
+     "type": "string"
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "ImageOCR"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Resize or convert an image. Specify width/height or scale factor.",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "description": "Path to the source image.",
+     "type": "string"
+    },
+    "height": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Target height in pixels. If only height is set, width is scaled proportionally."
+    },
+    "output_format": {
+     "anyOf": [
+      {
+       "enum": [
+        "png",
+        "jpeg",
+        "webp",
+        "gif",
+        "bmp"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Output image format. Defaults to the same format as the source."
+    },
+    "quality": {
+     "default": 85,
+     "type": "integer"
+    },
+    "scale": {
+     "anyOf": [
+      {
+       "exclusiveMinimum": 0.0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Scale factor (e.g. 0.5 for half size, 2.0 for double). Overrides width/height."
+    },
+    "width": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Target width in pixels. If only width is set, height is scaled proportionally."
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "ImageResize"
+ },
+ {
+  "category": "Actions",
+  "description": "Keyboard and mouse automation. Actions \u2014 hotkey: Send a keyboard shortcut (e.g; mouse_click: Click the mouse at specific screen coordinates; mouse_move: Move the mouse cursor to specific screen coordinates; type_text: Type text using the system keyboard (simulates keystrokes).",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "hotkey",
+      "mouse_click",
+      "mouse_move",
+      "type_text"
+     ],
+     "type": "string"
+    },
+    "app_name": {
+     "default": null,
+     "description": "Optional application name to focus before sending the hotkey. Used with action(s): hotkey, mouse_click, type_text.",
+     "type": "string"
+    },
+    "button": {
+     "default": "left",
+     "description": "Mouse button to click. Used with action(s): mouse_click.",
+     "enum": [
+      "left",
+      "right",
+      "middle"
+     ],
+     "type": "string"
+    },
+    "clicks": {
+     "default": 1,
+     "description": "Number of clicks (1=single, 2=double, 3=triple). Used with action(s): mouse_click.",
+     "maximum": 3,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "delay_ms": {
+     "default": 50,
+     "description": "Delay in milliseconds between each keystroke. Used with action(s): type_text.",
+     "maximum": 500,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "keys": {
+     "description": "Key combination in modifier+key format. Examples: 'cmd+c', 'ctrl+shift+s', 'alt+tab', 'cmd+space'. Modifiers: cmd/command, ctrl/control, alt/option, shift. Used with action(s): hotkey.",
+     "type": "string"
+    },
+    "text": {
+     "description": "Text to type via simulated keystrokes. Used with action(s): type_text.",
+     "type": "string"
+    },
+    "x": {
+     "description": "Screen X coordinate (pixels from left edge). Used with action(s): mouse_click, mouse_move.",
+     "type": "integer"
+    },
+    "y": {
+     "description": "Screen Y coordinate (pixels from top edge). Used with action(s): mouse_click, mouse_move.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_input"
+ },
+ {
+  "category": "Process Management",
+  "description": "Kill a process by PID or name.",
+  "input_schema": {
+   "properties": {
+    "force": {
+     "default": false,
+     "description": "If true, send SIGKILL instead of SIGTERM (cannot be caught).",
+     "type": "boolean"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Process name to terminate (kills all matching processes)."
+    },
+    "pid": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Process ID to terminate. Either pid or name must be provided."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "KillProcess"
+ },
+ {
+  "category": "Process Management",
+  "description": "Launch an application by name or path.",
+  "input_schema": {
+   "properties": {
+    "application": {
+     "description": "Application name (e.g. 'Calculator', 'notepad') or full executable path.",
+     "type": "string"
+    },
+    "args": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional list of command-line arguments to pass to the application."
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds to wait when wait=true.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "wait": {
+     "default": false,
+     "description": "If true, block until the application exits (up to timeout seconds).",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "application"
+   ],
+   "type": "object"
+  },
+  "name": "LaunchApp"
+ },
+ {
+  "category": "Audio",
+  "description": "List available audio input (microphones) and output (speakers) devices.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListAudioDevices"
+ },
+ {
+  "category": "Messages",
+  "description": "List recent iMessage/SMS conversations with the last message preview.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 25,
+     "description": "Maximum conversations to return (default 25, max 200).",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListConversations"
+ },
+ {
+  "category": "System",
+  "description": "Execute the ListDirectory tool.",
+  "input_schema": {
+   "properties": {
+    "cursor": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Opaque cursor from a previous list result."
+    },
+    "limit": {
+     "default": 100,
+     "description": "Maximum entries to return in this page.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Directory path to list. Defaults to working directory."
+    },
+    "show_hidden": {
+     "default": false,
+     "description": "If true, include hidden files and directories (names starting with '.').",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListDirectory"
+ },
+ {
+  "category": "Documents",
+  "description": "List all document folders.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListDocumentFolders"
+ },
+ {
+  "category": "Documents",
+  "description": "List all documents, optionally filtered by folder.",
+  "input_schema": {
+   "properties": {
+    "folder": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Folder name to filter by. Lists all documents if omitted."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListDocuments"
+ },
+ {
+  "category": "Mail",
+  "description": "List recent emails from Mail.app via AppleScript.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 25,
+     "description": "Maximum messages to return (default 25, max 200).",
+     "type": "integer"
+    },
+    "mailbox": {
+     "default": "INBOX",
+     "description": "Mailbox name to read from (default \"INBOX\").",
+     "type": "string"
+    },
+    "unread_only": {
+     "default": false,
+     "description": "If True, only return unread messages.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListEmails"
+ },
+ {
+  "category": "Calendar",
+  "description": "List upcoming calendar events.",
+  "input_schema": {
+   "properties": {
+    "calendar_names": {
+     "description": "Filter to specific calendar names. Omit for all calendars.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "days_ahead": {
+     "default": 7,
+     "description": "How many days into the future to look (default 7, max 365).",
+     "type": "integer"
+    },
+    "limit": {
+     "default": 50,
+     "description": "Maximum events to return (default 50, max 500).",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListEvents"
+ },
+ {
+  "category": "Messages",
+  "description": "List recent iMessage and SMS messages from the Messages app.",
+  "input_schema": {
+   "properties": {
+    "contact": {
+     "description": "Filter by contact name or phone number/email (partial match).",
+     "type": "string"
+    },
+    "limit": {
+     "default": 50,
+     "description": "Maximum messages to return (default 50, max 500).",
+     "type": "integer"
+    },
+    "unread_only": {
+     "default": false,
+     "description": "If True, only return unread messages.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListMessages"
+ },
+ {
+  "category": "Process Management",
+  "description": "List listening ports and their associated processes.",
+  "input_schema": {
+   "properties": {
+    "filter": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional substring filter on process name or port number."
+    },
+    "limit": {
+     "default": 100,
+     "description": "Maximum number of ports to return.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListPorts"
+ },
+ {
+  "category": "Process Management",
+  "description": "List running processes with PID, name, CPU%, memory usage.",
+  "input_schema": {
+   "properties": {
+    "filter": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional substring filter applied to process names."
+    },
+    "limit": {
+     "default": 50,
+     "description": "Maximum number of processes to return.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "sort_by": {
+     "default": "cpu",
+     "description": "Column to sort results by.",
+     "enum": [
+      "cpu",
+      "memory",
+      "name",
+      "pid"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListProcesses"
+ },
+ {
+  "category": "Calendar",
+  "description": "List reminders from macOS Reminders.",
+  "input_schema": {
+   "properties": {
+    "include_completed": {
+     "default": false,
+     "description": "Include completed reminders (default False).",
+     "type": "boolean"
+    },
+    "limit": {
+     "default": 50,
+     "description": "Maximum reminders to return (default 50, max 500).",
+     "type": "integer"
+    },
+    "list_names": {
+     "description": "Filter to specific Reminders list names. Omit for all lists.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListReminders"
+ },
+ {
+  "category": "Scheduler",
+  "description": "List all active and recent scheduled tasks.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListScheduled"
+ },
+ {
+  "category": "System",
+  "description": "List all connected monitors with their geometry.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListScreens"
+ },
+ {
+  "category": "Speech Recognition",
+  "description": "List all locales supported by SFSpeechRecognizer on this device.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListSpeechLocales"
+ },
+ {
+  "category": "Other",
+  "description": "List all running terminal emulators and interactive shells.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListTerminals"
+ },
+ {
+  "category": "Window Management",
+  "description": "List all visible windows with their titles, positions, and sizes.",
+  "input_schema": {
+   "properties": {
+    "app_filter": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional application name substring to filter the window list."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ListWindows"
+ },
+ {
+  "category": "Network Discovery",
+  "description": "Discover mDNS/Bonjour services on the local network (smart devices, printers, etc.).",
+  "input_schema": {
+   "properties": {
+    "service_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "mDNS service type to discover (e.g. '_http._tcp', '_ipp._tcp', '_ssh._tcp'). If omitted, discovers all services."
+    },
+    "timeout": {
+     "default": 5,
+     "description": "Seconds to listen for mDNS broadcasts.",
+     "maximum": 30,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "MDNSDiscover"
+ },
+ {
+  "category": "Actions",
+  "description": "macOS app integrations: AppleScript, Mail, Messages, Contacts, Calendar, Reminders, Photos, Location. Actions \u2014 applescript: Execute AppleScript on macOS (macOS only); create_event: Create a new calendar event (macOS only); create_reminder: Create a new reminder in macOS Reminders (macOS only); email_accounts: List configured Mail.app accounts and their mailboxes (macOS only); get_contact: Get a single contact by its unique CNContact identifier (macOS only); get_photo: Get a single photo asset with a thumbnail by its identifier (macOS only); list_conversations: List recent iMessage/SMS conversations with the last message preview (macOS only); list_emails: List recent emails from Mail.app via AppleScript (macOS only); list_events: List upcoming calendar events (macOS only); list_messages: List recent iMessage and SMS messages from the Messages app (macOS only); list_reminders: List reminders from macOS Reminders (macOS only); location: Get the device's current GPS/network location via CoreLocation (macOS only); search_contacts: Search contacts by name (macOS only); search_photos: Search and list photos/videos from the macOS Photos library (macOS only); send_email: Send an email via Mail.app using AppleScript (macOS only); send_message: Send an iMessage or SMS via the Messages app using AppleScript (macOS only).",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "applescript",
+      "create_event",
+      "create_reminder",
+      "email_accounts",
+      "get_contact",
+      "get_photo",
+      "list_conversations",
+      "list_emails",
+      "list_events",
+      "list_messages",
+      "list_reminders",
+      "location",
+      "search_contacts",
+      "search_photos",
+      "send_email",
+      "send_message"
+     ],
+     "type": "string"
+    },
+    "all_day": {
+     "default": false,
+     "description": "Whether this is an all-day event. Used with action(s): create_event.",
+     "type": "boolean"
+    },
+    "bcc": {
+     "description": "BCC recipient email address (optional). Used with action(s): send_email.",
+     "type": "string"
+    },
+    "body": {
+     "description": "Email body (plain text). Used with action(s): send_email, send_message.",
+     "type": "string"
+    },
+    "calendar": {
+     "description": "Calendar name to add the event to. Defaults to the default calendar. Used with action(s): create_event.",
+     "type": "string"
+    },
+    "calendar_names": {
+     "description": "Filter to specific calendar names. Omit for all calendars. Used with action(s): list_events.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "cc": {
+     "description": "CC recipient email address (optional). Used with action(s): send_email.",
+     "type": "string"
+    },
+    "contact": {
+     "description": "Filter by contact name or phone number/email (partial match). Used with action(s): list_messages.",
+     "type": "string"
+    },
+    "days_ahead": {
+     "default": 7,
+     "description": "How many days into the future to look (default 7, max 365). Used with action(s): list_events.",
+     "type": "integer"
+    },
+    "due": {
+     "description": "Due date/time in ISO 8601 format (e.g. \"2026-03-20T09:00:00\"). Used with action(s): create_reminder.",
+     "type": "string"
+    },
+    "end": {
+     "description": "End datetime in ISO 8601 format. Used with action(s): create_event.",
+     "type": "string"
+    },
+    "favorites_only": {
+     "default": false,
+     "description": "If True, only return favorited assets. Used with action(s): search_photos.",
+     "type": "boolean"
+    },
+    "identifier": {
+     "description": "The CNContact identifier string (from search_contacts results). Used with action(s): get_contact, get_photo.",
+     "type": "string"
+    },
+    "include_completed": {
+     "default": false,
+     "description": "Include completed reminders (default False). Used with action(s): list_reminders.",
+     "type": "boolean"
+    },
+    "limit": {
+     "default": 25,
+     "description": "Maximum conversations to return (default 25, max 200). Used with action(s): list_conversations, list_emails, list_events, list_messages, list_reminders, search_contacts, search_photos.",
+     "type": "integer"
+    },
+    "list_name": {
+     "description": "Reminders list to add it to. Defaults to the default list. Used with action(s): create_reminder.",
+     "type": "string"
+    },
+    "list_names": {
+     "description": "Filter to specific Reminders list names. Omit for all lists. Used with action(s): list_reminders.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "mailbox": {
+     "default": "INBOX",
+     "description": "Mailbox name to read from (default \"INBOX\"). Used with action(s): list_emails.",
+     "type": "string"
+    },
+    "media_type": {
+     "default": "image",
+     "description": "\"image\", \"video\", or \"all\" (default \"image\"). Used with action(s): search_photos.",
+     "type": "string"
+    },
+    "notes": {
+     "description": "Optional notes/description. Used with action(s): create_event, create_reminder.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Name to search for. If omitted, returns up to `limit` contacts Used with action(s): search_contacts.",
+     "type": "string"
+    },
+    "recipient": {
+     "description": "Phone number, email address, or contact name to send to. Used with action(s): send_message.",
+     "type": "string"
+    },
+    "script": {
+     "description": "AppleScript code to execute (macOS only). Can control Finder, Mail, Calendar, Safari, and any scriptable app. Used with action(s): applescript.",
+     "type": "string"
+    },
+    "service": {
+     "default": "iMessage",
+     "description": "\"iMessage\" or \"SMS\" (default \"iMessage\"). Used with action(s): send_message.",
+     "type": "string"
+    },
+    "start": {
+     "description": "Start datetime in ISO 8601 format (e.g. \"2026-03-15T10:00:00\"). Used with action(s): create_event.",
+     "type": "string"
+    },
+    "subject": {
+     "description": "Email subject line. Used with action(s): send_email.",
+     "type": "string"
+    },
+    "thumbnail_size": {
+     "default": 512,
+     "description": "Max thumbnail dimension in pixels (default 512, max 2048). Used with action(s): get_photo.",
+     "type": "integer"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds before the script is forcefully terminated. Used with action(s): applescript, location.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "title": {
+     "description": "Event title. Used with action(s): create_event, create_reminder.",
+     "type": "string"
+    },
+    "to": {
+     "description": "Recipient email address. Used with action(s): send_email.",
+     "type": "string"
+    },
+    "unread_only": {
+     "default": false,
+     "description": "If True, only return unread messages. Used with action(s): list_emails, list_messages.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_mac_apps"
+ },
+ {
+  "category": "Actions",
+  "description": "Local media processing: OCR, image resize, PDF extraction, Office generation, archives. Actions \u2014 archive_create: Create a zip or tar archive from files and directories; archive_extract: Extract a zip, tar, or 7z archive; ocr: Extract text from an image file using OCR (Tesseract); office_generate: Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a structured spec and w\u2026; pdf_extract: Extract text (and optionally images) from a PDF file; resize: Resize or convert an image file.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "archive_create",
+      "archive_extract",
+      "ocr",
+      "office_generate",
+      "pdf_extract",
+      "resize"
+     ],
+     "type": "string"
+    },
+    "compression": {
+     "default": "deflate",
+     "description": "Compression algorithm (only used for 'zip' format). Used with action(s): archive_create.",
+     "enum": [
+      "deflate",
+      "store",
+      "bzip2",
+      "lzma"
+     ],
+     "type": "string"
+    },
+    "extract_images": {
+     "default": false,
+     "description": "If true, also extract embedded images (saves to same directory as PDF). Used with action(s): pdf_extract.",
+     "type": "boolean"
+    },
+    "file_path": {
+     "description": "Path to the archive to extract (zip, tar, tar.gz, tar.bz2, 7z). Used with action(s): archive_extract, ocr, pdf_extract, resize.",
+     "type": "string"
+    },
+    "format": {
+     "default": "zip",
+     "description": "Archive format. Used with action(s): archive_create, office_generate.",
+     "enum": [
+      "zip",
+      "tar",
+      "tar.gz",
+      "tar.bz2"
+     ],
+     "type": "string"
+    },
+    "height": {
+     "default": null,
+     "description": "Target height in pixels. If only height is set, width is scaled proportionally. Used with action(s): resize.",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "language": {
+     "default": "eng",
+     "description": "Tesseract language code (e.g. 'eng', 'fra', 'deu', 'spa'). Multiple languages can be combined with '+' (e.g. 'eng+fra'). Used with action(s): ocr.",
+     "type": "string"
+    },
+    "output_dir": {
+     "default": null,
+     "description": "Directory to extract into. Defaults to the archive's directory. Used with action(s): archive_extract.",
+     "type": "string"
+    },
+    "output_format": {
+     "default": null,
+     "description": "Output image format. Defaults to the same format as the source. Used with action(s): resize.",
+     "enum": [
+      "png",
+      "jpeg",
+      "webp",
+      "gif",
+      "bmp"
+     ],
+     "type": "string"
+    },
+    "output_path": {
+     "default": null,
+     "description": "Output archive path. Auto-generated in the working directory if omitted. Used with action(s): archive_create.",
+     "type": "string"
+    },
+    "pages": {
+     "default": null,
+     "description": "Pages to extract. Accepts a single page ('3'), a range ('1-5'), or comma-separated values ('1,3,5-7'). Defaults to all pages. Used with action(s): pdf_extract.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Destination file path for the generated document (parent directories are created). Used with action(s): office_generate.",
+     "type": "string"
+    },
+    "scale": {
+     "default": null,
+     "description": "Scale factor (e.g. 0.5 for half size, 2.0 for double). Overrides width/height. Used with action(s): resize.",
+     "exclusiveMinimum": 0.0,
+     "type": "number"
+    },
+    "source_paths": {
+     "description": "List of file or directory paths to include in the archive. Used with action(s): archive_create.",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "type": "array"
+    },
+    "spec": {
+     "additionalProperties": true,
+     "description": "Structured document description matching the chosen format:\n- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?}]}\n- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]} Used with action(s): office_generate.",
+     "type": "object"
+    },
+    "width": {
+     "default": null,
+     "description": "Target width in pixels. If only width is set, height is scaled proportionally. Used with action(s): resize.",
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_media"
+ },
+ {
+  "category": "Window Management",
+  "description": "Minimize, maximize, or restore a window. Action: minimize, maximize, restore.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "default": "minimize",
+     "description": "Window action to perform.",
+     "enum": [
+      "minimize",
+      "maximize",
+      "restore"
+     ],
+     "type": "string"
+    },
+    "app_name": {
+     "description": "Application whose window to control.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  },
+  "name": "MinimizeWindow"
+ },
+ {
+  "category": "Other",
+  "description": "Execute the Mkdir tool.",
+  "input_schema": {
+   "properties": {
+    "parents": {
+     "default": true,
+     "description": "Create missing parent directories as needed.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "Path of the directory to create.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "Mkdir"
+ },
+ {
+  "category": "Actions",
+  "description": "System monitoring and filesystem watching. Actions \u2014 battery: Get battery level, charging status, and estimated time remaining; disk_usage: Get disk usage statistics for all mounted volumes or a specific path; heartbeat: Get the status of the heartbeat/scheduler system including all scheduled tasks,; resources: Get real-time CPU, memory, disk, and network usage statistics; stop_watch: Stop watching a directory; top_processes: Get top N processes by CPU or memory usage; watch_directory: Start watching a directory for file changes (create, modify, delete, move); watch_events: Get accumulated file change events from a directory watch.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "battery",
+      "disk_usage",
+      "heartbeat",
+      "resources",
+      "stop_watch",
+      "top_processes",
+      "watch_directory",
+      "watch_events"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "default": 15,
+     "description": "Number of top processes to return. Used with action(s): top_processes, watch_events.",
+     "maximum": 100,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "path": {
+     "default": null,
+     "description": "Specific path to analyze. If omitted, returns stats for all mounted volumes. Used with action(s): disk_usage, watch_directory.",
+     "type": "string"
+    },
+    "patterns": {
+     "description": "Used with action(s): watch_directory.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "recursive": {
+     "default": true,
+     "description": "Used with action(s): watch_directory.",
+     "type": "boolean"
+    },
+    "since_seconds": {
+     "description": "Used with action(s): watch_events.",
+     "type": "number"
+    },
+    "sort_by": {
+     "default": "cpu",
+     "description": "Sort processes by 'cpu' or 'memory' usage. Used with action(s): top_processes.",
+     "enum": [
+      "cpu",
+      "memory"
+     ],
+     "type": "string"
+    },
+    "watch_id": {
+     "description": "Used with action(s): stop_watch, watch_events.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_monitor"
+ },
+ {
+  "category": "Input Automation",
+  "description": "Click the mouse at screen coordinates. Button: left, right, middle.",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional application to focus before clicking."
+    },
+    "button": {
+     "default": "left",
+     "description": "Mouse button to click.",
+     "enum": [
+      "left",
+      "right",
+      "middle"
+     ],
+     "type": "string"
+    },
+    "clicks": {
+     "default": 1,
+     "description": "Number of clicks (1=single, 2=double, 3=triple).",
+     "maximum": 3,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "x": {
+     "description": "Screen X coordinate (pixels from left edge).",
+     "type": "integer"
+    },
+    "y": {
+     "description": "Screen Y coordinate (pixels from top edge).",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "x",
+    "y"
+   ],
+   "type": "object"
+  },
+  "name": "MouseClick"
+ },
+ {
+  "category": "Input Automation",
+  "description": "Move the mouse cursor to screen coordinates.",
+  "input_schema": {
+   "properties": {
+    "x": {
+     "description": "Target screen X coordinate.",
+     "type": "integer"
+    },
+    "y": {
+     "description": "Target screen Y coordinate.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "x",
+    "y"
+   ],
+   "type": "object"
+  },
+  "name": "MouseMove"
+ },
+ {
+  "category": "Other",
+  "description": "Execute the Move tool.",
+  "input_schema": {
+   "properties": {
+    "destination": {
+     "description": "Target path. Moving a file into an existing directory keeps the file's name.",
+     "type": "string"
+    },
+    "overwrite": {
+     "default": false,
+     "description": "Replace the destination if it already exists.",
+     "type": "boolean"
+    },
+    "source": {
+     "description": "Path of the file or directory to move.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "source",
+    "destination"
+   ],
+   "type": "object"
+  },
+  "name": "Move"
+ },
+ {
+  "category": "Window Management",
+  "description": "Move and/or resize a window by app name.",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "description": "Application whose window to move/resize.",
+     "type": "string"
+    },
+    "height": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "New window height in pixels."
+    },
+    "width": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "New window width in pixels."
+    },
+    "x": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "New left edge position in pixels."
+    },
+    "y": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "New top edge position in pixels."
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  },
+  "name": "MoveWindow"
+ },
+ {
+  "category": "Actions",
+  "description": "Local named-entity and PII extraction (data never leaves the machine). Actions \u2014 entities: Extract zero-shot named entities from text using the local GLiNER / GLiNER2 NER subsystem; pii: Extract common PII entities from text using the local GLiNER / GLiNER2 NER subsystem.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "entities",
+      "pii"
+     ],
+     "type": "string"
+    },
+    "labels": {
+     "description": "Entity labels, or a mapping of label to description for higher precision. Used with action(s): entities.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "max_chars": {
+     "default": 6000,
+     "description": "Maximum characters per inference chunk for long documents. Used with action(s): entities.",
+     "maximum": 100000,
+     "minimum": 500,
+     "type": "integer"
+    },
+    "model_id": {
+     "default": null,
+     "description": "Optional NER model id from /ner/models. Defaults to the active GLiNER2-base model.",
+     "type": "string"
+    },
+    "overlap_chars": {
+     "default": 500,
+     "description": "Character overlap between long-document chunks. Used with action(s): entities.",
+     "maximum": 20000,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "text": {
+     "description": "Text to scan for named entities.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "threshold": {
+     "default": 0.5,
+     "description": "Minimum confidence score to return when the model emits confidence.",
+     "maximum": 1.0,
+     "minimum": 0.0,
+     "type": "number"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_ner"
+ },
+ {
+  "category": "Actions",
+  "description": "Local network inspection and discovery. Actions \u2014 bluetooth_devices: List paired and nearby Bluetooth devices; connected_devices: List all connected peripheral devices (USB, Bluetooth, monitors, etc.); info: Get local network information: IPs, interfaces, gateway, DNS, MAC addresses; mdns_discover: Discover mDNS/Bonjour services on the local network (smart devices, printers, AirPlay, Ho\u2026; port_scan: Scan a host for open TCP ports; scan: Scan the local network for active hosts using ARP; wifi_networks: List available WiFi networks with signal strength, security, and channel.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "bluetooth_devices",
+      "connected_devices",
+      "info",
+      "mdns_discover",
+      "port_scan",
+      "scan",
+      "wifi_networks"
+     ],
+     "type": "string"
+    },
+    "host": {
+     "description": "Hostname or IP address to scan. Used with action(s): port_scan.",
+     "type": "string"
+    },
+    "ports": {
+     "default": "common",
+     "description": "Ports to scan. 'common' scans the top 1000 well-known ports, a range like '1-1024', or comma-separated values '80,443,8080'. Used with action(s): port_scan.",
+     "type": "string"
+    },
+    "rescan": {
+     "default": false,
+     "description": "Used with action(s): wifi_networks.",
+     "type": "boolean"
+    },
+    "scan_duration": {
+     "default": 5,
+     "description": "Used with action(s): bluetooth_devices.",
+     "type": "integer"
+    },
+    "service_type": {
+     "default": null,
+     "description": "mDNS service type to discover (e.g. '_http._tcp', '_ipp._tcp', '_ssh._tcp'). If omitted, discovers all services. Used with action(s): mdns_discover.",
+     "type": "string"
+    },
+    "subnet": {
+     "default": null,
+     "description": "Subnet to scan in CIDR notation (e.g. '192.168.1.0/24'). Auto-detected from the default interface if omitted. Used with action(s): scan.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 5,
+     "description": "Seconds to listen for mDNS broadcasts. Used with action(s): mdns_discover, scan.",
+     "maximum": 30,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "timeout_ms": {
+     "default": 1000,
+     "description": "Per-port connection timeout in milliseconds. Used with action(s): port_scan.",
+     "maximum": 10000,
+     "minimum": 100,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_net"
+ },
+ {
+  "category": "Network Discovery",
+  "description": "Get network interface information: IPs, gateway, DNS, MAC addresses.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "NetworkInfo"
+ },
+ {
+  "category": "Network Discovery",
+  "description": "Scan local network for devices using ARP. Returns IP, MAC, and hostname when available.",
+  "input_schema": {
+   "properties": {
+    "subnet": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Subnet to scan in CIDR notation (e.g. '192.168.1.0/24'). Auto-detected from the default interface if omitted."
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to wait for ARP replies.",
+     "maximum": 120,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "NetworkScan"
+ },
+ {
+  "category": "Notifications",
+  "description": "Send a native OS desktop notification and broadcast it to the UI.",
+  "input_schema": {
+   "properties": {
+    "level": {
+     "default": "info",
+     "type": "string"
+    },
+    "message": {
+     "description": "Notification body text.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to display the notification (default 10).",
+     "maximum": 60,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "title": {
+     "description": "Notification title.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "message"
+   ],
+   "type": "object"
+  },
+  "name": "Notify"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a",
+  "input_schema": {
+   "properties": {
+    "format": {
+     "description": "Office document format to generate.",
+     "enum": [
+      "docx",
+      "pptx",
+      "xlsx"
+     ],
+     "type": "string"
+    },
+    "path": {
+     "description": "Destination file path for the generated document (parent directories are created).",
+     "type": "string"
+    },
+    "spec": {
+     "additionalProperties": true,
+     "description": "Structured document description matching the chosen format:\n- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?}]}\n- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]}",
+     "type": "object"
+    }
+   },
+   "required": [
+    "format",
+    "spec",
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "OfficeGenerate"
+ },
+ {
+  "category": "System",
+  "description": "Open a file or directory using the OS default handler (Finder, Explorer, etc.).",
+  "input_schema": {
+   "properties": {
+    "path": {
+     "description": "Absolute path to a file or directory to open with the OS default application (Finder, Explorer, etc.).",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "OpenPath"
+ },
+ {
+  "category": "System",
+  "description": "Open a URL in the user's default browser.",
+  "input_schema": {
+   "properties": {
+    "url": {
+     "description": "URL to open in the default web browser.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  },
+  "name": "OpenUrl"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Read environment variables via PowerShell.",
+  "input_schema": {
+   "properties": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "PSGetEnv"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Set an environment variable via PowerShell.",
+  "input_schema": {
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "scope": {
+     "default": "Process",
+     "type": "string"
+    },
+    "value": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "value"
+   ],
+   "type": "object"
+  },
+  "name": "PSSetEnv"
+ },
+ {
+  "category": "Media Processing",
+  "description": "Extract text (and optionally images) from a PDF file.",
+  "input_schema": {
+   "properties": {
+    "extract_images": {
+     "default": false,
+     "description": "If true, also extract embedded images (saves to same directory as PDF).",
+     "type": "boolean"
+    },
+    "file_path": {
+     "description": "Path to the PDF file.",
+     "type": "string"
+    },
+    "pages": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Pages to extract. Accepts a single page ('3'), a range ('1-5'), or comma-separated values ('1,3,5-7'). Defaults to all pages."
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "PdfExtract"
+ },
+ {
+  "category": "Audio",
+  "description": "Play an audio file through speakers.",
+  "input_schema": {
+   "properties": {
+    "device_index": {
+     "type": "integer"
+    },
+    "file_path": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "PlayAudio"
+ },
+ {
+  "category": "Network Discovery",
+  "description": "Scan ports on a host. Ports can be 'common', a range '1-1024', or comma-separated '80,443,8080'.",
+  "input_schema": {
+   "properties": {
+    "host": {
+     "description": "Hostname or IP address to scan.",
+     "type": "string"
+    },
+    "ports": {
+     "default": "common",
+     "description": "Ports to scan. 'common' scans the top 1000 well-known ports, a range like '1-1024', or comma-separated values '80,443,8080'.",
+     "type": "string"
+    },
+    "timeout_ms": {
+     "default": 1000,
+     "description": "Per-port connection timeout in milliseconds.",
+     "maximum": 10000,
+     "minimum": 100,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "host"
+   ],
+   "type": "object"
+  },
+  "name": "PortScan"
+ },
+ {
+  "category": "OS Integration",
+  "description": "Run a PowerShell script. Works on Windows (powershell.exe / pwsh) and on",
+  "input_schema": {
+   "properties": {
+    "script": {
+     "description": "PowerShell script to execute (Windows only). Has access to COM, WMI, .NET APIs, and registry.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds before the script is forcefully terminated.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "script"
+   ],
+   "type": "object"
+  },
+  "name": "PowerShellScript"
+ },
+ {
+  "category": "Scheduler",
+  "description": "Prevent or allow the system to go to sleep.",
+  "input_schema": {
+   "properties": {
+    "duration_minutes": {
+     "type": "integer"
+    },
+    "enable": {
+     "default": true,
+     "type": "boolean"
+    },
+    "reason": {
+     "default": "Matrx Local background tasks",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "PreventSleep"
+ },
+ {
+  "category": "Actions",
+  "description": "Process and application management. Actions \u2014 focus_app: Bring an application window to the foreground; installed_apps: List installed applications on the system, optionally filtered by name; kill: Kill a running process by PID or name; launch_app: Launch an application on the local system by name or path; list: List running processes with PID, name, CPU%, and memory usage; ports: List listening TCP/UDP ports and the processes bound to them; tail_terminal: Fetch recent output from a terminal process; terminals: List all running terminal emulators and interactive shells.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "focus_app",
+      "installed_apps",
+      "kill",
+      "launch_app",
+      "list",
+      "ports",
+      "tail_terminal",
+      "terminals"
+     ],
+     "type": "string"
+    },
+    "application": {
+     "description": "Application name to bring to the foreground (e.g. 'Finder', 'notepad', 'chrome'). Used with action(s): focus_app, launch_app.",
+     "type": "string"
+    },
+    "args": {
+     "default": null,
+     "description": "Optional list of command-line arguments to pass to the application. Used with action(s): launch_app.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "filter": {
+     "default": null,
+     "description": "Optional substring filter applied to application names. Used with action(s): installed_apps, list, ports.",
+     "type": "string"
+    },
+    "force": {
+     "default": false,
+     "description": "If true, send SIGKILL instead of SIGTERM (cannot be caught). Used with action(s): kill.",
+     "type": "boolean"
+    },
+    "limit": {
+     "default": 50,
+     "description": "Maximum number of processes to return. Used with action(s): list, ports.",
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "lines": {
+     "default": 50,
+     "description": "Used with action(s): tail_terminal.",
+     "type": "integer"
+    },
+    "name": {
+     "default": null,
+     "description": "Process name to terminate (kills all matching processes). Used with action(s): kill.",
+     "type": "string"
+    },
+    "pid": {
+     "default": null,
+     "description": "Process ID to terminate. Either pid or name must be provided. Used with action(s): kill, tail_terminal.",
+     "type": "integer"
+    },
+    "sort_by": {
+     "default": "cpu",
+     "description": "Column to sort results by. Used with action(s): list.",
+     "enum": [
+      "cpu",
+      "memory",
+      "name",
+      "pid"
+     ],
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds to wait when wait=true. Used with action(s): launch_app.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "tty": {
+     "description": "Used with action(s): tail_terminal.",
+     "type": "string"
+    },
+    "wait": {
+     "default": false,
+     "description": "If true, block until the application exits (up to timeout seconds). Used with action(s): launch_app.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_process"
+ },
+ {
+  "category": "File Operations",
+  "description": "Execute the Read tool.",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "description": "Absolute or workspace-relative path to the file to read.",
+     "type": "string"
+    },
+    "limit": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Maximum number of lines to return."
+    },
+    "offset": {
+     "anyOf": [
+      {
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "1-based line number to start reading from."
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "Read"
+ },
+ {
+  "category": "Documents",
+  "description": "Read a document's content by file_path or by folder+label.",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Absolute path to the document file."
+    },
+    "folder": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Folder name. Used together with label to locate the document."
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Document label/title. Used together with folder to locate the document."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ReadDocument"
+ },
+ {
+  "category": "Audio",
+  "description": "Record audio from microphone for specified duration. Returns path to audio file.",
+  "input_schema": {
+   "properties": {
+    "channels": {
+     "default": 1,
+     "type": "integer"
+    },
+    "device_index": {
+     "type": "integer"
+    },
+    "duration_seconds": {
+     "default": 5,
+     "type": "integer"
+    },
+    "format": {
+     "default": "wav",
+     "type": "string"
+    },
+    "sample_rate": {
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "RecordAudio"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Read a Windows registry key or value (Windows only).",
+  "input_schema": {
+   "properties": {
+    "key_path": {
+     "type": "string"
+    },
+    "value_name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "key_path"
+   ],
+   "type": "object"
+  },
+  "name": "RegistryRead"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Write a value to the Windows registry (Windows only, use with caution).",
+  "input_schema": {
+   "properties": {
+    "key_path": {
+     "type": "string"
+    },
+    "value": {
+     "type": "string"
+    },
+    "value_name": {
+     "type": "string"
+    },
+    "value_type": {
+     "default": "String",
+     "type": "string"
+    }
+   },
+   "required": [
+    "key_path",
+    "value_name",
+    "value"
+   ],
+   "type": "object"
+  },
+  "name": "RegistryWrite"
+ },
+ {
+  "category": "Other",
+  "description": "Execute the Rename tool.",
+  "input_schema": {
+   "properties": {
+    "new_name": {
+     "description": "New bare name (no path separators). Use Move to relocate.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Path of the file or directory to rename.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "new_name"
+   ],
+   "type": "object"
+  },
+  "name": "Rename"
+ },
+ {
+  "category": "Network",
+  "description": "Deep research: search + scrape all results + compile findings.",
+  "input_schema": {
+   "properties": {
+    "country": {
+     "default": "us",
+     "description": "Two-letter country code for localized search results.",
+     "type": "string"
+    },
+    "effort": {
+     "default": "medium",
+     "description": "'low' (search only), 'medium' (search + top results scraped), 'high' (search + all results scraped + synthesis).",
+     "enum": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "type": "string"
+    },
+    "freshness": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Filter by age: 'pd', 'pw', 'pm', 'py'."
+    },
+    "query": {
+     "description": "Research question or topic.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "Research"
+ },
+ {
+  "category": "Actions",
+  "description": "Scheduled tasks on the user's machine. Actions \u2014 cancel: Cancel a scheduled task; create: Schedule a tool to run repeatedly at a given interval; list: List all active and recent scheduled tasks; prevent_sleep: Prevent or allow the system to go to sleep.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "cancel",
+      "create",
+      "list",
+      "prevent_sleep"
+     ],
+     "type": "string"
+    },
+    "duration_minutes": {
+     "description": "Used with action(s): prevent_sleep.",
+     "type": "integer"
+    },
+    "enable": {
+     "default": true,
+     "description": "Used with action(s): prevent_sleep.",
+     "type": "boolean"
+    },
+    "interval_seconds": {
+     "default": 60,
+     "description": "Used with action(s): create.",
+     "type": "integer"
+    },
+    "max_runs": {
+     "description": "Used with action(s): create.",
+     "type": "integer"
+    },
+    "name": {
+     "description": "Used with action(s): create.",
+     "type": "string"
+    },
+    "reason": {
+     "default": "Matrx Local background tasks",
+     "description": "Used with action(s): prevent_sleep.",
+     "type": "string"
+    },
+    "task_id": {
+     "description": "Used with action(s): cancel.",
+     "type": "string"
+    },
+    "tool_input": {
+     "description": "Used with action(s): create.",
+     "type": "object"
+    },
+    "tool_name": {
+     "description": "Used with action(s): create.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_schedule"
+ },
+ {
+  "category": "Scheduler",
+  "description": "Schedule a tool to run repeatedly at a given interval.",
+  "input_schema": {
+   "properties": {
+    "interval_seconds": {
+     "default": 60,
+     "type": "integer"
+    },
+    "max_runs": {
+     "type": "integer"
+    },
+    "name": {
+     "type": "string"
+    },
+    "tool_input": {
+     "type": "object"
+    },
+    "tool_name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "tool_name",
+    "tool_input"
+   ],
+   "type": "object"
+  },
+  "name": "ScheduleTask"
+ },
+ {
+  "category": "Network",
+  "description": "Scrape one or more URLs from THIS machine, on the user's own IP.",
+  "input_schema": {
+   "properties": {
+    "get_extraction": {
+     "default": false,
+     "description": "Also return the page's STRUCTURED extraction in the result metadata: heading outline, tables as rows, images/videos/audios, code blocks, renderable markdown, head metadata, redirect chain. The parse produces all of this either way; this only controls whether it is returned, and it can be large \u2014 ask for it when something will actually read it (a UI, a table extraction), not for prose.",
+     "type": "boolean"
+    },
+    "get_links": {
+     "default": false,
+     "description": "Also return a list of all links found on the page.",
+     "type": "boolean"
+    },
+    "get_overview": {
+     "default": false,
+     "description": "Include a brief AI-generated overview of the page content.",
+     "type": "boolean"
+    },
+    "output_mode": {
+     "default": "rich",
+     "description": "'rich' returns structured data with metadata, 'text' plain text, 'html' raw HTML, 'markdown' Markdown.",
+     "enum": [
+      "rich",
+      "text",
+      "html",
+      "markdown"
+     ],
+     "type": "string"
+    },
+    "urls": {
+     "description": "List of URLs to scrape (max 10 per call).",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 10,
+     "minItems": 1,
+     "type": "array"
+    },
+    "use_cache": {
+     "default": true,
+     "description": "Return cached results if available.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "urls"
+   ],
+   "type": "object"
+  },
+  "name": "Scrape"
+ },
+ {
+  "category": "Actions",
+  "description": "Screen capture and display enumeration. Actions \u2014 capture_book: Page through an e-book already open in a reader on this Mac, capture every page from the\u2026 (macOS only); list: List all connected monitors with their geometry; screenshot: Take a screenshot of the local screen and return a durable Content IR media artifact.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "capture_book",
+      "list",
+      "screenshot"
+     ],
+     "type": "string"
+    },
+    "app_name": {
+     "description": "The reader application holding the open book, e.g. 'Books', 'Kindle', 'Preview'. The book must already be open on screen. Used with action(s): capture_book.",
+     "type": "string"
+    },
+    "crop_bottom": {
+     "default": 0.0,
+     "description": "Fraction of the window height to trim off the bottom, to remove the page slider. Used with action(s): capture_book.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_left": {
+     "default": 0.0,
+     "description": "Fraction of the window width to trim off the left edge. Used with action(s): capture_book.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_right": {
+     "default": 0.0,
+     "description": "Fraction of the window width to trim off the right edge. Used with action(s): capture_book.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "crop_top": {
+     "default": 0.0,
+     "description": "Fraction of the window height to trim off the top, to remove the reader's toolbar. Used with action(s): capture_book.",
+     "exclusiveMaximum": 0.5,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "end_repeat_threshold": {
+     "default": 3,
+     "description": "How many unchanged frames in a row mean the book has ended. Two can fire on one slow render, so three is the safe floor. Used with action(s): capture_book.",
+     "maximum": 20,
+     "minimum": 2,
+     "type": "integer"
+    },
+    "max_pages": {
+     "default": 400,
+     "description": "Hard ceiling on captured pages. The capture normally stops on its own when the page stops changing; this is the safety stop. Used with action(s): capture_book.",
+     "maximum": 5000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "monitor": {
+     "default": "all",
+     "description": "Display to capture: 'all' for the full virtual desktop, 'primary' for the primary display, or a 1-based monitor index string from list screens. Used with action(s): screenshot.",
+     "type": "string"
+    },
+    "next_page_key": {
+     "default": "right",
+     "description": "Key that turns the page in this reader: right, left, down, up, space, page_down, page_up or return. Used with action(s): capture_book.",
+     "type": "string"
+    },
+    "ocr": {
+     "default": true,
+     "description": "Add a searchable text layer when an OCR engine is available. The result always states whether the text layer was actually written. Used with action(s): capture_book.",
+     "type": "boolean"
+    },
+    "page_change_threshold": {
+     "default": 0.001,
+     "description": "Fraction of the page that must change to count as a new page. Lower it for books whose pages differ by only a few words, such as an index or a page of verse. Used with action(s): capture_book.",
+     "exclusiveMaximum": 1.0,
+     "exclusiveMinimum": 0.0,
+     "type": "number"
+    },
+    "page_delay_seconds": {
+     "default": 0.9,
+     "description": "Seconds to wait after each page turn before capturing, so the reader finishes animating and re-renders the text. Used with action(s): capture_book.",
+     "maximum": 30.0,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "region": {
+     "default": null,
+     "description": "Optional crop rectangle [x, y, width, height]. Coordinates are absolute when monitor='all', otherwise relative to the selected monitor. Used with action(s): screenshot.",
+     "items": {
+      "type": "integer"
+     },
+     "maxItems": 4,
+     "minItems": 4,
+     "type": "array"
+    },
+    "send_to_library": {
+     "default": true,
+     "description": "Upload the assembled PDF to the user's AI Matrx library as one Source. When false the PDF is only written to this Mac. Used with action(s): capture_book.",
+     "type": "boolean"
+    },
+    "window_title": {
+     "default": null,
+     "description": "Optional text from the reader window's title, when the app has more than one window open and the largest is not the book. Used with action(s): capture_book.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_screen"
+ },
+ {
+  "category": "System",
+  "description": "Capture a screenshot.",
+  "input_schema": {
+   "properties": {
+    "monitor": {
+     "default": "all",
+     "description": "Display to capture: 'all' for the full virtual desktop, 'primary' for the primary display, or a 1-based monitor index string from list screens.",
+     "type": "string"
+    },
+    "region": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "integer"
+       },
+       "maxItems": 4,
+       "minItems": 4,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional crop rectangle [x, y, width, height]. Coordinates are absolute when monitor='all', otherwise relative to the selected monitor."
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "Screenshot"
+ },
+ {
+  "category": "Network",
+  "description": "Search the web using Brave Search API.",
+  "input_schema": {
+   "properties": {
+    "count": {
+     "default": 10,
+     "description": "Number of results to return.",
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "country": {
+     "default": "us",
+     "description": "Two-letter country code for localized results.",
+     "type": "string"
+    },
+    "freshness": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Filter by result age: 'pd' (past day), 'pw' (past week), 'pm' (past month), 'py' (past year)."
+    },
+    "keywords": {
+     "description": "Search terms to look up.",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "type": "array"
+    }
+   },
+   "required": [
+    "keywords"
+   ],
+   "type": "object"
+  },
+  "name": "Search"
+ },
+ {
+  "category": "Contacts",
+  "description": "Search contacts by name. Returns up to `limit` matching contacts.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 25,
+     "description": "Maximum number of contacts to return (default 25, max 200).",
+     "type": "integer"
+    },
+    "query": {
+     "description": "Name to search for. If omitted, returns up to `limit` contacts",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "SearchContacts"
+ },
+ {
+  "category": "Documents",
+  "description": "Search document contents for a query string.",
+  "input_schema": {
+   "properties": {
+    "query": {
+     "description": "Search string to look for across all document contents.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "SearchDocuments"
+ },
+ {
+  "category": "Photos",
+  "description": "Search and list photos/videos from the macOS Photos library.",
+  "input_schema": {
+   "properties": {
+    "favorites_only": {
+     "default": false,
+     "description": "If True, only return favorited assets.",
+     "type": "boolean"
+    },
+    "limit": {
+     "default": 25,
+     "description": "Maximum assets to return (default 25, max 200).",
+     "type": "integer"
+    },
+    "media_type": {
+     "default": "image",
+     "description": "\"image\", \"video\", or \"all\" (default \"image\").",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "SearchPhotos"
+ },
+ {
+  "category": "Other",
+  "description": "Find local files by meaning when optional semantic indexing is enabled.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 20,
+     "description": "Maximum similarity-ranked results.",
+     "maximum": 100,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "description": "Natural-language description of files to find.",
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "SemanticFindPaths"
+ },
+ {
+  "category": "Mail",
+  "description": "Send an email via Mail.app using AppleScript.",
+  "input_schema": {
+   "properties": {
+    "bcc": {
+     "description": "BCC recipient email address (optional).",
+     "type": "string"
+    },
+    "body": {
+     "description": "Email body (plain text).",
+     "type": "string"
+    },
+    "cc": {
+     "description": "CC recipient email address (optional).",
+     "type": "string"
+    },
+    "subject": {
+     "description": "Email subject line.",
+     "type": "string"
+    },
+    "to": {
+     "description": "Recipient email address.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "to",
+    "subject",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "SendEmail"
+ },
+ {
+  "category": "Messages",
+  "description": "Send an iMessage or SMS via the Messages app using AppleScript.",
+  "input_schema": {
+   "properties": {
+    "body": {
+     "description": "Message text to send.",
+     "type": "string"
+    },
+    "recipient": {
+     "description": "Phone number, email address, or contact name to send to.",
+     "type": "string"
+    },
+    "service": {
+     "default": "iMessage",
+     "description": "\"iMessage\" or \"SMS\" (default \"iMessage\").",
+     "type": "string"
+    }
+   },
+   "required": [
+    "recipient",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "SendMessage"
+ },
+ {
+  "category": "PowerShell",
+  "description": "Start, stop, or restart a system service.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "ServiceControl"
+ },
+ {
+  "category": "PowerShell",
+  "description": "List Windows/system services with their status (Windows/macOS/Linux).",
+  "input_schema": {
+   "properties": {
+    "filter": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ServiceList"
+ },
+ {
+  "category": "Actions",
+  "description": "Run shell commands on the user's machine (foreground or background). Actions \u2014 output: Read accumulated output from a background shell command started with local_bash (run_in_b\u2026; run: Run a shell command on the local system with full OS access; stop: Stop a background shell task started with local_bash.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "output",
+      "run",
+      "stop"
+     ],
+     "type": "string"
+    },
+    "bash_id": {
+     "description": "The bash_id returned by Bash when run_in_background=true. Used with action(s): output.",
+     "type": "string"
+    },
+    "command": {
+     "description": "Shell command to execute. Used with action(s): run.",
+     "type": "string"
+    },
+    "description": {
+     "default": null,
+     "description": "Optional human-readable label for what this command does. Used with action(s): run.",
+     "type": "string"
+    },
+    "filter": {
+     "default": null,
+     "description": "Optional substring to filter output lines. Used with action(s): output.",
+     "type": "string"
+    },
+    "run_in_background": {
+     "default": false,
+     "description": "If true, start the command in the background and return immediately with a bash_id. Use BashOutput to read its output. Used with action(s): run.",
+     "type": "boolean"
+    },
+    "task_id": {
+     "description": "The bash_id of the background task to stop. Used with action(s): stop.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": null,
+     "description": "Timeout in milliseconds (default 120000, max 600000). Used with action(s): run.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_shell"
+ },
+ {
+  "category": "File Watching",
+  "description": "Stop watching a directory.",
+  "input_schema": {
+   "properties": {
+    "watch_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "watch_id"
+   ],
+   "type": "object"
+  },
+  "name": "StopWatch"
+ },
+ {
+  "category": "Actions",
+  "description": "System information, opening URLs/paths, and desktop notifications. Actions \u2014 info: Get detailed information about the local system: OS, CPU, RAM, disk, hostname; notify: Show a desktop notification on the local system; open_path: Open a file or directory in the system's default application (Finder on macOS, Explorer o\u2026; open_url: Open a URL in the default web browser on the local system.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "info",
+      "notify",
+      "open_path",
+      "open_url"
+     ],
+     "type": "string"
+    },
+    "message": {
+     "description": "Notification body text. Used with action(s): notify.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Absolute path to a file or directory to open with the OS default application (Finder, Explorer, etc.). Used with action(s): open_path.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 10,
+     "description": "Seconds to display the notification (default 10). Used with action(s): notify.",
+     "maximum": 60,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "title": {
+     "description": "Notification title. Used with action(s): notify.",
+     "type": "string"
+    },
+    "url": {
+     "description": "URL to open in the default web browser. Used with action(s): open_url.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_system"
+ },
+ {
+  "category": "System",
+  "description": "Execute the SystemInfo tool.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "SystemInfo"
+ },
+ {
+  "category": "System Monitoring",
+  "description": "Get current system resource usage: CPU, RAM, disk, and network I/O.",
+  "input_schema": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "SystemResources"
+ },
+ {
+  "category": "Other",
+  "description": "Fetch recent output from a terminal process.",
+  "input_schema": {
+   "properties": {
+    "lines": {
+     "default": 50,
+     "type": "integer"
+    },
+    "pid": {
+     "type": "integer"
+    },
+    "tty": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "TailTerminal"
+ },
+ {
+  "category": "Execution",
+  "description": "Execute the TaskStop tool.",
+  "input_schema": {
+   "properties": {
+    "task_id": {
+     "description": "The bash_id of the background task to stop.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "task_id"
+   ],
+   "type": "object"
+  },
+  "name": "TaskStop"
+ },
+ {
+  "category": "System Monitoring",
+  "description": "Get top processes by CPU or memory usage.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 15,
+     "description": "Number of top processes to return.",
+     "maximum": 100,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "sort_by": {
+     "default": "cpu",
+     "description": "Sort processes by 'cpu' or 'memory' usage.",
+     "enum": [
+      "cpu",
+      "memory"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "TopProcesses"
+ },
+ {
+  "category": "Audio",
+  "description": "Transcribe audio file to text using OpenAI Whisper (local model).",
+  "input_schema": {
+   "properties": {
+    "file_path": {
+     "type": "string"
+    },
+    "language": {
+     "type": "string"
+    },
+    "model": {
+     "default": "base",
+     "type": "string"
+    }
+   },
+   "required": [
+    "file_path"
+   ],
+   "type": "object"
+  },
+  "name": "TranscribeAudio"
+ },
+ {
+  "category": "Speech Recognition",
+  "description": "Transcribe an audio file using Apple's on-device SFSpeechRecognizer.",
+  "input_schema": {
+   "properties": {
+    "audio_path": {
+     "description": "Absolute path to the audio file (WAV, M4A, MP3, AIFF, etc.).",
+     "type": "string"
+    },
+    "locale": {
+     "default": "en-US",
+     "description": "BCP-47 locale code for the language (e.g. \"en-US\", \"es-ES\", \"fr-FR\").",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 60.0,
+     "description": "Maximum seconds to wait for transcription (default 60, max 300).",
+     "type": "number"
+    }
+   },
+   "required": [
+    "audio_path"
+   ],
+   "type": "object"
+  },
+  "name": "TranscribeWithSpeech"
+ },
+ {
+  "category": "Input Automation",
+  "description": "Type text string via simulated keystrokes. Optionally target a specific app.",
+  "input_schema": {
+   "properties": {
+    "app_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional application name to focus before typing."
+    },
+    "delay_ms": {
+     "default": 50,
+     "description": "Delay in milliseconds between each keystroke.",
+     "maximum": 500,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "text": {
+     "description": "Text to type via simulated keystrokes.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "TypeText"
+ },
+ {
+  "category": "File Transfer",
+  "description": "Execute the UploadFile tool.",
+  "input_schema": {
+   "properties": {
+    "field_name": {
+     "default": "file",
+     "type": "string"
+    },
+    "file_path": {
+     "type": "string"
+    },
+    "timeout": {
+     "default": 120,
+     "type": "integer"
+    },
+    "upload_url": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "file_path",
+    "upload_url"
+   ],
+   "type": "object"
+  },
+  "name": "UploadFile"
+ },
+ {
+  "category": "File Watching",
+  "description": "Start watching a directory for file changes (create, modify, delete, move).",
+  "input_schema": {
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "patterns": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "recursive": {
+     "default": true,
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "WatchDirectory"
+ },
+ {
+  "category": "File Watching",
+  "description": "Get accumulated file change events from a directory watch.",
+  "input_schema": {
+   "properties": {
+    "limit": {
+     "default": 100,
+     "type": "integer"
+    },
+    "since_seconds": {
+     "type": "number"
+    },
+    "watch_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "watch_id"
+   ],
+   "type": "object"
+  },
+  "name": "WatchEvents"
+ },
+ {
+  "category": "Actions",
+  "description": "Web access from the user's machine: fetch, scrape, search, research, and file transfer. Actions \u2014 download: Execute the DownloadFile tool; fetch: Fetch content from a URL using HTTP (curl-cffi); fetch_with_browser: Fetch a URL using a headless browser (Playwright); research: Deep web research: search + scrape all results + compile findings into a structured report; scrape: Scrape one or more URLs with the full scraper pipeline (JS rendering, content extraction,\u2026; search: Search the web using Brave Search API and return results; upload: Execute the UploadFile tool.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "download",
+      "fetch",
+      "fetch_with_browser",
+      "research",
+      "scrape",
+      "search",
+      "upload"
+     ],
+     "type": "string"
+    },
+    "body": {
+     "default": null,
+     "description": "Request body (for POST/PUT/PATCH). Typically JSON. Used with action(s): fetch.",
+     "type": "string"
+    },
+    "count": {
+     "default": 10,
+     "description": "Number of results to return. Used with action(s): search.",
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "country": {
+     "default": "us",
+     "description": "Two-letter country code for localized search results. Used with action(s): research, search.",
+     "type": "string"
+    },
+    "effort": {
+     "default": "medium",
+     "description": "'low' (search only), 'medium' (search + top results scraped), 'high' (search + all results scraped + synthesis). Used with action(s): research.",
+     "enum": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "type": "string"
+    },
+    "extract_text": {
+     "default": false,
+     "description": "If true, return plain text instead of full HTML. Used with action(s): fetch_with_browser.",
+     "type": "boolean"
+    },
+    "field_name": {
+     "default": "file",
+     "description": "Used with action(s): upload.",
+     "type": "string"
+    },
+    "file_path": {
+     "description": "Used with action(s): upload.",
+     "type": "string"
+    },
+    "follow_redirects": {
+     "default": true,
+     "description": "Follow HTTP redirects. Used with action(s): fetch.",
+     "type": "boolean"
+    },
+    "freshness": {
+     "default": null,
+     "description": "Filter by age: 'pd', 'pw', 'pm', 'py'. Used with action(s): research, search.",
+     "type": "string"
+    },
+    "get_extraction": {
+     "default": false,
+     "description": "Also return the page's STRUCTURED extraction in the result metadata: heading outline, tables as rows, images/videos/audios, code blocks, renderable markdown, head metadata, redirect chain. The parse produces all of this either way; this only controls whether it is returned, and it can be large \u2014 ask for it when something will actually read it (a UI, a table extraction), not for prose. Used with action(s): scrape.",
+     "type": "boolean"
+    },
+    "get_links": {
+     "default": false,
+     "description": "Also return a list of all links found on the page. Used with action(s): scrape.",
+     "type": "boolean"
+    },
+    "get_overview": {
+     "default": false,
+     "description": "Include a brief AI-generated overview of the page content. Used with action(s): scrape.",
+     "type": "boolean"
+    },
+    "headers": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "default": null,
+     "description": "Additional request headers. Used with action(s): fetch.",
+     "type": "object"
+    },
+    "keywords": {
+     "description": "Search terms to look up. Used with action(s): search.",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "type": "array"
+    },
+    "method": {
+     "default": "GET",
+     "description": "HTTP method. Used with action(s): fetch.",
+     "enum": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD"
+     ],
+     "type": "string"
+    },
+    "output_mode": {
+     "default": "rich",
+     "description": "'rich' returns structured data with metadata, 'text' plain text, 'html' raw HTML, 'markdown' Markdown. Used with action(s): scrape.",
+     "enum": [
+      "rich",
+      "text",
+      "html",
+      "markdown"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "description": "Research question or topic. Used with action(s): research.",
+     "type": "string"
+    },
+    "save_path": {
+     "description": "Used with action(s): download.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 120,
+     "description": "Used with action(s): download, fetch, upload.",
+     "type": "integer"
+    },
+    "upload_url": {
+     "description": "Used with action(s): upload.",
+     "type": "string"
+    },
+    "url": {
+     "description": "Used with action(s): download, fetch, fetch_with_browser.",
+     "type": "string"
+    },
+    "urls": {
+     "description": "List of URLs to scrape (max 10 per call). Used with action(s): scrape.",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 10,
+     "minItems": 1,
+     "type": "array"
+    },
+    "use_cache": {
+     "default": true,
+     "description": "Return cached results if available. Used with action(s): scrape.",
+     "type": "boolean"
+    },
+    "wait_for": {
+     "default": null,
+     "description": "CSS selector to wait for after page load. Used with action(s): fetch_with_browser.",
+     "type": "string"
+    },
+    "wait_timeout": {
+     "default": 30000,
+     "description": "Milliseconds to wait for wait_for selector. Used with action(s): fetch_with_browser.",
+     "maximum": 120000,
+     "minimum": 1000,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_web"
+ },
+ {
+  "category": "WiFi & Bluetooth",
+  "description": "List available WiFi networks with signal strength, security, and channel.",
+  "input_schema": {
+   "properties": {
+    "rescan": {
+     "default": false,
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "WifiNetworks"
+ },
+ {
+  "category": "Actions",
+  "description": "Desktop window management. Actions \u2014 focus: Bring a window to the foreground by app name and optional title; list: List all visible windows with title, app name, position, and size; minimize: Minimize, maximize, or restore a window; move: Move and/or resize a window by app name.",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "focus",
+      "list",
+      "minimize",
+      "move"
+     ],
+     "type": "string"
+    },
+    "app_filter": {
+     "default": null,
+     "description": "Optional application name substring to filter the window list. Used with action(s): list.",
+     "type": "string"
+    },
+    "app_name": {
+     "description": "Application whose window should be focused. Used with action(s): focus, minimize, move.",
+     "type": "string"
+    },
+    "height": {
+     "default": null,
+     "description": "New window height in pixels. Used with action(s): move.",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "width": {
+     "default": null,
+     "description": "New window width in pixels. Used with action(s): move.",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "window_action": {
+     "default": "minimize",
+     "description": "Window action to perform. Used with action(s): minimize.",
+     "enum": [
+      "minimize",
+      "maximize",
+      "restore"
+     ],
+     "type": "string"
+    },
+    "window_title": {
+     "default": null,
+     "description": "Optional window title substring for disambiguation when an app has multiple windows. Used with action(s): focus.",
+     "type": "string"
+    },
+    "x": {
+     "default": null,
+     "description": "New left edge position in pixels. Used with action(s): move.",
+     "type": "integer"
+    },
+    "y": {
+     "default": null,
+     "description": "New top edge position in pixels. Used with action(s): move.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_window"
+ },
+ {
+  "category": "PowerShell",
+  "description": "List Windows optional features and capabilities (Windows only).",
+  "input_schema": {
+   "properties": {
+    "filter": {
+     "type": "string"
+    },
+    "installed_only": {
+     "default": true,
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "WindowsFeatures"
+ },
+ {
+  "category": "Actions",
+  "description": "PowerShell and Windows administration: scripts, env vars, registry, services, event log, features. Actions \u2014 event_log: Read Windows Event Log entries (Windows only) (Windows only); get_env: Read environment variables via PowerShell; registry_read: Read a Windows registry key or value (Windows only) (Windows only); registry_write: Write a value to the Windows registry (Windows only, use with caution) (Windows only); run: Execute a PowerShell script on Windows; service_control: Start, stop, or restart a system service; service_list: List Windows/system services with their status (Windows/macOS/Linux); set_env: Set an environment variable via PowerShell (Windows only); windows_features: List Windows optional features and capabilities (Windows only) (Windows only).",
+  "input_schema": {
+   "properties": {
+    "action": {
+     "description": "The operation to perform.",
+     "enum": [
+      "event_log",
+      "get_env",
+      "registry_read",
+      "registry_write",
+      "run",
+      "service_control",
+      "service_list",
+      "set_env",
+      "windows_features"
+     ],
+     "type": "string"
+    },
+    "count": {
+     "default": 20,
+     "description": "Used with action(s): event_log.",
+     "type": "integer"
+    },
+    "filter": {
+     "description": "Used with action(s): service_list, windows_features.",
+     "type": "string"
+    },
+    "installed_only": {
+     "default": true,
+     "description": "Used with action(s): windows_features.",
+     "type": "boolean"
+    },
+    "key_path": {
+     "description": "Used with action(s): registry_read, registry_write.",
+     "type": "string"
+    },
+    "level": {
+     "default": "Error",
+     "description": "Used with action(s): event_log.",
+     "type": "string"
+    },
+    "log_name": {
+     "default": "System",
+     "description": "Used with action(s): event_log.",
+     "type": "string"
+    },
+    "name": {
+     "description": "Used with action(s): get_env, service_control, set_env.",
+     "type": "string"
+    },
+    "scope": {
+     "default": "Process",
+     "description": "Used with action(s): set_env.",
+     "type": "string"
+    },
+    "script": {
+     "description": "PowerShell script to execute (Windows only). Has access to COM, WMI, .NET APIs, and registry. Used with action(s): run.",
+     "type": "string"
+    },
+    "service_action": {
+     "description": "Used with action(s): service_control.",
+     "type": "string"
+    },
+    "source": {
+     "description": "Used with action(s): event_log.",
+     "type": "string"
+    },
+    "status": {
+     "description": "Used with action(s): service_list.",
+     "type": "string"
+    },
+    "timeout": {
+     "default": 30,
+     "description": "Seconds before the script is forcefully terminated. Used with action(s): run.",
+     "maximum": 300,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "value": {
+     "description": "Used with action(s): registry_write, set_env.",
+     "type": "string"
+    },
+    "value_name": {
+     "description": "Used with action(s): registry_read, registry_write.",
+     "type": "string"
+    },
+    "value_type": {
+     "default": "String",
+     "description": "Used with action(s): registry_write.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  },
+  "name": "local_windows_ps"
+ },
+ {
+  "category": "File Operations",
+  "description": "Execute the Write tool.",
+  "input_schema": {
+   "properties": {
+    "content": {
+     "description": "Content to write to the file.",
+     "type": "string"
+    },
+    "create_directories": {
+     "default": true,
+     "description": "Create parent directories if they don't exist.",
+     "type": "boolean"
+    },
+    "file_path": {
+     "description": "Absolute or workspace-relative path to write.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "file_path",
+    "content"
+   ],
+   "type": "object"
+  },
+  "name": "Write"
+ },
+ {
+  "category": "Documents",
+  "description": "Create or update a document in the local store.",
+  "input_schema": {
+   "properties": {
+    "content": {
+     "description": "Markdown content to write.",
+     "type": "string"
+    },
+    "folder": {
+     "default": "General",
+     "description": "Folder to save the document in.",
+     "type": "string"
+    },
+    "label": {
+     "description": "Document title (used as file name).",
+     "type": "string"
+    }
+   },
+   "required": [
+    "label",
+    "content"
+   ],
+   "type": "object"
+  },
+  "name": "WriteDocument"
+ }
+]

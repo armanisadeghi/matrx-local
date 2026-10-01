@@ -49,6 +49,14 @@ export interface ToolFieldSchema {
   max?: number;
   /** Regex pattern for text validation */
   pattern?: string;
+  /** Number must be a whole number (JSON Schema "integer") */
+  integer?: boolean;
+  /** Number must be strictly greater than this */
+  exclusiveMin?: number;
+  /** Number must be strictly less than this */
+  exclusiveMax?: number;
+  /** Element type for tags fields whose array holds numbers */
+  itemType?: "string" | "number" | "integer";
 
   // Type-specific options
   /** Options for select-type fields */

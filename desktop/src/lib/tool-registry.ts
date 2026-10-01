@@ -4,15 +4,27 @@ import type {
   ToolUISchema,
 } from "@/types/tool-schema";
 
+interface EngineProperty {
+  type?: string | string[];
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  anyOf?: EngineProperty[];
+  items?: EngineProperty;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  minLength?: number;
+  maxLength?: number;
+}
+
 interface EngineToolSchema {
   name: string;
   description: string;
   category?: string;
   input_schema?: {
-    properties?: Record<
-      string,
-      { type?: string; description?: string; default?: unknown }
-    >;
+    properties?: Record<string, EngineProperty>;
     required?: string[];
   };
 }
@@ -265,29 +277,97 @@ const toFieldType = (type?: string): ToolFieldSchema["type"] => {
 const toTitleCase = (value: string) =>
   value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+/**
+ * Collapse `anyOf` / type lists to the one shape the form can render.
+ * Arrays win (tags), then strings (a text box accepts every scalar the
+ * server will parse), then the first non-null branch.
+ */
+type ResolvedProperty = Omit<EngineProperty, "type"> & { type?: string | undefined };
+
+function resolveProperty(def: EngineProperty): ResolvedProperty {
+  if (Array.isArray(def.type)) {
+    const t = def.type.find((x) => x !== "null");
+    return { ...def, type: t };
+  }
+  if (def.type || !def.anyOf) return def as ResolvedProperty;
+  const branches = def.anyOf
+    .map(resolveProperty)
+    .filter((b) => b.type !== "null");
+  const { anyOf: _drop, ...rest } = def;
+  // A list OR a mapping (e.g. ExtractEntities.labels) — only a JSON box can
+  // express both.
+  if (branches.some((b) => b.type === "array") && branches.some((b) => b.type === "object")) {
+    return { ...rest, type: "object" };
+  }
+  const pick: ResolvedProperty =
+    branches.find((b) => b.type === "array") ??
+    branches.find((b) => b.type === "string") ??
+    branches[0] ??
+    {};
+  return { ...pick, ...rest, type: pick.type };
+}
+
+function toField(
+  name: string,
+  raw: EngineProperty,
+  isRequired: boolean,
+): ToolFieldSchema {
+  const def = resolveProperty(raw);
+  const enumValues =
+    def.enum && def.enum.length > 0 && def.enum.every((v) => typeof v === "string")
+      ? (def.enum as string[])
+      : null;
+  // Only treat *string* params as file paths — the name heuristic was
+  // overriding ARRAY types (e.g. ArchiveCreate.source_paths), so the form
+  // submitted a plain string the handler then iterated per character.
+  const isPath =
+    !enumValues &&
+    name.toLowerCase().includes("path") &&
+    (def.type === "string" || def.type === undefined);
+  const type: ToolFieldSchema["type"] = enumValues
+    ? "select"
+    : isPath
+      ? "file-path"
+      : toFieldType(def.type);
+
+  const field: ToolFieldSchema = {
+    name,
+    label: toTitleCase(name),
+    type,
+    ...(def.description !== undefined ? { description: def.description } : {}),
+    // A null default means "omitted" — never a value the form must hold.
+    ...(def.default !== undefined && def.default !== null
+      ? { defaultValue: def.default }
+      : {}),
+    required: isRequired,
+    ...(isPath ? { placeholder: "/path/to/file" } : {}),
+  };
+
+  if (enumValues) {
+    field.options = enumValues.map((v) => ({ label: v, value: v }));
+  }
+  if (type === "number") {
+    if (def.type === "integer") field.integer = true;
+    if (def.minimum !== undefined) field.min = def.minimum;
+    if (def.maximum !== undefined) field.max = def.maximum;
+    if (def.exclusiveMinimum !== undefined) field.exclusiveMin = def.exclusiveMinimum;
+    if (def.exclusiveMaximum !== undefined) field.exclusiveMax = def.exclusiveMaximum;
+  }
+  if (type === "tags") {
+    const itemType = def.items ? resolveProperty(def.items).type : undefined;
+    if (itemType === "number" || itemType === "integer") field.itemType = itemType;
+  }
+  return field;
+}
+
 export function fromEngineSchema(schema: EngineToolSchema): ToolUISchema {
   const properties = schema.input_schema?.properties ?? {};
   const required = new Set(schema.input_schema?.required ?? []);
   const mappedCat = mapCategory(schema.category ?? "");
   const meta = toolCategories.find((c) => c.id === mappedCat);
 
-  const fields = Object.entries(properties).map(
-    ([name, def]): ToolFieldSchema => ({
-      name,
-      label: toTitleCase(name),
-      // Only treat *string* params as file paths — the name heuristic was
-      // overriding ARRAY types (e.g. ArchiveCreate.source_paths), so the form
-      // submitted a plain string the handler then iterated per character.
-      type:
-        name.toLowerCase().includes("path") &&
-        (def.type === "string" || def.type === undefined)
-          ? "file-path"
-          : toFieldType(def.type),
-      ...(def.description !== undefined ? { description: def.description } : {}),
-      defaultValue: def.default,
-      required: required.has(name),
-      ...(name.includes("path") ? { placeholder: "/path/to/file" } : {}),
-    }),
+  const fields = Object.entries(properties).map(([name, def]) =>
+    toField(name, def, required.has(name)),
   );
 
   return {

@@ -211,8 +211,9 @@ def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:
     required: list[str] = []
 
     for param_name, param in sig.parameters.items():
-        # Skip 'session' parameter — injected by dispatcher
-        if param_name == "session":
+        # Skip 'session' (injected by dispatcher) and _private params the
+        # engine passes itself (e.g. ScheduleTask._task_id on restore).
+        if param_name == "session" or param_name.startswith("_"):
             continue
 
         schema = _python_type_to_json_schema(param.annotation)
@@ -242,13 +243,40 @@ def generate_tool_schema(tool_name: str) -> dict[str, Any] | None:
     }
 
 
+def _with_arg_model_fields(schema: dict[str, Any]) -> dict[str, Any]:
+    """Swap introspected fields for the arg model's validated definitions.
+
+    Signature introspection loses every bound and description the server
+    enforces (BookCapture showed a 0–1 threshold as a bare number), so a form
+    built from it accepts values the handler then refuses. Handler-only
+    params the model does not declare are kept as introspected.
+    """
+    from app.tools.catalog import get_by_dispatcher_name
+
+    entry = get_by_dispatcher_name(schema["name"])
+    if entry is None or entry.arg_model is None:
+        return schema
+    model_props = entry.input_schema.get("properties", {})
+    properties = {}
+    for name, legacy in schema["input_schema"]["properties"].items():
+        rich = model_props.get(name)
+        if rich is None:
+            properties[name] = legacy
+            continue
+        merged = {k: v for k, v in rich.items() if k != "title"}
+        if "description" not in merged and "description" in legacy:
+            merged["description"] = legacy["description"]
+        properties[name] = merged
+    return {**schema, "input_schema": {**schema["input_schema"], "properties": properties}}
+
+
 def generate_all_tool_schemas() -> list[dict[str, Any]]:
     """Generate schemas for all registered tools."""
     schemas = []
     for tool_name in sorted(TOOL_HANDLERS.keys()):
         schema = generate_tool_schema(tool_name)
         if schema:
-            schemas.append(schema)
+            schemas.append(_with_arg_model_fields(schema))
     return schemas
 
 

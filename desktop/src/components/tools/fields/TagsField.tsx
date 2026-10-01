@@ -9,13 +9,22 @@ interface FieldProps {
 }
 
 export function TagsField({ field }: FieldProps) {
-  const { control } = useFormContext();
+  const { control, formState: { errors } } = useFormContext();
+  const fieldError = errors[field.name] as
+    | { message?: string; [i: number]: { message?: string } | undefined }
+    | undefined;
+  const errorMessage =
+    fieldError?.message ??
+    (Array.isArray(fieldError)
+      ? fieldError.find((e) => e?.message)?.message
+      : undefined);
   const [inputValue, setInputValue] = useState("");
 
   const addTag = useCallback(
     (tags: string[], onChange: (v: string[]) => void) => {
       const value = inputValue.trim();
-      if (value && !tags.includes(value)) {
+      // Repeats are real values (a region of 0, 0, 800, 600).
+      if (value) {
         onChange([...tags, value]);
         setInputValue("");
       }
@@ -52,9 +61,9 @@ export function TagsField({ field }: FieldProps) {
               />
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {tags.map((tag) => (
+                  {tags.map((tag, index) => (
                     <Badge
-                      key={tag}
+                      key={`${index}-${tag}`}
                       variant="secondary"
                       className="text-xs gap-1 pr-1"
                     >
@@ -63,7 +72,7 @@ export function TagsField({ field }: FieldProps) {
                         type="button"
                         className="rounded-full hover:bg-foreground/10 p-0.5"
                         onClick={() =>
-                          rhf.onChange(tags.filter((t) => t !== tag))
+                          rhf.onChange(tags.filter((_, i) => i !== index))
                         }
                       >
                         <X className="h-3 w-3" />
@@ -78,6 +87,9 @@ export function TagsField({ field }: FieldProps) {
       />
       {field.description && (
         <p className="text-xs text-muted-foreground">{field.description}</p>
+      )}
+      {errorMessage && (
+        <p className="text-xs text-destructive">{errorMessage}</p>
       )}
     </div>
   );

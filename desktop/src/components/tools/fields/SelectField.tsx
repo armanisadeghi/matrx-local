@@ -9,6 +9,9 @@ import {
 import { Label } from "@ai-matrx/design-system";
 import type { ToolFieldSchema } from "@/types/tool-schema";
 
+/** Radix forbids an empty item value; this one means "leave unset". */
+const NONE = "__none__";
+
 interface FieldProps {
   field: ToolFieldSchema;
 }
@@ -26,11 +29,15 @@ export function SelectField({ field }: FieldProps) {
         name={field.name}
         control={control}
         render={({ field: rhf }) => (
-          <Select value={rhf.value ?? ""} onValueChange={rhf.onChange}>
+          <Select
+            value={rhf.value ?? ""}
+            onValueChange={(v) => rhf.onChange(v === NONE ? undefined : v)}
+          >
             <SelectTrigger className="w-full">
               <SelectValue placeholder={field.placeholder ?? "Select..."} />
             </SelectTrigger>
             <SelectContent>
+              {!field.required && <SelectItem value={NONE}>—</SelectItem>}
               {(field.options ?? []).map((opt) => (
                 <SelectItem key={opt.value} value={opt.value}>
                   {opt.label}

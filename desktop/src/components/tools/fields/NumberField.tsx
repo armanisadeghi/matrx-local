@@ -9,14 +9,22 @@ interface FieldProps {
 export function NumberField({ field }: FieldProps) {
   const { register, formState: { errors } } = useFormContext();
 
+  const lower =
+    field.exclusiveMin !== undefined
+      ? `> ${field.exclusiveMin}`
+      : field.min !== undefined
+        ? `≥ ${field.min}`
+        : null;
+  const upper =
+    field.exclusiveMax !== undefined
+      ? `< ${field.exclusiveMax}`
+      : field.max !== undefined
+        ? `≤ ${field.max}`
+        : null;
   const rangeHint =
     field.min !== undefined && field.max !== undefined
       ? `${field.min} – ${field.max}`
-      : field.min !== undefined
-        ? `min ${field.min}`
-        : field.max !== undefined
-          ? `max ${field.max}`
-          : null;
+      : [lower, upper].filter(Boolean).join(", ") || null;
 
   return (
     <div className="space-y-1.5">
@@ -40,8 +48,8 @@ export function NumberField({ field }: FieldProps) {
         id={field.name}
         type="number"
         // Without step the browser assumes 1 and rejects any decimal
-        // (0.9, 0.001) on submit — including the tool's own defaults.
-        step="any"
+        // (0.9, 0.001) — including the tool's own defaults.
+        step={field.integer ? 1 : "any"}
         placeholder={
           field.placeholder ??
           (field.defaultValue !== undefined ? String(field.defaultValue) : undefined)

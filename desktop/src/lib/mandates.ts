@@ -18,31 +18,18 @@
  */
 
 import {
-  type DynamicMandateKey,
+  type AnyMandateKey,
   MANDATE_KEYS,
   type MandateKey,
+  storedMandateKey,
 } from "@ai-matrx/agents/mandates";
 
 /**
- * What a carrier accepts when the key may be a declared one OR a DB-authored
- * one (`app.*` / `shortcut.*`, `mandate.definition` origin='user'). Mirrors
- * matrx-frontend's `features/mandates/mandate-key.ts` — the same name, so the
- * mandate reference scanner reads a binding of this type as a proven key in
- * flight (`passthrough`), never an `UNRESOLVED_KEY`.
+ * `AnyMandateKey` and `storedMandateKey` have ONE definition platform-wide, in
+ * `@ai-matrx/agents/mandates`. Re-exported so existing `@/lib/mandates`
+ * imports keep working; never redefine them here.
  */
-export type AnyMandateKey = MandateKey | DynamicMandateKey;
-
-/**
- * A KEY THIS CODE DID NOT CHOOSE — a stored `mandate:` ref — entering the typed
- * world named for what it is. The SERVER is the authority on whether it exists
- * (a key declared after this build shipped is real there and absent here), so
- * this TYPES and never rejects; the server answers an unknown key with a 404
- * that names it. Never use it on a key this repo picks: those go through
- * `MANDATE_KEYS.<id>`.
- */
-export function storedMandateKey(value: string): AnyMandateKey {
-  return value as AnyMandateKey;
-}
+export { type AnyMandateKey, storedMandateKey };
 
 /** Canonical server-resolved target for a brand-new desktop Cloud Chat. */
 export const DEFAULT_CHAT_MANDATE_KEY: MandateKey =

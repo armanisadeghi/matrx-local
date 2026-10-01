@@ -803,7 +803,7 @@ function ScrapeDelayRow({
                 onChange(s);
               }}
               min={0}
-              step={0.5}
+              step={0.1}
               className="w-16 text-right"
             />
             <span className="text-xs text-muted-foreground">sec</span>

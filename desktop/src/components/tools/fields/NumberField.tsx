@@ -39,6 +39,9 @@ export function NumberField({ field }: FieldProps) {
       <Input
         id={field.name}
         type="number"
+        // Without step the browser assumes 1 and rejects any decimal
+        // (0.9, 0.001) on submit — including the tool's own defaults.
+        step="any"
         placeholder={
           field.placeholder ??
           (field.defaultValue !== undefined ? String(field.defaultValue) : undefined)

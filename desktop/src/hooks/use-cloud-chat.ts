@@ -18,6 +18,7 @@ import {
   applyOrganizationContextHeader,
   extractMatrxErrorMessage,
   fetchWithMatrxProtocolFallback,
+  readConversationOrganizationId as readRunConversationOrganizationId,
   readLiveRunRejoin,
   readLiveStreamUnavailable,
   streamErrorText,
@@ -150,24 +151,27 @@ function parseJsonText(text: string): unknown {
  * work on that run, so they carry ITS organization — never the session's
  * selection. Null when unreadable (the caller keeps the active one).
  */
-async function readConversationOrganizationId(
+function readConversationOrganizationId(
   cloudConversationId: string,
 ): Promise<string | null> {
-  const { data, error } = await supabase
-    .schema("chat")
-    .from("conversation")
-    .select("organization_id")
-    .eq("id", cloudConversationId)
-    .maybeSingle();
-  const organizationId = (data as { organization_id?: unknown } | null)?.organization_id;
-  if (error || typeof organizationId !== "string" || !organizationId) {
-    console.warn(
-      "[cloud-chat] conversation organization unreadable; rejoining under the active organization",
-      error?.message ?? null,
-    );
-    return null;
-  }
-  return organizationId;
+  return readRunConversationOrganizationId(
+    cloudConversationId,
+    async (id) => {
+      const { data, error } = await supabase
+        .schema("chat")
+        .from("conversation")
+        .select("organization_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as { organization_id?: unknown } | null)?.organization_id;
+    },
+    (reason) =>
+      console.warn(
+        "[cloud-chat] conversation organization unreadable; rejoining under the active organization",
+        reason,
+      ),
+  );
 }
 
 /** How often a turn this surface stopped streaming is re-checked and re-read. */

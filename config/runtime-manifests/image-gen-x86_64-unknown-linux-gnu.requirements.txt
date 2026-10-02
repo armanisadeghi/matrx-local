@@ -176,8 +176,8 @@ cuda-bindings==12.9.4 ; sys_platform == 'linux' \
     --hash=sha256:f69107389e6b9948969bfd0a20c4f571fd1aefcfb1d2e1b72cc8ba5ecb7918ab \
     --hash=sha256:fda147a344e8eaeca0c6ff113d2851ffca8f7dfc0a6c932374ee5c47caa649c8
     # via torch
-cuda-pathfinder==1.8.2 ; sys_platform == 'linux' \
-    --hash=sha256:4e65059febdb4d19d5cbc4798677e19db2b582f2f702f457b609e571690d357e
+cuda-pathfinder==1.8.3 ; sys_platform == 'linux' \
+    --hash=sha256:e29e59829c297a7a5233bd9cc71094fc5bddbd076951482670178f9eade39b1f
     # via cuda-bindings
 diffusers==0.39.0 \
     --hash=sha256:14bb1d98c85a0e463d734c99aaa73b480a7bc9bad22af30fbf730ef8f09c1d67 \

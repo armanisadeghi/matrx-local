@@ -140,6 +140,13 @@ if ! $MODE_SMOKE_ONLY; then
     run_step "t13 row-column ratchet" \
       uv run --frozen python scripts/check_t13_row_column_source.py
 
+    # ONE-HOME retired words (old schema and actor-tier names): shrink-only.
+    # Scanner lives in ../aidream; exits 2 (UNMEASURED) when that checkout is absent.
+    run_step "retired-words guard can fail" \
+      scripts/check-retired-words.sh --self-test
+    run_step "retired-words guard" \
+      scripts/check-retired-words.sh
+
     # Import check — catches circular imports and missing deps
     run_step "python import check" \
       uv run --frozen python -c "import app.main; print('OK')"

@@ -18,8 +18,13 @@ import {
   applyOrganizationContextHeader,
   extractMatrxErrorMessage,
   fetchWithMatrxProtocolFallback,
+  followUnavailableRejoin,
   readLiveRunRejoin,
+  readLiveStreamUnavailable,
+  settleRunPickup,
   streamErrorText,
+  type MatrxLiveRunRejoin,
+  type MatrxTransport,
 } from "@ai-matrx/agents/matrx";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
@@ -2226,6 +2231,9 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         // the RUN's organization once known.
         let liveRunRejoins = 0;
         let runOrganizationId: string | null = null;
+        // The live run this loop is rejoining — so the rejoin's own
+        // `409 live_stream_unavailable` (no journal) is recognised.
+        let activeRejoin: MatrxLiveRunRejoin | null = null;
         /**
          * Hand this conversation to the follower instead of calling it failed.
          *
@@ -2755,9 +2763,75 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               setStatus("This turn is still running — rejoining it...");
               runOrganizationId =
                 (await readConversationOrganizationId(cloudConversationId)) ?? runOrganizationId;
+              activeRejoin = liveRun;
               requestUrl = `${cloudServerUrl}/api${liveRun.rejoinPath}`;
               requestBody = {};
               continue;
+            }
+            // The rejoin has no journal to replay (`409 live_stream_unavailable`):
+            // the package's ONE fallback — follow the run to its end, then show
+            // the SAVED turn (`settleRunPickup`) — exactly as the web app and
+            // the extension do. Never a failed request for a run that did not fail.
+            const unavailable =
+              activeRejoin && cloudConversationId
+                ? readLiveStreamUnavailable({ status: response.status, serverDetail: errorBody })
+                : null;
+            if (unavailable && activeRejoin && !abort.signal.aborted) {
+              setStatus("This turn is still running — following it to the end...");
+              const followToken = await getFreshAccessToken();
+              const cloudTransport: MatrxTransport = {
+                fetch: (path, init) =>
+                  fetch(`${cloudServerUrl}/api${path}`, {
+                    method: init.method,
+                    headers: { ...init.headers, Authorization: `Bearer ${followToken}` },
+                    ...(init.body !== undefined ? { body: init.body } : {}),
+                    ...(init.signal ? { signal: init.signal } : {}),
+                  }),
+              };
+              const followed = await followUnavailableRejoin(
+                cloudTransport,
+                activeRejoin,
+                unavailable,
+                {
+                  signal: abort.signal,
+                  ...(runOrganizationId ? { organizationId: runOrganizationId } : {}),
+                },
+              ).catch((followError: unknown) => {
+                addDiagnostic(
+                  `Following the run failed (${followError instanceof Error ? followError.message : String(followError)}) — reloading the saved turn.`,
+                );
+                return null;
+              });
+              const settlement = await settleRunPickup(
+                followed ?? { kind: "followed", executionId: "unknown", ended: false, status: null },
+                {
+                  reloadSavedTurn: () => hydrateConversationMessages(conversationId, true),
+                  // The follow gave up while the turn may still be running:
+                  // hand it to this surface's live-turn follower, which keeps
+                  // re-reading the saved turn until it lands.
+                  onStillRunning: async () => {
+                    if (!(await followIfTurnIsAlive())) {
+                      await hydrateConversationMessages(conversationId, true);
+                    }
+                  },
+                },
+              );
+              addDiagnostic(`Rejoin without a live journal settled: ${settlement.state}.`);
+              if (settlement.state === "settled" && settlement.reloaded) {
+                // The saved turn replaced the streaming placeholder; if nothing
+                // was saved, the placeholder at least stops spinning.
+                updateAssistant({ content: accumulated, isStreaming: false });
+                return;
+              }
+              if (settlement.state === "still_running" && settlement.reloaded) {
+                updateAssistant({
+                  content: accumulated,
+                  isStreaming: false,
+                  streamStatus:
+                    "This turn is still running — the reply appears here as soon as it lands.",
+                });
+                return;
+              }
             }
             // A resume refused with 409 `outstanding_delegated_calls` /
             // `resume_conflict` is NOT a failed turn. It means a sibling tool

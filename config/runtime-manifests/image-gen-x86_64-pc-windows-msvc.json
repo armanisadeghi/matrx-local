@@ -1,5 +1,5 @@
 {
-  "contract_sha256": "2ad1964b58a8c056be9334c50735a83502a018b9fd5366bf95c784edf4ecd7fa",
+  "contract_sha256": "3452946b00c814bb6d9091565e0dccae4e47798280289a99de1dcdbf83deba52",
   "lock_file": "image-gen-x86_64-pc-windows-msvc.requirements.txt",
   "lock_sha256": "799aef7e5335d7eb9befe966b66e5e37fb9d10dde07b902268b62a482e1ba593",
   "packages": [

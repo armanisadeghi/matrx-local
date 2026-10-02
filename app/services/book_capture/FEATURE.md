@@ -92,5 +92,5 @@ were each confirmed to turn a guard red.
 
 **Not yet verified by anyone: a real capture of a real book on a real screen.**
 That run belongs to the owner, deliberately; the guided session is
-`common-docs/operations/for-arman/2026-09-19/book-capture-first-run.md`, and
+for-Arman hand-over 2026-09-19 · book-capture-first-run.md (deleted in d0e885c98), and
 board row E1 stays `doing` until he has done it.

@@ -18,7 +18,7 @@ that FAILS verification is 401, while a session this machine could not CHECK —
 the key set out of reach — is refused with 503
 ``session_verification_unavailable``, which still fails closed but never tells
 a signed-in user their credentials are invalid. Contract:
-``common-docs/systems/platform/proxy-identity/FEATURE.md``.
+``common-docs/systems/platform/auth/proxy-identity/FEATURE.md``.
 
 We deliberately do NOT hit /admin/shutdown here (a pass-through would kill the
 shared test engine); /settings and /tools/invoke are sufficient witnesses.

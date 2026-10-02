@@ -35,7 +35,7 @@ This module draws the missing distinction and verifies identity:
    ES256; verified 2026-09-20), and the round trip it justified put a
    5s-timeout network call on the auth hot path of every tunnel-reachable
    request — so a network blip locked the user out of their own desktop app.
-   Contract: ``common-docs/systems/platform/proxy-identity/FEATURE.md`` —
+   Contract: ``common-docs/systems/platform/auth/proxy-identity/FEATURE.md`` —
    local verification instead of a per-request auth-server round trip, a
    BOUNDED resolve, and an authority we could not REACH is never read as a
    signed-out person.

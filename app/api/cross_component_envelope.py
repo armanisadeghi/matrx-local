@@ -56,7 +56,7 @@ class CrossComponentEnvelope(BaseModel):
     (`matrx-extension-bridge:<userId>`, `matrx-local-bridge:<userId>`,
     `matrx-server-bus:<userId>` — the last one ACTIVE since 2026-09-11 as the
     platform client-directive channel, `kind:"directive"`; this client does not
-    subscribe yet: common-docs/systems/platform/realtime/CLIENT-DIRECTIVES.md).
+    subscribe yet: common-docs/systems/architecture/realtime/CLIENT-DIRECTIVES.md).
     v1 publishers parse cleanly: missing
     v2 fields default appropriately.
     """

@@ -1,7 +1,7 @@
 # Home Connection — this computer as the internet exit (residential egress)
 
 **The contract is NOT here.** One document rules all five repos:
-`/Users/armanisadeghi/code/common-docs/systems/platform/residential-egress/FEATURE.md`.
+`/Users/armanisadeghi/code/common-docs/systems/architecture/residential-egress/FEATURE.md`.
 Read it before changing anything in this folder. This file covers only what the
 desktop engine does.
 

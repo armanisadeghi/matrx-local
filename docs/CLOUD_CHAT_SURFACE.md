@@ -197,7 +197,7 @@ Marked "coming soon" in the + menu; each item names its frontend reference:
     `UPDATE … RETURNING` under a 6-hour lease, scoped to
     `target_instance_id IS NULL OR = :caller`; this engine sends `instance_id`
     (`app/services/delegation/client.py:173`); the picker route `/desktop-instances` is mounted.
-    The contract is `common-docs/systems/clients/client-tool-delegation/FEATURE.md` §2.7.
+    The contract is `common-docs/systems/apps/client-tool-delegation/FEATURE.md` §2.7.
 
 ## Unification note (Arman's directive)
 

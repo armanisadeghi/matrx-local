@@ -30,7 +30,7 @@ Default engine: `http://127.0.0.1:22140` (scan 22140–22159). Discovery: `~/.ma
 | Local scraper engine | [scraper-engine.md](./scraper-engine.md) |
 | Remote scraper server | [remote-scraper.md](./remote-scraper.md) |
 | OAuth, JWT, extension auth | [authentication.md](./authentication.md) |
-| matrx-extend bridge | [/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md) |
+| matrx-extend bridge | [/Users/armanisadeghi/code/common-docs/systems/apps/extension/CHANNELS.md](/Users/armanisadeghi/code/common-docs/systems/apps/extension/CHANNELS.md) |
 | Tauri shell, packaging, tray, CSP | [desktop-tauri.md](./desktop-tauri.md) |
 | **Lifecycle & ownership** | [lifecycle-ownership.md](./lifecycle-ownership.md) |
 | Ports, `local.json`, data paths | [runtime-paths.md](./runtime-paths.md) |

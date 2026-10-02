@@ -10,7 +10,7 @@ deliberately isolated so:
     the primary UI session manager (`app.websocket_manager`).
   * Wire format diverges — `/ws` speaks the in-process tool dispatcher's
     language, `/extension/ws` speaks the engine→browser invocation
-    envelope contract documented in `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`.
+    envelope contract documented in `/Users/armanisadeghi/code/common-docs/systems/apps/extension/CHANNELS.md`.
 
 This module owns:
 

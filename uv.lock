@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -633,7 +633,7 @@ name = "cuda-bindings"
 version = "12.9.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder" },
+    { name = "cuda-pathfinder", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/56/e465c31dc9111be3441a9ba7df1941fe98f4aa6e71e8788a3fb4534ce24d/cuda_bindings-12.9.4-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:32bdc5a76906be4c61eb98f546a6786c5773a881f3b166486449b5d141e4a39f", size = 11906628, upload-time = "2025-10-21T14:51:49.905Z" },
@@ -1943,7 +1943,7 @@ name = "macholib"
 version = "1.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "altgraph" },
+    { name = "altgraph", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz", hash = "sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362", size = 59427, upload-time = "2025-11-22T08:28:38.373Z" }
 wheels = [
@@ -2029,7 +2029,7 @@ wheels = [
 
 [[package]]
 name = "matrx-ai"
-version = "0.5.319"
+version = "0.5.420"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2056,6 +2056,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pathspec" },
+    { name = "pillow" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -2067,27 +2068,27 @@ dependencies = [
     { name = "wcmatch" },
     { name = "xai-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/08/1d/d835621459aa9e1b19492b9210e3b0a87097a5b0dc589df46024ef30904c/matrx_ai-0.5.319.tar.gz", hash = "sha256:f936cd867467aa48e3cb2aaabbb0a5ca5f264fdefd3cbe6d9d337c8f817aa33e", size = 3660929, upload-time = "2026-09-15T18:42:28.839Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/3a/10a520901f288161b6f15090ece6d400446ebf06c3d859ff6f67acb62db8/matrx_ai-0.5.420.tar.gz", hash = "sha256:dd4e0eff0724959bc7e5fa42a106d34da3914312dfa863b4a5f8750e5630c72a", size = 5063341, upload-time = "2026-10-02T08:16:46.062Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/39/bfdacdca6670c1d1b0478ded63752f60fce279659dc27fbf4364def93e25/matrx_ai-0.5.319-py3-none-any.whl", hash = "sha256:74521fcf0e5d9753ce3b54dabfd816d520050048473432f4eeb1cb9cf45e5ed4", size = 3276586, upload-time = "2026-09-15T18:42:26.257Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/3e/e4be40c4f352599fb074985ff4e95c1d8c59ca3a9d25e26e8e21737c4850/matrx_ai-0.5.420-py3-none-any.whl", hash = "sha256:94e4634968db99b5ec97f4f007540e7ecefae56c722ff954910d81ecc7f28e12", size = 4243566, upload-time = "2026-10-02T08:16:43.895Z" },
 ]
 
 [[package]]
 name = "matrx-assignment"
-version = "0.1.19"
+version = "0.1.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matrx-utils" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/33/16/df1d19c35dd756000cf24f60bb7c6e9d687a07341f46b929e993c7d8dd44/matrx_assignment-0.1.19.tar.gz", hash = "sha256:9ef330cab35ab1fdaef2330d414f4857e3555525691c8493b3047981e48bd2cd", size = 16311, upload-time = "2026-09-14T10:10:35.253Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/99/22779e59401508af256ccfe40f46e6a564ed5318f58fdbc37b02d16809c7/matrx_assignment-0.1.34.tar.gz", hash = "sha256:d93fc0924ae85235c1a04472a08fe006a8d04106afd18bf7d974783fd27a37fd", size = 16962, upload-time = "2026-09-29T06:45:13.417Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/ca/7ede725abfb664589af18c3943dbbd4a7965046734b1d89923f3f9bb2f13/matrx_assignment-0.1.19-py3-none-any.whl", hash = "sha256:764a58a1bbe10229310c69913410c2c9d8c91b032a078665f6ca878b163edda1", size = 13065, upload-time = "2026-09-14T10:10:34.074Z" },
+    { url = "https://files.pythonhosted.org/packages/06/5c/d2f6ac08975c6cac30e910ceee0fa2d9de58777283401c3791f6234dcb7e/matrx_assignment-0.1.34-py3-none-any.whl", hash = "sha256:bbaf2929760b321cd28acc914edad90a9d1f49f7d8dd5db2af3f2864beca1217", size = 13065, upload-time = "2026-09-29T06:45:12.042Z" },
 ]
 
 [[package]]
 name = "matrx-connect"
-version = "0.1.104"
+version = "0.1.162"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -2098,14 +2099,14 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "sse-starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/0f/acf107f501c270a855d8b9b703cabc7839f0c435ab01c0b2df8984e496d3/matrx_connect-0.1.104.tar.gz", hash = "sha256:230a016ae0899fc8e6757cc9bcc288f601d0e6e935add4d242889eb0f324bbc9", size = 246252, upload-time = "2026-09-15T18:07:03.931Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/c8/e433da17c05a419c23296494675e1bb02464163d7ae0bf0e8cfacbf0c4cb/matrx_connect-0.1.162.tar.gz", hash = "sha256:3631deb85faf433d2e3edef83ba147d86d407fe6f930577edd852bfa660bc98c", size = 335694, upload-time = "2026-10-02T06:53:21.469Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/53/879bd597a602aadc0aae14f06619c5c717f5b57a4a57fe8f6a685d85b766/matrx_connect-0.1.104-py3-none-any.whl", hash = "sha256:5a6082c80761d0e991ecff63e39e8885fa105a3196863119bfc218e36d4d8e48", size = 196486, upload-time = "2026-09-15T18:07:02.217Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/2e/6551709d1fd883fe5ebfb20cf1c6896a358dba0fc465322bbb5499d96f88/matrx_connect-0.1.162-py3-none-any.whl", hash = "sha256:9f0ddaf3ee9c369666c7b46521cc6dedd324ab49330a9d1aa096a69874c7ddf1", size = 254538, upload-time = "2026-10-02T06:53:19.542Z" },
 ]
 
 [[package]]
 name = "matrx-files"
-version = "0.2.166"
+version = "0.2.236"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -2135,14 +2136,14 @@ dependencies = [
     { name = "requests" },
     { name = "xlsxwriter" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/c0/16662e23e55d69912461f4a717a646f05f94a5d77899427e05908478dedc/matrx_files-0.2.166.tar.gz", hash = "sha256:24c9930824b25a279253c6fac5c7857a2b1a5053f893142d84e1977ea819ecc0", size = 789380, upload-time = "2026-09-15T18:12:09.142Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/89/bd8940db826f1a71536957e910d687405785a0ae8fe7c5bb89b6e99270a8/matrx_files-0.2.236.tar.gz", hash = "sha256:a1459b3d9e5f593d3fc2cfe05ae2f6980aaf119df4c3f3cfacb32b7ee404fca4", size = 935514, upload-time = "2026-10-02T06:54:34.429Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/f1/75c3acd6aec13fafbcddb825a07e6ca403e46b652e4635959e525a3cb6fe/matrx_files-0.2.166-py3-none-any.whl", hash = "sha256:15d64bd9edaef6676048e7eabea6a3126ea275da8e1835d0dea788af84989597", size = 770825, upload-time = "2026-09-15T18:12:07.365Z" },
+    { url = "https://files.pythonhosted.org/packages/52/90/6534d91c729b337ed69b98c7ec0b899c7486f7c3833f93c45f4aacf829f6/matrx_files-0.2.236-py3-none-any.whl", hash = "sha256:abb902fdbd340bfac90976bb1c28b9d9c7d868a8305ac4725f68e907fad9ad28", size = 884284, upload-time = "2026-10-02T06:54:32.701Z" },
 ]
 
 [[package]]
 name = "matrx-graph"
-version = "0.2.165"
+version = "0.2.228"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -2153,9 +2154,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/28/7aa974c5a8c992b55b4b4f96b32cec9b3da635c1a8fe8b6050fd04e38cc2/matrx_graph-0.2.165.tar.gz", hash = "sha256:f77595750679aba7ffb40cad48ba4c0e2ef5029f8eddb98150da900662fe7fd7", size = 951459, upload-time = "2026-09-15T18:09:33.292Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/22/3615da0904173fb33b730b1a7a478dbbbab20a9f1e7069d5c8446fa3ffdb/matrx_graph-0.2.228.tar.gz", hash = "sha256:6bae5b4821b8f39771bde8dabad9200337fa52e0d53b2d7a50506ca15c96bcff", size = 1016427, upload-time = "2026-10-02T06:55:42.881Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/b4/23668ec20fd2879d114f6efdfa4927855311bbbc7cce5048ef319cd38da4/matrx_graph-0.2.165-py3-none-any.whl", hash = "sha256:25d48be57f353145367ae059bad80c1ba87df42eea7099f3c50252e5e666ad81", size = 702977, upload-time = "2026-09-15T18:09:31.19Z" },
+    { url = "https://files.pythonhosted.org/packages/52/5e/eee34223b11347adbcfa9e94aa82e8eb99b4ce751c4b3d247eedea6e2c23/matrx_graph-0.2.228-py3-none-any.whl", hash = "sha256:4df1cdaeae06ffbbb21638b487c838df177fe7d8636ba11c635547d65e3ec0a2", size = 747024, upload-time = "2026-10-02T06:55:41.123Z" },
 ]
 
 [[package]]
@@ -2296,15 +2297,15 @@ requires-dist = [
     { name = "kokoro-onnx", specifier = ">=0.5.0" },
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "markdownify", specifier = ">=0.14.1" },
-    { name = "matrx-ai", specifier = ">=0.5.319" },
-    { name = "matrx-connect", specifier = ">=0.1.25" },
-    { name = "matrx-files", specifier = ">=0.1.11" },
-    { name = "matrx-graph", specifier = ">=0.1.5" },
-    { name = "matrx-orm", specifier = ">=3.1.168" },
-    { name = "matrx-runtime", specifier = ">=0.0.6" },
-    { name = "matrx-scheduler", marker = "extra == 'scheduler'", specifier = ">=0.3.5" },
-    { name = "matrx-scraper", extras = ["browser", "pdf", "ocr"], specifier = ">=0.1.100" },
-    { name = "matrx-utils", specifier = ">=2.0.42" },
+    { name = "matrx-ai", specifier = ">=0.5.420" },
+    { name = "matrx-connect", specifier = ">=0.1.162" },
+    { name = "matrx-files", specifier = ">=0.2.236" },
+    { name = "matrx-graph", specifier = ">=0.2.228" },
+    { name = "matrx-orm", specifier = ">=3.1.202" },
+    { name = "matrx-runtime", specifier = ">=0.0.143" },
+    { name = "matrx-scheduler", marker = "extra == 'scheduler'", specifier = ">=0.3.282" },
+    { name = "matrx-scraper", extras = ["browser", "pdf", "ocr"], specifier = ">=0.2.295" },
+    { name = "matrx-utils", specifier = ">=2.0.58" },
     { name = "mss", specifier = ">=9.0.1" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "onnxruntime", specifier = ">=1.18.0" },
@@ -2366,7 +2367,7 @@ dev = [
 
 [[package]]
 name = "matrx-orm"
-version = "3.1.168"
+version = "3.1.202"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asyncpg" },
@@ -2379,27 +2380,27 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/77/72ed186a355e1eecbfd40bf8b4959f9c3ae557706cc45ac0b93cecc8ced7/matrx_orm-3.1.168.tar.gz", hash = "sha256:52b74be6eb3480b0471a4e3372aba2cf9cfb9deccaa7a53e5dad7704c81fe679", size = 1007857, upload-time = "2026-09-19T09:11:40.637Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/29/bf9ddc118d20e95febfe3c9f74a84466f68ae84e392be5bdea6ba2610ade/matrx_orm-3.1.202.tar.gz", hash = "sha256:92d27ddbbc1d421f78d3b518c535e6dd30f0e5447ab5f4c3f14a71ea9640dd62", size = 1126970, upload-time = "2026-10-01T21:14:10.488Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/9e/08531d273236cdffb75da716adda1933bb506b563ce47b011a7cedbce82c/matrx_orm-3.1.168-py3-none-any.whl", hash = "sha256:c7a6c39f183d374395e7b1db2cb262a8e6cd8b5932ed35014da2cf43eb757b66", size = 786858, upload-time = "2026-09-19T09:11:39.001Z" },
+    { url = "https://files.pythonhosted.org/packages/88/d7/fa1375ffe5eb55b461059f1da08ec21d541f0558b7a940ccf67b844db30d/matrx_orm-3.1.202-py3-none-any.whl", hash = "sha256:963206c1cc97b0a93e0407049d3ca99a630c2c3eca7ab7f46549fe7fa91c0f85", size = 857076, upload-time = "2026-10-01T21:14:08.207Z" },
 ]
 
 [[package]]
 name = "matrx-runtime"
-version = "0.0.101"
+version = "0.0.143"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matrx-orm" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/53/309af61eb3bcfc67fc7489e941662932cae187b054dd3dbeffa6bcc52cf7/matrx_runtime-0.0.101.tar.gz", hash = "sha256:814a8e04dc1e8b690ee00a548893468de88a04cc7d7323a81092792208c1cb10", size = 97309, upload-time = "2026-09-15T18:14:40.398Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/af/7f3152b7091f044b28015e573d033a15ba3b91b880062b80bec4725c53ac/matrx_runtime-0.0.143.tar.gz", hash = "sha256:d0267bebd45d3783f96717a8e4103cccf070a6e792498da3c54d5c92cd8640b8", size = 107120, upload-time = "2026-10-01T22:20:17.311Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/01/69c5a7b4e37c828fcb6f7c8183884c59410b8c3438923510011cdcc945cd/matrx_runtime-0.0.101-py3-none-any.whl", hash = "sha256:f346ad601a77681d5af65188b1a0240b6c4edd3117d234bc20fe149116c129ed", size = 66374, upload-time = "2026-09-15T18:14:38.975Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/5b/26f47a3a63a89ac223e580bbf97e83d71dfb0d3b32337232ae64f92af90a/matrx_runtime-0.0.143-py3-none-any.whl", hash = "sha256:ba711da588da8a839fbf5ee32551ac8c1f1dabab279ba6b089c68e8f64b26997", size = 70501, upload-time = "2026-10-01T22:20:16.024Z" },
 ]
 
 [[package]]
 name = "matrx-scheduler"
-version = "0.3.5"
+version = "0.3.282"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -2407,14 +2408,14 @@ dependencies = [
     { name = "pydantic" },
     { name = "supabase" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/69/eae183e39ebbbfdbb1166bb734d45416cd9b16852b87d31d367a5472e86e/matrx_scheduler-0.3.5.tar.gz", hash = "sha256:c87efb78548b24d90b79f7e529d90104bbb95b3c810eb2a50e7c223791c11f43", size = 46845, upload-time = "2026-07-11T18:02:23.185Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/38/95b6d1bf50323a5eeaac71d3e8d64ef54c394c99cda1759a2a1b4dee7b3c/matrx_scheduler-0.3.282.tar.gz", hash = "sha256:260feecd5d6024d018eee59f6ea6f4eb78e575f0cdaa6cd4165787e4330f6d0d", size = 130347, upload-time = "2026-10-02T08:18:21.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/4b/1f85a1c375417263e1d8a1a0eed58e3104a5d7d7b754e1b6a5702301c450/matrx_scheduler-0.3.5-py3-none-any.whl", hash = "sha256:27ada9a65d182b95bbac503cb7094fe3517866587b3bc5e67826f61d012bddd9", size = 40420, upload-time = "2026-07-11T18:02:22.137Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/3c/eb1194e7803c59aa1cbbe816f5cfd7d1622034cb39255f966db197e0be12/matrx_scheduler-0.3.282-py3-none-any.whl", hash = "sha256:9cbb3301f15f83f1fe05851725efbd5b82b02ffe6c8f5163310184b41e952bf9", size = 92671, upload-time = "2026-10-02T08:18:19.806Z" },
 ]
 
 [[package]]
 name = "matrx-scraper"
-version = "0.2.209"
+version = "0.2.295"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -2428,10 +2429,11 @@ dependencies = [
     { name = "selectolax" },
     { name = "tabulate" },
     { name = "tldextract" },
+    { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/ba/d8d5f2e0ca6da09f187a2f5b51d666734a3127aa5d72a1a3a9591f4e726b/matrx_scraper-0.2.209.tar.gz", hash = "sha256:b8172950a81cbdf59a87999ae29abd9a5b728be3bf1f4417b55ddace056826c9", size = 1255269, upload-time = "2026-09-15T18:17:15.325Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/43/068d4e28aa7d16a688573bb2d2b69e190877c4c4c26253bb2790ca215066/matrx_scraper-0.2.295.tar.gz", hash = "sha256:b664b426f5000633f674a77ef176a76d7545599524058e9c56b7d03391e1622b", size = 1867988, upload-time = "2026-10-02T07:48:22.881Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/07/f33dbce559d4835f7db12b31edd5a5ba581655515e712c22473166158f9b/matrx_scraper-0.2.209-py3-none-any.whl", hash = "sha256:db978a78a5bc54a432d0060623099474d6cf5b7c06980eaf5a34ffae666834a2", size = 858152, upload-time = "2026-09-15T18:17:13.037Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/10/5056b59b6f0fc27bf6a35ddcc90421daadae3ab1f2fa487043a9cb5fdeb2/matrx_scraper-0.2.295-py3-none-any.whl", hash = "sha256:8eea3d1f09aebe159149a336f9b1a6008a6a4df1224333f7f118a5f81614421e", size = 1045070, upload-time = "2026-10-02T07:48:20.746Z" },
 ]
 
 [package.optional-dependencies]
@@ -2449,16 +2451,16 @@ pdf = [
 
 [[package]]
 name = "matrx-utils"
-version = "2.0.50"
+version = "2.0.58"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/84/6bf258de5142d1bdfce3562be42a20c2d42c1dba44e49a92ad979bf09e4e/matrx_utils-2.0.50.tar.gz", hash = "sha256:a633c1531723543596af87b7903334ff8efbe6ac4a5a39686e554c7d40cae684", size = 295244, upload-time = "2026-09-18T06:45:36.565Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/d2/7aa5451796ea9bb2a26d8ed4cd097a54b5510283667076a391ff4d988bd6/matrx_utils-2.0.58.tar.gz", hash = "sha256:633aa2a4306550b15841b7dbdd81a77793bb6effbcc74fbab8d2888493dbe917", size = 315296, upload-time = "2026-09-29T06:10:50.634Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/8e/e94fc0b2e1442dd803916b36f2329c2454ca57836edf66a06c6a0b37bca0/matrx_utils-2.0.50-py3-none-any.whl", hash = "sha256:4c7289c5be97fd2fdb2606874e7d56dfcb3fa622478c9ebe2ab4d98832aab6b0", size = 306519, upload-time = "2026-09-18T06:45:34.853Z" },
+    { url = "https://files.pythonhosted.org/packages/76/1e/23b7265c702b634f0ae12d0451386e8df33f5b5c4696b1ebcdead566f28d/matrx_utils-2.0.58-py3-none-any.whl", hash = "sha256:41c1e20cc755bca3f72682b1c0224fd4a7d463aaf2c049cbdd5acfc3c135ac15", size = 319047, upload-time = "2026-09-29T06:10:48.546Z" },
 ]
 
 [[package]]
@@ -2832,7 +2834,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/51/e123d997aa098c61d029f76663dedbfb9bc8dcf8c60cbd6adbe42f76d049/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:949452be657fa16687d0930933f032835951ef0892b37d2d53824d1a84dc97a8", size = 706758467, upload-time = "2025-06-06T21:54:08.597Z" },
@@ -2843,7 +2845,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4d2dd21ec0b88cf61b62e6b43564355e5222e4a3fb394cac0db101f2dd0d4f74", size = 193118695, upload-time = "2025-03-07T01:45:27.821Z" },
@@ -2870,9 +2872,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cusparse-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/48/9a13d2975803e8cf2777d5ed57b87a0b6ca2cc795f9a4f59796a910bfb80/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4376c11ad263152bd50ea295c05370360776f8c3427b30991df774f9fb26c450", size = 267506905, upload-time = "2025-03-07T01:47:16.273Z" },
@@ -2883,7 +2885,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/f5/e1854cb2f2bcd4280c44736c93550cc300ff4b8c95ebe370d0aa7d2b473d/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ec05d76bbbd8b61b06a80e1eaf8cf4959c3d4ce8e711b65ebd0443bb0ebb13b", size = 288216466, upload-time = "2025-03-07T01:48:13.779Z" },
@@ -3937,11 +3939,11 @@ name = "pyobjc-framework-avfoundation"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-coreaudio" },
-    { name = "pyobjc-framework-coremedia" },
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-coreaudio", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-coremedia", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cd/42/c026ab308edc2ed5582d8b4b93da6b15d1b6557c0086914a4aabedd1f032/pyobjc_framework_avfoundation-12.1.tar.gz", hash = "sha256:eda0bb60be380f9ba2344600c4231dd58a3efafa99fdc65d3673ecfbb83f6fcb", size = 310047, upload-time = "2025-11-14T10:09:40.069Z" }
 wheels = [
@@ -3956,7 +3958,7 @@ name = "pyobjc-framework-cocoa"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/a3/16ca9a15e77c061a9250afbae2eae26f2e1579eb8ca9462ae2d2c71e1169/pyobjc_framework_cocoa-12.1.tar.gz", hash = "sha256:5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640", size = 2772191, upload-time = "2025-11-14T10:13:02.069Z" }
 wheels = [
@@ -3971,8 +3973,8 @@ name = "pyobjc-framework-contacts"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4b/a0/ce0542d211d4ea02f5cbcf72ee0a16b66b0d477a4ba5c32e00117703f2f0/pyobjc_framework_contacts-12.1.tar.gz", hash = "sha256:89bca3c5cf31404b714abaa1673577e1aaad6f2ef49d4141c6dbcc0643a789ad", size = 42378, upload-time = "2025-11-14T10:13:14.203Z" }
 wheels = [
@@ -3987,8 +3989,8 @@ name = "pyobjc-framework-coreaudio"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/84/d1/0b884c5564ab952ff5daa949128c64815300556019c1bba0cf2ca752a1a0/pyobjc_framework_coreaudio-12.1.tar.gz", hash = "sha256:a9e72925fcc1795430496ce0bffd4ddaa92c22460a10308a7283ade830089fe1", size = 75077, upload-time = "2025-11-14T10:13:22.345Z" }
 wheels = [
@@ -4003,8 +4005,8 @@ name = "pyobjc-framework-corelocation"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/79/b75885e0d75397dc2fe1ed9ca80be2b64c18b817f5fb924277cb1bf7b163/pyobjc_framework_corelocation-12.1.tar.gz", hash = "sha256:3674e9353f949d91dde6230ad68f6d5748a7f0424751e08a2c09d06050d66231", size = 53511, upload-time = "2025-11-14T10:13:43.384Z" }
 wheels = [
@@ -4019,8 +4021,8 @@ name = "pyobjc-framework-coremedia"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/7d/5ad600ff7aedfef8ba8f51b11d9aaacdf247b870bd14045d6e6f232e3df9/pyobjc_framework_coremedia-12.1.tar.gz", hash = "sha256:166c66a9c01e7a70103f3ca44c571431d124b9070612ef63a1511a4e6d9d84a7", size = 89566, upload-time = "2025-11-14T10:13:49.788Z" }
 wheels = [
@@ -4035,8 +4037,8 @@ name = "pyobjc-framework-eventkit"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b6/42/4ec97e641fdcf30896fe76476181622954cb017117b1429f634d24816711/pyobjc_framework_eventkit-12.1.tar.gz", hash = "sha256:7c1882be2f444b1d0f71e9a0cd1e9c04ad98e0261292ab741fc9de0b8bbbbae9", size = 28538, upload-time = "2025-11-14T10:15:07.878Z" }
 wheels = [
@@ -4048,8 +4050,8 @@ name = "pyobjc-framework-photos"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b8/53/f8a3dc7f711034d2283e289cd966fb7486028ea132a24260290ff32d3525/pyobjc_framework_photos-12.1.tar.gz", hash = "sha256:adb68aaa29e186832d3c36a0b60b0592a834e24c5263e9d78c956b2b77dce563", size = 47034, upload-time = "2025-11-14T10:18:47.27Z" }
 wheels = [
@@ -4064,8 +4066,8 @@ name = "pyobjc-framework-quartz"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/18/cc59f3d4355c9456fc945eae7fe8797003c4da99212dd531ad1b0de8a0c6/pyobjc_framework_quartz-12.1.tar.gz", hash = "sha256:27f782f3513ac88ec9b6c82d9767eef95a5cf4175ce88a1e5a65875fee799608", size = 3159099, upload-time = "2025-11-14T10:21:24.31Z" }
 wheels = [
@@ -4080,9 +4082,9 @@ name = "pyobjc-framework-screencapturekit"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-coremedia" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-coremedia", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2d/7f/73458db1361d2cb408f43821a1e3819318a0f81885f833d78d93bdc698e0/pyobjc_framework_screencapturekit-12.1.tar.gz", hash = "sha256:50992c6128b35ab45d9e336f0993ddd112f58b8c8c8f0892a9cb42d61bd1f4c9", size = 32573, upload-time = "2025-11-14T10:21:44.497Z" }
 wheels = [
@@ -4097,8 +4099,8 @@ name = "pyobjc-framework-speech"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8d/3d/194cf19fe7a56c2be5dfc28f42b3b597a62ebb1e1f52a7dd9c55b917ac6c/pyobjc_framework_speech-12.1.tar.gz", hash = "sha256:2a2a546ba6c52d5dd35ddcfee3fd9226a428043d1719597e8701851a6566afdd", size = 25218, upload-time = "2025-11-14T10:22:32.505Z" }
 wheels = [
@@ -4307,7 +4309,7 @@ name = "python-xlib"
 version = "0.33"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six" },
+    { name = "six", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
 wheels = [
@@ -4863,8 +4865,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "jeepney", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

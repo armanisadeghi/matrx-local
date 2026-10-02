@@ -24,7 +24,7 @@ def _load_verifier():
 def test_release_build_syncs_scheduler_extra_and_all_five_build_paths_bundle_it() -> None:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'scheduler = [' in pyproject
-    assert '"matrx-scheduler>=0.3.5"' in pyproject
+    assert '"matrx-scheduler>=0.3.282"' in pyproject
     assert "it is bundled\n    # into release builds" in pyproject
 
     fallback = (REPO_ROOT / "scripts" / "build-sidecar.sh").read_text(

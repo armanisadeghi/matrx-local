@@ -88,7 +88,7 @@ dependencies = [
     # `middleware` and nothing here imports that submodule yet — the first
     # auth-middleware import would have killed the AI streaming surface. Fixed
     # upstream in matrx-connect 0.1.25; do not lower these floors.
-    "matrx-utils>=2.0.42",
+    "matrx-utils>=2.0.58",
     # 3.1.141 is LOAD-BEARING, not cosmetic — same defect class as MXL-D-075.
     # matrx-scraper's `db/__init__.py` imports PLATFORM_DB_ENV_PREFIX /
     # platform_connection_url / register_platform_db (the ONE-database
@@ -103,11 +103,11 @@ dependencies = [
     # this HTTP-only Vault client must resolve the verified package rather than
     # an older ORM that predates that server-side refusal boundary.
     # Do not lower this.
-    "matrx-orm>=3.1.168",
-    "matrx-ai>=0.5.319",
-    "matrx-connect>=0.1.25",
-    "matrx-graph>=0.1.5",
-    "matrx-runtime>=0.0.6",
+    "matrx-orm>=3.1.202",
+    "matrx-ai>=0.5.420",
+    "matrx-connect>=0.1.162",
+    "matrx-graph>=0.2.228",
+    "matrx-runtime>=0.0.143",
     # Canonical Office (docx/pptx/xlsx) codec — matrx_files.specific_handlers.office
     # (extract_office / generate_office + the spec models). Local Read of an Office
     # file returns markdown via this codec; the OfficeGenerate tool renders bytes
@@ -115,7 +115,7 @@ dependencies = [
     # Present transitively via matrx-ai, but the office submodule only exists from
     # 0.1.10, so we pin the floor here explicitly (Hard Rule 5). Its pure-python
     # Office deps (python-docx/pptx/openpyxl/xlsxwriter) come in with it.
-    "matrx-files>=0.1.11",
+    "matrx-files>=0.2.236",
     # THE scraper. There is exactly one scraping/parsing engine in the platform
     # and this is it — matrx-local runs it in a LOCAL lane (the user's own
     # machine and residential IP, never a proxy), it does not own a copy. Until
@@ -129,7 +129,7 @@ dependencies = [
     # [db] (no Postgres here — durable storage is SQLite + the server),
     # [dedup] (datasketch pulls numpy, which the single-ML-stack doctrine
     # reserves for the managed media runtime slot).
-    "matrx-scraper[browser,pdf,ocr]>=0.1.100",
+    "matrx-scraper[browser,pdf,ocr]>=0.2.295",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs
@@ -193,7 +193,7 @@ transcription = [
 scheduler = [
     # Cross-component scheduling host (surface='desktop'). Optional + lazily
     # imported; the Phase 8 host is gated off by default. Published on PyPI.
-    "matrx-scheduler>=0.3.5",
+    "matrx-scheduler>=0.3.282",
 ]
 image-gen = [
     # Hugging Face diffusers-based image AND video generation (large install).

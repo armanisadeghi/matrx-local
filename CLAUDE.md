@@ -17,9 +17,9 @@
 Also binding: the Data Doctrine (`common-docs/systems/architecture/database/DECISIONS.md`), the access ladder (`common-docs/policies/access-ladder.md`), canonical-first triage (`common-docs/policies/canonical-first-triage.md`), agents never author agents (`common-docs/policies/agents-never-author-agents.md`), and the domain tree (`common-docs/policies/domain-tree.md`).
 <!-- nine-laws:end -->
 
-- 🚨 **The active organization is never a list filter** (Arman, 2026-09-30): lists and reads show everything the person can see across all their organizations; an org filter is a visible page-local control defaulting to **All organizations**; the active org is only where new things are saved and which org a server call runs in — every write/API call must carry it. Law: `../common-docs/policies/active-org-is-never-a-list-filter.md`.
+- 🚨 **The active organization is never a list filter** (Arman, 2026-09-30): lists and reads show everything the person can see across all their organizations; an org filter is a visible page-local control defaulting to **All organizations**; the active org is only where new things are saved and which org a server call runs in — every write/API call must carry it. Law: `../common-docs/policies/access-ladder.md`.
 
-**Cloud task autonomy:** A task request authorizes routine in-scope edits, verification, exact-path commits, and pushes. Continue without a conversational confirmation pause; honor explicit hold points and human-only gates. [Completion policy](../common-docs/policies/defect-ownership.md).
+**Cloud task autonomy:** A task request authorizes routine in-scope edits, verification, exact-path commits, and pushes. Continue without a conversational confirmation pause; honor explicit hold points and human-only gates. [Completion policy](../common-docs/policies/reality-is-the-referee.md).
 
 
 **Why you're reading this: you are doing DESKTOP-APP work in this repo.** This file
@@ -28,7 +28,7 @@ Tauri + Python sidecar specifics, how local tools are exposed to the platform, a
 pointers to the shared systems this client consumes. It is NOT a rulebook: every rule
 body lives in exactly one canonical doc (linked below); this file holds one-liners and
 links only, per the charter at
-`/Users/armanisadeghi/code/common-docs/policies/claude-md-charter.md` (≤200 lines; no
+`/Users/armanisadeghi/code/common-docs/policies/document-types.md` (≤200 lines; no
 stories, quotes, or incident narratives). Content outside that purpose is a defect —
 relocate it, don't grow this file.
 
@@ -99,7 +99,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   `/Users/armanisadeghi/code/common-docs/policies/no-legacy.md` + `/Users/armanisadeghi/code/common-docs/policies/pre-launch-mode.md`
 - **Human steps are guided sessions.** Anything only Arman can do: one link, one task, what to
   look for, what to report — never a list or menu. →
-  `/Users/armanisadeghi/code/common-docs/policies/human-steps-are-guided-sessions.md`
+  `/Users/armanisadeghi/code/common-docs/policies/talk-to-arman-like-a-person.md`
 - **The organization is what the USER SET on this device — never a saved default, never the
   organization created at signup**. The TS resolver is `desktop/src/lib/org/active-org.ts`,
   the engine's is `app/services/aidream/organization.py`, and each SET crosses to the other

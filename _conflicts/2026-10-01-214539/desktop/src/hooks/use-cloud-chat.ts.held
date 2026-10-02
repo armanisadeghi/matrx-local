@@ -1,3 +1,67 @@
+matrx-auto-git-conflict-file-work-delete-this-when-resolved
+
+HELD CONFLICT, written by scripts/sync-main.py
+File:      desktop/src/hooks/use-cloud-chat.ts
+Why held:  both sides changed the same code
+GITHUB's version is live in the repo at the path above. LOCAL's version is at the bottom
+of this file, below the FACTS.
+Done with it: the final code is in the live file, this .held file is deleted, and its line
+in _conflicts/README.md is deleted. The list of open items is _conflicts/README.md.
+
+FACTS (computed by sync-main from git)
+
+THE TWO VERSIONS
+  LOCAL  = the version that was on this Mac. It is saved below, in this .held file.
+  GITHUB = the version from GitHub. It is LIVE in the repo right now, at desktop/src/hooks/use-cloud-chat.ts
+  Both grew from the same COMMON version: commit daba24ec36, 2026-10-01 20:19.
+
+WHEN EACH SIDE CHANGED THIS FILE (newest first)
+  LOCAL:
+    2026-10-01 20:32  75415c058e  "refactor: use @ai-matrx/agents readConversationOrganizationId / readMatrxErrorCodeFromMessage (0.26.0) — drop the local copy"
+    2026-10-01 20:22  71d887535a  "fix(cloud-chat): a rejoin with no journal ends on the saved answer, never a failed request"
+  GITHUB:
+    2026-10-01 20:23  743eeec9ea  "fix(cloud-chat): a rejoin with no journal ends on the saved answer, never a failed request"
+  LOCAL's latest change is 9m AFTER GITHUB's latest change.
+
+SIZE: common version 3141 lines, LOCAL 3122 lines, GITHUB 3118 lines
+
+WHAT EACH SIDE DID, compared with the common version
+  LOCAL added 15 lines and removed 29 lines.
+  GITHUB added 7 lines and removed 22 lines.
+
+CODE ONE SIDE HAS THAT THE OTHER DOES NOT
+  LOCAL has 7 of the 7 lines GITHUB added.
+    Lines GITHUB deliberately REMOVED that LOCAL still has: 2
+      | addDiagnostic(
+      | return null;
+  GITHUB has 8 of the 15 lines LOCAL added.
+    Lines LOCAL added that GITHUB does NOT have:
+      | readConversationOrganizationId as readRunConversationOrganizationId,
+      | function readConversationOrganizationId(
+      | return readRunConversationOrganizationId(
+      | async (id) => {
+      | .eq("id", id)
+      | if (error) throw new Error(error.message);
+      | return (data as { organization_id?: unknown } | null)?.organization_id;
+    Lines LOCAL deliberately REMOVED that GITHUB still has: 9
+      | async function readConversationOrganizationId(
+      | .eq("id", cloudConversationId)
+      | const organizationId = (data as { organization_id?: unknown } | null)?.organization_id;
+      | if (error || typeof organizationId !== "string" || !organizationId) {
+      | error?.message ?? null,
+      | return null;
+      | return organizationId;
+      | addDiagnostic(
+      | return null;
+
+COMPARE THEM (the labels are correct; '-' lines are GITHUB, '+' lines are LOCAL):
+  diff -u --label 'GITHUB (live)' --label 'LOCAL (held)' <(git show 743eeec9eac3:'desktop/src/hooks/use-cloud-chat.ts') <(git show 75415c058e13:'desktop/src/hooks/use-cloud-chat.ts')
+
+RECOVER EITHER VERSION FOREVER (works even after this .held file is deleted):
+  LOCAL : git show 75415c058e13:'desktop/src/hooks/use-cloud-chat.ts'
+  GITHUB: git show 743eeec9eac3:'desktop/src/hooks/use-cloud-chat.ts'
+
+---------------- LOCAL VERSION BELOW ----------------
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchAIDreamModels, fetchMandateResolution } from "@/lib/aidream-client";
 import {
@@ -18,6 +82,7 @@ import {
   applyOrganizationContextHeader,
   extractMatrxErrorMessage,
   fetchWithMatrxProtocolFallback,
+  readConversationOrganizationId as readRunConversationOrganizationId,
   readLiveRunRejoin,
   readLiveStreamUnavailable,
   streamErrorText,
@@ -150,24 +215,27 @@ function parseJsonText(text: string): unknown {
  * work on that run, so they carry ITS organization — never the session's
  * selection. Null when unreadable (the caller keeps the active one).
  */
-async function readConversationOrganizationId(
+function readConversationOrganizationId(
   cloudConversationId: string,
 ): Promise<string | null> {
-  const { data, error } = await supabase
-    .schema("chat")
-    .from("conversation")
-    .select("organization_id")
-    .eq("id", cloudConversationId)
-    .maybeSingle();
-  const organizationId = (data as { organization_id?: unknown } | null)?.organization_id;
-  if (error || typeof organizationId !== "string" || !organizationId) {
-    console.warn(
-      "[cloud-chat] conversation organization unreadable; rejoining under the active organization",
-      error?.message ?? null,
-    );
-    return null;
-  }
-  return organizationId;
+  return readRunConversationOrganizationId(
+    cloudConversationId,
+    async (id) => {
+      const { data, error } = await supabase
+        .schema("chat")
+        .from("conversation")
+        .select("organization_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as { organization_id?: unknown } | null)?.organization_id;
+    },
+    (reason) =>
+      console.warn(
+        "[cloud-chat] conversation organization unreadable; rejoining under the active organization",
+        reason,
+      ),
+  );
 }
 
 /** How often a turn this surface stopped streaming is re-checked and re-read. */

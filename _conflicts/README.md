@@ -23,6 +23,7 @@ agent -> Needs Arman) with ` — <question> — <what was checked> — <who>` ad
 Its files stay as they are.
 
 ## Held files
+- _conflicts/2026-10-01-214539/desktop/src/hooks/use-cloud-chat.ts.held — LOCAL latest 2026-10-01 20:32; GITHUB latest 2026-10-01 20:23; LOCAL lacks 0 of GITHUB's 7 new lines; GITHUB lacks 7 of LOCAL's 15 new lines; recover: git show 75415c058e:'desktop/src/hooks/use-cloud-chat.ts' / 743eeec9ea:'desktop/src/hooks/use-cloud-chat.ts'
 
 ## Needs a manager
 

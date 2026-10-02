@@ -18,14 +18,12 @@ import {
   applyOrganizationContextHeader,
   extractMatrxErrorMessage,
   fetchWithMatrxProtocolFallback,
-  followUnavailableRejoin,
   readLiveRunRejoin,
   readLiveStreamUnavailable,
-  settleRunPickup,
   streamErrorText,
   type MatrxLiveRunRejoin,
-  type MatrxTransport,
 } from "@ai-matrx/agents/matrx";
+import { settleCloudRejoinWithoutJournal } from "@/lib/cloud-chat-rejoin";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
   cloudModelDisplayName,
@@ -2778,45 +2776,24 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 : null;
             if (unavailable && activeRejoin && !abort.signal.aborted) {
               setStatus("This turn is still running — following it to the end...");
-              const followToken = await getFreshAccessToken();
-              const cloudTransport: MatrxTransport = {
-                fetch: (path, init) =>
-                  fetch(`${cloudServerUrl}/api${path}`, {
-                    method: init.method,
-                    headers: { ...init.headers, Authorization: `Bearer ${followToken}` },
-                    ...(init.body !== undefined ? { body: init.body } : {}),
-                    ...(init.signal ? { signal: init.signal } : {}),
-                  }),
-              };
-              const followed = await followUnavailableRejoin(
-                cloudTransport,
-                activeRejoin,
+              const settlement = await settleCloudRejoinWithoutJournal({
+                cloudServerUrl,
+                accessToken: await getFreshAccessToken(),
+                rejoin: activeRejoin,
                 unavailable,
-                {
-                  signal: abort.signal,
-                  ...(runOrganizationId ? { organizationId: runOrganizationId } : {}),
+                organizationId: runOrganizationId,
+                signal: abort.signal,
+                reloadSavedTurn: () => hydrateConversationMessages(conversationId, true),
+                // The follow gave up while the turn may still be running:
+                // hand it to this surface's live-turn follower, which keeps
+                // re-reading the saved turn until it lands.
+                onStillRunning: async () => {
+                  if (!(await followIfTurnIsAlive())) {
+                    await hydrateConversationMessages(conversationId, true);
+                  }
                 },
-              ).catch((followError: unknown) => {
-                addDiagnostic(
-                  `Following the run failed (${followError instanceof Error ? followError.message : String(followError)}) — reloading the saved turn.`,
-                );
-                return null;
+                onDiagnostic: addDiagnostic,
               });
-              const settlement = await settleRunPickup(
-                followed ?? { kind: "followed", executionId: "unknown", ended: false, status: null },
-                {
-                  reloadSavedTurn: () => hydrateConversationMessages(conversationId, true),
-                  // The follow gave up while the turn may still be running:
-                  // hand it to this surface's live-turn follower, which keeps
-                  // re-reading the saved turn until it lands.
-                  onStillRunning: async () => {
-                    if (!(await followIfTurnIsAlive())) {
-                      await hydrateConversationMessages(conversationId, true);
-                    }
-                  },
-                },
-              );
-              addDiagnostic(`Rejoin without a live journal settled: ${settlement.state}.`);
               if (settlement.state === "settled" && settlement.reloaded) {
                 // The saved turn replaced the streaming placeholder; if nothing
                 // was saved, the placeholder at least stops spinning.

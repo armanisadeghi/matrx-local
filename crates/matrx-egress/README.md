@@ -4,7 +4,7 @@ The device leg of residential egress: a person lends **their own computer's inte
 to **their own** AI Matrx work, and only when a site has blocked our servers.
 
 Contract (the one source of truth for every repo in this system):
-`common-docs/systems/platform/residential-egress/FEATURE.md`.
+`common-docs/systems/architecture/residential-egress/FEATURE.md`.
 
 **What it is not:** it is not a proxy anybody else can use, and it is not a way into this
 computer. It dials OUT and holds one WebSocket — nothing listens here, no port is opened, no

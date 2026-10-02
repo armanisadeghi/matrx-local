@@ -5,7 +5,7 @@ sends an `extension.invoke` envelope to the matrx-extend Chrome extension
 over its dedicated `/extension/ws` WebSocket and awaits the matching
 `extension.result` envelope.
 
-Wire format (CONTRACTUAL — must match `/Users/armanisadeghi/code/common-docs/systems/clients/extension/CHANNELS.md`):
+Wire format (CONTRACTUAL — must match `/Users/armanisadeghi/code/common-docs/systems/apps/extension/CHANNELS.md`):
 
   Engine → browser:
     { "type": "extension.invoke", "callId": str,

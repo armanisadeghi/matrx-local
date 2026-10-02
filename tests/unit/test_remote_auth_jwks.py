@@ -2,7 +2,7 @@
 
 These tests are the guard for the 2026-09-20 conversion described in
 ``app/api/remote_auth.py`` and in
-``common-docs/systems/platform/proxy-identity/FEATURE.md``:
+``common-docs/systems/platform/auth/proxy-identity/FEATURE.md``:
 
   1. verification never makes a per-request auth-server round trip
      (``GET /auth/v1/user`` — the old implementation's only move),

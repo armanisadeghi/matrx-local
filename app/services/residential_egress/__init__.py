@@ -1,7 +1,7 @@
 """Residential egress — this computer as the internet exit, when we get blocked.
 
 Contract (the ONE source of truth for all five repos):
-``common-docs/systems/platform/residential-egress/FEATURE.md``.
+``common-docs/systems/architecture/residential-egress/FEATURE.md``.
 """
 
 from app.services.residential_egress.supervisor import (

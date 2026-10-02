@@ -297,7 +297,7 @@ verifiable.
 ## Primary source references
 
 - Current system status and user-authored kinds:
-  `/Users/armanisadeghi/code/common-docs/systems/content-ir-system/FEATURE.md`
+  `/Users/armanisadeghi/code/common-docs/systems/architecture/content-ir/FEATURE.md`
 - Frontend architecture and Shapes studio:
   `/Users/armanisadeghi/code/matrx-frontend/features/content-ir/FEATURE.md`
 - Portable-core twin rules and manifest:

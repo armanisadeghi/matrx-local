@@ -16,7 +16,10 @@ import {
 } from "@/lib/api/routes/ai";
 import {
   applyOrganizationContextHeader,
+  extractMatrxErrorMessage,
   fetchWithMatrxProtocolFallback,
+  readLiveRunRejoin,
+  streamErrorText,
 } from "@ai-matrx/agents/matrx";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {
@@ -126,6 +129,43 @@ const DELEGATION_GATE_POLL_MS = 1500;
 
 /** How many times a `/resume` may be refused as "siblings still running". */
 const MAX_RESUME_CONFLICT_RETRIES = 8;
+// A resume refused because the run is STILL LIVE is followed into the live
+// run's rejoin stream once per turn; a rejoin that itself answers a live-run
+// 409 is not chased in a loop.
+const MAX_LIVE_RUN_REJOINS = 1;
+
+function parseJsonText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The organization of an EXISTING cloud conversation. Resume and rejoin are
+ * work on that run, so they carry ITS organization — never the session's
+ * selection. Null when unreadable (the caller keeps the active one).
+ */
+async function readConversationOrganizationId(
+  cloudConversationId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .schema("chat")
+    .from("conversation")
+    .select("organization_id")
+    .eq("id", cloudConversationId)
+    .maybeSingle();
+  const organizationId = (data as { organization_id?: unknown } | null)?.organization_id;
+  if (error || typeof organizationId !== "string" || !organizationId) {
+    console.warn(
+      "[cloud-chat] conversation organization unreadable; rejoining under the active organization",
+      error?.message ?? null,
+    );
+    return null;
+  }
+  return organizationId;
+}
 
 /** How often a turn this surface stopped streaming is re-checked and re-read. */
 const LIVE_TURN_POLL_MS = 3000;
@@ -508,8 +548,7 @@ function errorMessage(data: {
   details?: Record<string, unknown> | null;
 }): string {
   return (
-    data.user_message ||
-    data.message ||
+    streamErrorText(data) ||
     data.code ||
     data.error_type ||
     "The AI stream returned an unknown error."
@@ -2183,6 +2222,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
         // retried after waiting, but a conversation that keeps refusing must
         // surface rather than spin.
         let resumeConflicts = 0;
+        // A live-run 409 on a resume → rejoin the live run (bounded), under
+        // the RUN's organization once known.
+        let liveRunRejoins = 0;
+        let runOrganizationId: string | null = null;
         /**
          * Hand this conversation to the follower instead of calling it failed.
          *
@@ -2631,13 +2674,14 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
           // organization is required — resolved above by
           // `requireActiveOrganizationId`, which fails closed with a remedy
           // and opens the picker.
-          const segmentHeaders = cloudOrganizationId
+          const segmentOrganizationId = runOrganizationId ?? cloudOrganizationId;
+          const segmentHeaders = segmentOrganizationId
             ? applyOrganizationContextHeader(
                 {
                   "Content-Type": "application/json",
                   Authorization: `Bearer ${segmentToken}`,
                 },
-                cloudOrganizationId,
+                segmentOrganizationId,
               )
             : {
                 "Content-Type": "application/json",
@@ -2686,6 +2730,35 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
 
           if (!response.ok || !response.body) {
             const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);
+            const errorBody = parseJsonText(rawErrorText);
+            // A live-run 409 (`run_in_progress`, or a `resume_conflict` that
+            // names a live run) — the run this resume asked for is STILL
+            // RUNNING. Not a failed turn and never a second run: POST the
+            // body's own `rejoin_path` (never a URL built here, never the
+            // envelope's `request_id`) into this same assistant message,
+            // under the conversation's own organization. Only a BARE
+            // resume_conflict falls through to the retry below.
+            const liveRun =
+              executionTarget === "cloud"
+                ? readLiveRunRejoin({ status: response.status, serverDetail: errorBody })
+                : null;
+            if (
+              liveRun &&
+              cloudConversationId &&
+              !abort.signal.aborted &&
+              liveRunRejoins < MAX_LIVE_RUN_REJOINS
+            ) {
+              liveRunRejoins += 1;
+              addDiagnostic(
+                `Run ${liveRun.liveRequestId ?? liveRun.runId ?? "(unnamed)"} is still running — rejoining its live stream.`,
+              );
+              setStatus("This turn is still running — rejoining it...");
+              runOrganizationId =
+                (await readConversationOrganizationId(cloudConversationId)) ?? runOrganizationId;
+              requestUrl = `${cloudServerUrl}/api${liveRun.rejoinPath}`;
+              requestBody = {};
+              continue;
+            }
             // A resume refused with 409 `outstanding_delegated_calls` /
             // `resume_conflict` is NOT a failed turn. It means a sibling tool
             // of the same turn is still running (or another client already
@@ -2734,7 +2807,12 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               });
               return;
             }
-            const errorText = rawErrorText || `HTTP ${response.status} ${response.statusText}`;
+            // The server's sentence for the person (`user_message` first) when
+            // the body carries one; the raw body only when it does not.
+            const errorText =
+              extractMatrxErrorMessage(errorBody) ||
+              rawErrorText ||
+              `HTTP ${response.status} ${response.statusText}`;
             const label = executionTarget === "local" ? "Local AI" : "AIDream";
             const message = `${label} request failed (${response.status}): ${errorText}`;
             setRequestError(message);

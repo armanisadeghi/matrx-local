@@ -24,6 +24,7 @@ import type {
   ErrorPayload,
 } from "@/types/python-generated/stream-events";
 import { sanitizeRenderBlock } from "@/features/content-ir/runtime/inbound";
+import { streamErrorText } from "@ai-matrx/agents/matrx";
 
 export type ToolBlockPhase =
   | "pending"
@@ -137,7 +138,7 @@ export class StreamBlockBuilder {
     this.blocks.push({
       type: "error",
       errorType: payload.error_type,
-      message: payload.user_message || payload.message,
+      message: streamErrorText(payload) ?? payload.message,
     });
   }
 

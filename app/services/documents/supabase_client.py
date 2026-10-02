@@ -123,17 +123,17 @@ class SupabaseDocClient:
         # is passed explicitly by the ONE caller that is this engine's own
         # background reconciliation loop (sync_engine.py) — never by a
         # person's own action reaching this client through document_routes.py.
-        # Absent means human; that is the whole contract, so this header is
+        # Absent means a person (`user`); that is the whole contract, so this header is
         # never sent unless a caller asked for it by name.
         if actor_tier:
             h["x-matrx-actor-tier"] = actor_tier
             # DD-131/B-56 (chair ruling): a person's write has no system; an
-            # agent/code write names its system through x-matrx-actor-system,
+            # agent/system write names its system through x-matrx-actor-system,
             # read by platform.declared_actor_system() exactly the way
             # platform.declared_actor_tier() reads x-matrx-actor-tier above.
             # The only caller that ever passes actor_tier here is this
             # engine's own sync reconciliation, so the system name is fixed.
-            if actor_tier == "code":
+            if actor_tier == "system":
                 h["x-matrx-actor-system"] = "matrx-local:sync"
         return h
 
@@ -519,7 +519,7 @@ class SupabaseDocClient:
 
     # NOTE (2026-07): the cloud aux tables this client used to talk to —
     # note_versions, note_shares, note_devices, note_directory_mappings and
-    # note_sync_log — were moved to the `graveyard` schema during the cloud DB
+    # note_sync_log — were moved to the `deprecated` schema during the cloud DB
     # reorganization. Every request against them 404'd silently on each save.
     # Their client methods are deleted, not stubbed:
     #   - version history  → local SQLite `note_versions` (offline-capable) +

@@ -72,7 +72,7 @@ Pinned by `tests/smoke/test_access_health.py`,
   ALL remote↔local column mapping lives in `_normalize_note_row`
   (`created_by`↔`user_id`, `deleted_at`→`is_deleted`). Skipping it resurrects
   deleted notes — that regression shipped once already.
-  The graveyarded cloud tables (`note_versions`, `note_devices`,
+  The deprecated cloud tables (`note_versions`, `note_devices`,
   `note_directory_mappings`, `note_sync_log`, `note_shares`) have NO client
   methods — do not reintroduce them; every request 404s. Versions: local
   SQLite + the cloud `platform._version_capture` trigger. Shares: 501 until

@@ -518,7 +518,7 @@ class SyncEngine:
                         # DD-131 (B-44): this loop is the engine's own
                         # reconciliation, never a live keystroke — a job, not
                         # a person.
-                        actor_tier="code",
+                        actor_tier="system",
                     )
                     if pushed_row is None:
                         # Precondition failed — remote moved since our last
@@ -552,7 +552,7 @@ class SyncEngine:
                 if pushed_row is None:
                     # DD-131 (B-44): the sync loop's own push, not a person's.
                     pushed_row = await self.sb.upsert_note(
-                        **upsert_body, actor_tier="code"
+                        **upsert_body, actor_tier="system"
                     )
 
                 result = pushed_row
@@ -1000,11 +1000,11 @@ class SyncEngine:
                         note["_reroute_from"],
                         file_path,
                         self.device_id,
-                        actor_tier="code",
+                        actor_tier="system",
                     )
                 else:
                     won = await self.sb.set_file_path_if_null(
-                        note_id, file_path, self.device_id, actor_tier="code"
+                        note_id, file_path, self.device_id, actor_tier="system"
                     )
                 if not won:
                     logger.debug(
@@ -1531,7 +1531,7 @@ class SyncEngine:
                             continue
                         try:
                             await self.sb.soft_delete_note(
-                                note_id, self.device_id, actor_tier="code"
+                                note_id, self.device_id, actor_tier="system"
                             )
                             stats["deleted_local"] += 1
                         except Exception as exc:
@@ -1681,7 +1681,7 @@ class SyncEngine:
                             self._last_push_hashes[fp] = local["content_hash"]
                             try:
                                 await self.sb.set_file_path_if_null(
-                                    twin["id"], fp, self.device_id, actor_tier="code"
+                                    twin["id"], fp, self.device_id, actor_tier="system"
                                 )
                             except Exception:
                                 logger.debug(
@@ -1859,7 +1859,7 @@ class SyncEngine:
     async def register_device(self) -> dict[str, Any]:
         """Device identity is local-only.
 
-        The cloud `note_devices` registry was graveyarded in the 2026-07 cloud
+        The cloud `note_devices` registry was deprecated in the 2026-07 cloud
         DB reorganization; device_id lives in `.sync/state.json` and rides on
         every push as `last_device_id` (own-echo detection).
         """
@@ -2180,7 +2180,7 @@ class SyncEngine:
                     return
                 try:
                     await self.sb.soft_delete_note(
-                        row["id"], self.device_id, actor_tier="code"
+                        row["id"], self.device_id, actor_tier="system"
                     )
                 except Exception:
                     logger.debug(

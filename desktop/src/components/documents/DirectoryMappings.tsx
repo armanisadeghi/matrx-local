@@ -125,7 +125,7 @@ export function DirectoryMappings({
         ) : (
           <>
             {/* Existing mappings — from local_mappings. The old UI listed the
-                (graveyarded) cloud_mappings, which was always empty, so saved
+                (deprecated) cloud_mappings, which was always empty, so saved
                 mappings were invisible and undeletable. */}
             {activeMappings.length > 0 && (
               <div className="mb-4">

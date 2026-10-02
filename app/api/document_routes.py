@@ -979,7 +979,7 @@ async def get_note_sync_status(note_id: str, request: Request) -> dict[str, Any]
 async def list_versions(note_id: str, request: Request) -> list[dict[str, Any]]:
     """List version history for a note — local SQLite snapshots.
 
-    Cloud `note_versions` was graveyarded (2026-07); cloud-side history is now
+    Cloud `note_versions` was deprecated (2026-07); cloud-side history is now
     captured by the `platform._version_capture` trigger into
     `history.row_versions` and is not surfaced here.
     """
@@ -1213,7 +1213,7 @@ async def resolve_conflict(
 # ---------------------------------------------------------------------------
 # Share endpoints — RETIRED (2026-07)
 #
-# The cloud `note_shares` table was graveyarded in the cloud DB reorganization;
+# The cloud `note_shares` table was deprecated in the cloud DB reorganization;
 # the platform now models sharing through iam grants (see the RLS policies on
 # workbench.notes: iam.has_access('note', id, ...)). These endpoints returned
 # silent 404-backed failures for weeks. They now fail loudly until a proper
@@ -1254,7 +1254,7 @@ async def delete_share(share_id: str, request: Request) -> dict[str, str]:
 
 # Directory mappings are LOCAL-ONLY: they map cloud folder ids to extra local
 # directories on THIS machine, so a cloud copy never made sense — and the
-# `note_directory_mappings` table it used to mirror into was graveyarded.
+# `note_directory_mappings` table it used to mirror into was deprecated.
 
 @router.get("/mappings")
 async def list_mappings(request: Request) -> dict[str, Any]:

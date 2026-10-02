@@ -418,7 +418,7 @@ def test_push_new_note_upserts_and_marks_synced(engine: SyncEngine) -> None:
 def test_push_existing_note_is_a_single_upsert(engine: SyncEngine) -> None:
     """Every push is ONE atomic upsert (2026-07-13 amendment).
 
-    Cloud note_versions was graveyarded; history is captured by the
+    Cloud note_versions was deprecated; history is captured by the
     platform._version_capture trigger cloud-side and SQLite note_versions
     locally. The old get_note -> create_version -> update_note dance is gone.
     """

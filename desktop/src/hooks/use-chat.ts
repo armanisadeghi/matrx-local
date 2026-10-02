@@ -20,6 +20,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ContextReceipt, ContextReceiptMismatch } from "@ai-matrx/agents/context";
+import { streamErrorText } from "@ai-matrx/agents/matrx";
 import { isTauri } from "@/lib/sidecar";
 import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";
@@ -842,7 +843,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
               break;
             }
             case "error": {
-              streamError = event.data.message ?? "Unknown error";
+              streamError = streamErrorText(event) ?? "Unknown error";
               updateAssistant({
                 content: accumulated || streamError,
                 isStreaming: false,

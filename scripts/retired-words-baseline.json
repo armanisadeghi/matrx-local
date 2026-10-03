@@ -1,6 +1,6 @@
 {
   "$comment": "Shrink-only baseline of the retired-words guard (check_retired_words.py / check-retired-words.ts). Every entry is an EXISTING use of a retired word; it only ever gets smaller. A new use is fixed, never added here.",
-  "words_file": "common-docs/systems/platform/vocabulary/retired-words.json",
+  "words_file": "common-docs/meta/scripts/retired-words.json",
   "static": {
     "actor-tier-words": {
       "desktop/src/types/python-generated/api-types.ts": 4

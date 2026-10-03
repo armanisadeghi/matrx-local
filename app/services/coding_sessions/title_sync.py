@@ -78,13 +78,15 @@ from app.services.coding_sessions.claude_overview import (
     index_facts,
     read_session_index_async,
 )
-from app.services.coding_sessions.models import BridgeRequest
 from app.services.coding_sessions.identity_client import (
     IdentityInventoryBlocked,
     fetch_complete_identity_inventory,
 )
+from matrx_coding_history.envelopes import (
+    payload_digest,
+    session_metadata_request,
+)
 from app.services.coding_sessions.service import (
-    SESSION_METADATA_EVENT,
     CodingSessionBridgeOutbox,
     get_coding_session_bridge_outbox,
 )
@@ -215,14 +217,6 @@ def raw_session_id(provider_session_id: str) -> str | None:
     except ValueError:
         return None
     return candidate
-
-
-def payload_digest(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def title_sha256(title: str) -> str:
@@ -429,29 +423,6 @@ def _index_truncated(totals: dict[str, int]) -> bool:
 
 def _index_incomplete(totals: dict[str, int]) -> bool:
     return _index_truncated(totals) or int(totals.get("unreadable", 0)) > 0
-
-
-def session_metadata_request(
-    *,
-    provider_session_id: str,
-    provider_project_key: str | None,
-    payload: dict[str, Any],
-) -> BridgeRequest:
-    """One metadata-plane observation for an existing Claude binding."""
-    envelope: dict[str, Any] = {
-        "action": "observe_hook",
-        "provider": "claude_code",
-        "provider_session_id": provider_session_id,
-        "origin": "independent_hook",
-        "hook_event": {
-            "name": SESSION_METADATA_EVENT,
-            "stable_event_id": f"session-metadata:{payload_digest(payload)[:48]}",
-            "payload": payload,
-        },
-    }
-    if provider_project_key:
-        envelope["provider_project_key"] = provider_project_key
-    return BridgeRequest.model_validate(envelope)
 
 
 class ClaudeSessionMetadataReconciler:

@@ -1,0 +1,3308 @@
+{
+ "envelopes": [
+  {
+   "action": "append_native",
+   "conversation": {
+    "conversation_id": "<CONVERSATION>",
+    "is_new": true,
+    "store": true
+   },
+   "entries": [
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000000",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:00Z",
+     "payload": {
+      "cwd": "/tmp/golden-project",
+      "gitBranch": "feature/golden",
+      "message": {
+       "content": "golden question zero",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:00.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000000"
+     },
+     "payload_sha256": "35b862b092fa738639f2c26c650357697c30c888cc0f9a6f4199bf9d4061da24",
+     "source_cursor": {
+      "line_number": 1,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 0
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000001",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:01Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 1 xxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:01.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000001"
+     },
+     "payload_sha256": "969a2a8b655038388302645e657e20d8e2587d70a40e8f925634a10ae877d624",
+     "source_cursor": {
+      "line_number": 2,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 1
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000002",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:02Z",
+     "payload": {
+      "message": {
+       "content": "golden question 2",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:02.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000002"
+     },
+     "payload_sha256": "b0b6f6668249b39c08bcbe48aacbf7320889ea338ae534bae44d733a21aa1de0",
+     "source_cursor": {
+      "line_number": 3,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 2
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000003",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:03Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 3 xxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:03.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000003"
+     },
+     "payload_sha256": "c611840da7b4984585f20eda6fcde99e1ee570804358f053f6fe6fcebc229c8b",
+     "source_cursor": {
+      "line_number": 4,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 3
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000004",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:04Z",
+     "payload": {
+      "message": {
+       "content": "golden question 4",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:04.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000004"
+     },
+     "payload_sha256": "9c977d752037577c20b99670d184a4ba6304202a03d78b06e6a90915a68ae527",
+     "source_cursor": {
+      "line_number": 5,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 4
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000005",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:05Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:05.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000005"
+     },
+     "payload_sha256": "3822e652e697b4377fddac557e89c40ec8173bac0bce336059c0f421f18e7436",
+     "source_cursor": {
+      "line_number": 6,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 5
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000006",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:06Z",
+     "payload": {
+      "message": {
+       "content": "golden question 6",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:06.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000006"
+     },
+     "payload_sha256": "671a60cca91f7b1b99cf614170d002dfaf6fd02673628e0ea19d768bfcbf1cfa",
+     "source_cursor": {
+      "line_number": 7,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 6
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000007",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:07Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 7 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:07.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000007"
+     },
+     "payload_sha256": "21a2688b97e3af5e8a4d6fa5112826d516468dcc77fe13f9c4d48fd7a064a2d3",
+     "source_cursor": {
+      "line_number": 8,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 7
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000008",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:08Z",
+     "payload": {
+      "message": {
+       "content": "golden question 8",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:08.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000008"
+     },
+     "payload_sha256": "d7ae04d1040c8994f7673b87524ea401e9a9d840e33273f160fe18a8fba42c56",
+     "source_cursor": {
+      "line_number": 9,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 8
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000009",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:09Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 9 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:09.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000009"
+     },
+     "payload_sha256": "f9cf29491956642e0939d26c1935a63a7764cf36e912dfa058c781c9f54636b0",
+     "source_cursor": {
+      "line_number": 10,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 9
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000010",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:10Z",
+     "payload": {
+      "message": {
+       "content": "golden question 10",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:10.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000010"
+     },
+     "payload_sha256": "4e34c210f242da8ecfc3bcb55ea8c83011414c90c6d0713bda0091afcce6ae68",
+     "source_cursor": {
+      "line_number": 11,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 10
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000011",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:11Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 11 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:11.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000011"
+     },
+     "payload_sha256": "d6fb6b5390960acae628c999ed8ac4bdcb276be33439dc4170f761c4997693e9",
+     "source_cursor": {
+      "line_number": 12,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 11
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000012",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:12Z",
+     "payload": {
+      "message": {
+       "content": "golden question 12",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:12.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000012"
+     },
+     "payload_sha256": "61b393d4fcea76c1661a31956b3535c9246dd2c96b5a9d1c354abe1c1889e2e0",
+     "source_cursor": {
+      "line_number": 13,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 12
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000013",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:13Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 13 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:13.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000013"
+     },
+     "payload_sha256": "43a5799efac85692383e64d63ad501e3edb1d25252de7a54b8541f91f2dcdc67",
+     "source_cursor": {
+      "line_number": 14,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 13
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000014",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:14Z",
+     "payload": {
+      "message": {
+       "content": "golden question 14",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:14.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000014"
+     },
+     "payload_sha256": "6d8927f4cb77ec17708cd0339cb7441db7f76f361e59ade25a9b0485e3233ffc",
+     "source_cursor": {
+      "line_number": 15,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 14
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000015",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:15Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 15 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:15.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000015"
+     },
+     "payload_sha256": "aa62b9c377d0da2d7f15a3d00b1e42544b8a25cd296aa675836129276540f89a",
+     "source_cursor": {
+      "line_number": 16,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 15
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000016",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:16Z",
+     "payload": {
+      "message": {
+       "content": "golden question 16",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:16.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000016"
+     },
+     "payload_sha256": "673053438682481df549ad80c28d257cbc9f9f8d22e32980f0f6e9fb996b2b05",
+     "source_cursor": {
+      "line_number": 17,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 16
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000017",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:17Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 17 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:17.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000017"
+     },
+     "payload_sha256": "14761cc52d5670eb960262e6729cf9345ff439b71b5d3bbaad8f8718d3e8a196",
+     "source_cursor": {
+      "line_number": 18,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 17
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000018",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:18Z",
+     "payload": {
+      "message": {
+       "content": "golden question 18",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:18.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000018"
+     },
+     "payload_sha256": "b3860c675c7dbd10802ca951cde67f155e246945cd3a1b4790edcff91aac3b36",
+     "source_cursor": {
+      "line_number": 19,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 18
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000019",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:19Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 19 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:19.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000019"
+     },
+     "payload_sha256": "82f774ed99c80fc533f0e6641881f75fe3f57be24d81bfca16a503f55fda6eb2",
+     "source_cursor": {
+      "line_number": 20,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 19
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000020",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:20Z",
+     "payload": {
+      "message": {
+       "content": "golden question 20",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:20.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000020"
+     },
+     "payload_sha256": "60aa565d7de8148ba7c330bafc51dd233a397c5fdc409c5e6a2830cd1ab30f8b",
+     "source_cursor": {
+      "line_number": 21,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 20
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000021",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:21Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 21 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:21.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000021"
+     },
+     "payload_sha256": "90b18f6789d9442700b13f857b0690552e46b2941a23acf15b1f63fc722c9329",
+     "source_cursor": {
+      "line_number": 22,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 21
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000022",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:22Z",
+     "payload": {
+      "message": {
+       "content": "golden question 22",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:22.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000022"
+     },
+     "payload_sha256": "98850292d3440ebe683aad938c5fd4e169a7b8b50dd4372e1aa52e48ac3e1193",
+     "source_cursor": {
+      "line_number": 23,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 22
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000023",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:23Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 23 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:23.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000023"
+     },
+     "payload_sha256": "1e53061dde256e70ee747ba6a21b15f9118ff1c8a82b07d251891c522ea3071b",
+     "source_cursor": {
+      "line_number": 24,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 23
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000024",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:24Z",
+     "payload": {
+      "message": {
+       "content": "golden question 24",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:24.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000024"
+     },
+     "payload_sha256": "c188ee065f05b02ba071aa774e26bf7aa037df387445adb4fa00aa0c595a1d2b",
+     "source_cursor": {
+      "line_number": 25,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 24
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000025",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:25Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 25 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:25.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000025"
+     },
+     "payload_sha256": "f0bb08025cc8915c7c06b820ad0b61824c018793dddf52fba568793c9c32801d",
+     "source_cursor": {
+      "line_number": 26,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 25
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000026",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:26Z",
+     "payload": {
+      "message": {
+       "content": "golden question 26",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:26.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000026"
+     },
+     "payload_sha256": "703f19ecef19855e9b38ca966d79376d93bdd06e7edde7cb7099db7b542019f6",
+     "source_cursor": {
+      "line_number": 27,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 26
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000027",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:27Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 27 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:27.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000027"
+     },
+     "payload_sha256": "07e859ac8c3e5318315ca2009888a32027ffde0c95c808d27bd7f28d44bbadd0",
+     "source_cursor": {
+      "line_number": 28,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 27
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000028",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:28Z",
+     "payload": {
+      "message": {
+       "content": "golden question 28",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:28.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000028"
+     },
+     "payload_sha256": "1f4ebd768e4d784a43e7137fb60193154d32badd437f8de203e77e0ee2cce386",
+     "source_cursor": {
+      "line_number": 29,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 28
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000029",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:29Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 29 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:29.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000029"
+     },
+     "payload_sha256": "083b69ac9ab4a8497627c2643d34376cb0245db7c31ac6e8b2b3c226d9b7cfb6",
+     "source_cursor": {
+      "line_number": 30,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 29
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000030",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:30Z",
+     "payload": {
+      "message": {
+       "content": "golden question 30",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:30.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000030"
+     },
+     "payload_sha256": "820e98d78b68ecc7a20bb47f1e55d590ad55994b9ef4673e544338a751698a94",
+     "source_cursor": {
+      "line_number": 31,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 30
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000031",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:31Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 31 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:31.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000031"
+     },
+     "payload_sha256": "cecbe690149fe2afa8c5d30bd5497c5e737050ce6ca6bd7c6053fc9e7b86d4c0",
+     "source_cursor": {
+      "line_number": 32,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 31
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000032",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:32Z",
+     "payload": {
+      "message": {
+       "content": "golden question 32",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:32.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000032"
+     },
+     "payload_sha256": "b735ac0e8f331e7d68aeec05c8bd5984b1113104e25f4f3f984eeb8a2461676f",
+     "source_cursor": {
+      "line_number": 33,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 32
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000033",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:33Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 33 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:33.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000033"
+     },
+     "payload_sha256": "a75ef8c766d3c6e4805c5bdb8f1c2f61b203b7038f024c1a7772bd8245925ed2",
+     "source_cursor": {
+      "line_number": 34,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 33
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000034",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:34Z",
+     "payload": {
+      "message": {
+       "content": "golden question 34",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:34.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000034"
+     },
+     "payload_sha256": "65208f9737965583cba041454f5c4ed9e06745a2e4ea083ce18ed1b9645c4c2e",
+     "source_cursor": {
+      "line_number": 35,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 34
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000035",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:35Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 35 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:35.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000035"
+     },
+     "payload_sha256": "bf967e89abf72c15e491207e942941b2b2d8fcc393d8efcabd75697cb4fc1562",
+     "source_cursor": {
+      "line_number": 36,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 35
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000036",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:36Z",
+     "payload": {
+      "message": {
+       "content": "golden question 36",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:36.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000036"
+     },
+     "payload_sha256": "554707bb16365b2ef8af57dcd7b8919064da925841a9d635f75cb5c80f3c06e4",
+     "source_cursor": {
+      "line_number": 37,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 36
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000037",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:37Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 37 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:37.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000037"
+     },
+     "payload_sha256": "9fe17317a6dd5cd7c91d0a5340a8b9f9da0e24f775c3ee5ffecb5cfe327ce44a",
+     "source_cursor": {
+      "line_number": 38,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 37
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000038",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:38Z",
+     "payload": {
+      "message": {
+       "content": "golden question 38",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:38.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000038"
+     },
+     "payload_sha256": "54cd3d1c689050a47cfa45b0958e5d89f50067f1033d547266bbe1096ead00e0",
+     "source_cursor": {
+      "line_number": 39,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 38
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000039",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:39Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 39 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:39.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000039"
+     },
+     "payload_sha256": "a0d5e53ebff7f7bf4b980b0c9f606f6a96d3f2863442aa35a04ef454c6a6dce7",
+     "source_cursor": {
+      "line_number": 40,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 39
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000040",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:40Z",
+     "payload": {
+      "message": {
+       "content": "golden question 40",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:40.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000040"
+     },
+     "payload_sha256": "e262d4789c20558c8779f46bdc810573264dc87b31e75c59d17b8bf63f970f6d",
+     "source_cursor": {
+      "line_number": 41,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 40
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000041",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:41Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 41 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:41.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000041"
+     },
+     "payload_sha256": "9c2a51e34753c519b94765bbf56566a39a91d71b9bcfd635db45899c2d25ef27",
+     "source_cursor": {
+      "line_number": 42,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 41
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000042",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:42Z",
+     "payload": {
+      "message": {
+       "content": "golden question 42",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:42.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000042"
+     },
+     "payload_sha256": "75e586e7c6de68ac68836e2e33123f180f1cdefd5cdeeafb36f746b52b2f07f0",
+     "source_cursor": {
+      "line_number": 43,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 42
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000043",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:43Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 43 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:43.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000043"
+     },
+     "payload_sha256": "a68f793311a027361908bd344f9312c6bd3f2a456a03ba570ab8d55f67f5e61b",
+     "source_cursor": {
+      "line_number": 44,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 43
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000044",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:44Z",
+     "payload": {
+      "message": {
+       "content": "golden question 44",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:44.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000044"
+     },
+     "payload_sha256": "d6de9fddbe9575fb12f64f2e09bd6873f354de01c8706193ac3af9074a725c80",
+     "source_cursor": {
+      "line_number": 45,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 44
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000045",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:45Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 45 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:45.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000045"
+     },
+     "payload_sha256": "cbba87f2b4cc9ab0702c444fad90bd705af80cfbe3cc8e7cd85a295814c4d643",
+     "source_cursor": {
+      "line_number": 46,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 45
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000046",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:46Z",
+     "payload": {
+      "message": {
+       "content": "golden question 46",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:46.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000046"
+     },
+     "payload_sha256": "63c6fc6b838fd378fe27edf648c439405dcdbc6502af2aa7810002b8d34c0c6e",
+     "source_cursor": {
+      "line_number": 47,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 46
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000047",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:47Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 47 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:47.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000047"
+     },
+     "payload_sha256": "f33e45c99133ae502850dc34f2c7c25b2488f808797718a034f02dba419b6d29",
+     "source_cursor": {
+      "line_number": 48,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 47
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000048",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:48Z",
+     "payload": {
+      "message": {
+       "content": "golden question 48",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:48.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000048"
+     },
+     "payload_sha256": "14f2f2c89c8b00c430874e64793f55e1cdca2ec8c0e0940d328de8759654e8d3",
+     "source_cursor": {
+      "line_number": 49,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 48
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000049",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:49Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 49 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:49.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000049"
+     },
+     "payload_sha256": "ae2383f754b1d4a79f6dd8ec7be69f719037464441138cbcbb536d2848b129e8",
+     "source_cursor": {
+      "line_number": 50,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 49
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000050",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:50Z",
+     "payload": {
+      "message": {
+       "content": "golden question 50",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:50.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000050"
+     },
+     "payload_sha256": "f24caf6633027c1d416e235268cd240fdfc750b349546182023e902147443947",
+     "source_cursor": {
+      "line_number": 51,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 50
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000051",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:51Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 51 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:51.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000051"
+     },
+     "payload_sha256": "c61e253a4b76bad246c32fdb636c230e24f26c3219ae25c4e5b85ffa190fa02c",
+     "source_cursor": {
+      "line_number": 52,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 51
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000052",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:52Z",
+     "payload": {
+      "message": {
+       "content": "golden question 52",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:52.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000052"
+     },
+     "payload_sha256": "bad8defbe06d5c2a9fb15885484b4dc8c154cd4d1030386157a6c76b25c1493f",
+     "source_cursor": {
+      "line_number": 53,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 52
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000053",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:53Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 53 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:53.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000053"
+     },
+     "payload_sha256": "9f6567f33d18764584fea4023e090081ccfe8f67a519f76a6c563e504621515c",
+     "source_cursor": {
+      "line_number": 54,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 53
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000054",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:54Z",
+     "payload": {
+      "message": {
+       "content": "golden question 54",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:54.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000054"
+     },
+     "payload_sha256": "0562e7d082517340c461aabdd8e5ad9b9d313f6ddf603ce88cac4e0a6d89bec9",
+     "source_cursor": {
+      "line_number": 55,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 54
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000055",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:55Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 55 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:55.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000055"
+     },
+     "payload_sha256": "49f31c7214934558130a4d5349b39db9dd33892559bc41d335e65067d2b7914a",
+     "source_cursor": {
+      "line_number": 56,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 55
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000056",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:56Z",
+     "payload": {
+      "message": {
+       "content": "golden question 56",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:56.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000056"
+     },
+     "payload_sha256": "522613cd26b8083d3081519e6f3d119d8a61a552dce9ec0c6593f3975a853ce7",
+     "source_cursor": {
+      "line_number": 57,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 56
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000057",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:57Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 57 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:57.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000057"
+     },
+     "payload_sha256": "275307ad7666a86d63e69e08a22384c65d21f7475df1ee93fe2f6b025cc0be17",
+     "source_cursor": {
+      "line_number": 58,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 57
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000058",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:00:58Z",
+     "payload": {
+      "message": {
+       "content": "golden question 58",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:58.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000058"
+     },
+     "payload_sha256": "ed52aa7c18089c8dc108bb1ddcfb636bade1a3faadcf2844dc1589d13364011a",
+     "source_cursor": {
+      "line_number": 59,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 58
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000059",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:00:59Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 59 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:00:59.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000059"
+     },
+     "payload_sha256": "30f4c5e83be95a6c420f451ff8bbe8ead674791fe03eaba90fc3a9cba36862bc",
+     "source_cursor": {
+      "line_number": 60,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 59
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000060",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:00Z",
+     "payload": {
+      "message": {
+       "content": "golden question 60",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:00.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000060"
+     },
+     "payload_sha256": "f61f8fa8a35a17611a9176e1e9b402020553253eeeed317ab881d2fc5b642c2e",
+     "source_cursor": {
+      "line_number": 61,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 60
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000061",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:01Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 61 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:01.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000061"
+     },
+     "payload_sha256": "6fd990858695bf755df459e2b7c00e3cbb35cd5ee8ba068d52063af81915b321",
+     "source_cursor": {
+      "line_number": 62,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 61
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000062",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:02Z",
+     "payload": {
+      "message": {
+       "content": "golden question 62",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:02.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000062"
+     },
+     "payload_sha256": "c14e418f44c5921fa72c4f28092029e8df4a4eda7d5c0e9b97766d52def3c85c",
+     "source_cursor": {
+      "line_number": 63,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 62
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000063",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:03Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 63 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:03.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000063"
+     },
+     "payload_sha256": "7eb703a30e8bfa7307ccde1fb5af828291fe694437c118aa1ed8ec18ef7a38bf",
+     "source_cursor": {
+      "line_number": 64,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 63
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000064",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:04Z",
+     "payload": {
+      "message": {
+       "content": "golden question 64",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:04.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000064"
+     },
+     "payload_sha256": "02457d787d34aae9bab0c1ea52095e2184cddb70f675bf44a7c565b567e6b69a",
+     "source_cursor": {
+      "line_number": 65,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 64
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000065",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:05Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 65 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:05.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000065"
+     },
+     "payload_sha256": "2e11d1d370077dcf0411b83c4a410580c8a13f6538dadf922722643b2aa3b1f5",
+     "source_cursor": {
+      "line_number": 66,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 65
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000066",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:06Z",
+     "payload": {
+      "message": {
+       "content": "golden question 66",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:06.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000066"
+     },
+     "payload_sha256": "816d8a95af59fc3d1ab562f889141a69c7430390564aeb2b21e36a7d12f074e4",
+     "source_cursor": {
+      "line_number": 67,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 66
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000067",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:07Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 67 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:07.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000067"
+     },
+     "payload_sha256": "32ca1c83d33dac2137219023a88c9fb5b9a0eeabf37208a29864d2ae48e6c1c6",
+     "source_cursor": {
+      "line_number": 68,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 67
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000068",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:08Z",
+     "payload": {
+      "message": {
+       "content": "golden question 68",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:08.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000068"
+     },
+     "payload_sha256": "15a0bc5d0c663680b44d11ad9209bb04d748f092fd647ba2c4c7bc29b6ad3d7a",
+     "source_cursor": {
+      "line_number": 69,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 68
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000069",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:09Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 69 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:09.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000069"
+     },
+     "payload_sha256": "6148610236841dc952f78f2239f7679ebf7149201659775aa8979b535f981525",
+     "source_cursor": {
+      "line_number": 70,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 69
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000070",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:10Z",
+     "payload": {
+      "message": {
+       "content": "golden question 70",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:10.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000070"
+     },
+     "payload_sha256": "6d0f833d80705d12b59fff6f1a811494e0c5d0b36f16b2fae3b02ee339868c03",
+     "source_cursor": {
+      "line_number": 71,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 70
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000071",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:11Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 71 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:11.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000071"
+     },
+     "payload_sha256": "71563bda22c8de2624fc175f41f9e135eafb2a46e1d14af4a26cfc22e3a33003",
+     "source_cursor": {
+      "line_number": 72,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 71
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000072",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:12Z",
+     "payload": {
+      "message": {
+       "content": "golden question 72",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:12.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000072"
+     },
+     "payload_sha256": "fbd6105e5a2a785c3469d86b2cc84ecd40701696a0b92a0dc92dd6a9b8e50b7e",
+     "source_cursor": {
+      "line_number": 73,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 72
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000073",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:13Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 73 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:13.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000073"
+     },
+     "payload_sha256": "e3213f95c30c8886a7a27e07460bf2038a2e45cc9d9ddc0b4ca309059bac1f5e",
+     "source_cursor": {
+      "line_number": 74,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 73
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000074",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:14Z",
+     "payload": {
+      "message": {
+       "content": "golden question 74",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:14.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000074"
+     },
+     "payload_sha256": "e29bd73c3c2db126abf5c711470e4f6d442bcaa2a27b67517ed5978626792c65",
+     "source_cursor": {
+      "line_number": 75,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 74
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000075",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:15Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 75 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:15.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000075"
+     },
+     "payload_sha256": "93e8d822c437d8dfddba3ac7238ceed5cd5c1c266523ca80f34aff9190806353",
+     "source_cursor": {
+      "line_number": 76,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 75
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000076",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:16Z",
+     "payload": {
+      "message": {
+       "content": "golden question 76",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:16.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000076"
+     },
+     "payload_sha256": "2d3361581e7d833c2085506d7acea1ad38c1d263e2dfe60d4f550fdcb479d6a4",
+     "source_cursor": {
+      "line_number": 77,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 76
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000077",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:17Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 77 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:17.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000077"
+     },
+     "payload_sha256": "fd0316b6fca943b69315726a6b455e2c921e6a8b2892a643ad3d5002a5aa06bb",
+     "source_cursor": {
+      "line_number": 78,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 77
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000078",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:18Z",
+     "payload": {
+      "message": {
+       "content": "golden question 78",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:18.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000078"
+     },
+     "payload_sha256": "0945b8cf444fea8ed80e1efcbf160bbf53c8e5a1d2d605fe0d4862a2ab39d20b",
+     "source_cursor": {
+      "line_number": 79,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 78
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000079",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:19Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 79 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:19.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000079"
+     },
+     "payload_sha256": "796372a9f06b011bc472739efce831b0f056385a23b549ca2fe09536fbc0dc0e",
+     "source_cursor": {
+      "line_number": 80,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 79
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000080",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:20Z",
+     "payload": {
+      "message": {
+       "content": "golden question 80",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:20.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000080"
+     },
+     "payload_sha256": "cf2b67fb0edc2bc19be7bcf6f6def522a6aed284dd06d45e907fdf69e8e3bcad",
+     "source_cursor": {
+      "line_number": 81,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 80
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000081",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:21Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 81 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:21.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000081"
+     },
+     "payload_sha256": "488cbed0356beeec19374e355b5a6dca67bf3d2e59957e620481de85159cf203",
+     "source_cursor": {
+      "line_number": 82,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 81
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000082",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:22Z",
+     "payload": {
+      "message": {
+       "content": "golden question 82",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:22.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000082"
+     },
+     "payload_sha256": "abb7ba7a6caed7684314001a364b6202ce9d6c0f830082d99f8a6879e5bc96d1",
+     "source_cursor": {
+      "line_number": 83,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 82
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000083",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:23Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 83 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:23.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000083"
+     },
+     "payload_sha256": "388640093efaa93988284ca7589a1a8c6fcaaa11f02edc6d69d83477267ff8de",
+     "source_cursor": {
+      "line_number": 84,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 83
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000084",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:24Z",
+     "payload": {
+      "message": {
+       "content": "golden question 84",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:24.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000084"
+     },
+     "payload_sha256": "ca52bbc7eddaefe0dd4dcc013cdf371c721ee4e5c2a075baacbaf453ddfb0086",
+     "source_cursor": {
+      "line_number": 85,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 84
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000085",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:25Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 85 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:25.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000085"
+     },
+     "payload_sha256": "970182f1cb1e2cc7dfce86e657548ad7d19a1545f086e233c0e82c312157eab1",
+     "source_cursor": {
+      "line_number": 86,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 85
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000086",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:26Z",
+     "payload": {
+      "message": {
+       "content": "golden question 86",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:26.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000086"
+     },
+     "payload_sha256": "5e643ea56d0d2cf3db9ac35e49d8988f180161b40930cab9321bc553737ae036",
+     "source_cursor": {
+      "line_number": 87,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 86
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000087",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:27Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 87 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:27.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000087"
+     },
+     "payload_sha256": "046360072af7ceb2c16c85bd13ced7b049b71f24930d943712fb6e5aa6939ad1",
+     "source_cursor": {
+      "line_number": 88,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 87
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000088",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:28Z",
+     "payload": {
+      "message": {
+       "content": "golden question 88",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:28.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000088"
+     },
+     "payload_sha256": "f926b1cd7737d4c09b49058f6cd905ceda0551c5905a066a90b245c6f6e11d94",
+     "source_cursor": {
+      "line_number": 89,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 88
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000089",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:29Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 89 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:29.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000089"
+     },
+     "payload_sha256": "efac2fd7e5fba7323b9b3be4eb9e00a58637f35d8d72721ec4dda4775ec3ea92",
+     "source_cursor": {
+      "line_number": 90,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 89
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000090",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:30Z",
+     "payload": {
+      "message": {
+       "content": "golden question 90",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:30.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000090"
+     },
+     "payload_sha256": "5c58f6f42906d3551f793b8c3347eba905ad8a6370944ff5b18b6c59950648a9",
+     "source_cursor": {
+      "line_number": 91,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 90
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000091",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:31Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 91 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:31.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000091"
+     },
+     "payload_sha256": "ee73695822d58eb43ab5559e4ef9fa61787fe3a471c15056913140b35739b840",
+     "source_cursor": {
+      "line_number": 92,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 91
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000092",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:32Z",
+     "payload": {
+      "message": {
+       "content": "golden question 92",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:32.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000092"
+     },
+     "payload_sha256": "a351a6064dab8e297c15c25993647379d47048f172645e26f7ff5fae129e9bfa",
+     "source_cursor": {
+      "line_number": 93,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 92
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000093",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:33Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 93 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:33.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000093"
+     },
+     "payload_sha256": "b2bafa1e4cf42db86a9f1d15c5f8a3d58bf06b2a6ce5172a7dfbcc939dc71756",
+     "source_cursor": {
+      "line_number": 94,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 93
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000094",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:34Z",
+     "payload": {
+      "message": {
+       "content": "golden question 94",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:34.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000094"
+     },
+     "payload_sha256": "c2e4e90eb49500f003fc4e5a5067ebce589ef176027681a69d40ce34a6a414b5",
+     "source_cursor": {
+      "line_number": 95,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 94
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000095",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:35Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 95 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:35.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000095"
+     },
+     "payload_sha256": "79f59cc665dd3fffae8ad2314be0fadc85d527f84e3754e9617373ffa6aa387e",
+     "source_cursor": {
+      "line_number": 96,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 95
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000096",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:36Z",
+     "payload": {
+      "message": {
+       "content": "golden question 96",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:36.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000096"
+     },
+     "payload_sha256": "dd04ace9eaa040316b6d5165a004ce280201cdd55601e542ee771f3ff34d84eb",
+     "source_cursor": {
+      "line_number": 97,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 96
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000097",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:37Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 97 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:37.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000097"
+     },
+     "payload_sha256": "444b2393120d5f6b46a75f18148a26195adecf252bcc72b6b13bfc3ddcde4201",
+     "source_cursor": {
+      "line_number": 98,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 97
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000098",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:38Z",
+     "payload": {
+      "message": {
+       "content": "golden question 98",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:38.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000098"
+     },
+     "payload_sha256": "a1ed4e20aeac92beac1373f0b6b2b2d7d36d001933ad3d32840033d036d01f26",
+     "source_cursor": {
+      "line_number": 99,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 98
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000099",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:39Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 99 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:39.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000099"
+     },
+     "payload_sha256": "f0e278f96990d65a17539bff1bf2bb0bff5c7ff5b59b864e1ec201edd30f20b0",
+     "source_cursor": {
+      "line_number": 100,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 99
+    }
+   ],
+   "limit": 250,
+   "origin": "matrx_local",
+   "provider": "claude_code",
+   "provider_project_key": "<PROJECT_KEY>",
+   "provider_session_id": "claude-sdk:<PROJECT_DIGEST>:NmYxYzNhNTItOWEyZS00ZDhlLWI2ZjEtMmM0ZDVlNmY3YTgw",
+   "schema_version": 1,
+   "source_metadata": {
+    "client_version": "2.1.228",
+    "corrupt_line_count": 1,
+    "importer_version": "matrx-local/claude-history-v2",
+    "provider_account_fingerprint": "aaaaaaaaaaaa",
+    "provider_account_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider_account_key_version": 2,
+    "provider_account_label": "golden@example.com",
+    "provider_native_session_id": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+    "source_complete": false,
+    "source_kind": "claude_local_jsonl",
+    "transcript_bytes": 59417,
+    "transcript_entry_count": 134,
+    "transcript_mtime_ns": 1790000000000000000,
+    "transcript_sha256": "2211801ee997c8b474c4a732220a96d1be884ec426555f40c94ff4aff08de8ca"
+   },
+   "stream_key": "main",
+   "writer_lease_seconds": 300,
+   "writer_runtime_id": "matrx-local:claude-history:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "action": "append_native",
+   "conversation": {
+    "conversation_id": "<CONVERSATION>",
+    "is_new": true,
+    "store": true
+   },
+   "entries": [
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000100",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:40Z",
+     "payload": {
+      "message": {
+       "content": "golden question 100",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:40.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000100"
+     },
+     "payload_sha256": "6d8745f8a8cc64341b02640186de18e6142f6847e73778f221aecb58eddfcade",
+     "source_cursor": {
+      "line_number": 101,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 100
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000101",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:41Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 101 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:41.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000101"
+     },
+     "payload_sha256": "7ca8a6262de6d91c8d8cd84da44cdbce32830c5e34561732ca94effbbb8bcfc1",
+     "source_cursor": {
+      "line_number": 102,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 101
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000102",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:42Z",
+     "payload": {
+      "message": {
+       "content": "golden question 102",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:42.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000102"
+     },
+     "payload_sha256": "588801410842e62fa5e2ad6b14b945387864d476d228cc667b46d00bd6abc622",
+     "source_cursor": {
+      "line_number": 103,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 102
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000103",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:43Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 103 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:43.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000103"
+     },
+     "payload_sha256": "3fee834965f49f7f7b0603968f64b70e67acb4daf622fd0adb8efc63f4567414",
+     "source_cursor": {
+      "line_number": 104,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 103
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000104",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:44Z",
+     "payload": {
+      "message": {
+       "content": "golden question 104",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:44.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000104"
+     },
+     "payload_sha256": "06c55650ae3f3b0326e8b1aafa21c0c4ff49f6ba405c71f99be5dc9097cd4b80",
+     "source_cursor": {
+      "line_number": 105,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 104
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000105",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:45Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 105 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:45.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000105"
+     },
+     "payload_sha256": "a6cc05076d384794a25469b8b39662faefee5e06ac4157594a629406a0fefa76",
+     "source_cursor": {
+      "line_number": 106,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 105
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000106",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:46Z",
+     "payload": {
+      "message": {
+       "content": "golden question 106",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:46.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000106"
+     },
+     "payload_sha256": "fd099f911d3660f343ba719f65b338f3dc43c10ee2d6e752cf57157b5c6b370e",
+     "source_cursor": {
+      "line_number": 107,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 106
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000107",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:47Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 107 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:47.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000107"
+     },
+     "payload_sha256": "3693107d93a22c310555361e75ad669b8fe98996526266b7aef683e7417077bb",
+     "source_cursor": {
+      "line_number": 108,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 107
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000108",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:48Z",
+     "payload": {
+      "message": {
+       "content": "golden question 108",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:48.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000108"
+     },
+     "payload_sha256": "efda8cb92657b6511eceb1c76a9b390607c393104e81111186c84489b3150596",
+     "source_cursor": {
+      "line_number": 109,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 108
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000109",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:49Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 109 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:49.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000109"
+     },
+     "payload_sha256": "17428a4494ce3d5f7f122b981fd670491a5f8c8fc13c58472961ff18c78bf0f4",
+     "source_cursor": {
+      "line_number": 110,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 109
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000110",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:50Z",
+     "payload": {
+      "message": {
+       "content": "golden question 110",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:50.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000110"
+     },
+     "payload_sha256": "f53e30fc3f08ea3d7aa2e0f39bc227c2fd1ee4da39cb6959f99007215bd4e33e",
+     "source_cursor": {
+      "line_number": 111,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 110
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000111",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:51Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 111 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:51.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000111"
+     },
+     "payload_sha256": "eaa8f1762ac37b9c2f9ba50042ae4cb2aa5f7a0e2f9d4cee6cb86fdb6b848333",
+     "source_cursor": {
+      "line_number": 112,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 111
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000112",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:52Z",
+     "payload": {
+      "message": {
+       "content": "golden question 112",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:52.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000112"
+     },
+     "payload_sha256": "4e6a8391ff6aa3580f6d1a8b5387fd15746952fa32c23d66b71375fe28690dbd",
+     "source_cursor": {
+      "line_number": 113,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 112
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000113",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:53Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 113 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:53.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000113"
+     },
+     "payload_sha256": "b275a3558f197934233c4af3cfa334df3b0c7484351548c2e5fd0eef2ceb6049",
+     "source_cursor": {
+      "line_number": 114,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 113
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000114",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:54Z",
+     "payload": {
+      "message": {
+       "content": "golden question 114",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:54.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000114"
+     },
+     "payload_sha256": "87de558fb3d4c97428058ab7b64602d92cba92ecd27ddc03b70098ae194803c6",
+     "source_cursor": {
+      "line_number": 115,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 114
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000115",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:55Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 115 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:55.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000115"
+     },
+     "payload_sha256": "3f3480a0b415d1c9e5e65273a08fb3eba4fb60c9cad3cca5657a7f4d380f80ca",
+     "source_cursor": {
+      "line_number": 116,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 115
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000116",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:56Z",
+     "payload": {
+      "message": {
+       "content": "golden question 116",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:56.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000116"
+     },
+     "payload_sha256": "da53043426879cf4a330f1fd711a22020e12a365de7bca3ccf72321ada7962eb",
+     "source_cursor": {
+      "line_number": 117,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 116
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000117",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:57Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 117 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:57.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000117"
+     },
+     "payload_sha256": "f0fcf6843dee073b60700f72c3f0c493a01cc26fbf200152aa6ab73768a00837",
+     "source_cursor": {
+      "line_number": 118,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 117
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000118",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:01:58Z",
+     "payload": {
+      "message": {
+       "content": "golden question 118",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:58.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000118"
+     },
+     "payload_sha256": "eaadb6940a5289e53d100329f1bf03525c620192cdc2b0dd8d9faa81827b6b08",
+     "source_cursor": {
+      "line_number": 119,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 118
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000119",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:01:59Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 119 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:01:59.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000119"
+     },
+     "payload_sha256": "a00116a67daa1f92ebf216e26f1e2cd3e0b828c5b06c5be1b10e6e25b8ad44b5",
+     "source_cursor": {
+      "line_number": 120,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 119
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000120",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:02:00Z",
+     "payload": {
+      "message": {
+       "content": "golden question 120",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:00.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000120"
+     },
+     "payload_sha256": "298103e7db910480e70115ddd0cc7f3e3cafa0b05746d73c55118526ad6b75e0",
+     "source_cursor": {
+      "line_number": 121,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 120
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000121",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:02:01Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 121 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:01.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000121"
+     },
+     "payload_sha256": "51945cdef000c62fd25aad59df9e4f4bc734e2ae220dc655172526cbbc426385",
+     "source_cursor": {
+      "line_number": 122,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 121
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000122",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:02:02Z",
+     "payload": {
+      "message": {
+       "content": "golden question 122",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:02.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000122"
+     },
+     "payload_sha256": "0f67ebf8e96ad09c323acec66ae57744526e1b79720ab0debd060a0431a16cb4",
+     "source_cursor": {
+      "line_number": 123,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 122
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000123",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:02:03Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 123 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:03.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000123"
+     },
+     "payload_sha256": "79c75d912280ff1a80e81cc904c99f7815af4766b65c7eaca306dcba23531292",
+     "source_cursor": {
+      "line_number": 124,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 123
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000124",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:02:04Z",
+     "payload": {
+      "message": {
+       "content": "golden question 124",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:04.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000124"
+     },
+     "payload_sha256": "140f9b1adc15c16b1340d334cff906e0296f8411243c2c0340d6ee9877e09af6",
+     "source_cursor": {
+      "line_number": 125,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 124
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000125",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:02:05Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 125 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:05.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000125"
+     },
+     "payload_sha256": "adaa574022e5147666f7134ad82917ab23153bbfc32962e0e5dfd95f805eaebd",
+     "source_cursor": {
+      "line_number": 126,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 125
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000126",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:02:06Z",
+     "payload": {
+      "message": {
+       "content": "golden question 126",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:06.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000126"
+     },
+     "payload_sha256": "a08ac174d6ff2b78e30f5281b48ffd8055dee5d38e7652bef27847b73de3ff44",
+     "source_cursor": {
+      "line_number": 127,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 126
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000127",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:02:07Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 127 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:07.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000127"
+     },
+     "payload_sha256": "8186291ca6a7c1ac116fb17e63e41798e4b1503b50521d1e3bb867b372dc12b0",
+     "source_cursor": {
+      "line_number": 128,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 127
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000128",
+     "kind": "user",
+     "occurred_at": "2026-10-01T09:02:08Z",
+     "payload": {
+      "message": {
+       "content": "golden question 128",
+       "role": "user"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:08.000Z",
+      "type": "user",
+      "uuid": "11111111-0000-4000-8000-000000000128"
+     },
+     "payload_sha256": "665b8e6fdd58618ac50804c1d0c3d5b535ef6e30b677cf70e3988f1210655a59",
+     "source_cursor": {
+      "line_number": 129,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 128
+    },
+    {
+     "entry_id": "11111111-0000-4000-8000-000000000129",
+     "kind": "assistant",
+     "occurred_at": "2026-10-01T09:02:09Z",
+     "payload": {
+      "message": {
+       "content": [
+        {
+         "text": "golden turn 129 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "type": "text"
+        }
+       ],
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "timestamp": "2026-10-01T09:02:09.000Z",
+      "type": "assistant",
+      "uuid": "11111111-0000-4000-8000-000000000129"
+     },
+     "payload_sha256": "b890122cb96f354d5bde4c80dceaaa8c619a8deb5e764a80bb03e1002a91a8b4",
+     "source_cursor": {
+      "line_number": 130,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 129
+    },
+    {
+     "entry_id": "line:131:449ee566a170fde1da84d32ecdb6a8f5",
+     "kind": "summary",
+     "payload": {
+      "leafUuid": "x",
+      "summary": "no uuid here",
+      "type": "summary"
+     },
+     "payload_sha256": "449ee566a170fde1da84d32ecdb6a8f54fae2c29da8e7d9384cb5bbfe5dd0a84",
+     "source_cursor": {
+      "line_number": 132,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 131
+    },
+    {
+     "entry_id": "line:132:9d3355538c8bf065bbfe489f339dfc1f",
+     "kind": "custom-title",
+     "payload": {
+      "customTitle": "Golden session",
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "type": "custom-title"
+     },
+     "payload_sha256": "9d3355538c8bf065bbfe489f339dfc1fb65d2fd7e5d44314534bc9c2fa86652b",
+     "source_cursor": {
+      "line_number": 133,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 132
+    }
+   ],
+   "limit": 250,
+   "origin": "matrx_local",
+   "provider": "claude_code",
+   "provider_project_key": "<PROJECT_KEY>",
+   "provider_session_id": "claude-sdk:<PROJECT_DIGEST>:NmYxYzNhNTItOWEyZS00ZDhlLWI2ZjEtMmM0ZDVlNmY3YTgw",
+   "schema_version": 1,
+   "source_metadata": {
+    "client_version": "2.1.228",
+    "corrupt_line_count": 1,
+    "importer_version": "matrx-local/claude-history-v2",
+    "provider_account_fingerprint": "aaaaaaaaaaaa",
+    "provider_account_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider_account_key_version": 2,
+    "provider_account_label": "golden@example.com",
+    "provider_native_session_id": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+    "source_complete": false,
+    "source_kind": "claude_local_jsonl",
+    "transcript_bytes": 59417,
+    "transcript_entry_count": 134,
+    "transcript_mtime_ns": 1790000000000000000,
+    "transcript_sha256": "2211801ee997c8b474c4a732220a96d1be884ec426555f40c94ff4aff08de8ca"
+   },
+   "stream_key": "main",
+   "writer_lease_seconds": 300,
+   "writer_runtime_id": "matrx-local:claude-history:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "action": "append_native",
+   "conversation": {
+    "conversation_id": "<CONVERSATION>",
+    "is_new": true,
+    "store": true
+   },
+   "entries": [
+    {
+     "entry_id": "22222222-0000-4000-8000-000000000002",
+     "kind": "assistant",
+     "payload": {
+      "message": {
+       "content": "direct",
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "type": "assistant",
+      "uuid": "22222222-0000-4000-8000-000000000002"
+     },
+     "payload_sha256": "31ada7c882371bdc50c7bde75faee0a0865938ae3a16637e115551de80122e62",
+     "source_cursor": {
+      "line_number": 1,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 0
+    }
+   ],
+   "limit": 250,
+   "origin": "matrx_local",
+   "provider": "claude_code",
+   "provider_project_key": "<PROJECT_KEY>",
+   "provider_session_id": "claude-sdk:<PROJECT_DIGEST>:NmYxYzNhNTItOWEyZS00ZDhlLWI2ZjEtMmM0ZDVlNmY3YTgw",
+   "schema_version": 1,
+   "source_metadata": {
+    "client_version": "2.1.228",
+    "corrupt_line_count": 1,
+    "importer_version": "matrx-local/claude-history-v2",
+    "provider_account_fingerprint": "aaaaaaaaaaaa",
+    "provider_account_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider_account_key_version": 2,
+    "provider_account_label": "golden@example.com",
+    "provider_native_session_id": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+    "source_complete": false,
+    "source_kind": "claude_local_jsonl",
+    "transcript_bytes": 59417,
+    "transcript_entry_count": 134,
+    "transcript_mtime_ns": 1790000000000000000,
+    "transcript_sha256": "2211801ee997c8b474c4a732220a96d1be884ec426555f40c94ff4aff08de8ca"
+   },
+   "stream_key": "subagent:agent-d",
+   "writer_lease_seconds": 300,
+   "writer_runtime_id": "matrx-local:claude-history:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "action": "append_native",
+   "conversation": {
+    "conversation_id": "<CONVERSATION>",
+    "is_new": true,
+    "store": true
+   },
+   "entries": [
+    {
+     "entry_id": "22222222-0000-4000-8000-000000000001",
+     "kind": "assistant",
+     "payload": {
+      "message": {
+       "content": "nested",
+       "role": "assistant"
+      },
+      "sessionId": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+      "type": "assistant",
+      "uuid": "22222222-0000-4000-8000-000000000001"
+     },
+     "payload_sha256": "a80dfe023447ef5f6798e0099c3aa5710c117044f3ab69792b5f91bd75402dd8",
+     "source_cursor": {
+      "line_number": 1,
+      "source_kind": "claude_local_jsonl"
+     },
+     "source_sequence": 0
+    }
+   ],
+   "limit": 250,
+   "origin": "matrx_local",
+   "provider": "claude_code",
+   "provider_project_key": "<PROJECT_KEY>",
+   "provider_session_id": "claude-sdk:<PROJECT_DIGEST>:NmYxYzNhNTItOWEyZS00ZDhlLWI2ZjEtMmM0ZDVlNmY3YTgw",
+   "schema_version": 1,
+   "source_metadata": {
+    "client_version": "2.1.228",
+    "corrupt_line_count": 1,
+    "importer_version": "matrx-local/claude-history-v2",
+    "provider_account_fingerprint": "aaaaaaaaaaaa",
+    "provider_account_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider_account_key_version": 2,
+    "provider_account_label": "golden@example.com",
+    "provider_native_session_id": "6f1c3a52-9a2e-4d8e-b6f1-2c4d5e6f7a80",
+    "source_complete": false,
+    "source_kind": "claude_local_jsonl",
+    "transcript_bytes": 59417,
+    "transcript_entry_count": 134,
+    "transcript_mtime_ns": 1790000000000000000,
+    "transcript_sha256": "2211801ee997c8b474c4a732220a96d1be884ec426555f40c94ff4aff08de8ca"
+   },
+   "stream_key": "subagent:workflows/wf_1/agent-n",
+   "writer_lease_seconds": 300,
+   "writer_runtime_id": "matrx-local:claude-history:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "action": "observe_hook",
+   "entries": [],
+   "hook_event": {
+    "name": "SessionMetadata",
+    "payload": {
+     "git_branch": "feature/golden",
+     "project_name": "golden-project",
+     "title": "golden question zero"
+    },
+    "stable_event_id": "session-metadata:16614deaa5842015a3196018fc6e47150b6aa87776e8af3c"
+   },
+   "limit": 250,
+   "origin": "independent_hook",
+   "provider": "claude_code",
+   "provider_project_key": "<PROJECT_KEY>",
+   "provider_session_id": "claude-sdk:<PROJECT_DIGEST>:NmYxYzNhNTItOWEyZS00ZDhlLWI2ZjEtMmM0ZDVlNmY3YTgw",
+   "schema_version": 1,
+   "stream_key": "main",
+   "writer_lease_seconds": 300
+  }
+ ],
+ "result": {
+  "accepted": true,
+  "continuation": "Open the original local Claude transcript with claude --resume <session-id> only while that local file, workspace, and login remain available.",
+  "corrupt_lines": 1,
+  "duplicate_pending_batches": 0,
+  "entries": 134,
+  "labeled_sessions": 1,
+  "native_restore_available": false,
+  "pending_outbox": 5,
+  "provider_account_fingerprint": "aaaaaaaaaaaa",
+  "provider_account_label": "golden@example.com",
+  "queued_batches": 4,
+  "queued_label_updates": 1,
+  "schema_version": 1,
+  "selected_sessions": 1,
+  "source_complete": false
+ },
+ "revision": "2211801ee997c8b474c4a732220a96d1be884ec426555f40c94ff4aff08de8ca"
+}

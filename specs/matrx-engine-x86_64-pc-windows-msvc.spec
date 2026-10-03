@@ -134,6 +134,19 @@ if not _matrx_files_mods:
     )
 _office_hidden = _matrx_files_mods + collect_office_modules(collect_submodules)
 
+# ── The Claude history importer + capture reconciler — matrx_coding_history ──
+# A workspace member of THIS repo (packages/matrx-coding-history), shared with
+# Matrx 2. The old app.services.coding_sessions paths alias its modules through
+# sys.modules, so static analysis alone would miss some of them: collect the
+# whole package, and fail the build if it is not importable here.
+_matrx_coding_history_mods = collect_submodules('matrx_coding_history')
+if 'matrx_coding_history.importer' not in _matrx_coding_history_mods:
+    raise RuntimeError(
+        'matrx_coding_history is absent from the build environment; Claude '
+        'history import, capture backfill and the hook delivery queue would be '
+        'missing from the sidecar'
+    )
+
 # ── THE scraper engine — matrx_scraper ────────────────────────────────────────
 # Same lazy shape as matrx_ai: matrx_scraper/__init__.py resolves ~90 top-level
 # names through importlib at call time (PEP 562 __getattr__), so PyInstaller's
@@ -160,7 +173,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'pyproject.toml'), '.'),
         (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
-    hiddenimports=["app.services.daemon_session_reconciler"] + _matrx_ai_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
+    hiddenimports=["app.services.daemon_session_reconciler"] + _matrx_ai_mods + _matrx_coding_history_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
     + _matrx_scraper_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',

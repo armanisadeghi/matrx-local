@@ -65,7 +65,7 @@ dependencies = [
     "pytesseract>=0.3.13",
     # Matrx — all pulled from PyPI. PyPI publishes happen via tag-push
     # to ``matrx-<pkg>/v<x.y.z>`` (see aidream/.github/workflows/
-    # publish-package.yml). There is intentionally no [tool.uv.sources]
+    # publish-package.yml). There is no [tool.uv.sources]
     # path override — see the note further down near [tool.uv].
     # All matrx-* pins resolve from PyPI (matrx-ai 0.4.18 wave, 2026-07-18:
     # client-host capability resolution plus the consolidated desktop discovery
@@ -130,6 +130,10 @@ dependencies = [
     # [dedup] (datasketch pulls numpy, which the single-ML-stack doctrine
     # reserves for the managed media runtime slot).
     "matrx-scraper[browser,pdf,ocr]>=0.2.295",
+    # The Claude Code history importer + capture reconciler, shared with Matrx 2. It lives IN this
+    # repo (packages/matrx-coding-history, a uv workspace member), so CI and release builds resolve
+    # it without any sibling checkout; Matrx 2 pins it by commit from this public repo.
+    "matrx-coding-history",
     # matrx-scheduler — see the optional [scheduler] extra below. Kept OUT of
     # core on purpose: the Phase 8 host that uses it is gated off by default
     # (MATRX_LOCAL_SCHEDULER_ENABLED) and imports it lazily, so the engine runs
@@ -247,12 +251,18 @@ dev = [
     "ruff",
 ]
 
-# NOTE: there is intentionally no [tool.uv.sources] section. All matrx-*
-# packages (including matrx-scheduler) resolve from PyPI. Do NOT add a path
-# source for a sibling repo (e.g. ../aidream/packages/...): those paths do
+# NOTE: the only [tool.uv.sources] entry is this repo's OWN workspace member
+# (packages/matrx-coding-history). Every other matrx-* package (including
+# matrx-scheduler) resolves from PyPI. Do NOT add a path source for a sibling repo (e.g. ../aidream/packages/...): those paths do
 # not exist on a clean checkout or on CI runners and break `uv sync` for
 # everyone. To consume in-flight aidream-workspace changes ahead of a PyPI
 # release, build a wheel from aidream and `uv pip install` it locally.
+
+[tool.uv.workspace]
+members = ["packages/matrx-coding-history"]
+
+[tool.uv.sources]
+matrx-coding-history = { workspace = true }
 
 [tool.uv]
 python-preference = "only-managed"

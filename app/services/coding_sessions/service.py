@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
 
 import aiosqlite
 
@@ -50,6 +49,10 @@ from app.services.coding_sessions.models import (
     BridgeRequest,
     LocalBridgeReceipt,
 )
+from matrx_coding_history.envelopes import (
+    SESSION_METADATA_EVENT as _SESSION_METADATA_EVENT,
+    validate_acknowledgement as _validate_acknowledgement,
+)
 from app.services.session_freshness import (
     request_session_grant,
     session_blocker,
@@ -61,11 +64,9 @@ from app.services.local_db.repositories import TokenRepo
 logger = get_logger()
 
 _SERVER_PATH = "/coding-sessions/bridge"
-# The metadata-plane hook name. It carries provider-authored session labels
-# (title, workspace, branch, worktree, archived) rather than transcript
-# content, so the server applies it to an EXISTING binding of either fidelity
-# and settles an unbound session with accepted=0 instead of minting one.
-SESSION_METADATA_EVENT = "SessionMetadata"
+# The metadata-plane hook name (matrx_coding_history.envelopes owns it, shared with Matrx 2):
+# provider-authored session labels on an EXISTING binding, never transcript content.
+SESSION_METADATA_EVENT = _SESSION_METADATA_EVENT
 _MAX_BACKOFF_SECONDS = 60.0
 _ENQUEUE_ORIGINS = frozenset(
     {
@@ -672,99 +673,11 @@ def _validate_upstream_acknowledgement(
 ) -> None:
     """Prove a 2xx body durably accepted exactly this one hook event.
 
-    A reverse proxy, stale server, or accidentally remounted route can return
-    JSON with HTTP 2xx without committing the bridge entry. Deleting the local
-    outbox row on that weak signal would turn a deployment mistake into data
-    loss, so the response must satisfy the frozen BridgeResponse v1 receipt.
+    The rule lives in ``matrx_coding_history.envelopes.validate_acknowledgement``
+    (shared with Matrx 2); this outbox raises it as ``AIDreamError(502, ...)``,
+    exactly as before, so its quarantine and retry decisions are unchanged.
     """
-
-    def _count(name: str) -> int:
-        value = response.get(name) if isinstance(response, dict) else None
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise AIDreamError(502, f"bridge acknowledgement has invalid {name}")
-        return value
-
-    if not isinstance(response, dict):
-        raise AIDreamError(502, "bridge acknowledgement is not a JSON object")
-    expected = {
-        "schema_version": 1,
-        "action": request.action.value,
-        "provider": request.provider.value,
-    }
-    hook_event = request.hook_event
-    is_session_metadata = (
-        request.action.value == "observe_hook"
-        and hook_event is not None
-        and hook_event.name == SESSION_METADATA_EVENT
-    )
-    if is_session_metadata:
-        # A label update lands on an existing binding of EITHER fidelity, and
-        # an unmirrored local session settles with accepted=0 and no session
-        # identity — that is a durable "nothing to update here", not a failure
-        # to retry forever.
-        for field, value in expected.items():
-            if response.get(field) != value:
-                raise AIDreamError(
-                    502,
-                    f"bridge acknowledgement {field} did not match request",
-                )
-        accepted = _count("accepted")
-        duplicates = _count("duplicates")
-        if _count("conflicts") != 0:
-            raise AIDreamError(
-                502,
-                "bridge acknowledgement did not account for every submitted entry",
-            )
-        if accepted == 0 and duplicates == 0:
-            return
-        if accepted + duplicates != 1:
-            raise AIDreamError(
-                502,
-                "bridge acknowledgement did not account for every submitted entry",
-            )
-        if response.get("fidelity") not in {"native", "event_mirror"}:
-            raise AIDreamError(502, "bridge acknowledgement has invalid fidelity")
-        for field in ("session_id", "conversation_id"):
-            try:
-                UUID(str(response.get(field)))
-            except (TypeError, ValueError, AttributeError) as exc:
-                raise AIDreamError(
-                    502,
-                    f"bridge acknowledgement has invalid {field}",
-                ) from exc
-        return
-    if request.action.value == "observe_hook":
-        expected["fidelity"] = "event_mirror"
-    for field, value in expected.items():
-        if response.get(field) != value:
-            raise AIDreamError(
-                502,
-                f"bridge acknowledgement {field} did not match request",
-            )
-    for field in ("session_id", "conversation_id"):
-        try:
-            UUID(str(response.get(field)))
-        except (TypeError, ValueError, AttributeError) as exc:
-            raise AIDreamError(
-                502,
-                f"bridge acknowledgement has invalid {field}",
-            ) from exc
-    accepted = _count("accepted")
-    duplicates = _count("duplicates")
-    conflicts = _count("conflicts")
-    expected_count = (
-        1 if request.action.value == "observe_hook" else len(request.entries)
-    )
-    if request.action.value == "append_native" and response.get("fidelity") not in {
-        "native",
-        "event_mirror",
-    }:
-        raise AIDreamError(502, "bridge acknowledgement has invalid import fidelity")
-    if conflicts != 0 or accepted + duplicates != expected_count:
-        raise AIDreamError(
-            502,
-            "bridge acknowledgement did not account for every submitted entry",
-        )
+    _validate_acknowledgement(response, request, error=AIDreamError)
 
 
 class CodingSessionBridgeOutbox:

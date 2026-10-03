@@ -31,7 +31,8 @@ install_one() {
   echo "installed $dst"
 }
 
-install_one "$repo_root/app/services/coding_sessions/claude_scope.py" \
+# The rule lives in the shared package (the old app path is an alias of it).
+install_one "$repo_root/packages/matrx-coding-history/src/matrx_coding_history/scope.py" \
             "$target/claude_scope.py"
 install_one "$repo_root/scripts/claude_code_pins_extract.py" \
             "$target/claude-code-pins-extract.py"

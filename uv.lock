@@ -11,6 +11,10 @@ resolution-markers = [
 ]
 
 [manifest]
+members = [
+    "matrx-coding-history",
+    "matrx-local",
+]
 constraints = [{ name = "protobuf", specifier = "<7" }]
 overrides = [{ name = "tflite-runtime", marker = "python_full_version < '3'" }]
 
@@ -2087,6 +2091,17 @@ wheels = [
 ]
 
 [[package]]
+name = "matrx-coding-history"
+version = "0.1.0"
+source = { editable = "packages/matrx-coding-history" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.11,<3" }]
+
+[[package]]
 name = "matrx-connect"
 version = "0.1.162"
 source = { registry = "https://pypi.org/simple" }
@@ -2182,6 +2197,7 @@ dependencies = [
     { name = "lxml" },
     { name = "markdownify" },
     { name = "matrx-ai" },
+    { name = "matrx-coding-history" },
     { name = "matrx-connect" },
     { name = "matrx-files" },
     { name = "matrx-graph" },
@@ -2298,6 +2314,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "matrx-ai", specifier = ">=0.5.420" },
+    { name = "matrx-coding-history", editable = "packages/matrx-coding-history" },
     { name = "matrx-connect", specifier = ">=0.1.162" },
     { name = "matrx-files", specifier = ">=0.2.236" },
     { name = "matrx-graph", specifier = ">=0.2.228" },

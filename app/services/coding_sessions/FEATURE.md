@@ -8,6 +8,20 @@ Cross-repo product plan:
 conversation browsing, provider launch, saved requests, skills, associations, or automation for
 this integration.
 
+## Where the importer lives (shared with Matrx 2)
+
+The Claude history importer and the capture reconciler, plus everything they need that is pure
+(`models`, `claude_probe`, `claude_scope`, `claude_session_index`, `continuation`, the envelope
+rules and the acknowledgement check), live in `packages/matrx-coding-history` — a uv workspace
+member of this repo that Matrx 2 pins by commit. The old module paths are `sys.modules` aliases
+of the package modules (the same objects). What stays here, behind the package's ports
+(`matrx_coding_history.ports`, wired in `history_ports.py`): the durable hook delivery queue
+(`service.py`), SQLite (`TokenRepo`, `SyncMetaRepo`, `HistoryInventoryStore`,
+`claude_capture_backfill`), the AIDream client, raw backup and the engine logger, and the
+review/prepare/sync-all and queue-view flows (`claude_history.py`). A test that patches importer
+or reconciler internals patches `matrx_coding_history.importer` / `.reconciler`, where they run.
+Guard: `tests/unit/test_coding_history_package_boundary.py`.
+
 ## What this edge owns
 
 `POST /coding-session/hooks` is the frozen provider-neutral command-hook

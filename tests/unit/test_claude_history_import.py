@@ -180,9 +180,7 @@ async def test_review_is_stat_fenced_paged_and_reports_scan_deltas(
     def fail_if_hashed(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("review must not content-hash the transcript corpus")
 
-    monkeypatch.setattr(
-        "app.services.coding_sessions.claude_history._hash_source", fail_if_hashed
-    )
+    monkeypatch.setattr("matrx_coding_history.importer._hash_source", fail_if_hashed)
     importer = ClaudeHistoryImporter(
         db=db, outbox=outbox, config_dir=config_dir, account_reader=_account_a
     )

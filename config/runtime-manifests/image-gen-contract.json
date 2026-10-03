@@ -1,5 +1,5 @@
 {
-  "contract_sha256": "3452946b00c814bb6d9091565e0dccae4e47798280289a99de1dcdbf83deba52",
+  "contract_sha256": "4421d8e17e577177c3f766a3a88e0226a0522d8c9dc0ae95d2522a1ecddff9ea",
   "critical_frozen_modules": [
     "doctest",
     "filecmp",
@@ -9,7 +9,7 @@
     "timeit",
     "tqdm.contrib.logging"
   ],
-  "lock_graph_sha256": "aadf6c7c121eb4d2d584aa661b56d6663a095c3883e8ba1ac2becf3ef3e9546d",
+  "lock_graph_sha256": "c4c7128d2f90b40b65d306e8336f0f97a42385ab78b1381f65fc68673ae11ad2",
   "lock_source": "uv.lock",
   "managed_direct_versions": {
     "accelerate": "1.13.0",

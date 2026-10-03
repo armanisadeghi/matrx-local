@@ -210,7 +210,8 @@ async def test_recovery_hashes_only_selected_missing_candidates(
     env, monkeypatch
 ) -> None:
     """The unattended inventory must not reread every transcript each pass."""
-    import app.services.coding_sessions.claude_history as history
+    # The discovery code lives in the shared package; patch it where it runs.
+    import matrx_coding_history.importer as history
 
     config_dir, db, importer = env
     era_start = datetime.now(UTC) - timedelta(days=2)
@@ -368,7 +369,8 @@ async def test_signed_out_is_blocked_not_crashed(env, monkeypatch: pytest.Monkey
 @pytest.mark.anyio
 async def test_an_oversized_transcript_never_blocks_the_batch(env, monkeypatch) -> None:
     """One huge session must not burn the retry budget of every session beside it."""
-    import app.services.coding_sessions.capture_reconciler as mod
+    # The pass lives in the shared package; patch its budget where it is read.
+    import matrx_coding_history.reconciler as mod
 
     config_dir, db, importer = env
     era_start = datetime.now(UTC) - timedelta(days=2)
@@ -429,7 +431,7 @@ async def test_one_bad_candidate_does_not_consume_its_neighbors_retry_budget(
 async def test_dry_run_does_not_consume_oversized_retry_budget(
     env, monkeypatch
 ) -> None:
-    import app.services.coding_sessions.capture_reconciler as mod
+    import matrx_coding_history.reconciler as mod
 
     config_dir, db, importer = env
     era_start = datetime.now(UTC) - timedelta(days=2)

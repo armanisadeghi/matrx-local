@@ -479,6 +479,12 @@ args = [
     # sidecar that cannot scrape at all.
     "--collect-submodules", "matrx_scraper",
     "--hidden-import", "matrx_scraper",
+    # The Claude history importer + capture reconciler: this repo's own workspace
+    # member (packages/matrx-coding-history), aliased from the old
+    # app.services.coding_sessions paths through sys.modules. Keep in sync with
+    # specs/*.spec.
+    "--collect-submodules", "matrx_coding_history",
+    "--hidden-import", "matrx_coding_history.importer",
     # google.protobuf is a namespace-package member PyInstaller misses; when
     # absent from the bundle, `import google.protobuf` resolves via sys.path
     # to ~/.matrx/image-gen-packages' protobuf 7.x, which xai-sdk hard-rejects

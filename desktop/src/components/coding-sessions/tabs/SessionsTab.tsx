@@ -646,7 +646,47 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
       <div className="min-w-0" data-testid="sessions-table">
         <MatrxDataTable
           data={conversations}
-          columns={columns}
+          columns={[...(columns), { id: "custom-actions", header: "Actions", sortable: false, filter: false, customActions: (row) => {
+            const target = resolveSessionConversation(row);
+            const continuation = row.continuation ?? null;
+            return (
+              <>
+                {target.kind === "conversation" && (
+                  <RowAction
+                    label="In AI Matrx"
+                    title="Open this conversation on the AI Matrx website."
+                    icon={<ExternalLink className="h-3.5 w-3.5" />}
+                    onRun={async () => {
+                      const origin = await getWebAppOrigin();
+                      await openExternal(conversationWebUrl(origin, target.conversationId));
+                    }}
+                  />
+                )}
+                {continuation && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title="Continue this session with a new turn on this Mac — or see exactly why that is not possible here, with the resume command to copy."
+                    onClick={() => setContinueRow(row)}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    <span className="ml-1.5 hidden text-xs xl:inline">Continue</span>
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  title="Every delivery fact behind this row's status: the server's binding, the transcript on disk, each envelope and its error."
+                  onClick={() => onOpenDiagnosis(row.session_id, rowProvider(row, data) ?? "claude_code")}
+                >
+                  <Stethoscope className="h-3.5 w-3.5" />
+                  <span className="ml-1.5 hidden text-xs xl:inline">Delivery</span>
+                </Button>
+              </>
+            );
+          } }]}
           getRowId={(row) => row.session_id}
           searchText={(row) => [row.title, row.project, row.category].filter(Boolean).join(" ")}
           query={{
@@ -707,47 +747,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
                     ? "No conversations match that search or filter."
                     : "No coding-agent conversations found on this Mac.",
           }}
-          rowActions={(row) => {
-            const target = resolveSessionConversation(row);
-            const continuation = row.continuation ?? null;
-            return (
-              <>
-                {target.kind === "conversation" && (
-                  <RowAction
-                    label="In AI Matrx"
-                    title="Open this conversation on the AI Matrx website."
-                    icon={<ExternalLink className="h-3.5 w-3.5" />}
-                    onRun={async () => {
-                      const origin = await getWebAppOrigin();
-                      await openExternal(conversationWebUrl(origin, target.conversationId));
-                    }}
-                  />
-                )}
-                {continuation && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    title="Continue this session with a new turn on this Mac — or see exactly why that is not possible here, with the resume command to copy."
-                    onClick={() => setContinueRow(row)}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    <span className="ml-1.5 hidden text-xs xl:inline">Continue</span>
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  title="Every delivery fact behind this row's status: the server's binding, the transcript on disk, each envelope and its error."
-                  onClick={() => onOpenDiagnosis(row.session_id, rowProvider(row, data) ?? "claude_code")}
-                >
-                  <Stethoscope className="h-3.5 w-3.5" />
-                  <span className="ml-1.5 hidden text-xs xl:inline">Delivery</span>
-                </Button>
-              </>
-            );
-          }}
+
         />
         {snapshot.overviewPending && data && (
           <p

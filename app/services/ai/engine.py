@@ -129,6 +129,13 @@ def install_client_host_queue_guard() -> None:
         return
 
     original = queue_helpers.get_coordinator
+    # ``apply_authoritative_user_request_rollup`` was removed from matrx-ai's
+    # persistence module after the 0.4.x client-host workaround was added.
+    # It is an optional compatibility hook: newer releases no longer call it,
+    # so installing the rest of the queue guard must not depend on its presence.
+    original_rollup = getattr(
+        db_persistence, "apply_authoritative_user_request_rollup", None
+    )
 
     required_bases = (
         "AgentMemoryBase",
@@ -220,13 +227,13 @@ def install_client_host_queue_guard() -> None:
         return await original_expire(self, *args, **kwargs)
 
     original_drain = dynamic_drain.drain_pending_injections
-    original_rollup = db_persistence.apply_authoritative_user_request_rollup
     original_schedule_labeling = orchestrator_executor._schedule_labeling_if_new
     queue_helpers.get_coordinator = _guarded_get_coordinator
     dynamic_drain.drain_pending_injections = _guarded_drain_pending_injections
-    db_persistence.apply_authoritative_user_request_rollup = (
-        _guarded_apply_authoritative_user_request_rollup
-    )
+    if callable(original_rollup):
+        db_persistence.apply_authoritative_user_request_rollup = (
+            _guarded_apply_authoritative_user_request_rollup
+        )
     orchestrator_executor._schedule_labeling_if_new = (
         _guarded_schedule_labeling_if_new
     )

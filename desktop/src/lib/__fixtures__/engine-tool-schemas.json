@@ -1344,7 +1344,6 @@
   "input_schema": {
    "properties": {
     "action": {
-     "description": "The operation to perform.",
      "enum": [
       "copy",
       "delete",
@@ -1364,104 +1363,104 @@
      "type": "string"
     },
     "content": {
-     "description": "Content to write to the file. Used with action(s): write.",
+     "description": "write: full file content.",
      "type": "string"
     },
     "create_directories": {
      "default": true,
-     "description": "Create parent directories if they don't exist. Used with action(s): write.",
+     "description": "write: create missing parent directories.",
      "type": "boolean"
     },
     "cursor": {
      "default": null,
-     "description": "Cursor from a previous result page. Used with action(s): find, list.",
+     "description": "find, list: cursor from the previous page.",
      "type": "string"
     },
     "destination": {
-     "description": "Target path. Copying a file into an existing directory keeps the file's name. Used with action(s): copy, move.",
+     "description": "copy, move: target path. A file source into an existing directory keeps its name; a directory source is never nested into an existing destination.",
      "type": "string"
     },
     "file_path": {
-     "description": "Path to the file to edit. Used with action(s): edit, read, write.",
+     "description": "read, write, edit: the file.",
      "type": "string"
     },
     "include": {
      "default": null,
-     "description": "Glob pattern to restrict which files are searched (e.g. '*.py'). Used with action(s): grep.",
+     "description": "grep: glob restricting which files are searched, e.g. '*.py'.",
      "type": "string"
     },
     "limit": {
      "default": 100,
-     "description": "Maximum results in this page. Used with action(s): find, list, read, semantic_find.",
+     "description": "find, list: page size (max 500). read: max lines (default all, up to the 256 KB cap). semantic_find: max results (max 100).",
      "maximum": 500,
      "minimum": 1,
      "type": "integer"
     },
     "max_results": {
      "default": 100,
-     "description": "Maximum number of matching lines to return. Used with action(s): grep.",
+     "description": "grep: max matching lines.",
      "maximum": 2000,
      "minimum": 1,
      "type": "integer"
     },
     "new_name": {
-     "description": "New bare name (no path separators). Use Move to relocate. Used with action(s): rename.",
+     "description": "rename: bare name, no path separators; use move to relocate.",
      "type": "string"
     },
     "new_string": {
-     "description": "Replacement string. Used with action(s): edit.",
+     "description": "edit: replacement text.",
      "type": "string"
     },
     "offset": {
      "default": null,
-     "description": "1-based line number to start reading from. Used with action(s): read.",
+     "description": "read: 1-based start line.",
      "minimum": 1,
      "type": "integer"
     },
     "old_string": {
-     "description": "Exact string to find and replace. Must match exactly including whitespace. Must be unique in the file unless replace_all is true. Used with action(s): edit.",
+     "description": "edit: exact text to replace, whitespace included; must be unique unless replace_all.",
      "type": "string"
     },
     "overwrite": {
      "default": false,
-     "description": "Replace the destination if it already exists. Used with action(s): copy, move.",
+     "description": "copy, move: replace an existing destination; a directory destination is replaced whole.",
      "type": "boolean"
     },
     "parents": {
      "default": true,
-     "description": "Create missing parent directories as needed. Used with action(s): mkdir.",
+     "description": "mkdir: create missing parent directories.",
      "type": "boolean"
     },
     "path": {
-     "description": "Path of the file or directory to delete. Used with action(s): delete, find, glob, grep, list, mkdir, rename.",
+     "description": "glob, grep, list: where to search/list (grep: file or directory); default working directory. find: optional root; omit to search the machine index. delete, rename, mkdir: the target (required).",
      "type": "string"
     },
     "pattern": {
-     "description": "Glob pattern to match (e.g. '**/*.py', 'src/*.ts'). Used with action(s): glob, grep.",
+     "description": "glob: glob pattern, e.g. '**/*.py'. grep: regular expression.",
      "type": "string"
     },
     "permanent": {
      "default": false,
-     "description": "If false (default), move to the OS trash (recoverable). If true, delete permanently \u2014 NOT recoverable. Used with action(s): delete.",
+     "description": "delete: true = permanent, unrecoverable; false = OS trash.",
      "type": "boolean"
     },
     "query": {
-     "description": "File or directory name/path text to find. Used with action(s): find, semantic_find.",
+     "description": "find: file or directory name/path text. semantic_find: natural-language description of the files.",
      "minLength": 1,
      "type": "string"
     },
     "replace_all": {
      "default": false,
-     "description": "Replace every occurrence instead of requiring a unique match. Used with action(s): edit.",
+     "description": "edit: replace every occurrence.",
      "type": "boolean"
     },
     "show_hidden": {
      "default": false,
-     "description": "If true, include hidden files and directories (names starting with '.'). Used with action(s): list.",
+     "description": "list: include dot-entries.",
      "type": "boolean"
     },
     "source": {
-     "description": "Path of the file or directory to copy. Used with action(s): copy, move.",
+     "description": "copy, move: path to copy or move.",
      "type": "string"
     }
    },
@@ -3724,7 +3723,7 @@
     },
     "effort": {
      "default": "medium",
-     "description": "Result pages scraped: low \u226410, medium \u226425, high \u226450.",
+     "description": "Result pages scraped: low \u226410, medium and high \u226420.",
      "enum": [
       "low",
       "medium",
@@ -3871,7 +3870,7 @@
     },
     "output_mode": {
      "default": "rich",
-     "description": "'rich' returns structured data with metadata, 'text' plain text, 'html' raw HTML, 'markdown' Markdown.",
+     "description": "No effect: every value returns the same parsed result.",
      "enum": [
       "rich",
       "text",
@@ -3908,7 +3907,6 @@
   "input_schema": {
    "properties": {
     "action": {
-     "description": "The operation to perform.",
      "enum": [
       "capture_book",
       "list",
@@ -3917,83 +3915,83 @@
      "type": "string"
     },
     "app_name": {
-     "description": "The reader application holding the open book, e.g. 'Books', 'Kindle', 'Preview'. The book must already be open on screen. Used with action(s): capture_book.",
+     "description": "capture_book: reader app holding the open book, e.g. 'Books', 'Kindle', 'Preview'.",
      "type": "string"
     },
     "crop_bottom": {
      "default": 0.0,
-     "description": "Fraction of the window height to trim off the bottom, to remove the page slider. Used with action(s): capture_book.",
+     "description": "capture_book: fraction of window height trimmed from the bottom (page slider).",
      "exclusiveMaximum": 0.5,
      "minimum": 0.0,
      "type": "number"
     },
     "crop_left": {
      "default": 0.0,
-     "description": "Fraction of the window width to trim off the left edge. Used with action(s): capture_book.",
+     "description": "capture_book: fraction of window width trimmed from the left.",
      "exclusiveMaximum": 0.5,
      "minimum": 0.0,
      "type": "number"
     },
     "crop_right": {
      "default": 0.0,
-     "description": "Fraction of the window width to trim off the right edge. Used with action(s): capture_book.",
+     "description": "capture_book: fraction of window width trimmed from the right.",
      "exclusiveMaximum": 0.5,
      "minimum": 0.0,
      "type": "number"
     },
     "crop_top": {
      "default": 0.0,
-     "description": "Fraction of the window height to trim off the top, to remove the reader's toolbar. Used with action(s): capture_book.",
+     "description": "capture_book: fraction of window height trimmed from the top (reader toolbar).",
      "exclusiveMaximum": 0.5,
      "minimum": 0.0,
      "type": "number"
     },
     "end_repeat_threshold": {
      "default": 3,
-     "description": "How many unchanged frames in a row mean the book has ended. Two can fire on one slow render, so three is the safe floor. Used with action(s): capture_book.",
+     "description": "capture_book: consecutive unchanged frames that mean the book ended; 2 can misfire on a slow render.",
      "maximum": 20,
      "minimum": 2,
      "type": "integer"
     },
     "max_pages": {
      "default": 400,
-     "description": "Hard ceiling on captured pages. The capture normally stops on its own when the page stops changing; this is the safety stop. Used with action(s): capture_book.",
+     "description": "capture_book: safety cap; capture normally stops when the page stops changing.",
      "maximum": 5000,
      "minimum": 1,
      "type": "integer"
     },
     "monitor": {
      "default": "all",
-     "description": "Display to capture: 'all' for the full virtual desktop, 'primary' for the primary display, or a 1-based monitor index string from list screens. Used with action(s): screenshot.",
+     "description": "screenshot: 'all' (whole virtual desktop), 'primary', or a 1-based index from list.",
      "type": "string"
     },
     "next_page_key": {
      "default": "right",
-     "description": "Key that turns the page in this reader: right, left, down, up, space, page_down, page_up or return. Used with action(s): capture_book.",
+     "description": "capture_book: page-turn key: right, left, down, up, space, page_down, page_up, return.",
      "type": "string"
     },
     "ocr": {
      "default": true,
-     "description": "Add a searchable text layer when an OCR engine is available. The result always states whether the text layer was actually written. Used with action(s): capture_book.",
+     "description": "capture_book: add a searchable text layer when an OCR engine is available; the result states whether it was written.",
      "type": "boolean"
     },
     "page_change_threshold": {
      "default": 0.001,
-     "description": "Fraction of the page that must change to count as a new page. Lower it for books whose pages differ by only a few words, such as an index or a page of verse. Used with action(s): capture_book.",
+     "description": "capture_book: fraction of the page that must change to count as a new page; lower it for near-identical pages (index, verse).",
      "exclusiveMaximum": 1.0,
      "exclusiveMinimum": 0.0,
      "type": "number"
     },
     "page_delay_seconds": {
      "default": 0.9,
-     "description": "Seconds to wait after each page turn before capturing, so the reader finishes animating and re-renders the text. Used with action(s): capture_book.",
+     "description": "capture_book: wait after each page turn before capturing, so the reader re-renders.",
      "maximum": 30.0,
      "minimum": 0.0,
      "type": "number"
     },
     "region": {
      "default": null,
-     "description": "Optional crop rectangle [x, y, width, height]. Coordinates are absolute when monitor='all', otherwise relative to the selected monitor. Used with action(s): screenshot.",
+     "description": "screenshot: crop [x, y, width, height]; absolute when monitor='all', else relative to the chosen monitor.",
      "items": {
       "type": "integer"
      },
@@ -4003,12 +4001,12 @@
     },
     "send_to_library": {
      "default": true,
-     "description": "Upload the assembled PDF to the user's AI Matrx library as one Source. When false the PDF is only written to this Mac. Used with action(s): capture_book.",
+     "description": "capture_book: false = the PDF stays on this Mac only.",
      "type": "boolean"
     },
     "window_title": {
      "default": null,
-     "description": "Optional text from the reader window's title, when the app has more than one window open and the largest is not the book. Used with action(s): capture_book.",
+     "description": "capture_book: text in the reader window's title, when the app has several windows and the largest is not the book.",
      "type": "string"
     }
    },
@@ -4059,7 +4057,7 @@
    "properties": {
     "count": {
      "default": 10,
-     "description": "Number of results to return.",
+     "description": "Results per keyword; at most 20 are returned.",
      "maximum": 50,
      "minimum": 1,
      "type": "integer"
@@ -4082,7 +4080,7 @@
      "description": "Filter by result age: 'pd' (past day), 'pw' (past week), 'pm' (past month), 'py' (past year)."
     },
     "keywords": {
-     "description": "Search terms to look up.",
+     "description": "One search per keyword; results are merged.",
      "items": {
       "type": "string"
      },
@@ -4290,7 +4288,6 @@
   "input_schema": {
    "properties": {
     "action": {
-     "description": "The operation to perform.",
      "enum": [
       "output",
       "run",
@@ -4299,35 +4296,35 @@
      "type": "string"
     },
     "bash_id": {
-     "description": "The bash_id returned by Bash when run_in_background=true. Used with action(s): output.",
+     "description": "output: bash_id from a background run.",
      "type": "string"
     },
     "command": {
-     "description": "Shell command to execute. Used with action(s): run.",
+     "description": "run: shell command (bash/zsh; PowerShell on Windows), run in the session cwd; a cd persists across foreground runs.",
      "type": "string"
     },
     "description": {
      "default": null,
-     "description": "Optional human-readable label for what this command does. Used with action(s): run.",
+     "description": "run: short label for the command.",
      "type": "string"
     },
     "filter": {
      "default": null,
-     "description": "Optional substring to filter output lines. Used with action(s): output.",
+     "description": "output: regex; returns only matching new lines and does not consume output.",
      "type": "string"
     },
     "run_in_background": {
      "default": false,
-     "description": "If true, start the command in the background and return immediately with a bash_id. Use BashOutput to read its output. Used with action(s): run.",
+     "description": "run: start in the background and return a bash_id immediately.",
      "type": "boolean"
     },
     "task_id": {
-     "description": "The bash_id of the background task to stop. Used with action(s): stop.",
+     "description": "stop: bash_id of the background command to kill.",
      "type": "string"
     },
     "timeout": {
      "default": null,
-     "description": "Timeout in milliseconds (default 120000, max 600000). Used with action(s): run.",
+     "description": "run: foreground timeout in ms (default 120000, max 600000); a timeout returns an error.",
      "type": "integer"
     }
    },
@@ -4673,7 +4670,7 @@
     },
     "count": {
      "default": 10,
-     "description": "Number of results to return. Used with action(s): search.",
+     "description": "Results per keyword; at most 20 are returned. Used with action(s): search.",
      "maximum": 50,
      "minimum": 1,
      "type": "integer"
@@ -4685,7 +4682,7 @@
     },
     "effort": {
      "default": "medium",
-     "description": "Result pages scraped: low \u226410, medium \u226425, high \u226450. Used with action(s): research.",
+     "description": "Result pages scraped: low \u226410, medium and high \u226420. Used with action(s): research.",
      "enum": [
       "low",
       "medium",
@@ -4741,7 +4738,7 @@
      "type": "object"
     },
     "keywords": {
-     "description": "Search terms to look up. Used with action(s): search.",
+     "description": "One search per keyword; results are merged. Used with action(s): search.",
      "items": {
       "type": "string"
      },
@@ -4763,7 +4760,7 @@
     },
     "output_mode": {
      "default": "rich",
-     "description": "'rich' returns structured data with metadata, 'text' plain text, 'html' raw HTML, 'markdown' Markdown. Used with action(s): scrape.",
+     "description": "No effect: every value returns the same parsed result. Used with action(s): scrape.",
      "enum": [
       "rich",
       "text",

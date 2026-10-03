@@ -46,13 +46,29 @@ fi
 command -v gh >/dev/null 2>&1 || fail "GitHub CLI (gh) is required"
 gh auth status >/dev/null 2>&1 || fail "GitHub CLI is not authenticated"
 
+SLOT_ERR_FILE="$(mktemp)"
+trap 'rm -f "$SLOT_ERR_FILE"' EXIT
+
 # Fail closed before dispatching anything that would queue a second version.
 # release.yml owns platform build/publish; this workflow owns the version bump.
 for workflow in release.yml "$WORKFLOW"; do
     for status in queued pending waiting in_progress requested action_required; do
-        run_count="$(gh run list --repo "$REPO" --workflow "$workflow" \
-            --status "$status" --limit 100 --json databaseId --jq length 2>/dev/null)" \
-            || fail "could not verify the $workflow release slot"
+        # Still fails closed; a transient GitHub API blip gets three tries, and the
+        # last error is printed instead of discarded (2026-10-03: two ship.sh runs died
+        # with no reason while every query answered 0 by hand a minute later).
+        run_count="" slot_err=""
+        for attempt in 1 2 3; do
+            if run_count="$(gh run list --repo "$REPO" --workflow "$workflow" \
+                --status "$status" --limit 100 --json databaseId --jq length 2>"$SLOT_ERR_FILE")"; then
+                slot_err=""
+                break
+            fi
+            slot_err="$(cat "$SLOT_ERR_FILE")"
+            run_count=""
+            [[ $attempt -lt 3 ]] && sleep $((attempt * 3))
+        done
+        [[ -z "$slot_err" ]] \
+            || fail "could not verify the $workflow release slot ($status) after 3 tries: $slot_err"
         [[ "$run_count" =~ ^[0-9]+$ ]] \
             || fail "received an invalid $workflow release-slot response"
         if [[ "$run_count" -gt 0 ]]; then

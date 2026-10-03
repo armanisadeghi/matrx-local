@@ -4,7 +4,7 @@ System of record:
 `/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`.
 
 Cross-repo product plan:
-`/Users/armanisadeghi/code/common-docs/projects/ai-work-hub/PLAN.md` — read it before building
+`/Users/armanisadeghi/code/common-docs/systems/chat/ai-work/projects/ai-work-hub/PLAN.md` — read it before building
 conversation browsing, provider launch, saved requests, skills, associations, or automation for
 this integration.
 

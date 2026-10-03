@@ -7,7 +7,7 @@ role; membership (owned + directly-shared + org-shared user agents + active
 builtins) and ordering are decided INSIDE the database, never here.
 
 🚨 THE LAW (Arman, 2026-09-08, ruling D4 of
-`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`):
+`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/STATUS.md`):
 matrx-local is NEVER an exception. The SQLite mirror exists so the catalog is
 readable offline — "the data is saved locally, but the structure, the format,
 and everything else must be absolutely identical." This module therefore

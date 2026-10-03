@@ -1,7 +1,7 @@
 # FEATURE — The platform agent catalog, mirrored for offline use
 
 **The law first.** Arman, 2026-09-08 (ruling D4 in
-`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`):
+`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/STATUS.md`):
 
 > "the SQL light mirror is simply designed to give a user offline access, and so
 > nothing should ever change … This is a bug that has been introduced over and

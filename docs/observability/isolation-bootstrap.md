@@ -69,7 +69,7 @@ count as proof; the independent native-host rerun passed with the candidate
 profile unchanged.
 
 Durable receipt:
-`common-docs/projects/unified-error-observability/matrx-local/ISOLATION-RESOLVER-RECEIPT-2026-09-15.json`
+`common-docs/systems/architecture/observability/error-surfaces/projects/unified-error-observability`
 
 - Receipt SHA-256: `554368d9cac50bba1ebddf75e7f24afa842166f7cfd4b5a00648592bdb13a4fd`
 - Launcher SHA-256: `a2d05fea1506ecd15aff45c1e5597ade708bda8157ebedd8d1db4576b4aa9d29`

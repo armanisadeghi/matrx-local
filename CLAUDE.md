@@ -115,7 +115,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 - **The access ladder decides who can open a record.** Every table starts at Organization; only Arman approves Confidential or Private; sharing sits outside the ladder; children inherit their parent; organizations are unlimited and equal, with no personal type. → `/Users/armanisadeghi/code/common-docs/policies/access-ladder.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
   signup-organization/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
-  `/Users/armanisadeghi/code/common-docs/projects/no-db-assigned-org/PLAN.md`
+  `/Users/armanisadeghi/code/common-docs/systems/architecture/database/projects/no-db-assigned-org/PLAN.md`
 
 ## Configuration posture — everything here ships to the user
 

@@ -7,7 +7,7 @@ sidecar mirrors those rows into SQLite (`SyncEngine.sync_agents`) so the
 desktop can read the SAME catalog with the network down.
 
 🚨 Ruling D4 (Arman, 2026-09-08) —
-`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`:
+`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/STATUS.md`:
 "the SQL light mirror is simply designed to give a user offline access, and so
 nothing should ever change ... matrx local has an option to work locally. And
 when it works locally, the data is saved locally. But the structure, the

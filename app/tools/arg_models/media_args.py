@@ -6,97 +6,90 @@ from pydantic import BaseModel, Field
 
 
 class ImageOcrArgs(BaseModel):
-    file_path: str = Field(description="Path to the image file (PNG, JPEG, TIFF, BMP, etc.).")
+    file_path: str = Field(description="Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).")
     language: str = Field(
         default="eng",
-        description=(
-            "Tesseract language code (e.g. 'eng', 'fra', 'deu', 'spa'). "
-            "Multiple languages can be combined with '+' (e.g. 'eng+fra')."
-        ),
+        description="Tesseract language code(s), '+'-joined, e.g. 'eng+fra'.",
     )
 
 
 class ImageResizeArgs(BaseModel):
-    file_path: str = Field(description="Path to the source image.")
+    file_path: str = Field(description="Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).")
     width: int | None = Field(
         default=None,
         ge=1,
-        description="Target width in pixels. If only width is set, height is scaled proportionally.",
+        description="Pixels; alone, keeps the aspect ratio.",
     )
     height: int | None = Field(
         default=None,
         ge=1,
-        description="Target height in pixels. If only height is set, width is scaled proportionally.",
+        description="Pixels; alone, keeps the aspect ratio.",
     )
     scale: float | None = Field(
         default=None,
         gt=0.0,
-        description="Scale factor (e.g. 0.5 for half size, 2.0 for double). Overrides width/height.",
+        description="Factor, e.g. 0.5; overrides width/height.",
     )
     output_format: Literal["png", "jpeg", "webp", "gif", "bmp"] | None = Field(
         default=None,
-        description="Output image format. Defaults to the same format as the source.",
+        description="Default: the source's format.",
     )
 
 
 class PdfExtractArgs(BaseModel):
-    file_path: str = Field(description="Path to the PDF file.")
+    file_path: str = Field(description="Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).")
     pages: str | None = Field(
         default=None,
-        description=(
-            "Pages to extract. Accepts a single page ('3'), a range ('1-5'), "
-            "or comma-separated values ('1,3,5-7'). Defaults to all pages."
-        ),
+        description="1-based: '3', '1-5' or '1,3,5-7'. Default: all.",
     )
     extract_images: bool = Field(
         default=False,
-        description="If true, also extract embedded images (saves to same directory as PDF).",
+        description="Also save embedded images to the app temp dir (pdf_images/).",
     )
 
 
 class OfficeGenerateArgs(BaseModel):
     format: Literal["docx", "pptx", "xlsx"] = Field(
-        description="Office document format to generate.",
+        description="archive_create: archive type. office_generate: document type.",
     )
     spec: dict[str, Any] = Field(
         description=(
-            "Structured document description matching the chosen format:\n"
-            "- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|"
-            "bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n"
-            "- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, "
-            "bullets?, body?, notes?, layout?}]}\n"
-            "- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]}"
+            "Per format. docx: {title?, blocks: [{type: heading|paragraph|bullet|numbered|"
+            "quote|table|page_break, text?, level?, rows?, header?}]}. pptx: {title?, "
+            "subtitle?, slides: [{title?, bullets?, body?, notes?, layout?: title|"
+            "title_content|section|blank}]}. xlsx: {sheets: [{name, columns?, rows, "
+            "freeze_header?}]}."
         ),
     )
     path: str = Field(
-        description="Destination file path for the generated document (parent directories are created).",
+        description="Destination file; parent dirs created, an existing file overwritten.",
     )
 
 
 class ArchiveCreateArgs(BaseModel):
     source_paths: list[str] = Field(
-        description="List of file or directory paths to include in the archive.",
+        description="Files and directories to include.",
         min_length=1,
     )
     output_path: str | None = Field(
         default=None,
-        description="Output archive path. Auto-generated in the working directory if omitted.",
+        description="Default: a new file in the app temp dir (archives/).",
     )
     format: Literal["zip", "tar", "tar.gz", "tar.bz2"] = Field(
         default="zip",
-        description="Archive format.",
+        description="archive_create: archive type. office_generate: document type.",
     )
     compression: Literal["deflate", "store", "bzip2", "lzma"] = Field(
         default="deflate",
-        description="Compression algorithm (only used for 'zip' format).",
+        description="zip only: deflate compresses; any other value stores uncompressed.",
     )
 
 
 class ArchiveExtractArgs(BaseModel):
     file_path: str = Field(
-        description="Path to the archive to extract (zip, tar, tar.gz, tar.bz2, 7z)."
+        description="Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z)."
     )
     output_dir: str | None = Field(
         default=None,
-        description="Directory to extract into. Defaults to the archive's directory.",
+        description="Default: a new dir in the app temp dir (extracted/).",
     )

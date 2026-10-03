@@ -569,26 +569,25 @@ _META: dict[str, ToolMeta] = {
     # ── Media Processing ─────────────────────────────────────────────────
     "ImageOCR": ToolMeta(
         "local_image_ocr",
-        "Extract text from an image file using OCR (Tesseract).",
+        "OCR an image's text with Tesseract (must be installed).",
         "local_media", ("ocr", "image", "text", "local"), ImageOcrArgs,
         timeout_seconds=60.0,
     ),
     "ImageResize": ToolMeta(
         "local_image_resize",
-        "Resize or convert an image file.",
+        "Resize or convert an image into a new temp file (path returned).",
         "local_media", ("image", "resize", "convert", "local"), ImageResizeArgs,
         timeout_seconds=30.0,
     ),
     "PdfExtract": ToolMeta(
         "local_pdf_extract",
-        "Extract text (and optionally images) from a PDF file.",
+        "Extract text (optionally images) from a PDF; text capped at 50,000 chars.",
         "local_media", ("pdf", "extract", "text", "local"), PdfExtractArgs,
         timeout_seconds=60.0,
     ),
     "OfficeGenerate": ToolMeta(
         "local_office_generate",
-        "Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a "
-        "structured spec and write it to a local path.",
+        "Write a .docx, .pptx or .xlsx file from a structured spec.",
         "local_media", ("office", "docx", "pptx", "xlsx", "generate", "local"),
         OfficeGenerateArgs, timeout_seconds=60.0,
     ),
@@ -600,7 +599,7 @@ _META: dict[str, ToolMeta] = {
     ),
     "ArchiveExtract": ToolMeta(
         "local_archive_extract",
-        "Extract a zip, tar, or 7z archive.",
+        "Extract a zip, tar or 7z archive (7z needs the 7z CLI).",
         "local_media", ("archive", "extract", "zip", "tar", "local"),
         ArchiveExtractArgs, timeout_seconds=120.0,
     ),

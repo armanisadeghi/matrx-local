@@ -171,10 +171,7 @@ class ScrapeArgs(BaseModel):
     )
     output_mode: Literal["rich", "text", "html", "markdown"] = Field(
         default="rich",
-        description=(
-            "'rich' returns structured data with metadata, "
-            "'text' plain text, 'html' raw HTML, 'markdown' Markdown."
-        ),
+        description="No effect: every value returns the same parsed result.",
     )
     get_links: bool = Field(
         default=False,
@@ -197,7 +194,7 @@ class ScrapeArgs(BaseModel):
 
 class SearchArgs(BaseModel):
     keywords: list[str] = Field(
-        description="Search terms to look up.",
+        description="One search per keyword; results are merged.",
         min_length=1,
     )
     country: str = Field(
@@ -208,7 +205,7 @@ class SearchArgs(BaseModel):
         default=10,
         ge=1,
         le=50,
-        description="Number of results to return.",
+        description="Results per keyword; at most 20 are returned.",
     )
     freshness: str | None = Field(
         default=None,
@@ -227,7 +224,7 @@ class ResearchArgs(BaseModel):
     )
     effort: Literal["low", "medium", "high"] = Field(
         default="medium",
-        description="Result pages scraped: low ≤10, medium ≤25, high ≤50.",
+        description="Result pages scraped: low ≤10, medium and high ≤20.",
     )
     freshness: str | None = Field(
         default=None,

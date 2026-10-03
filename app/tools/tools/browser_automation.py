@@ -353,11 +353,8 @@ async def tool_browser_extract(
                 metadata={"tables": tables[:5]},
             )
 
-        if not selector:
-            return ToolResult(
-                type=ToolResultType.ERROR,
-                output="Selector required for this extract_type.",
-            )
+        # No selector = the whole page, as the advertised contract says.
+        selector = selector or "body"
 
         if all_matches:
             if extract_type == "text":
@@ -371,6 +368,10 @@ async def tool_browser_extract(
             elif extract_type == "attribute" and attribute:
                 results = await page.eval_on_selector_all(
                     selector, f"els => els.map(el => el.getAttribute('{attribute}'))"
+                )
+            elif extract_type == "value":
+                results = await page.eval_on_selector_all(
+                    selector, "els => els.map(el => el.value ?? null)"
                 )
             else:
                 results = await page.eval_on_selector_all(
@@ -395,6 +396,8 @@ async def tool_browser_extract(
                 result = await element.inner_html()
             elif extract_type == "attribute" and attribute:
                 result = await element.get_attribute(attribute) or ""
+            elif extract_type == "value":
+                result = await element.input_value()
             else:
                 result = await element.inner_text()
 

@@ -20,7 +20,7 @@ class BrowserNavigateArgs(BaseModel):
         default=30,
         ge=1,
         le=120,
-        description="Seconds to wait for the page to load.",
+        description="Seconds to wait for wait_for (page load itself is capped at 30s).",
     )
 
 
@@ -99,7 +99,8 @@ class BrowserTabsArgs(BaseModel):
         default="list",
         description=(
             "Tab action: 'list' (list all tabs), 'new' (open a new tab), "
-            "'close' (close tab at tab_index), 'switch' (focus tab at tab_index)."
+            "'close' (close tab at tab_index), 'switch' (bring tab at tab_index to "
+            "front; page actions still act on the most recently opened tab)."
         ),
     )
     tab_index: int | None = Field(

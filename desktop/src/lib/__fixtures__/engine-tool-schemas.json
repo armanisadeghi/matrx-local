@@ -30,7 +30,7 @@
    "properties": {
     "compression": {
      "default": "deflate",
-     "description": "Compression algorithm (only used for 'zip' format).",
+     "description": "zip only: deflate compresses; any other value stores uncompressed.",
      "enum": [
       "deflate",
       "store",
@@ -41,7 +41,7 @@
     },
     "format": {
      "default": "zip",
-     "description": "Archive format.",
+     "description": "archive_create: archive type. office_generate: document type.",
      "enum": [
       "zip",
       "tar",
@@ -60,10 +60,10 @@
       }
      ],
      "default": null,
-     "description": "Output archive path. Auto-generated in the working directory if omitted."
+     "description": "Default: a new file in the app temp dir (archives/)."
     },
     "source_paths": {
-     "description": "List of file or directory paths to include in the archive.",
+     "description": "Files and directories to include.",
      "items": {
       "type": "string"
      },
@@ -84,7 +84,7 @@
   "input_schema": {
    "properties": {
     "file_path": {
-     "description": "Path to the archive to extract (zip, tar, tar.gz, tar.bz2, 7z).",
+     "description": "Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).",
      "type": "string"
     },
     "output_dir": {
@@ -97,7 +97,7 @@
       }
      ],
      "default": null,
-     "description": "Directory to extract into. Defaults to the archive's directory."
+     "description": "Default: a new dir in the app temp dir (extracted/)."
     }
    },
    "required": [
@@ -451,7 +451,7 @@
     },
     "tab_action": {
      "default": "list",
-     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (focus tab at tab_index). Used with action(s): tabs.",
+     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (bring tab at tab_index to front; page actions still act on the most recently opened tab). Used with action(s): tabs.",
      "enum": [
       "list",
       "new",
@@ -622,7 +622,7 @@
     },
     "timeout": {
      "default": 30,
-     "description": "Seconds to wait for the page to load.",
+     "description": "Seconds to wait for wait_for (page load itself is capped at 30s).",
      "maximum": 120,
      "minimum": 1,
      "type": "integer"
@@ -690,7 +690,7 @@
    "properties": {
     "action": {
      "default": "list",
-     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (focus tab at tab_index).",
+     "description": "Tab action: 'list' (list all tabs), 'new' (open a new tab), 'close' (close tab at tab_index), 'switch' (bring tab at tab_index to front; page actions still act on the most recently opened tab).",
      "enum": [
       "list",
       "new",
@@ -1787,12 +1787,12 @@
   "input_schema": {
    "properties": {
     "file_path": {
-     "description": "Path to the image file (PNG, JPEG, TIFF, BMP, etc.).",
+     "description": "Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).",
      "type": "string"
     },
     "language": {
      "default": "eng",
-     "description": "Tesseract language code (e.g. 'eng', 'fra', 'deu', 'spa'). Multiple languages can be combined with '+' (e.g. 'eng+fra').",
+     "description": "Tesseract language code(s), '+'-joined, e.g. 'eng+fra'.",
      "type": "string"
     }
    },
@@ -1809,7 +1809,7 @@
   "input_schema": {
    "properties": {
     "file_path": {
-     "description": "Path to the source image.",
+     "description": "Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).",
      "type": "string"
     },
     "height": {
@@ -1823,7 +1823,7 @@
       }
      ],
      "default": null,
-     "description": "Target height in pixels. If only height is set, width is scaled proportionally."
+     "description": "Pixels; alone, keeps the aspect ratio."
     },
     "output_format": {
      "anyOf": [
@@ -1842,7 +1842,7 @@
       }
      ],
      "default": null,
-     "description": "Output image format. Defaults to the same format as the source."
+     "description": "Default: the source's format."
     },
     "quality": {
      "default": 85,
@@ -1859,7 +1859,7 @@
       }
      ],
      "default": null,
-     "description": "Scale factor (e.g. 0.5 for half size, 2.0 for double). Overrides width/height."
+     "description": "Factor, e.g. 0.5; overrides width/height."
     },
     "width": {
      "anyOf": [
@@ -1872,7 +1872,7 @@
       }
      ],
      "default": null,
-     "description": "Target width in pixels. If only width is set, height is scaled proportionally."
+     "description": "Pixels; alone, keeps the aspect ratio."
     }
    },
    "required": [
@@ -2587,7 +2587,7 @@
  },
  {
   "category": "Actions",
-  "description": "Local media processing: OCR, image resize, PDF extraction, Office generation, archives. Actions \u2014 archive_create: Create a zip or tar archive from files and directories; archive_extract: Extract a zip, tar, or 7z archive; ocr: Extract text from an image file using OCR (Tesseract); office_generate: Generate a Microsoft Office document (.docx / .pptx / .xlsx) from a structured spec and w\u2026; pdf_extract: Extract text (and optionally images) from a PDF file; resize: Resize or convert an image file.",
+  "description": "Local media processing: OCR, image resize, PDF extraction, Office generation, archives. Actions \u2014 archive_create: Create a zip or tar archive from files and directories; archive_extract: Extract a zip, tar or 7z archive (7z needs the 7z CLI); ocr: OCR an image's text with Tesseract (must be installed); office_generate: Write a .docx, .pptx or .xlsx file from a structured spec; pdf_extract: Extract text (optionally images) from a PDF; text capped at 50,000 chars; resize: Resize or convert an image into a new temp file (path returned).",
   "input_schema": {
    "properties": {
     "action": {
@@ -2604,7 +2604,7 @@
     },
     "compression": {
      "default": "deflate",
-     "description": "Compression algorithm (only used for 'zip' format). Used with action(s): archive_create.",
+     "description": "zip only: deflate compresses; any other value stores uncompressed. Used with action(s): archive_create.",
      "enum": [
       "deflate",
       "store",
@@ -2615,16 +2615,16 @@
     },
     "extract_images": {
      "default": false,
-     "description": "If true, also extract embedded images (saves to same directory as PDF). Used with action(s): pdf_extract.",
+     "description": "Also save embedded images to the app temp dir (pdf_images/). Used with action(s): pdf_extract.",
      "type": "boolean"
     },
     "file_path": {
-     "description": "Path to the archive to extract (zip, tar, tar.gz, tar.bz2, 7z). Used with action(s): archive_extract, ocr, pdf_extract, resize.",
+     "description": "Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z). Used with action(s): archive_extract, ocr, pdf_extract, resize.",
      "type": "string"
     },
     "format": {
      "default": "zip",
-     "description": "Archive format. Used with action(s): archive_create, office_generate.",
+     "description": "archive_create: archive type. office_generate: document type. Used with action(s): archive_create, office_generate.",
      "enum": [
       "zip",
       "tar",
@@ -2635,23 +2635,23 @@
     },
     "height": {
      "default": null,
-     "description": "Target height in pixels. If only height is set, width is scaled proportionally. Used with action(s): resize.",
+     "description": "Pixels; alone, keeps the aspect ratio. Used with action(s): resize.",
      "minimum": 1,
      "type": "integer"
     },
     "language": {
      "default": "eng",
-     "description": "Tesseract language code (e.g. 'eng', 'fra', 'deu', 'spa'). Multiple languages can be combined with '+' (e.g. 'eng+fra'). Used with action(s): ocr.",
+     "description": "Tesseract language code(s), '+'-joined, e.g. 'eng+fra'. Used with action(s): ocr.",
      "type": "string"
     },
     "output_dir": {
      "default": null,
-     "description": "Directory to extract into. Defaults to the archive's directory. Used with action(s): archive_extract.",
+     "description": "Default: a new dir in the app temp dir (extracted/). Used with action(s): archive_extract.",
      "type": "string"
     },
     "output_format": {
      "default": null,
-     "description": "Output image format. Defaults to the same format as the source. Used with action(s): resize.",
+     "description": "Default: the source's format. Used with action(s): resize.",
      "enum": [
       "png",
       "jpeg",
@@ -2663,26 +2663,26 @@
     },
     "output_path": {
      "default": null,
-     "description": "Output archive path. Auto-generated in the working directory if omitted. Used with action(s): archive_create.",
+     "description": "Default: a new file in the app temp dir (archives/). Used with action(s): archive_create.",
      "type": "string"
     },
     "pages": {
      "default": null,
-     "description": "Pages to extract. Accepts a single page ('3'), a range ('1-5'), or comma-separated values ('1,3,5-7'). Defaults to all pages. Used with action(s): pdf_extract.",
+     "description": "1-based: '3', '1-5' or '1,3,5-7'. Default: all. Used with action(s): pdf_extract.",
      "type": "string"
     },
     "path": {
-     "description": "Destination file path for the generated document (parent directories are created). Used with action(s): office_generate.",
+     "description": "Destination file; parent dirs created, an existing file overwritten. Used with action(s): office_generate.",
      "type": "string"
     },
     "scale": {
      "default": null,
-     "description": "Scale factor (e.g. 0.5 for half size, 2.0 for double). Overrides width/height. Used with action(s): resize.",
+     "description": "Factor, e.g. 0.5; overrides width/height. Used with action(s): resize.",
      "exclusiveMinimum": 0.0,
      "type": "number"
     },
     "source_paths": {
-     "description": "List of file or directory paths to include in the archive. Used with action(s): archive_create.",
+     "description": "Files and directories to include. Used with action(s): archive_create.",
      "items": {
       "type": "string"
      },
@@ -2691,12 +2691,12 @@
     },
     "spec": {
      "additionalProperties": true,
-     "description": "Structured document description matching the chosen format:\n- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?}]}\n- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]} Used with action(s): office_generate.",
+     "description": "Per format. docx: {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}. pptx: {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?: title|title_content|section|blank}]}. xlsx: {sheets: [{name, columns?, rows, freeze_header?}]}. Used with action(s): office_generate.",
      "type": "object"
     },
     "width": {
      "default": null,
-     "description": "Target width in pixels. If only width is set, height is scaled proportionally. Used with action(s): resize.",
+     "description": "Pixels; alone, keeps the aspect ratio. Used with action(s): resize.",
      "minimum": 1,
      "type": "integer"
     }
@@ -3199,7 +3199,7 @@
   "input_schema": {
    "properties": {
     "format": {
-     "description": "Office document format to generate.",
+     "description": "archive_create: archive type. office_generate: document type.",
      "enum": [
       "docx",
       "pptx",
@@ -3208,12 +3208,12 @@
      "type": "string"
     },
     "path": {
-     "description": "Destination file path for the generated document (parent directories are created).",
+     "description": "Destination file; parent dirs created, an existing file overwritten.",
      "type": "string"
     },
     "spec": {
      "additionalProperties": true,
-     "description": "Structured document description matching the chosen format:\n- docx (DocumentSpec): {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}\n- pptx (PresentationSpec): {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?}]}\n- xlsx (SpreadsheetSpec): {sheets: [{name, columns?, rows, freeze_header?}]}",
+     "description": "Per format. docx: {title?, blocks: [{type: heading|paragraph|bullet|numbered|quote|table|page_break, text?, level?, rows?, header?}]}. pptx: {title?, subtitle?, slides: [{title?, bullets?, body?, notes?, layout?: title|title_content|section|blank}]}. xlsx: {sheets: [{name, columns?, rows, freeze_header?}]}.",
      "type": "object"
     }
    },
@@ -3305,11 +3305,11 @@
    "properties": {
     "extract_images": {
      "default": false,
-     "description": "If true, also extract embedded images (saves to same directory as PDF).",
+     "description": "Also save embedded images to the app temp dir (pdf_images/).",
      "type": "boolean"
     },
     "file_path": {
-     "description": "Path to the PDF file.",
+     "description": "Input file: image (ocr, resize), PDF (pdf_extract), or archive (archive_extract: zip, tar, tar.gz, tar.bz2, 7z).",
      "type": "string"
     },
     "pages": {
@@ -3322,7 +3322,7 @@
       }
      ],
      "default": null,
-     "description": "Pages to extract. Accepts a single page ('3'), a range ('1-5'), or comma-separated values ('1,3,5-7'). Defaults to all pages."
+     "description": "1-based: '3', '1-5' or '1,3,5-7'. Default: all."
     }
    },
    "required": [
@@ -3724,7 +3724,7 @@
     },
     "effort": {
      "default": "medium",
-     "description": "'low' (search only), 'medium' (search + top results scraped), 'high' (search + all results scraped + synthesis).",
+     "description": "Result pages scraped: low \u226410, medium \u226425, high \u226450.",
      "enum": [
       "low",
       "medium",
@@ -3856,7 +3856,7 @@
    "properties": {
     "get_extraction": {
      "default": false,
-     "description": "Also return the page's STRUCTURED extraction in the result metadata: heading outline, tables as rows, images/videos/audios, code blocks, renderable markdown, head metadata, redirect chain. The parse produces all of this either way; this only controls whether it is returned, and it can be large \u2014 ask for it when something will actually read it (a UI, a table extraction), not for prose.",
+     "description": "Also return the structured extraction in metadata (heading outline, tables as rows, media, code blocks, markdown, head metadata, redirect chain). Large: request it only when something will parse it (e.g. table extraction), not for prose.",
      "type": "boolean"
     },
     "get_links": {
@@ -4685,7 +4685,7 @@
     },
     "effort": {
      "default": "medium",
-     "description": "'low' (search only), 'medium' (search + top results scraped), 'high' (search + all results scraped + synthesis). Used with action(s): research.",
+     "description": "Result pages scraped: low \u226410, medium \u226425, high \u226450. Used with action(s): research.",
      "enum": [
       "low",
       "medium",
@@ -4719,7 +4719,7 @@
     },
     "get_extraction": {
      "default": false,
-     "description": "Also return the page's STRUCTURED extraction in the result metadata: heading outline, tables as rows, images/videos/audios, code blocks, renderable markdown, head metadata, redirect chain. The parse produces all of this either way; this only controls whether it is returned, and it can be large \u2014 ask for it when something will actually read it (a UI, a table extraction), not for prose. Used with action(s): scrape.",
+     "description": "Also return the structured extraction in metadata (heading outline, tables as rows, media, code blocks, markdown, head metadata, redirect chain). Large: request it only when something will parse it (e.g. table extraction), not for prose. Used with action(s): scrape.",
      "type": "boolean"
     },
     "get_links": {

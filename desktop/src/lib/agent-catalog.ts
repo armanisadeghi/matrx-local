@@ -2,7 +2,7 @@
  * THE agent catalog for this desktop — TWO CLIENTS, ONE PACKAGE, ONE PICKER.
  *
  * 🚨 Ruling D4 (Arman, 2026-09-08 —
- * `common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`):
+ * `common-docs/projects/npm-package-extraction/STATUS.md`):
  *
  * > "the SQL light mirror is simply designed to give a user offline access, and
  * > so nothing should ever change … matrx local has an option to work locally.

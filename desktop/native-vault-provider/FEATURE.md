@@ -17,7 +17,7 @@ publishes bounded metadata-only identity suggestions and validates selected reco
 against the current account, generation and scope revision. It requires interaction
 before credential use; source and harness checks do not establish signed OS delivery.
 
-Canonical contracts: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-ENROLLMENT.md` and `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-IDENTITIES.md`.
+Canonical contracts: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/REGISTER.md` and `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/REGISTER.md`.
 
 ## Strict envelope corpus
 
@@ -40,7 +40,7 @@ The provider's v2 public status holds only selected organization/revision, fresh
 
 ## Protected exchange
 
-`NativeVaultExport.swift` holds the authenticated, explicitly confirmed Apple export lifecycle. `NativeVaultImportTransport.swift` sends only native-owned source bytes to the dedicated import endpoint, binds writes and receipt reads to the acquired subject/generation and admitted scope, and validates fixed receipt envelopes. Cancelling forbids further writes but permits exact receipt recovery. Its focused transport corpus proves envelope, scope, receipt and late-account-switch refusal; this unit alone does not establish chooser integration or OS readiness. Canonical transfer contract: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/NATIVE-EXCHANGE.md`.
+`NativeVaultExport.swift` holds the authenticated, explicitly confirmed Apple export lifecycle. `NativeVaultImportTransport.swift` sends only native-owned source bytes to the dedicated import endpoint, binds writes and receipt reads to the acquired subject/generation and admitted scope, and validates fixed receipt envelopes. Cancelling forbids further writes but permits exact receipt recovery. Its focused transport corpus proves envelope, scope, receipt and late-account-switch refusal; this unit alone does not establish chooser integration or OS readiness. Canonical transfer contract: `/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/REGISTER.md`.
 
 `NativeVaultImportParser.swift` adapts the one-shot provider-private Rust file parser into bounded Swift inventory records. Rust cancellation refuses before ABI materialization; the Swift corpus verifies original public-key identity across CXF-to-source conversion. These private generated bindings are not public host IPC. Complete file-import readiness still requires the native chooser, confirmed controller, server storage and RP acceptance.
 

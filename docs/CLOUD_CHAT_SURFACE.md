@@ -212,7 +212,7 @@ Both chats render `AgentListDropdown` from **`@ai-matrx/agents/catalog/react`**
 and nothing else. The list, its tabs, sorts, filters, counts, favourites and the
 live-named default row are the package's; this repo's contract is
 `onSelect(agentId)`. Canonical body: the package's `FEATURE.md` and
-`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/AGENT-PICKER-DESIGN.md`
+`/Users/armanisadeghi/code/common-docs/projects/npm-package-extraction/STATUS.md`
 (rulings D1–D4). Guard: `pnpm check:canonical-pickers`, blocking in `release.sh`.
 
 The ONLY difference between the two surfaces is which client the catalog reads

@@ -17,11 +17,11 @@ available everywhere.
 **Consumer only.** This repo never writes to the vault, never holds a vault
 encryption key, and never sees a `sealed` value (the server refuses to release
 one). Cross-repo plan:
-`/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/PLAN.md`;
+`/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/REGISTER.md`;
 foundation: `.../projects/unified-credential-vault/PLAN.md`.
 
 **Picking this up cold?**
-`/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/HANDOFF.md` —
+`/Users/armanisadeghi/code/common-docs/projects/credential-sharing-browser-login/REGISTER.md` —
 vision, gap analysis, cross-repo architecture, next steps, and landmines. Start there.
 
 ## THE RESOLUTION ORDER

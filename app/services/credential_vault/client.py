@@ -108,7 +108,7 @@ async def _session_jwt() -> str:
 # the user SET on this Mac, then a sole active membership, otherwise HOLD and
 # ask (Arman, 2026-09-19). There is no saved-preference rung and no
 # personal-org fallback — both were guesses, and a guess is exactly the defect
-# class common-docs/projects/no-db-assigned-org exists to end.
+# class common-docs/systems/architecture/database/projects/no-db-assigned-org/PLAN.md exists to end.
 
 
 async def _organization_id(jwt_value: str) -> str:

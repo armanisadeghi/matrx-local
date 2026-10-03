@@ -19,8 +19,11 @@
 #        copying any files, clearing all stale Restart Manager registrations.
 #     2. Reuse the extracted files across app restarts (faster cold start).
 #
-#   upx=True: UPX compression is safe on Windows (unlike macOS where it
-#   corrupts dylibs before code signing). Reduces binary size significantly.
+#   upx=False: NumPy 2.4's Windows wheel loads its C extension through hashed
+#   delvewheel DLLs. The release Office probe executes that extension inside
+#   the frozen process, and compression makes this native dependency chain an
+#   unnecessary variable. Keep the release sidecar uncompressed so the probe
+#   validates the wheel bytes that were collected.
 
 import os
 import sys
@@ -269,7 +272,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     # Fixed extraction directory under %LOCALAPPDATA%\AI Matrx\engine-runtime.
     # This replaces the random _MEIxxxxxx temp folder that Windows Restart Manager

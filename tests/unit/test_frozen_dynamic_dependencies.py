@@ -35,3 +35,12 @@ def test_every_frozen_build_collects_all_jinja_submodules() -> None:
 def test_jinja_is_a_direct_engine_dependency() -> None:
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"jinja2>=3.1.6"' in pyproject
+
+
+def test_windows_frozen_sidecar_does_not_compress_numpy_native_dependencies() -> None:
+    """The NumPy C extension is exercised by the Windows Office release gate."""
+    spec = (
+        REPO_ROOT / "specs" / "matrx-engine-x86_64-pc-windows-msvc.spec"
+    ).read_text(encoding="utf-8")
+
+    assert "upx=False" in spec

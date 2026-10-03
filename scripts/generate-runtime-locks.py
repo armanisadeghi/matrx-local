@@ -10,7 +10,10 @@ import json
 import re
 import subprocess
 import sys
+import socket
+import ssl
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -44,6 +47,41 @@ TORCH_VARIANTS = {
 }
 REQ_RE = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)")
 HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
+
+
+# Index reads cross the public internet from a hosted runner; one TLS handshake
+# timeout used to abort a whole release (run 37153511268). Transient failures are
+# retried with backoff; a definitive answer (any 4xx) is returned at once, and
+# exhausting the attempts still fails loudly with every error named.
+FETCH_ATTEMPTS = 5
+FETCH_TIMEOUT_SECONDS = 30
+FETCH_BACKOFF_SECONDS = 2.0
+
+
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(
+        exc, (urllib.error.URLError, TimeoutError, socket.timeout, ssl.SSLError, ConnectionError)
+    )
+
+
+def _fetch(url: str, *, sleep=time.sleep, opener=urllib.request.urlopen) -> bytes:
+    errors: list[str] = []
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with opener(url, timeout=FETCH_TIMEOUT_SECONDS) as response:
+                return response.read()
+        except Exception as exc:
+            if not _is_transient(exc):
+                raise
+            errors.append(f"attempt {attempt}: {exc}")
+            if attempt == FETCH_ATTEMPTS:
+                break
+            delay = FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            print(f"[retry] {url}: {exc} (attempt {attempt}/{FETCH_ATTEMPTS}, next in {delay:.0f}s)", file=sys.stderr)
+            sleep(delay)
+    raise RuntimeError(f"{url} unreachable after {FETCH_ATTEMPTS} attempts: " + "; ".join(errors))
 
 
 class _LinkParser(html.parser.HTMLParser):
@@ -87,8 +125,7 @@ def _target_tags(target: str):
 def _pypi_wheels(name: str, version: str) -> list[dict[str, str]]:
     url = f"https://pypi.org/pypi/{name}/{version}/json"
     try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            payload = json.load(response)
+        payload = json.loads(_fetch(url))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return []
@@ -106,8 +143,7 @@ def _pypi_wheels(name: str, version: str) -> list[dict[str, str]]:
 
 def _pytorch_wheels(name: str) -> list[dict[str, str]]:
     base = f"https://download.pytorch.org/whl/cu126/{name.replace('-', '_')}/"
-    with urllib.request.urlopen(base, timeout=30) as response:
-        body = response.read().decode("utf-8")
+    body = _fetch(base).decode("utf-8")
     parser = _LinkParser()
     parser.feed(body)
     wheels: list[dict[str, str]] = []

@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -117,16 +119,33 @@ def download_verified(artifact: InstallerArtifact, destination: Path) -> None:
         artifact.url,
         headers={"User-Agent": "Matrx-Local-release-builder/1"},
     )
-    digest = hashlib.sha256()
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response, destination.open(
-            "wb"
-        ) as output:
-            while block := response.read(1024 * 1024):
-                output.write(block)
-                digest.update(block)
-    except OSError as exc:
-        raise RuntimeError(f"Could not download {artifact.url}: {exc}") from exc
+    # A hosted runner's TLS handshake can time out once; retry transient
+    # network failures with backoff instead of failing the whole build.
+    attempts = 5
+    errors: list[str] = []
+    for attempt in range(1, attempts + 1):
+        digest = hashlib.sha256()
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response, destination.open(
+                "wb"
+            ) as output:
+                while block := response.read(1024 * 1024):
+                    output.write(block)
+                    digest.update(block)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise RuntimeError(f"Could not download {artifact.url}: {exc}") from exc
+            errors.append(f"attempt {attempt}: {exc}")
+        except OSError as exc:
+            errors.append(f"attempt {attempt}: {exc}")
+        if attempt == attempts:
+            raise RuntimeError(
+                f"Could not download {artifact.url} after {attempts} attempts: " + "; ".join(errors)
+            )
+        delay = 2 * (2 ** (attempt - 1))
+        print(f"[retry] {artifact.url}: {errors[-1]} (next in {delay}s)", file=sys.stderr)
+        time.sleep(delay)
     actual = digest.hexdigest()
     if actual != artifact.sha256:
         destination.unlink(missing_ok=True)

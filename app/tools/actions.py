@@ -119,6 +119,16 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
             "Run shell commands on the user's machine (foreground or background).",
             "desktop", ("shell", "command", "local", "actions"),
             {"run": "Bash", "output": "BashOutput", "stop": "TaskStop"},
+            param_descriptions={
+                "command": "run: shell command (bash/zsh; PowerShell on Windows), run in the session cwd; a cd persists across foreground runs.",
+                "timeout": "run: foreground timeout in ms (default 120000, max 600000); a timeout returns an error.",
+                "description": "run: short label for the command.",
+                "run_in_background": "run: start in the background and return a bash_id immediately.",
+                "bash_id": "output: bash_id from a background run.",
+                "filter": "output: regex; returns only matching new lines and does not consume output.",
+                "task_id": "stop: bash_id of the background command to kill.",
+            },
+            action_description=None,
         ),
         ActionGroup(
             "Window", "local_window",

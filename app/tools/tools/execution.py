@@ -182,7 +182,7 @@ async def _bash_background(session: ToolSession, command: str) -> ToolResult:
     asyncio.create_task(_collect_background_output(shell))
 
     return ToolResult(
-        output=f"Started background command (shell_id: {shell_id}). Use BashOutput to check on it.",
+        output=f"Started background command (shell_id: {shell_id}). Read it with action=output.",
         metadata={"bash_id": shell_id},
     )
 

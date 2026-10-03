@@ -801,6 +801,30 @@ ok "Desktop dependencies match the frozen lockfile."
 # happily ship yesterday's package forever — the drift is invisible to every
 # other gate here. Fix forward (reinstall + adopt the CHANGELOG "Consumer
 # action"s); pinning is banned.
+#
+# Hosted releases opt in to catch-up HERE, immediately before the gate, with
+# RELEASE_REFRESH_MATRX_PACKAGES=true. A catch-up done at the start of the job
+# lost every race against packages published during the sidecar builds (run
+# 37154067906: associations 0.13.141 landed between catch-up and this gate).
+# Only a lock-graph move is automated; any other file it touches needs consumer
+# adoption by a person, so that refuses. The gate below still decides.
+if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
+    info "Refreshing the @ai-matrx lock graph to npm latest (hosted catch-up)..."
+    (cd desktop && pnpm update -r "@ai-matrx/*" --latest) \
+        || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest) failed (see above)."
+    if git diff --quiet -- desktop/pnpm-lock.yaml; then
+        ok "The @ai-matrx lock graph was already current."
+    else
+        UNEXPECTED_CATCHUP="$(git status --porcelain | awk '$2 != "desktop/pnpm-lock.yaml" { print }')"
+        if [[ -n "$UNEXPECTED_CATCHUP" ]]; then
+            echo "$UNEXPECTED_CATCHUP" >&2
+            fail "The @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); that needs consumer adoption, not automation."
+        fi
+        git add desktop/pnpm-lock.yaml
+        git commit -q -m "chore(deps): every @ai-matrx package to npm latest [skip actions]"
+        ok "Committed the @ai-matrx lock catch-up; it is pushed with the release commit."
+    fi
+fi
 info "Checking @ai-matrx packages are npm latest..."
 (cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
 # Package logic is NEVER duplicated outside the package: a local re-definition of a

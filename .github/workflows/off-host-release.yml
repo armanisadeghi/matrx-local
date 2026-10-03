@@ -112,33 +112,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Refresh the reviewed @ai-matrx package lock graph
-        if: inputs.refresh_matrx_packages
-        working-directory: desktop
-        run: pnpm sync:matrx-packages
-
-      - name: Commit the package lock catch-up
-        if: inputs.refresh_matrx_packages
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- desktop/pnpm-lock.yaml; then
-            echo "The @ai-matrx package lock graph was already current."
-            exit 0
-          fi
-
-          UNEXPECTED="$(git status --porcelain | awk '$2 != "desktop/pnpm-lock.yaml" { print }')"
-          if [[ -n "$UNEXPECTED" ]]; then
-            echo "Package catch-up changed files other than desktop/pnpm-lock.yaml:" >&2
-            echo "$UNEXPECTED" >&2
-            echo "Refusing to automate a change that may require consumer adoption." >&2
-            exit 1
-          fi
-
-          git add desktop/pnpm-lock.yaml
-          git commit -m "chore(deps): every @ai-matrx package to npm latest [skip actions]"
-          echo "Package catch-up committed locally. The canonical release path will"
-          echo "validate it, add the release commit/tag, and push all three atomically."
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -148,6 +121,8 @@ jobs:
           RELEASE_BUMP: ${{ inputs.bump }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_MESSAGE: ${{ inputs.message }}
+          # release.sh refreshes the lock graph right before its package gate.
+          RELEASE_REFRESH_MATRX_PACKAGES: ${{ inputs.refresh_matrx_packages }}
         run: |
           set -euo pipefail
           RELEASE_MESSAGE="${RELEASE_MESSAGE:-release: off-host}"

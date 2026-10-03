@@ -1,7 +1,7 @@
 {
   "name": "aimatrx-desktop",
   "private": true,
-  "version": "1.4.305",
+  "version": "1.4.306",
   "type": "module",
   "scripts": {
     "dev": "vite",

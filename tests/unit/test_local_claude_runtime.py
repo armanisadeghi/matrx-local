@@ -695,6 +695,38 @@ async def test_hung_final_mirror_times_out_but_terminal_remains_durable(
     assert run.events[-1]["event"] == "runtime_finished"
 
 
+async def test_terminal_settlement_keeps_classified_mirror_failure_when_cancelled(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation while journaling must not erase an earlier mirror timeout."""
+    runtime, _outbox, _config, workspace_root, _settings, _db = env
+    config = CodingSessionRuntimeConfig().model_dump(mode="json")
+    run = _LocalRun(
+        runtime_id="rt-mirror-cancelled",
+        session_id=str(uuid4()),
+        workspace=workspace_root,
+        action="start",
+        status="completed",
+        runtime_config=config,
+        events=deque(maxlen=config["event_buffer_max"]),
+    )
+    await runtime._persist_run(run)
+
+    async def _timed_out_then_cancelled(
+        _run: _LocalRun, *, final: bool = False
+    ) -> None:
+        assert final is True
+        run.mirror_error = "mirror_timeout"
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(runtime, "_mirror_bounded", _timed_out_then_cancelled)
+    await runtime._settle_run(run)
+
+    status = await runtime.status(run.runtime_id)
+    assert status["mirror"]["error"] == "mirror_timeout"
+    assert run.events[-1]["event"] == "runtime_finished"
+
+
 async def test_durable_event_journal_prunes_to_configured_replay_bound(env) -> None:
     runtime, _outbox, _config, workspace_root, _settings, db = env
     config = CodingSessionRuntimeConfig().model_dump(mode="json")
@@ -936,6 +968,7 @@ async def test_hung_interrupt_returns_bounded_truth(env) -> None:
     [
         ("query", "wall-clock limit"),
         ("receive", "idle beyond the configured limit"),
+        ("receive-wall-first", "wall-clock limit"),
     ],
 )
 async def test_execution_hangs_settle_with_distinct_timeout_reason(
@@ -946,8 +979,12 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
 ) -> None:
     runtime, _outbox, _config, workspace_root, _settings, _db = env
     config = CodingSessionRuntimeConfig().model_dump(mode="json")
-    config["execution_timeout_seconds"] = 0.03
-    config["idle_timeout_seconds"] = 0.01
+    if hang_stage == "receive-wall-first":
+        config["execution_timeout_seconds"] = 0.01
+        config["idle_timeout_seconds"] = 0.03
+    else:
+        config["execution_timeout_seconds"] = 0.03
+        config["idle_timeout_seconds"] = 0.01
     config["mirror_timeout_seconds"] = 0.01
     run = _LocalRun(
         runtime_id=f"rt-{hang_stage}-timeout",

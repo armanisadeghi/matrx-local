@@ -1267,11 +1267,14 @@ class LocalClaudeRuntime:
             )
             self._track_identity_task(run, identity_task)
             saw_result = False
+            awaiting_response = False
+            execution_deadline = asyncio.get_running_loop().time() + float(
+                run.runtime_config["execution_timeout_seconds"]
+            )
+            idle_deadline: float | None = None
             try:
                 try:
-                    async with asyncio.timeout(
-                        float(run.runtime_config["execution_timeout_seconds"])
-                    ):
+                    async with asyncio.timeout_at(execution_deadline):
                         async with client:
                             run.status = "running"
                             await self._emit(
@@ -1291,18 +1294,33 @@ class LocalClaudeRuntime:
                                 responses = client.receive_response().__aiter__()
                                 while True:
                                     try:
-                                        async with asyncio.timeout(
-                                            float(
+                                        # Leave this true if the outer execution
+                                        # deadline interrupts the nested timeout.
+                                        # When both clocks expire under a busy event
+                                        # loop, classify by the deadline that was
+                                        # scheduled to fire first.
+                                        awaiting_response = True
+                                        idle_deadline = (
+                                            asyncio.get_running_loop().time()
+                                            + float(
                                                 run.runtime_config[
                                                     "idle_timeout_seconds"
                                                 ]
                                             )
-                                        ):
+                                        )
+                                        async with asyncio.timeout_at(idle_deadline):
                                             message = await responses.__anext__()
                                     except StopAsyncIteration:
+                                        awaiting_response = False
+                                        idle_deadline = None
                                         break
                                     except TimeoutError as exc:
+                                        awaiting_response = False
+                                        idle_deadline = None
                                         raise _ExecutionIdleTimeout from exc
+                                    else:
+                                        awaiting_response = False
+                                        idle_deadline = None
                                     payload = _message_payload(message)
                                     await self._emit(
                                         run,
@@ -1319,6 +1337,12 @@ class LocalClaudeRuntime:
                 except _ExecutionIdleTimeout:
                     raise
                 except TimeoutError as exc:
+                    if (
+                        awaiting_response
+                        and idle_deadline is not None
+                        and idle_deadline <= execution_deadline
+                    ):
+                        raise _ExecutionIdleTimeout from exc
                     raise _ExecutionWallTimeout from exc
             finally:
                 run.client = None
@@ -1380,7 +1404,11 @@ class LocalClaudeRuntime:
         try:
             await self._mirror_bounded(run, final=True)
         except BaseException as exc:  # cancellation must not suppress terminal state
-            run.mirror_error = str(exc)
+            # A timeout may already have recorded its durable semantic reason
+            # before persistence is interrupted.  Keep that reason: replacing it
+            # with str(CancelledError) loses the failure classification entirely.
+            if run.mirror_error is None:
+                run.mirror_error = str(exc) or "mirror_cancelled"
             logger.error(
                 "[local_runtime] final mirror crashed for %s: %s",
                 run.runtime_id,

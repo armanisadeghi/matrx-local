@@ -252,6 +252,11 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Every bundled package's delvewheel <pkg>.libs DLLs, at their own paths —
+# see specs/_delvewheel_libs.py (no-op off Windows).
+from _delvewheel_libs import complete_delvewheel_libs
+a.binaries += complete_delvewheel_libs(a)
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

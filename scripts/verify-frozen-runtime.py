@@ -159,6 +159,28 @@ def check_office_archive(binary: Path) -> None:
         )
 
 
+def check_delvewheel_libs_archive(binary: Path) -> None:
+    """Every bundled package's delvewheel ``<pkg>.libs`` DLL is in the artifact.
+
+    Each Windows wheel adds only ITS OWN ``.libs`` directory to the DLL search
+    path, so a DLL two wheels share (numpy and pandas both vendor the same
+    hashed msvcp140) must exist under BOTH directories. PyInstaller collects a
+    shared name once, wherever the search order puts it; this compares the
+    artifact against the build environment so a misplaced DLL fails here, by
+    name, instead of as ``DLL load failed`` on the user's machine.
+    See specs/_delvewheel_libs.py.
+    """
+    sys.path.insert(0, str(ROOT / "specs"))
+    from _delvewheel_libs import missing_delvewheel_dlls
+
+    missing = missing_delvewheel_dlls(archive_data_files(binary), archive_modules(binary))
+    if missing:
+        raise RuntimeError(
+            "frozen archive is missing delvewheel DLLs its packages load from "
+            "their own .libs directory: " + ", ".join(missing)
+        )
+
+
 def check_scraper_archive(binary: Path) -> None:
     """Prove THE scraper engine reached the artifact.
 
@@ -433,6 +455,7 @@ def main() -> int:
     check_office_archive(binary)
     check_scraper_archive(binary)
     check_scheduler_archive(binary)
+    check_delvewheel_libs_archive(binary)
     print(f"archive verified: {binary}")
 
     # The Office probe needs no managed runtime and no network, so it gates

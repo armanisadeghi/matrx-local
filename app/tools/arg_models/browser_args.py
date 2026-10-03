@@ -186,13 +186,10 @@ class ScrapeArgs(BaseModel):
     get_extraction: bool = Field(
         default=False,
         description=(
-            "Also return the page's STRUCTURED extraction in the result "
-            "metadata: heading outline, tables as rows, images/videos/audios, "
-            "code blocks, renderable markdown, head metadata, redirect chain. "
-            "The parse produces all of this either way; this only controls "
-            "whether it is returned, and it can be large — ask for it when "
-            "something will actually read it (a UI, a table extraction), not "
-            "for prose."
+            "Also return the structured extraction in metadata (heading "
+            "outline, tables as rows, media, code blocks, markdown, head "
+            "metadata, redirect chain). Large: request it only when something "
+            "will parse it (e.g. table extraction), not for prose."
         ),
     )
 
@@ -229,10 +226,7 @@ class ResearchArgs(BaseModel):
     )
     effort: Literal["low", "medium", "high"] = Field(
         default="medium",
-        description=(
-            "'low' (search only), 'medium' (search + top results scraped), "
-            "'high' (search + all results scraped + synthesis)."
-        ),
+        description="Result pages scraped: low ≤10, medium ≤25, high ≤50.",
     )
     freshness: str | None = Field(
         default=None,

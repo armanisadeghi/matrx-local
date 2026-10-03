@@ -64,6 +64,14 @@ class ActionGroup:
     admin_only: bool = False
     # action -> {mega_param_name: inner_param_name} renames applied pre-dispatch
     arg_aliases: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    # Model-facing text for top-level params in the cloud dialect. A param named
+    # here gets this text verbatim (leading with the actions it serves) instead
+    # of the first variant's text plus a "Used with action(s)" suffix. Must equal
+    # the tool.definition row, which tool_sync diffs in full.
+    param_descriptions: Mapping[str, str] = field(default_factory=dict)
+    # The `action` property's description; None omits it (the enum + the tool
+    # description already carry each action).
+    action_description: str | None = "The operation to perform."
 
 
 ACTION_GROUPS: dict[str, ActionGroup] = {
@@ -81,6 +89,30 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
                 "places": "FilesystemPlaces", "find": "FindPaths",
                 "semantic_find": "SemanticFindPaths",
             },
+            param_descriptions={
+                "path": "glob, grep, list: where to search/list (grep: file or directory); default working directory. find: optional root; omit to search the machine index. delete, rename, mkdir: the target (required).",
+                "limit": "find, list: page size (max 500). read: max lines (default all, up to the 256 KB cap). semantic_find: max results (max 100).",
+                "query": "find: file or directory name/path text. semantic_find: natural-language description of the files.",
+                "cursor": "find, list: cursor from the previous page.",
+                "offset": "read: 1-based start line.",
+                "source": "copy, move: path to copy or move.",
+                "content": "write: full file content.",
+                "include": "grep: glob restricting which files are searched, e.g. '*.py'.",
+                "parents": "mkdir: create missing parent directories.",
+                "pattern": "glob: glob pattern, e.g. '**/*.py'. grep: regular expression.",
+                "new_name": "rename: bare name, no path separators; use move to relocate.",
+                "file_path": "read, write, edit: the file.",
+                "overwrite": "copy, move: replace an existing destination; a directory destination is replaced whole.",
+                "permanent": "delete: true = permanent, unrecoverable; false = OS trash.",
+                "new_string": "edit: replacement text.",
+                "old_string": "edit: exact text to replace, whitespace included; must be unique unless replace_all.",
+                "destination": "copy, move: target path. A file source into an existing directory keeps its name; a directory source is never nested into an existing destination.",
+                "max_results": "grep: max matching lines.",
+                "replace_all": "edit: replace every occurrence.",
+                "show_hidden": "list: include dot-entries.",
+                "create_directories": "write: create missing parent directories.",
+            },
+            action_description=None,
         ),
         ActionGroup(
             "Shell", "local_shell",
@@ -143,6 +175,24 @@ ACTION_GROUPS: dict[str, ActionGroup] = {
                 "screenshot": "Screenshot", "list": "ListScreens",
                 "capture_book": "BookCapture",
             },
+            param_descriptions={
+                "ocr": "capture_book: add a searchable text layer when an OCR engine is available; the result states whether it was written.",
+                "region": "screenshot: crop [x, y, width, height]; absolute when monitor='all', else relative to the chosen monitor.",
+                "monitor": "screenshot: 'all' (whole virtual desktop), 'primary', or a 1-based index from list.",
+                "app_name": "capture_book: reader app holding the open book, e.g. 'Books', 'Kindle', 'Preview'.",
+                "crop_top": "capture_book: fraction of window height trimmed from the top (reader toolbar).",
+                "crop_bottom": "capture_book: fraction of window height trimmed from the bottom (page slider).",
+                "crop_left": "capture_book: fraction of window width trimmed from the left.",
+                "crop_right": "capture_book: fraction of window width trimmed from the right.",
+                "max_pages": "capture_book: safety cap; capture normally stops when the page stops changing.",
+                "window_title": "capture_book: text in the reader window's title, when the app has several windows and the largest is not the book.",
+                "next_page_key": "capture_book: page-turn key: right, left, down, up, space, page_down, page_up, return.",
+                "send_to_library": "capture_book: false = the PDF stays on this Mac only.",
+                "page_delay_seconds": "capture_book: wait after each page turn before capturing, so the reader re-renders.",
+                "end_repeat_threshold": "capture_book: consecutive unchanged frames that mean the book ended; 2 can misfire on a slow render.",
+                "page_change_threshold": "capture_book: fraction of the page that must change to count as a new page; lower it for near-identical pages (index, verse).",
+            },
+            action_description=None,
         ),
         ActionGroup(
             "System", "local_system",
@@ -471,18 +521,23 @@ def build_group_schemas(
                 union[name] = cleaned
             prop_actions.setdefault(name, []).append(action)
     all_actions = sorted(group.actions)
+    if unknown := sorted(set(group.param_descriptions) - set(union)):
+        raise RuntimeError(
+            f"action group {group.dispatcher_name}: param_descriptions names "
+            f"params no action takes: {unknown}"
+        )
     for name, used_by in prop_actions.items():
-        if len(used_by) < len(all_actions):
+        if name in group.param_descriptions:
+            union[name]["description"] = group.param_descriptions[name]
+        elif len(used_by) < len(all_actions):
             base = union[name].get("description", "").rstrip()
             suffix = f"Used with action(s): {', '.join(used_by)}."
             union[name]["description"] = f"{base} {suffix}".strip()
 
-    action_prop = {
-        "type": "string",
-        "enum": all_actions,
-        "description": "The operation to perform.",
-        "required": True,
-    }
+    action_prop: dict[str, Any] = {"type": "string", "enum": all_actions}
+    if group.action_description is not None:
+        action_prop["description"] = group.action_description
+    action_prop["required"] = True
 
     cloud_parameters: dict[str, Any] = {"action": action_prop}
     cloud_parameters.update(union)

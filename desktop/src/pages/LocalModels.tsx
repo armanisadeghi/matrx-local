@@ -5358,11 +5358,11 @@ function InferenceTab() {
                               return (
                                 <button
                                   key={m.filename}
-                                  className={"matrx-glyph-trim " + (`flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors ${
+                                  className={`flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors ${
                                     isCurrent
                                       ? "bg-accent text-accent-foreground"
                                       : "text-foreground hover:bg-accent/50"
-                                  }`)}
+                                  }`}
                                   onClick={() => {
                                     if (!isCurrent)
                                       handleModelSwitch(m.filename);

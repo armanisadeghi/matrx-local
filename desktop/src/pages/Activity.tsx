@@ -565,7 +565,7 @@ function LogFilterBar({
               ? "Auto-scroll ON — click to disable"
               : "Auto-scroll OFF — click to enable"
           }
-          className={"matrx-glyph-trim " + (cn(
+          className={"matrx-glyph-trim [--matrx-glyph-size:0.625rem] " + (cn(
             "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
             autoScroll
               ? "bg-zinc-200 text-zinc-800 border-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:border-zinc-500"

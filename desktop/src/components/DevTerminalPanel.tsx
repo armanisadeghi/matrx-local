@@ -459,7 +459,7 @@ function LevelFilters({
               ? "Auto-scroll ON — click to disable"
               : "Auto-scroll OFF — click to enable"
           }
-          className={"matrx-glyph-trim " + (cn(
+          className={"matrx-glyph-trim [--matrx-glyph-size:0.625rem] " + (cn(
             "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
             autoScroll
               ? "bg-zinc-700 text-zinc-200 border-zinc-500"
@@ -1119,12 +1119,12 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           onClick={copyIssueReport}
           disabled={!hasIssues}
           title="Copy a clean error/warning report grouped by source — paste into AI or support ticket"
-          className={"matrx-glyph-trim " + (cn(
+          className={cn(
             "flex flex-col items-center justify-center gap-1 rounded-lg border px-4 py-2 text-[10px] font-mono transition-colors disabled:opacity-30 min-w-[110px] text-center",
             hasIssues
               ? "border-zinc-600 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:border-zinc-500"
               : "border-zinc-800 bg-zinc-900 text-zinc-600",
-          ))}
+          )}
         >
           {copiedReport ? (
             <>

@@ -308,7 +308,7 @@ export function AppSidebar({ engineStatus, user, onSignOut }: AppSidebarProps) {
                       setProfileOpen(false);
                       onSignOut();
                     }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                    className="matrx-glyph-trim flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                   >
                     <LogOut className="h-3.5 w-3.5" />
                     Sign out

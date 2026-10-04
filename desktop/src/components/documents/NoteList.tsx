@@ -306,7 +306,7 @@ export const NoteList = memo(function NoteList({
                 <>
                   <button
                     onClick={() => handleRenameStart(note)}
-                    className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent"
+                    className="matrx-glyph-trim flex w-full items-center gap-2 px-3 py-2 hover:bg-accent"
                   >
                     <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                     Rename
@@ -315,7 +315,7 @@ export const NoteList = memo(function NoteList({
                     onClick={() =>
                       setContextMenu({ ...contextMenu, submenu: "move" })
                     }
-                    className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent"
+                    className="matrx-glyph-trim flex w-full items-center gap-2 px-3 py-2 hover:bg-accent"
                   >
                     <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />
                     Move to folder
@@ -323,7 +323,7 @@ export const NoteList = memo(function NoteList({
                   <div className="border-t border-border my-1" />
                   <button
                     onClick={() => handleDelete(note.id)}
-                    className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent text-destructive"
+                    className="matrx-glyph-trim flex w-full items-center gap-2 px-3 py-2 hover:bg-accent text-destructive"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete

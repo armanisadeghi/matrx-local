@@ -215,7 +215,7 @@ function NegativePromptReveal({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        className="matrx-glyph-trim flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         <Plus className="h-3 w-3" />
         Negative prompt
@@ -229,7 +229,7 @@ function NegativePromptReveal({
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            className="matrx-glyph-trim flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
           >
             <Minus className="h-3 w-3" />
             Hide
@@ -611,7 +611,7 @@ export function VariantFocus() {
             <button
               type="button"
               onClick={() => setListsOpen(true)}
-              className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              className="matrx-glyph-trim flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
             >
               <ListTree className="h-3 w-3" />
               Open lists
@@ -619,7 +619,7 @@ export function VariantFocus() {
             <button
               type="button"
               onClick={() => setLibraryOpen(true)}
-              className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              className="matrx-glyph-trim flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
             >
               <Library className="h-3 w-3" />
               Open library

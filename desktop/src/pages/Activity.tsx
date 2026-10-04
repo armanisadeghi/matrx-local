@@ -565,12 +565,12 @@ function LogFilterBar({
               ? "Auto-scroll ON — click to disable"
               : "Auto-scroll OFF — click to enable"
           }
-          className={cn(
+          className={"matrx-glyph-trim " + (cn(
             "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
             autoScroll
               ? "bg-zinc-200 text-zinc-800 border-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:border-zinc-500"
               : LEVEL_PILL_INACTIVE,
-          )}
+          ))}
         >
           <ArrowDown className="h-2.5 w-2.5" />
           Scroll
@@ -1356,12 +1356,12 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           onClick={handleCopyReport}
           disabled={!hasIssues}
           title="Copy structured error/warning report — paste to AI for debugging"
-          className={cn(
+          className={"matrx-glyph-trim " + (cn(
             "flex flex-col items-center justify-center gap-1 rounded-lg border px-5 py-3 text-[11px] font-mono transition-colors disabled:opacity-30 min-w-[120px] text-center",
             hasIssues
               ? "border-border bg-muted hover:bg-muted/80 text-foreground"
               : "border-border bg-muted/20 text-muted-foreground",
-          )}
+          ))}
         >
           {copiedReport ? (
             <>

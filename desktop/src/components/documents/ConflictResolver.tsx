@@ -345,7 +345,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={() => handleResolve("merge")}
                   disabled={resolving || !mergedContent.trim()}
-                  className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                 >
                   <Check className="h-3.5 w-3.5" />
                   Save Merged
@@ -356,7 +356,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={() => handleResolve("keep_local")}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-500 hover:bg-blue-500/20 disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-500 hover:bg-blue-500/20 disabled:opacity-60"
                 >
                   <Monitor className="h-3.5 w-3.5" />
                   Keep Local
@@ -364,7 +364,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={() => handleResolve("keep_remote")}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-xs text-purple-500 hover:bg-purple-500/20 disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-xs text-purple-500 hover:bg-purple-500/20 disabled:opacity-60"
                 >
                   <Cloud className="h-3.5 w-3.5" />
                   Keep Cloud
@@ -372,7 +372,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={startMerge}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-60"
                 >
                   <GitMerge className="h-3.5 w-3.5" />
                   Merge
@@ -380,7 +380,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={() => handleResolve("append")}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-500 hover:bg-amber-500/20 disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-500 hover:bg-amber-500/20 disabled:opacity-60"
                   title="Combine both versions into one note (local first, then cloud)"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -389,7 +389,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                 <button
                   onClick={() => handleResolve("split")}
                   disabled={resolving}
-                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-60"
+                  className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-60"
                 >
                   <Copy className="h-3.5 w-3.5" />
                   Split (Keep Both)
@@ -401,7 +401,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
           <button
             onClick={() => handleResolve("exclude")}
             disabled={resolving}
-            className="flex items-center gap-1.5 rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-700 dark:text-red-400 hover:bg-red-500/10 disabled:opacity-60"
+            className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-700 dark:text-red-400 hover:bg-red-500/10 disabled:opacity-60"
             title="Exclude this note from all future syncs"
           >
             <Ban className="h-3.5 w-3.5" />

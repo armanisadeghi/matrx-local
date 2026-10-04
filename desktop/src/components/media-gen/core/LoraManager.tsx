@@ -608,7 +608,7 @@ export function LoraStylesSection({ ctl }: { ctl: ImageGenController }) {
       {disabledForModel.length > 0 && (
         <button
           type="button"
-          className="flex items-center gap-1.5 text-left text-[10px] text-amber-600 hover:underline dark:text-amber-400"
+          className="matrx-glyph-trim flex items-center gap-1.5 text-left text-[10px] text-amber-600 hover:underline dark:text-amber-400"
           onClick={() => setManagerOpen(true)}
         >
           <AlertCircle className="h-3 w-3 shrink-0" />

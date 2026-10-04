@@ -20,7 +20,7 @@ export class SurfaceErrorBoundary extends Component<Props, State> {
       <AlertTriangle className="h-10 w-10 text-amber-500" />
       <h2 className="text-lg font-semibold">This view stopped working</h2>
       <p className="max-w-md text-center text-sm text-muted-foreground">{this.state.error.message}</p>
-      <div className="flex gap-2"><button onClick={this.props.onReset} className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"><RotateCcw className="h-4 w-4" />Reset view</button><button onClick={this.props.onOpenRecovery} className="flex items-center gap-2 rounded-md border px-4 py-2 text-sm"><RefreshCw className="h-4 w-4" />Recovery Center</button></div>
+      <div className="flex gap-2"><button onClick={this.props.onReset} className="matrx-glyph-trim flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"><RotateCcw className="h-4 w-4" />Reset view</button><button onClick={this.props.onOpenRecovery} className="matrx-glyph-trim flex items-center gap-2 rounded-md border px-4 py-2 text-sm"><RefreshCw className="h-4 w-4" />Recovery Center</button></div>
     </div>;
   }
 }

@@ -429,11 +429,11 @@ export function VariantGallery() {
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors ${
+                      className={"matrx-glyph-trim " + (`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors ${
                         currentModelName
                           ? "border-violet-500/40 bg-violet-500/10 text-violet-600 hover:bg-violet-500/15 dark:text-violet-400"
                           : "animate-pulse border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                      }`}
+                      }`)}
                     >
                       <Cpu className="h-3 w-3" />
                       {modelLoading ? (
@@ -493,7 +493,7 @@ export function VariantGallery() {
                       disabled={
                         isImage ? !imageCtl.defaults : !videoCtl.defaults
                       }
-                      className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
+                      className="matrx-glyph-trim relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <Settings2 className="h-3 w-3" />
                       Settings
@@ -538,7 +538,7 @@ export function VariantGallery() {
                       disabled={
                         isImage ? !imageCtl.defaults : !videoCtl.defaults
                       }
-                      className="relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
+                      className="matrx-glyph-trim relative flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors hover:bg-muted/30 disabled:opacity-50"
                     >
                       <SlidersHorizontal className="h-3 w-3" />
                       Advanced

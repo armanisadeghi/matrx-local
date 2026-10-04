@@ -539,7 +539,7 @@ export function QuickActionBar(props: QuickActionBarProps) {
                 setUserMenuOpen(false);
                 onSignOut();
               }}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="matrx-glyph-trim flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <LogOut className="h-3.5 w-3.5" />
               Sign out

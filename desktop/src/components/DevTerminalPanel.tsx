@@ -459,12 +459,12 @@ function LevelFilters({
               ? "Auto-scroll ON — click to disable"
               : "Auto-scroll OFF — click to enable"
           }
-          className={cn(
+          className={"matrx-glyph-trim " + (cn(
             "inline-flex items-center gap-1 text-[10px] font-mono px-1.5 h-[18px] rounded border transition-colors select-none",
             autoScroll
               ? "bg-zinc-700 text-zinc-200 border-zinc-500"
               : "text-zinc-600 border-zinc-800 hover:text-zinc-400 hover:border-zinc-700",
-          )}
+          ))}
         >
           <ArrowDown className="h-2.5 w-2.5" />
           Scroll
@@ -1119,12 +1119,12 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
           onClick={copyIssueReport}
           disabled={!hasIssues}
           title="Copy a clean error/warning report grouped by source — paste into AI or support ticket"
-          className={cn(
+          className={"matrx-glyph-trim " + (cn(
             "flex flex-col items-center justify-center gap-1 rounded-lg border px-4 py-2 text-[10px] font-mono transition-colors disabled:opacity-30 min-w-[110px] text-center",
             hasIssues
               ? "border-zinc-600 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:border-zinc-500"
               : "border-zinc-800 bg-zinc-900 text-zinc-600",
-          )}
+          ))}
         >
           {copiedReport ? (
             <>
@@ -1619,12 +1619,12 @@ export function DevTerminalPanel() {
         <button
           onClick={() => setLogsPaused(!paused)}
           title={paused ? "Resume live log stream" : "Pause live log stream"}
-          className={cn(
+          className={"matrx-glyph-trim " + (cn(
             "flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-mono transition-colors",
             paused
               ? "text-amber-400 hover:text-amber-300"
               : "text-zinc-500 hover:text-zinc-200",
-          )}
+          ))}
         >
           {paused ? (
             <Play className="h-3.5 w-3.5" />

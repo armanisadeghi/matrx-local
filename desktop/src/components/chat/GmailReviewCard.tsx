@@ -247,7 +247,7 @@ export function GmailReviewCard({ review, onResolve }: GmailReviewCardProps) {
         <button
           type="button"
           onClick={() => void googleWorkspaceSettingsUrl().then(openExternal)}
-          className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="matrx-glyph-trim inline-flex w-fit items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
           Manage or disconnect this Google account
           <ExternalLink className="h-3 w-3" />

@@ -648,22 +648,22 @@ function CameraCard({ perm }: { perm: PermissionInfo | null }) {
           <div className="flex items-center gap-1 rounded-lg border p-1 w-fit">
             <button
               onClick={() => setMode("photo")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
+              className={"matrx-glyph-trim " + (`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
                 mode === "photo"
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
-              }`}
+              }`)}
             >
               <ImageIcon className="h-3.5 w-3.5" />
               Photo
             </button>
             <button
               onClick={() => setMode("video")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
+              className={"matrx-glyph-trim " + (`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
                 mode === "video"
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
-              }`}
+              }`)}
             >
               <Video className="h-3.5 w-3.5" />
               Video
@@ -865,11 +865,11 @@ function ScreenRecordingCard({ perm }: { perm: PermissionInfo | null }) {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setSelectedMonitor("all")}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${
+            className={"matrx-glyph-trim " + (`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${
               selectedMonitor === "all"
                 ? "border-primary bg-primary/5 font-medium"
                 : "border-border bg-background hover:border-primary/40"
-            }`}
+            }`)}
           >
             <Monitor className="h-3.5 w-3.5" />
             All Screens
@@ -898,22 +898,22 @@ function ScreenRecordingCard({ perm }: { perm: PermissionInfo | null }) {
       <div className="flex items-center gap-1 rounded-lg border p-1 w-fit">
         <button
           onClick={() => setMode("screenshot")}
-          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
+          className={"matrx-glyph-trim " + (`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
             mode === "screenshot"
               ? "bg-primary text-primary-foreground"
               : "text-muted-foreground hover:text-foreground"
-          }`}
+          }`)}
         >
           <ImageIcon className="h-3.5 w-3.5" />
           Screenshot
         </button>
         <button
           onClick={() => setMode("video")}
-          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
+          className={"matrx-glyph-trim " + (`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all ${
             mode === "video"
               ? "bg-primary text-primary-foreground"
               : "text-muted-foreground hover:text-foreground"
-          }`}
+          }`)}
         >
           <Video className="h-3.5 w-3.5" />
           Screen Record

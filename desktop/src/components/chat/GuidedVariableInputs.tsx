@@ -686,7 +686,7 @@ export function GuidedVariableInputs({
           type="button"
           onClick={goPrev}
           disabled={safeIndex === 0}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors px-1 py-0.5"
+          className="matrx-glyph-trim flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors px-1 py-0.5"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
           Prev
@@ -700,7 +700,7 @@ export function GuidedVariableInputs({
           <button
             type="button"
             onClick={goNext}
-            className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-1 py-0.5 font-medium"
+            className="matrx-glyph-trim flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-1 py-0.5 font-medium"
           >
             Next
             <ChevronRight className="w-3.5 h-3.5" />
@@ -709,7 +709,7 @@ export function GuidedVariableInputs({
           <button
             type="button"
             onClick={handleDone}
-            className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-1 py-0.5 font-medium"
+            className="matrx-glyph-trim flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-1 py-0.5 font-medium"
           >
             Done
             <Check className="w-3.5 h-3.5" />

@@ -170,7 +170,7 @@ export function VideoPlayback({
               <button
                 type="button"
                 onClick={onExpand}
-                className="flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white transition-colors hover:bg-black/75"
+                className="matrx-glyph-trim flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-1 text-[10px] text-white transition-colors hover:bg-black/75"
                 aria-label="Open video in the viewer"
                 title="Open in the full-screen viewer"
               >

@@ -103,11 +103,11 @@ function ModeToggle({
         role="tab"
         aria-selected={mode === "image"}
         onClick={() => onChange("image")}
-        className={`${base} ${
+        className={"matrx-glyph-trim " + (`${base} ${
           mode === "image"
             ? "bg-background shadow-sm text-foreground"
             : "text-muted-foreground hover:text-foreground"
-        }`}
+        }`)}
       >
         <ImageIcon className="h-3.5 w-3.5" />
         Image
@@ -117,11 +117,11 @@ function ModeToggle({
         role="tab"
         aria-selected={mode === "video"}
         onClick={() => onChange("video")}
-        className={`${base} ${
+        className={"matrx-glyph-trim " + (`${base} ${
           mode === "video"
             ? "bg-background shadow-sm text-foreground"
             : "text-muted-foreground hover:text-foreground"
-        }`}
+        }`)}
       >
         <Film className="h-3.5 w-3.5" />
         Video

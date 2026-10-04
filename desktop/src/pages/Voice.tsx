@@ -1336,12 +1336,12 @@ function TranscribeTab({
             <button
               onClick={handleStartRecording}
               disabled={state.isRecording || state.isProcessingTail}
-              className={cn(
+              className={"matrx-glyph-trim " + (cn(
                 "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
                 state.isRecording || state.isProcessingTail
                   ? "bg-muted text-muted-foreground cursor-not-allowed"
                   : "bg-primary text-primary-foreground hover:bg-primary/90",
-              )}
+              ))}
             >
               <Plus className="h-4 w-4 shrink-0" />
               New Recording
@@ -1416,7 +1416,7 @@ function TranscribeTab({
           <div className="shrink-0 px-4 pt-3">
             <button
               onClick={() => setShowHistory(true)}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="matrx-glyph-trim flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               <ChevronRight className="h-3.5 w-3.5" />
               Show history
@@ -1496,12 +1496,12 @@ function TranscribeTab({
               <div className="mb-4 flex flex-wrap gap-1.5">
                 <button
                   onClick={() => actions.setSelectedDevice(null)}
-                  className={cn(
+                  className={"matrx-glyph-trim " + (cn(
                     "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
                     !state.selectedDevice
                       ? "border-primary bg-primary/10 text-primary font-medium"
                       : "border-border text-muted-foreground hover:border-primary/40",
-                  )}
+                  ))}
                 >
                   <Volume2 className="h-3 w-3" />
                   Default
@@ -1716,14 +1716,14 @@ function TranscribeTab({
                         <div className="flex items-center">
                           {/* Left: run default preset */}
                           <button
-                            className={cn(
+                            className={"matrx-glyph-trim " + (cn(
                               "inline-flex items-center gap-1 rounded-l-md h-7 px-2 text-xs",
                               "hover:bg-accent transition-colors",
                               polishSuccess === viewingSession.id &&
                                 "text-emerald-500",
                               !llmServerRunning && "text-muted-foreground",
                               polishing && "opacity-50 cursor-not-allowed",
-                            )}
+                            ))}
                             onClick={() => void handlePolish()}
                             disabled={polishing}
                             title={
@@ -1799,7 +1799,7 @@ function TranscribeTab({
                           ))}
                           <div className="border-t border-border/50 my-1" />
                           <button
-                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-left text-muted-foreground hover:bg-accent transition-colors"
+                            className="matrx-glyph-trim w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-left text-muted-foreground hover:bg-accent transition-colors"
                             onClick={() => {
                               setPolishDropdownOpen(false);
                               setShowManagePresets(true);

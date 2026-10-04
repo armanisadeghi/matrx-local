@@ -111,7 +111,7 @@ export function StructuredValue({ value, kind, note, footer = true }: Structured
             <button
               type="button"
               onClick={() => setRawOpen((open) => !open)}
-              className="flex items-center gap-0.5 hover:text-foreground"
+              className="matrx-glyph-trim flex items-center gap-0.5 hover:text-foreground"
             >
               <ChevronRight
                 className={cn("h-3 w-3 transition-transform", rawOpen && "rotate-90")}

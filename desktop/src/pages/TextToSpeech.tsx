@@ -454,7 +454,7 @@ function SynthesizingOverlay({
         {!isSynth && (
           <button
             onClick={isPaused ? onResume : onPause}
-            className="flex h-6 items-center gap-1 rounded-full border border-primary/30 bg-background/80 px-2.5 text-[11px] font-medium text-primary backdrop-blur-sm transition-colors hover:bg-primary/10"
+            className="matrx-glyph-trim flex h-6 items-center gap-1 rounded-full border border-primary/30 bg-background/80 px-2.5 text-[11px] font-medium text-primary backdrop-blur-sm transition-colors hover:bg-primary/10"
           >
             {isPaused ? (
               <>
@@ -469,7 +469,7 @@ function SynthesizingOverlay({
         )}
         <button
           onClick={onStop}
-          className="flex h-6 items-center gap-1 rounded-full border border-destructive/30 bg-background/80 px-2.5 text-[11px] font-medium text-destructive backdrop-blur-sm transition-colors hover:bg-destructive/10"
+          className="matrx-glyph-trim flex h-6 items-center gap-1 rounded-full border border-destructive/30 bg-background/80 px-2.5 text-[11px] font-medium text-destructive backdrop-blur-sm transition-colors hover:bg-destructive/10"
         >
           <Square className="h-2.5 w-2.5 fill-current" />
           Stop

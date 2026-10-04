@@ -300,7 +300,7 @@ function ActionNeededCard({
         <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={() => onDismiss(entry)}
-            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="matrx-glyph-trim flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="Remove this request permanently — it will not come back on restart"
           >
             <X className="h-3 w-3" />
@@ -308,7 +308,7 @@ function ActionNeededCard({
           </button>
           <button
             onClick={() => onRetry(entry)}
-            className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            className="matrx-glyph-trim flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             title="Re-check access and start the download again"
           >
             <RotateCcw className="h-3 w-3" />
@@ -462,7 +462,7 @@ function LogPanel() {
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          className="matrx-glyph-trim flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
           title="Copy all log lines to clipboard"
         >
           {copied ? (

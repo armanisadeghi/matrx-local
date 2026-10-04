@@ -243,7 +243,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
 
           <button
             onClick={handleCreateNote}
-            className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+            className="matrx-glyph-trim flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
           >
             <Plus className="h-3.5 w-3.5" />
             New Note
@@ -381,7 +381,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 <p className="text-sm">Select a note or create a new one</p>
                 <button
                   onClick={handleCreateNote}
-                  className="mt-3 flex items-center gap-1 mx-auto rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
+                  className="matrx-glyph-trim mt-3 flex items-center gap-1 mx-auto rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   New Note

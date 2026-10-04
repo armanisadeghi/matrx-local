@@ -238,7 +238,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
           {processes.length > 0 && (
             <ToolSection title="Top Processes" icon={Zap} iconColor="text-violet-700 dark:text-violet-400"
               actions={
-                <button onClick={() => refreshProcesses()} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                <button onClick={() => refreshProcesses()} className="matrx-glyph-trim text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
                   <RefreshCw className="h-3 w-3" /> Refresh
                 </button>
               } noPadding>

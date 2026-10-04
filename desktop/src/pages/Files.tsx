@@ -166,7 +166,7 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
           ) : placesState.error ? (
             <div className="p-2 text-xs text-destructive">{placesState.error}</div>
           ) : placesState.places.map((place) => (
-            <button key={place.id} type="button" disabled={place.available === false} aria-disabled={place.available === false} title={place.available === false ? `${place.path} is unavailable` : place.path} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void browse(place.path)}>
+            <button key={place.id} type="button" disabled={place.available === false} aria-disabled={place.available === false} title={place.available === false ? `${place.path} is unavailable` : place.path} className="matrx-glyph-trim flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void browse(place.path)}>
               <Folder className="h-4 w-4 shrink-0 text-amber-500" />
               <span className="min-w-0 flex-1 truncate">{place.label}</span>
               {place.available === false && <span className="text-[10px] text-destructive">Unavailable</span>}

@@ -456,9 +456,9 @@ export function VariantWorkspace() {
               aria-label={
                 collapsed ? "Expand navigation" : "Collapse navigation"
               }
-              className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors ${
+              className={"matrx-glyph-trim " + (`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors ${
                 collapsed ? "justify-center" : ""
-              }`}
+              }`)}
             >
               {collapsed ? (
                 <ChevronsRight className="h-4 w-4 shrink-0" />

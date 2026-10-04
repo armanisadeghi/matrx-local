@@ -415,7 +415,7 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
           <div className="flex items-center gap-1">
             <button
               onClick={() => setHistoryOpen(true)}
-              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              className="matrx-glyph-trim flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
               title="View scrape history"
             >
               <History className="h-3 w-3" />
@@ -428,7 +428,7 @@ function BulkTab({ engineStatus }: { engineStatus: EngineStatus }) {
                 </span>
                 <button
                   onClick={handleClearAll}
-                  className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+                  className="matrx-glyph-trim flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
                 >
                   <Trash2 className="h-3 w-3" />
                   Clear

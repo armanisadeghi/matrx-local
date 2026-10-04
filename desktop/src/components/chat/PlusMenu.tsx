@@ -488,12 +488,12 @@ export function CloudChatPlusMenu({
                 type="button"
                 onClick={onResetOverrides}
                 disabled={overrideCount === 0}
-                className={cn(
+                className={"matrx-glyph-trim " + (cn(
                   "flex items-center gap-1 text-[11px] transition-colors",
                   overrideCount === 0
                     ? "cursor-not-allowed text-muted-foreground/50"
                     : "text-muted-foreground hover:text-foreground",
-                )}
+                ))}
               >
                 <RotateCcw className="h-3 w-3" />
                 Reset model and settings
@@ -610,7 +610,7 @@ export function CloudChatPlusMenu({
                     <button
                       type="button"
                       onClick={openGoogleSettings}
-                      className="mt-1 flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
+                      className="matrx-glyph-trim mt-1 flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
                     >
                       <ExternalLink className="h-3 w-3" />
                       Set up Google files on the web
@@ -656,7 +656,7 @@ export function CloudChatPlusMenu({
                   <button
                     type="button"
                     onClick={openGoogleSettings}
-                    className="mt-1 flex items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                    className="matrx-glyph-trim mt-1 flex items-center gap-1 px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <ExternalLink className="h-3 w-3" />
                     Add more files on the web

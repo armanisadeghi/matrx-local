@@ -362,7 +362,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
         <div>
           <button
             type="button"
-            className="flex items-center gap-1 text-sm font-medium"
+            className="matrx-glyph-trim flex items-center gap-1 text-sm font-medium"
             onClick={() => setShowAccounts((open: boolean) => !open)}
           >
             {showAccounts ? (

@@ -294,7 +294,7 @@ function ModelLoadingCard({
       {visibleLogs.length > 0 && (
         <div className="border-t">
           <button
-            className="w-full flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+            className="matrx-glyph-trim w-full flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
             onClick={() => setShowLogs((v) => !v)}
           >
             {showLogs ? (
@@ -2096,7 +2096,7 @@ function AgenticToolCallCard({
       {/* Expandable args */}
       <div className="border-t">
         <button
-          className="flex items-center gap-1 w-full px-3 py-1.5 text-muted-foreground hover:text-foreground transition-colors"
+          className="matrx-glyph-trim flex items-center gap-1 w-full px-3 py-1.5 text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setShowArgs((v) => !v)}
         >
           <ChevronRight
@@ -2641,7 +2641,7 @@ function SystemPromptSelector({
             />
           </button>
           <button
-            className="flex items-center gap-1 text-xs text-primary hover:underline"
+            className="matrx-glyph-trim flex items-center gap-1 text-xs text-primary hover:underline"
             onClick={() => navigate("/system-prompts")}
             title="Open System Prompts library"
           >
@@ -2854,7 +2854,7 @@ function SaveToNoteModal({
             <div className="flex items-center justify-between">
               <Label className="text-xs">Folder</Label>
               <button
-                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                className="matrx-glyph-trim flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => setNewFolderMode((v) => !v)}
               >
                 <FolderPlus className="h-3 w-3" />
@@ -5358,11 +5358,11 @@ function InferenceTab() {
                               return (
                                 <button
                                   key={m.filename}
-                                  className={`flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors ${
+                                  className={"matrx-glyph-trim " + (`flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors ${
                                     isCurrent
                                       ? "bg-accent text-accent-foreground"
                                       : "text-foreground hover:bg-accent/50"
-                                  }`}
+                                  }`)}
                                   onClick={() => {
                                     if (!isCurrent)
                                       handleModelSwitch(m.filename);

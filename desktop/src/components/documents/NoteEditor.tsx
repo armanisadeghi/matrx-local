@@ -502,14 +502,14 @@ export function NoteEditor({
             <button
               onClick={handleInsertDictation}
               disabled={!dictationText.trim()}
-              className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              className="matrx-glyph-trim flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             >
               <Check className="h-3 w-3" />
               Insert
             </button>
             <button
               onClick={handleCancelDictation}
-              className="flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+              className="matrx-glyph-trim flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
             >
               <X className="h-3 w-3" />
               Cancel

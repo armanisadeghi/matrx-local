@@ -165,7 +165,7 @@ function PromptEditor({
         <div className="flex items-center gap-3">
           <button
             onClick={onCancel}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="matrx-glyph-trim flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
             Back
@@ -895,7 +895,7 @@ export function SystemPrompts() {
                           {/* Fork button on hover */}
                           <div className="absolute right-9 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex items-center gap-1">
                             <button
-                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted/60 transition-colors"
+                              className="matrx-glyph-trim flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted/60 transition-colors"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const forked = systemPrompts.forkBuiltin(p.id);

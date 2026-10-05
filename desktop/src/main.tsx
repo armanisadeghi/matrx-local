@@ -1,5 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import {
+  MOBILE_BREAKPOINT,
+  ViewportHintProvider,
+} from "@ai-matrx/kit/media-query";
 import App from "./App";
 import { windowRole } from "./lib/window-role";
 import { TranscriptOverlay } from "./components/TranscriptOverlay";
@@ -37,4 +41,15 @@ const tree =
     <App />
   );
 
-root.render(<React.StrictMode>{tree}</React.StrictMode>);
+const viewportAwareTree =
+  windowRole.kind === "overlay" ? (
+    tree
+  ) : (
+    <ViewportHintProvider
+      isMobile={window.innerWidth < MOBILE_BREAKPOINT}
+    >
+      {tree}
+    </ViewportHintProvider>
+  );
+
+root.render(<React.StrictMode>{viewportAwareTree}</React.StrictMode>);

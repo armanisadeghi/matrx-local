@@ -495,8 +495,10 @@ run_packaged() {
         [ "$(basename "$helper")" = "$host_exe" ] && continue
         file "$helper" | grep -q "Mach-O" || continue
         helper_seen=$((helper_seen + 1))
+        local helper_timeout=30
+        [ "$(basename "$helper")" = "llama-server" ] && helper_timeout=120
         DYLD_LIBRARY_PATH="$smoke_app/Contents/Resources/binaries" \
-          perl -e 'alarm 30; exec @ARGV' "$helper" --version >/dev/null 2>&1
+          perl -e 'alarm shift; exec @ARGV' "$helper_timeout" "$helper" --version >/dev/null 2>&1
         local helper_status=$?
         if [ "$helper_status" -ne 0 ]; then
           helper_failures="$helper_failures\n  $(basename "$helper") exited $helper_status"

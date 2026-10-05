@@ -165,10 +165,13 @@ while IFS= read -r helper; do
         fi
     done
 
-    # Every helper answers --version and exits. Bound it: a hung helper must
-    # fail loudly, not wedge the release job.
+    # Every helper answers --version and exits. llama-server initializes Metal
+    # before printing its version; CI runners can need more than 30 seconds.
+    # Keep a finite bound so a genuinely hung helper still fails the release.
+    HELPER_TIMEOUT=30
+    [[ "$helper_name" == "llama-server" ]] && HELPER_TIMEOUT=120
     set +e
-    HELPER_OUT="$(DYLD_LIBRARY_PATH="$HELPER_DYLIBS" perl -e 'alarm 30; exec @ARGV' "$helper" --version 2>&1)"
+    HELPER_OUT="$(DYLD_LIBRARY_PATH="$HELPER_DYLIBS" perl -e 'alarm shift; exec @ARGV' "$HELPER_TIMEOUT" "$helper" --version 2>&1)"
     HELPER_STATUS=$?
     set -e
     if [[ "$HELPER_STATUS" == "137" ]]; then

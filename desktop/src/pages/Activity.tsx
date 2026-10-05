@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Button, Tabs, TabsContent, TabsList, TabsTrigger } from "@ai-matrx/design-system";
+import { Chip } from "@ai-matrx/design-system/controls";
 import { cn } from "@/lib/utils";
 import type { EngineStatus } from "@/hooks/use-engine";
 import {
@@ -405,15 +406,11 @@ function buildIssueReport(logs: ClientLogLine[]): string {
 function TabBadge({ errors, warns }: { errors: number; warns: number }) {
   if (errors > 0)
     return (
-      <span className="text-[9px] bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400 rounded px-1 py-px font-mono">
-        {errors}e
-      </span>
+      <Chip tone="destructive" label={`${errors}e`} />
     );
   if (warns > 0)
     return (
-      <span className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400 rounded px-1 py-px font-mono">
-        {warns}w
-      </span>
+      <Chip tone="warning" label={`${warns}w`} />
     );
   return null;
 }

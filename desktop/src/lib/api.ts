@@ -3150,7 +3150,7 @@ class EngineAPI {
   // The user lending THIS computer's internet connection to AI Matrx, used
   // only when a site blocks our datacenter address. The engine owns the
   // helper child; the UI only reads the status and flips the switch.
-  // Contract: common-docs/systems/architecture/residential-egress/FEATURE.md
+  // Contract: common-docs/systems/web/residential-egress/FEATURE.md
 
   /** What the home connection is doing right now. */
   async egressStatus(): Promise<EgressStatus> {

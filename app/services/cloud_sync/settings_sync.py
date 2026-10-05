@@ -107,7 +107,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # an explicit opt-in, never a default-on. (The old proxy_enabled=True did
     # nothing — the loopback proxy it started was unreachable from anywhere —
     # and is gone.) Contract:
-    # common-docs/systems/architecture/residential-egress/FEATURE.md
+    # common-docs/systems/web/residential-egress/FEATURE.md
     "residential_egress_enabled": False,
     # Remote access
     "tunnel_enabled": False,

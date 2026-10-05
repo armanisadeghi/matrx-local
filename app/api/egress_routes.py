@@ -5,7 +5,7 @@ The switch writes the ``residential_egress_enabled`` setting and then runs the
 ONE reconciler — the routes never start or stop the child directly, so the
 engine has exactly one decision point for "signed in AND enabled".
 
-Contract: ``common-docs/systems/architecture/residential-egress/FEATURE.md``.
+Contract: ``common-docs/systems/web/residential-egress/FEATURE.md``.
 """
 
 from __future__ import annotations

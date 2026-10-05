@@ -1,6 +1,6 @@
 # Records mirror sync (custom record store)
 
-Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/platform/custom-data/STATE.md — read it before touching this feature in ANY repo.
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/systems/data/custom-data/STATE.md — read it before touching this feature in ANY repo.
 
 `RecordsSyncEngine` mirrors ONE custom Table's records into local SQLite
 (`custom_record_mirror`, migration V37) and syncs them both ways through the

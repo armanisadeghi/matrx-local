@@ -1,7 +1,7 @@
 # Coding Session Bridge — Matrx Local edge
 
 System of record:
-`/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`.
+`/Users/armanisadeghi/code/common-docs/systems/code/coding-session-bridge/FEATURE.md`.
 
 Cross-repo product plan:
 `/Users/armanisadeghi/code/common-docs/systems/chat/ai-work/projects/ai-work-hub/PLAN.md` — read it before building
@@ -864,7 +864,7 @@ the same pass every `claude_label_sync_interval_minutes` (default 15, clamped 1�
 `claude_label_sync_auto_enabled` is on — both read fresh per tick from the standard settings store,
 no restart. A tick stands down while the page's own sync holds the operation lock, and a blocked
 pass (signed out, offline, unconfigured) logs the `session_blocker` payload at info, never ERROR.
-Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/coding/coding-session-bridge/FEATURE.md`
+Cross-repo contract: `/Users/armanisadeghi/code/common-docs/systems/code/coding-session-bridge/FEATURE.md`
 § "The session label".
 
 - **[`claude_session_index.py`](claude_session_index.py) is the only reader.** It reduces each
@@ -1199,7 +1199,7 @@ registering as a machine writer, whose rows the platform keeps out of the person
 library. Guard: `test_lane_never_publishes_without_a_registered_machine_writer` in
 `tests/unit/test_coding_session_artifacts.py`. The platform rule that keeps such rows out of the
 person's Files and Recents (and how a machine writer registers before it writes):
-`/Users/armanisadeghi/code/common-docs/systems/media/file-service/USER_FILES_VS_MACHINE_FILES.md`.
+`/Users/armanisadeghi/code/common-docs/systems/files/file-service/USER_FILES_VS_MACHINE_FILES.md`.
 
 ### ONE artifacts lane per provider, and THE REPOSITORY RULE (2026-09-18)
 

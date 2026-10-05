@@ -810,26 +810,14 @@ ok "Desktop dependencies match the frozen lockfile."
 # adoption by a person, so that refuses. The gate below still decides.
 if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     info "Refreshing the @ai-matrx lock graph to npm latest (hosted catch-up)..."
-    # npm publishes the packument before its CDN serves the tarball: a version
-    # published seconds earlier resolves as `latest` and then 404s on fetch
-    # (run 37316081137: design-system 0.66.1 published 13:21:33, fetch 404 at
-    # 13:24:07, served by 13:27). Only that propagation 404 is retried, with a
-    # bounded wait; any other failure — and a 404 that outlives the window —
-    # still fails the release.
-    CATCHUP_ATTEMPT=1
-    CATCHUP_MAX_ATTEMPTS=6
-    CATCHUP_WAIT_SECONDS=60
-    while true; do
-        CATCHUP_OUT="$(cd desktop && pnpm update -r "@ai-matrx/*" --latest 2>&1)" && { echo "$CATCHUP_OUT"; break; }
-        echo "$CATCHUP_OUT" >&2
-        if grep -q "ERR_PNPM_FETCH_404" <<<"$CATCHUP_OUT" && (( CATCHUP_ATTEMPT < CATCHUP_MAX_ATTEMPTS )); then
-            warn "A just-published @ai-matrx tarball is not on the npm CDN yet (attempt ${CATCHUP_ATTEMPT}/${CATCHUP_MAX_ATTEMPTS}); retrying in ${CATCHUP_WAIT_SECONDS}s."
-            sleep "$CATCHUP_WAIT_SECONDS"
-            CATCHUP_ATTEMPT=$((CATCHUP_ATTEMPT + 1))
-            continue
-        fi
-        fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest) failed (see above)."
-    done
+    # npm publishes the packument before its CDN serves the tarball (run
+    # 37316081137: design-system 0.66.1 published 13:21:33, fetch 404 at 13:24:07,
+    # served by 13:27). Wait until every @ai-matrx latest tarball answers 200
+    # BEFORE pnpm touches the lockfile; a 404 that outlives the window (10 min)
+    # exits non-zero and fails the release. One behavior across all repos:
+    # desktop/scripts/await-matrx-latest.mjs.
+    (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
+    (cd desktop && pnpm update -r "@ai-matrx/*" --latest) || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest) failed (see above)."
     if git diff --quiet -- desktop/pnpm-lock.yaml; then
         ok "The @ai-matrx lock graph was already current."
     else

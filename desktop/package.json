@@ -28,7 +28,7 @@
     "test:e2e:setup": "node e2e/setup/create-test-user.mjs",
     "check:matrx-packages": "node scripts/check-matrx-packages.mjs",
     "check:matrx-latest": "node scripts/check-matrx-packages.mjs",
-    "sync:matrx-packages": "pnpm update -r \"@ai-matrx/*\" --latest && pnpm update -r \"@ai-matrx/*\" --depth Infinity && pnpm check:matrx-packages",
+    "sync:matrx-packages": "node scripts/await-matrx-latest.mjs && pnpm update -r \"@ai-matrx/*\" --latest && pnpm update -r \"@ai-matrx/*\" --depth Infinity && pnpm check:matrx-packages",
     "postinstall": "node scripts/check-matrx-packages.mjs --duplicates",
     "check:archived-items-law": "node scripts/check-archived-items-law.mjs",
     "check:archived-items-law:self-test": "node scripts/check-archived-items-law.mjs --self-test",

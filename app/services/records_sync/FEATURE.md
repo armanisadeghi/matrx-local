@@ -27,15 +27,14 @@ replay of that key returns the SAME record id and increments
 `custom.anon_replay.replays`, so a crash between the write and the
 acknowledgement cannot duplicate a record.
 
-## The switch
+## Reachability
 
-Every cycle asks whether the store is on for the organization before anything
-else. `custom.store_is_open` is not EXECUTE-granted to `authenticated`, so the
-client reads the same knob the door reads —
-`platform.knob_resolve('custom','system_enabled', org)` — and treats an
-unreadable switch as CLOSED. Closed means the feature is ABSENT and says so
-with a remedy (`RecordsMirrorUnavailable`, HTTP 409 on `/records/mirror/sync`);
-it never half-works and never writes nowhere.
+Every organization keeps its data in the record store since the final switch
+(2026-10-01), so the cycle no longer asks `custom.store_is_open` first (retired
+2026-10-03). A cycle whose first read cannot reach the store says why with a
+remedy (`RecordsMirrorUnavailable`, HTTP 409 on `/records/mirror/sync`): offline,
+or the `custom` doors are not on the client wire. It never half-works and never
+writes nowhere.
 
 ## Ordering and safety
 
@@ -55,8 +54,7 @@ transport is a seam so the wire can change without the engine knowing.
 
 ## Wire status (2026-09-18, proven over HTTP)
 
-`custom` is exposed to PostgREST on the main database and `custom.store_is_open`
-is EXECUTE-granted to `authenticated` (landed by the W6-EXT lane), so the
+`custom` is exposed to PostgREST on the main database, so the
 SHIPPED transport works end to end: the live proof in
 `tests/parity/test_records_mirror_live.py` drives this engine over HTTPS with
 the admin account's JWT and `Content-Profile: custom`, and every door it calls
@@ -64,9 +62,3 @@ answers. The only non-HTTP step in that test is reading the `custom.anon_replay`
 ledger for its assertion — no client may read that table, by design — and it is
 optional.
 
-## The switch door
-
-The gate asks `custom.store_is_open(org)`. If a database has not taken that
-grant, the client falls back — with an ERROR log naming the refusal — to the
-knob that door reads, `platform.knob_resolve('custom','system_enabled', org)`,
-which is `store_is_open`'s whole body. A switch it cannot read at all is CLOSED.

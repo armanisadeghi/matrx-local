@@ -189,48 +189,6 @@ class CustomStoreClient:
     def available(self) -> bool:
         return self._transport is not self._http or self._http.available
 
-    # -- the switch ----------------------------------------------------
-
-    async def store_is_open(self, organization_id: str) -> bool:
-        """Is the record store switched on for this organization?
-
-        ``custom.store_is_open(org)`` is the store's own switch door and is what
-        this asks (it is EXECUTE-granted to ``authenticated`` and declared in
-        ``platform.client_callable_door`` since 2026-09-18).
-
-        If a database has not taken that grant yet the door answers 42501, and
-        this falls back — LOUDLY, never silently — to the knob the door itself
-        reads, ``platform.knob_resolve('custom','system_enabled', org)``, which
-        is the whole body of ``store_is_open``. A switch this client cannot read
-        at all is CLOSED, never open.
-        """
-        try:
-            value = await self._transport.call(
-                "custom", "store_is_open", {"p_organization_id": organization_id}
-            )
-        except RecordsStoreError as exc:
-            if not exc.is_door_refused:
-                raise
-            logger.error(
-                "[records_sync] custom.store_is_open is not callable here (%s) — reading the "
-                "knob it reads instead: platform.knob_resolve('custom','system_enabled')",
-                exc.code or exc.status_code,
-            )
-            value = await self._transport.call(
-                "platform",
-                "knob_resolve",
-                {
-                    "p_feature": "custom",
-                    "p_key": "system_enabled",
-                    "p_organization_id": organization_id,
-                },
-            )
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() == "true"
-        return False
-
     # -- reads (ONLY through the read doors) ---------------------------
 
     async def read_records(

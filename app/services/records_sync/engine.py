@@ -12,8 +12,8 @@ swallow — with the three differences the record store's contract forces:
   returns the SAME record id and increments ``custom.anon_replay.replays``, so
   draining an outbox twice — the normal consequence of a crash between the
   write and the acknowledgement — cannot duplicate a record.
-* **The whole path is gated on the campaign switch.**  When the store is off
-  for this organization the feature is ABSENT and says so with a remedy
+* **Unreachable is absent and loud.**  Offline, or a wire that does not carry
+  the ``custom`` doors, makes the feature ABSENT and says so with a remedy
   (law 4).  It never half-works and never quietly writes nowhere.
 
 The read door does not offer a "changed since" cursor — it offers
@@ -42,11 +42,6 @@ _PAGE_SIZE = 200
 _MAX_ATTEMPTS = 5
 _QUEUE_ENTITY = "custom.record"
 
-REMEDY_STORE_CLOSED = (
-    "The custom record store is switched off for this organization, so the desktop "
-    "records mirror is not available. Turn on the 'custom / system_enabled' setting "
-    "for this organization and sync again."
-)
 REMEDY_OFFLINE = (
     "This device cannot reach AI Matrx right now. Your records are safe in the local "
     "mirror and everything you wrote is queued — it syncs by itself on reconnect."
@@ -82,7 +77,6 @@ class RecordsSyncEngine:
         self._device = f"matrx-local/{_platform.node()}"
         self._lock = asyncio.Lock()
         self._last_cycle: dict[str, Any] = {}
-        self._gate: dict[str, Any] = {"checked_at": None, "open": None, "reason": None}
 
     # ------------------------------------------------------------------
     # Configuration
@@ -128,41 +122,33 @@ class RecordsSyncEngine:
         return True
 
     # ------------------------------------------------------------------
-    # The switch — law 4: absent and loud, never dead and never degraded
+    # Reachability — law 4: absent and loud, never dead and never degraded
     # ------------------------------------------------------------------
+    # Every organization keeps its data in the record store since the final switch
+    # (2026-10-01), so the cycle no longer asks ``custom.store_is_open`` first (retired
+    # 2026-10-03). What that ask also did — tell an offline device or a closed wire apart
+    # from a fault — is said by the cycle's own first read instead.
 
-    async def assert_store_open(self) -> None:
+    def _assert_organization(self) -> None:
         if not self._organization_id:
             raise RecordsMirrorUnavailable(
                 "No organization selected for the records mirror",
                 "Choose the organization whose records this device should mirror.",
             )
-        try:
-            is_open = await self._client.store_is_open(self._organization_id)
-        except RecordsStoreError as exc:
-            if exc.is_transport:
-                self._gate = {"checked_at": _now(), "open": None, "reason": "offline"}
-                logger.error("[records_sync] store unreachable (offline): %s", exc)
-                raise RecordsMirrorUnavailable(
-                    "This device is offline, so the store's switch cannot be read", REMEDY_OFFLINE
-                ) from exc
-            if exc.is_unreachable_schema:
-                self._gate = {"checked_at": _now(), "open": False, "reason": "wire-closed"}
-                logger.error("[records_sync] store doors unreachable: %s", exc)
-                raise RecordsMirrorUnavailable(
-                    "The record store's doors are not on the client wire", REMEDY_STORE_UNREACHABLE
-                ) from exc
-            raise
-        self._gate = {"checked_at": _now(), "open": bool(is_open), "reason": None if is_open else "switch-off"}
-        if not is_open:
-            logger.error(
-                "[records_sync] store CLOSED for organization %s — mirror unavailable",
-                self._organization_id,
+
+    @staticmethod
+    def _unavailable(exc: RecordsStoreError) -> RecordsMirrorUnavailable | None:
+        if exc.is_transport:
+            logger.error("[records_sync] store unreachable (offline): %s", exc)
+            return RecordsMirrorUnavailable(
+                "This device is offline, so the record store cannot be reached", REMEDY_OFFLINE
             )
-            raise RecordsMirrorUnavailable(
-                "The custom record store is switched off for this organization",
-                REMEDY_STORE_CLOSED,
+        if exc.is_unreachable_schema:
+            logger.error("[records_sync] store doors unreachable: %s", exc)
+            return RecordsMirrorUnavailable(
+                "The record store's doors are not on the client wire", REMEDY_STORE_UNREACHABLE
             )
+        return None
 
     # ------------------------------------------------------------------
     # Local authoring — works with the platform unreachable
@@ -246,11 +232,17 @@ class RecordsSyncEngine:
                 "Sign in to AI Matrx on this device and sync again.",
             )
         async with self._lock:
-            await self.assert_store_open()
+            self._assert_organization()
             # PULL FIRST, exactly as chat does: learn the store's newer rows
             # before offering ours, so a device that was offline for a week
             # cannot blindly overwrite a week of other people's edits.
-            pulled = await self._pull()
+            try:
+                pulled = await self._pull()
+            except RecordsStoreError as exc:
+                unavailable = self._unavailable(exc)
+                if unavailable is None:
+                    raise
+                raise unavailable from exc
             pushed = await self._push()
         summary = {"pulled": pulled, "pushed": pushed, "at": _now()}
         self._last_cycle = summary
@@ -301,6 +293,10 @@ class RecordsSyncEngine:
                     entity, {"resume_offset": offset}, status="error", error=str(exc)
                 )
                 logger.error("[records_sync] pull custom.%s failed: %s", table_id, exc)
+                if exc.is_transport or exc.is_unreachable_schema:
+                    # The wire itself is down, not this Table: the cycle stops here, before
+                    # the push touches the queue, and says why (sync_cycle).
+                    raise
                 result[table_id] = {
                     "applied": applied,
                     "kept_local": skipped,
@@ -513,7 +509,6 @@ class RecordsSyncEngine:
             "configured": self.is_configured,
             "organization_id": self._organization_id,
             "tables": self._table_ids,
-            "switch": self._gate,
             "mirrored_records": mirrored["n"] if mirrored else 0,
             "pending": pending["n"] if pending else 0,
             "dead_letters": dead["n"] if dead else 0,

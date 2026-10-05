@@ -1,5 +1,5 @@
-"""Characterization: the custom-record mirror — switch gate, pull, offline
-capture, idempotent replay, and durable conflicts.
+"""Characterization: the custom-record mirror — pull, offline capture,
+idempotent replay, and durable conflicts.
 
 Everything runs against a REAL SQLite database in tmp_path (real migrations).
 The store is a faithful in-memory stand-in for the doors: it enforces the two
@@ -33,9 +33,7 @@ USER = "87a6e699-3622-4869-8843-d0867456c0dd"
 class FakeStore:
     """The doors, in memory, with the two behaviours that matter."""
 
-    def __init__(self, *, switch_on: bool = True, switch_door_granted: bool = True) -> None:
-        self.switch_on = switch_on
-        self.switch_door_granted = switch_door_granted
+    def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
         self.replays: dict[str, dict[str, Any]] = {}
         self.offline = False
@@ -49,16 +47,6 @@ class FakeStore:
         return handler(args)
 
     # -- doors ---------------------------------------------------------
-
-    def _store_is_open(self, args: dict[str, Any]) -> Any:
-        if not self.switch_door_granted:
-            raise RecordsStoreError(
-                "store_is_open", 403, "permission denied for function store_is_open", code="42501"
-            )
-        return self.switch_on
-
-    def _knob_resolve(self, args: dict[str, Any]) -> Any:
-        return self.switch_on
 
     def _read_records(self, args: dict[str, Any]) -> list[dict[str, Any]]:
         rows = [
@@ -111,14 +99,13 @@ class FakeStore:
         return rec["version"]
 
 
-def _run(tmp_path: Path, scenario: Callable[[LocalDatabase, FakeStore, RecordsSyncEngine], Awaitable[None]],
-         *, switch_on: bool = True) -> None:
+def _run(tmp_path: Path, scenario: Callable[[LocalDatabase, FakeStore, RecordsSyncEngine], Awaitable[None]]) -> None:
     async def _main() -> None:
         db = LocalDatabase(tmp_path / "matrx.db")
         await db.connect()
         old = database_module._instance
         database_module._instance = db
-        store = FakeStore(switch_on=switch_on)
+        store = FakeStore()
         engine = RecordsSyncEngine(CustomStoreClient(transport=store))
         engine.configure(user_id=USER, jwt=None, organization_id=ORG, table_ids=[TABLE], transport=store)
         try:
@@ -130,30 +117,15 @@ def _run(tmp_path: Path, scenario: Callable[[LocalDatabase, FakeStore, RecordsSy
     asyncio.run(_main())
 
 
-def test_switch_off_makes_the_feature_absent_and_loud(tmp_path: Path) -> None:
-    """Law 4: closed is announced with a remedy — never a quiet empty sync."""
+def test_the_cycle_never_asks_a_store_switch(tmp_path: Path) -> None:
+    """Every organization keeps its data in the store (final switch, 2026-10-01): the
+    cycle's first call is the read door, never ``custom.store_is_open``."""
 
     async def scenario(db: LocalDatabase, store: FakeStore, engine: RecordsSyncEngine) -> None:
-        with pytest.raises(RecordsMirrorUnavailable) as caught:
-            await engine.sync_cycle()
-        assert "switched off" in caught.value.reason
-        assert "system_enabled" in caught.value.remedy
-        # Nothing was read or written behind the closed switch.
-        assert store.calls == ["custom.store_is_open"]
-        status = await engine.get_status()
-        assert status["switch"]["open"] is False
-
-    _run(tmp_path, scenario, switch_on=False)
-
-
-def test_an_ungranted_switch_door_falls_back_to_the_knob_it_reads(tmp_path: Path) -> None:
-    """A database that has not taken the grant still gets an honest answer."""
-
-    async def scenario(db: LocalDatabase, store: FakeStore, engine: RecordsSyncEngine) -> None:
-        store.switch_door_granted = False
         await engine.sync_cycle()
-        assert store.calls[:2] == ["custom.store_is_open", "platform.knob_resolve"]
-        assert (await engine.get_status())["switch"]["open"] is True
+        assert store.calls and store.calls[0] == "custom.read_records", store.calls
+        assert "custom.store_is_open" not in store.calls
+        assert "switch" not in await engine.get_status()
 
     _run(tmp_path, scenario)
 
@@ -198,7 +170,7 @@ def test_reconnect_drains_once_and_a_replay_never_duplicates(tmp_path: Path) -> 
         store.offline = True
         local_id = await engine.create_record(TABLE, {"title": "captured offline"})
         with pytest.raises(RecordsMirrorUnavailable) as offline:
-            # Offline the switch itself cannot be read, so the cycle refuses —
+            # Offline the store cannot be read, so the cycle refuses —
             # loudly, with the remedy, and with the queue untouched.
             await engine.sync_cycle()
         assert "offline" in offline.value.reason

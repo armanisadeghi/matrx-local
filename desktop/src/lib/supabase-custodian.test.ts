@@ -59,5 +59,5 @@ it("never sends an anon-keyed request when the daemon gives no token", async () 
   expect(wire).toHaveBeenCalledTimes(1);
 });
 it("installs the guarded fetch on the shared client", () => {
-  expect(typeof mocks.createClient.mock.calls[0][2].global.fetch).toBe("function");
+  expect(typeof mocks.createClient.mock.calls[0]![2].global.fetch).toBe("function");
 });

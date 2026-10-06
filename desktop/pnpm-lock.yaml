@@ -2331,8 +2331,8 @@ packages:
     resolution: {integrity: sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA==}
     engines: {node: '>=20.0.0'}
 
-  idb@8.0.3:
-    resolution: {integrity: sha512-LtwtVyVYO5BqRvcsKuB2iUMnHwPVByPCXFXOpuU96IZPPoPN6xjOGxZQ74pgSVVLQWtUOYgyeL4GE98BY5D3wg==}
+  idb@8.0.4:
+    resolution: {integrity: sha512-jd0ITCrN+Zah4J7R/Z2jnR3W7A4BXDAjmo62MwWuSjxCiueUAf7X5rbodEdidWzeknwXHmLpdZkoiiCppNi30Q==}
 
   inline-style-parser@0.2.7:
     resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
@@ -3266,7 +3266,7 @@ snapshots:
     dependencies:
       '@ai-matrx/content-ir': 0.21.2
       dompurify: 3.4.16
-      idb: 8.0.3
+      idb: 8.0.4
       json5: 2.2.3
       jsqr: 1.4.0
       marked: 18.0.14
@@ -5155,7 +5155,7 @@ snapshots:
 
   iceberg-js@0.8.1: {}
 
-  idb@8.0.3: {}
+  idb@8.0.4: {}
 
   inline-style-parser@0.2.7: {}
 

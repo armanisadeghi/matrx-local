@@ -264,7 +264,9 @@ function isPrecondition(message: string): boolean {
     message.includes("matrx_local_mirror_unavailable") ||
     message.includes("The offline agent catalog is unavailable") ||
     message.includes("No organization is selected") ||
-    message.includes("no signed-in user")
+    message.includes("no signed-in user") ||
+    message.includes("matrx_local_not_signed_in") ||
+    message.includes("Not connected: AI Matrx Sync")
   );
 }
 

@@ -30,9 +30,44 @@ if (!supabaseUrl || !supabaseKey) {
     );
 }
 
+/** The code a refused no-token request carries (PostgREST-shaped, so every caller sees `error`). */
+export const NOT_SIGNED_IN_CODE = 'matrx_local_not_signed_in';
+
+/**
+ * supabase-js, when the `accessToken` callback yields null, silently sends the ANON key instead.
+ * Signed-in reads (RPCs such as `agx_get_list_full`) are then refused as anon — a failure nobody
+ * sees. This fetch refuses to put an anon-keyed request on the wire: with no daemon token the
+ * request answers locally with a real, named error ("not connected / signing in"), and the next
+ * call goes out normally the moment the token exists. Never an anon fallback for user data.
+ */
+export function createGuardedFetch(
+    anonKey: string,
+    baseFetch: typeof fetch = (...args) => fetch(...args),
+): typeof fetch {
+    return async (input, init) => {
+        const headers = new Headers(
+            init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        );
+        const bearer = headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+        if (!bearer || (anonKey && bearer === anonKey)) {
+            return new Response(
+                JSON.stringify({
+                    code: NOT_SIGNED_IN_CODE,
+                    message:
+                        'Not connected: AI Matrx Sync has no signed-in session yet, so this ' +
+                        'read was not sent. It will work once sign-in completes — retry then.',
+                }),
+                { status: 401, headers: { 'Content-Type': 'application/json' } },
+            );
+        }
+        return baseFetch(input, init);
+    };
+}
+
 const tokenClient = createClient(supabaseUrl ?? '', supabaseKey ?? '', {
     // May be called concurrently and many times — `getToken` memoises and single-flights.
     accessToken: async () => await getToken(),
+    global: { fetch: createGuardedFetch(supabaseKey ?? '') },
 });
 
 // supabase-js's type still exposes auth even though accessToken disables it.

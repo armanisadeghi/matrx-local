@@ -149,7 +149,7 @@ export const FolderTree = memo(function FolderTree({
           className={cn(
             "group relative flex w-full items-center rounded-md transition-colors",
             "hover:bg-accent",
-            isActive && "bg-primary/10 text-primary font-medium",
+            isActive && "bg-primary/10 text-primary-ink font-medium",
           )}
           style={{ paddingLeft: `${depth * 16}px` }}
           onContextMenu={(e) => openContextMenu(e, folder.id, folder.name)}
@@ -264,7 +264,7 @@ export const FolderTree = memo(function FolderTree({
           className={cn(
             "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
             "hover:bg-accent",
-            activeFolderId === null && "bg-primary/10 text-primary font-medium",
+            activeFolderId === null && "bg-primary/10 text-primary-ink font-medium",
           )}
         >
           <FileText className="h-4 w-4 shrink-0" />

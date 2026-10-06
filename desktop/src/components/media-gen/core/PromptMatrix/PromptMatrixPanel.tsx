@@ -235,7 +235,7 @@ export function PromptMatrixEditor<TJob>({
             hint={
               <p className="text-[11px] text-muted-foreground">
                 Wrap anything you want to sweep in{" "}
-                <code className="rounded bg-primary/15 px-1 text-primary">
+                <code className="rounded bg-primary/15 px-1 text-primary-ink">
                   {"{{double braces}}"}
                 </code>
                 . Use{" "}
@@ -300,7 +300,7 @@ export function PromptMatrixEditor<TJob>({
           <div className="rounded-lg border border-dashed p-4 text-center">
             <p className="text-xs text-muted-foreground">
               No variables yet. Add{" "}
-              <code className="rounded bg-primary/15 px-1 text-primary">
+              <code className="rounded bg-primary/15 px-1 text-primary-ink">
                 {"{{like_this}}"}
               </code>{" "}
               or a shared pool like{" "}
@@ -562,7 +562,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
   return (
     <div className="space-y-2">
       {blockers.length > 0 && total > 0 && (
-        <ul className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+        <ul className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive-ink">
           {blockers.map((b) => (
             <li key={b} className="flex min-w-0 gap-1.5">
               <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -575,7 +575,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
       )}
 
       {submitError !== null && (
-        <div className="flex min-w-0 gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+        <div className="flex min-w-0 gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive-ink">
           <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
             {submitError}

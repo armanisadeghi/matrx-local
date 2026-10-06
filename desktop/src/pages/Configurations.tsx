@@ -1169,7 +1169,7 @@ export function Configurations() {
                               <span className="flex items-center gap-1.5">
                                 {m.name}
                                 {m.filename === catalogs.llmRecommended && (
-                                  <span className="text-[10px] font-medium bg-primary/15 text-primary px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] font-medium bg-primary/15 text-primary-ink px-1.5 py-0.5 rounded">
                                     Recommended
                                   </span>
                                 )}
@@ -1290,7 +1290,7 @@ export function Configurations() {
                                   .replace("ggml-", "")
                                   .replace(".bin", "")}
                                 {m.filename === catalogs.whisperRecommended && (
-                                  <span className="text-[10px] font-medium bg-primary/15 text-primary px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] font-medium bg-primary/15 text-primary-ink px-1.5 py-0.5 rounded">
                                     Recommended
                                   </span>
                                 )}
@@ -1687,7 +1687,7 @@ export function Configurations() {
                                     {v.gender} · {v.quality_grade}
                                   </span>
                                   {v.is_default && (
-                                    <span className="text-[10px] font-medium bg-primary/15 text-primary px-1.5 py-0.5 rounded">
+                                    <span className="text-[10px] font-medium bg-primary/15 text-primary-ink px-1.5 py-0.5 rounded">
                                       Default
                                     </span>
                                   )}

@@ -389,7 +389,7 @@ export function NoteEditor({
             className={cn(
               "rounded-md px-2 py-1 text-xs transition-colors",
               viewMode === "edit"
-                ? "bg-primary/15 text-primary"
+                ? "bg-primary/15 text-primary-ink"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -400,7 +400,7 @@ export function NoteEditor({
             className={cn(
               "rounded-md px-2 py-1 text-xs transition-colors",
               viewMode === "split"
-                ? "bg-primary/15 text-primary"
+                ? "bg-primary/15 text-primary-ink"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -411,7 +411,7 @@ export function NoteEditor({
             className={cn(
               "rounded-md px-2 py-1 text-xs transition-colors",
               viewMode === "preview"
-                ? "bg-primary/15 text-primary"
+                ? "bg-primary/15 text-primary-ink"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -502,7 +502,7 @@ export function NoteEditor({
             <button
               onClick={handleInsertDictation}
               disabled={!dictationText.trim()}
-              className="matrx-glyph-trim flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              className="matrx-glyph-trim flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary-ink hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             >
               <Check className="h-3 w-3" />
               Insert
@@ -564,7 +564,7 @@ export function NoteEditor({
                 </p>
                 <button
                   onClick={() => setForcePreview(true)}
-                  className="rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
+                  className="rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary-ink hover:bg-primary/20"
                 >
                   Render preview anyway
                 </button>

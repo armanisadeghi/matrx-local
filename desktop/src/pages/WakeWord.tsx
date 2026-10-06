@@ -897,7 +897,7 @@ function ModelCard({
         <div className="flex items-center gap-2">
           <p className="truncate text-sm font-medium">{model.name}</p>
           {isActive && (
-            <span className="shrink-0 rounded-full bg-primary/20 px-1.5 py-0.5 text-xs text-primary">
+            <span className="shrink-0 rounded-full bg-primary/20 px-1.5 py-0.5 text-xs text-primary-ink">
               active
             </span>
           )}
@@ -1048,9 +1048,9 @@ function CtrlBtn({
     "flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
   const styles: Record<typeof variant, string> = {
     outline: "border-border bg-muted/20 text-foreground hover:bg-muted",
-    accent: "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20",
+    accent: "border-primary/40 bg-primary/10 text-primary-ink hover:bg-primary/20",
     destructive:
-      "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20",
+      "border-destructive/40 bg-destructive/10 text-destructive-ink hover:bg-destructive/20",
     secondary: "border-border bg-muted/20 text-foreground hover:bg-muted",
   };
   return (

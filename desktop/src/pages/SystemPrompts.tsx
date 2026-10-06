@@ -237,7 +237,7 @@ function PromptEditor({
                   variant="ghost"
                   size="sm"
                   onClick={onDelete}
-                  className="gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  className="gap-1.5 text-destructive-ink hover:text-destructive-ink hover:bg-destructive/10"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   Delete
@@ -694,7 +694,7 @@ export function SystemPrompts() {
                 className={cn(
                   "w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors",
                   !activeCategory
-                    ? "bg-primary/10 text-primary font-medium"
+                    ? "bg-primary/10 text-primary-ink font-medium"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
                 onClick={() => setActiveCategory(null)}
@@ -718,7 +718,7 @@ export function SystemPrompts() {
                     className={cn(
                       "w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors",
                       activeCategory === cat
-                        ? "bg-primary/10 text-primary font-medium"
+                        ? "bg-primary/10 text-primary-ink font-medium"
                         : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                     )}
                     onClick={() =>

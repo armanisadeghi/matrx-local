@@ -176,7 +176,7 @@ export function VariableCard<TJob>({
             "flex min-w-0 max-w-[16rem] items-center rounded px-1.5 py-0.5 text-xs font-medium",
             isParam
               ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-              : "bg-primary/15 text-primary",
+              : "bg-primary/15 text-primary-ink",
           )}
         >
           {!isParam && <span className="shrink-0">{"{{"}</span>}

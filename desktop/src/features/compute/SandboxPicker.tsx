@@ -160,7 +160,7 @@ export function SandboxPicker({ thisDeviceInstanceId }: SandboxPickerProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 gap-1 px-2 text-[10px] text-destructive hover:bg-destructive/10"
+                className="h-7 gap-1 px-2 text-[10px] text-destructive-ink hover:bg-destructive/10"
                 onClick={() => setBound(null)}
               >
                 <X className="h-3 w-3" />
@@ -315,7 +315,7 @@ function TargetRow({
       <span className="min-w-0 flex-1 truncate">
         {target.name}
         {thisDevice && (
-          <span className="ml-1 rounded bg-primary/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
+          <span className="ml-1 rounded bg-primary/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary-ink">
             This computer
           </span>
         )}

@@ -127,7 +127,7 @@ export function SessionDetailsComparisonTable({ result, busy, onVerified }: {
         {!result.dry_run && <Button type="button" variant="outline" size="sm" onClick={() => void verify()} disabled={busy || loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Reread both sides and verify</Button>}
       </div>
       {result.operation.mode === "retry" && <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">This is the targeted retry operation and contains only the retried write intent. Return to Preview to compare the full current set again.</p>}
-      {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><AlertTriangle className="h-4 w-4 shrink-0" />{error}</div>}
+      {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive-ink" role="alert"><AlertTriangle className="h-4 w-4 shrink-0" />{error}</div>}
       <div className="overflow-x-auto rounded-md border">
         <table className="w-full min-w-[1050px] text-xs">
           <thead className="border-b bg-muted/40 text-left"><tr><th className="px-3 py-2">Session</th><th className="px-3 py-2">Field</th><th className="px-3 py-2">Claude Code observed</th><th className="px-3 py-2">AI Matrx observed</th><th className="px-3 py-2">Chosen result</th><th className="px-3 py-2">Evidence state</th></tr></thead>

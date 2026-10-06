@@ -164,7 +164,7 @@ export function ErrorNote({
   onDismiss?: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive flex items-center gap-2">
+    <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive-ink flex items-center gap-2">
       <AlertCircle className="h-3.5 w-3.5 shrink-0" />
       <span className="break-words min-w-0 flex-1">{message}</span>
       {onDismiss && (
@@ -1018,7 +1018,7 @@ export function AdvancedParamsEditor({
         </span>
         <span className="flex items-center gap-2 shrink-0">
           {!result.ok && (
-            <span className="rounded bg-destructive/15 text-destructive px-1.5 py-0.5 text-[10px] font-medium">
+            <span className="rounded bg-destructive/15 text-destructive-ink px-1.5 py-0.5 text-[10px] font-medium">
               invalid JSON
             </span>
           )}

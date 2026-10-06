@@ -278,7 +278,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                   onClick={() => setView("side-by-side")}
                   className={cn(
                     "rounded-l-md px-2.5 py-1 transition-colors",
-                    view === "side-by-side" ? "bg-primary/15 text-primary" : "hover:bg-accent",
+                    view === "side-by-side" ? "bg-primary/15 text-primary-ink" : "hover:bg-accent",
                   )}
                 >
                   Side by Side
@@ -287,7 +287,7 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
                   onClick={() => setView("unified")}
                   className={cn(
                     "rounded-r-md px-2.5 py-1 transition-colors",
-                    view === "unified" ? "bg-primary/15 text-primary" : "hover:bg-accent",
+                    view === "unified" ? "bg-primary/15 text-primary-ink" : "hover:bg-accent",
                   )}
                 >
                   Unified

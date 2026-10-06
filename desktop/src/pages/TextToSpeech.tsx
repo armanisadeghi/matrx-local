@@ -345,7 +345,7 @@ function SpeakTab({
               onClick={handleStop}
               size="lg"
               variant="outline"
-              className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10"
+              className="gap-2 border-destructive/40 text-destructive-ink hover:bg-destructive/10"
             >
               <Square className="h-4 w-4 fill-current" />
               Stop
@@ -454,7 +454,7 @@ function SynthesizingOverlay({
         {!isSynth && (
           <button
             onClick={isPaused ? onResume : onPause}
-            className="matrx-glyph-trim [--matrx-glyph-size:0.625rem] flex h-6 items-center gap-1 rounded-full border border-primary/30 bg-background/80 px-2.5 text-[11px] font-medium text-primary backdrop-blur-sm transition-colors hover:bg-primary/10"
+            className="matrx-glyph-trim [--matrx-glyph-size:0.625rem] flex h-6 items-center gap-1 rounded-full border border-primary/30 bg-background/80 px-2.5 text-[11px] font-medium text-primary-ink backdrop-blur-sm transition-colors hover:bg-primary/10"
           >
             {isPaused ? (
               <>
@@ -469,7 +469,7 @@ function SynthesizingOverlay({
         )}
         <button
           onClick={onStop}
-          className="matrx-glyph-trim [--matrx-glyph-size:0.625rem] flex h-6 items-center gap-1 rounded-full border border-destructive/30 bg-background/80 px-2.5 text-[11px] font-medium text-destructive backdrop-blur-sm transition-colors hover:bg-destructive/10"
+          className="matrx-glyph-trim [--matrx-glyph-size:0.625rem] flex h-6 items-center gap-1 rounded-full border border-destructive/30 bg-background/80 px-2.5 text-[11px] font-medium text-destructive-ink backdrop-blur-sm transition-colors hover:bg-destructive/10"
         >
           <Square className="h-2.5 w-2.5 fill-current" />
           Stop
@@ -575,7 +575,7 @@ function HistoryItem({ entry }: { entry: TtsHistoryEntry }) {
           hasAudio
             ? isPlaying
               ? "bg-primary text-primary-foreground hover:bg-primary/90"
-              : "bg-primary/10 text-primary hover:bg-primary/20"
+              : "bg-primary/10 text-primary-ink hover:bg-primary/20"
             : "cursor-not-allowed bg-muted text-muted-foreground/50",
         )}
       >
@@ -884,7 +884,7 @@ function VoiceCard({
           "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
           isPlaying
             ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground hover:bg-primary/20 hover:text-primary",
+            : "bg-muted text-muted-foreground hover:bg-primary/20 hover:text-primary-ink",
           !modelReady && "cursor-not-allowed opacity-40",
         )}
       >
@@ -906,7 +906,7 @@ function VoiceCard({
           />
           <span className="truncate text-sm font-medium">{voice.name}</span>
           {voice.is_default && (
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary-ink">
               Default
             </span>
           )}
@@ -1650,7 +1650,7 @@ function ImportVoicesTab({
                   setImportId(idFromName(base));
                 }
               }}
-              className="h-9 w-full rounded-md border bg-background px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-primary/10 file:px-2 file:py-0.5 file:text-xs file:font-medium file:text-primary"
+          className="h-9 w-full rounded-md border bg-background px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-primary/10 file:px-2 file:py-0.5 file:text-xs file:font-medium file:text-primary-ink"
             />
           </div>
           <div className="space-y-1.5">

@@ -55,7 +55,7 @@ function GenericOutput({ output, error }: { output: string; error: boolean }) {
     <pre
       className={cn(
         "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed",
-        error && "bg-destructive/5 text-destructive",
+        error && "bg-destructive/5 text-destructive-ink",
       )}
     >
       {safeToolOutput(parsed)}

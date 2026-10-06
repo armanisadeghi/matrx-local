@@ -86,7 +86,7 @@ export function WakeWordOverlay({ uiMode, onDismiss }: WakeWordOverlayProps) {
           variant="outline"
           size="sm"
           onClick={onDismiss}
-          className="fixed bottom-4 right-4 z-[51] rounded-full border-border/80 bg-background/85 text-foreground shadow-lg backdrop-blur-xl hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
+          className="fixed bottom-4 right-4 z-[51] rounded-full border-border/80 bg-background/85 text-foreground shadow-lg backdrop-blur-xl hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive-ink"
           title="Stop listening"
         >
           ✕ Stop

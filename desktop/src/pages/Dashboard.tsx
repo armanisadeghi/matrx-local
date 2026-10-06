@@ -112,7 +112,7 @@ export function Dashboard({
                       className="h-12 w-12 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary-ink">
                       <User className="h-6 w-6" />
                     </div>
                   )}

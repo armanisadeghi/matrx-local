@@ -103,7 +103,7 @@ export function MediaContextMenu({
               }}
               className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
                 e.danger
-                  ? "text-destructive hover:bg-destructive/10"
+                  ? "text-destructive-ink hover:bg-destructive/10"
                   : "hover:bg-muted"
               } ${armed ? "bg-destructive/10 font-medium" : ""}`}
             >

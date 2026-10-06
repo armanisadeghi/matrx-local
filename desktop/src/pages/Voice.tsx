@@ -512,7 +512,7 @@ export function Voice() {
             {whisperDownloads.length > 0 && (
               <button
                 onClick={openDownloadModal}
-                className="flex items-center gap-2 w-full rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary hover:bg-primary/10 transition-colors"
+                className="flex items-center gap-2 w-full rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary-ink hover:bg-primary/10 transition-colors"
               >
                 <span className="h-2 w-2 rounded-full bg-primary animate-pulse shrink-0" />
                 <span className="flex-1 text-left font-medium">
@@ -583,7 +583,7 @@ function SetupTab({
               "flex h-12 w-12 items-center justify-center rounded-xl",
               isSetupDone
                 ? "bg-emerald-500/10 text-emerald-500"
-                : "bg-primary/10 text-primary",
+                : "bg-primary/10 text-primary-ink",
             )}
           >
             {isSetupDone ? (
@@ -688,7 +688,7 @@ function SetupTab({
         </h3>
         <div className="space-y-3 text-sm text-muted-foreground">
           <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold flex-shrink-0">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary-ink text-xs font-bold flex-shrink-0">
               1
             </div>
             <p>
@@ -698,7 +698,7 @@ function SetupTab({
             </p>
           </div>
           <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold flex-shrink-0">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary-ink text-xs font-bold flex-shrink-0">
               2
             </div>
             <p>
@@ -708,7 +708,7 @@ function SetupTab({
             </p>
           </div>
           <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold flex-shrink-0">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary-ink text-xs font-bold flex-shrink-0">
               3
             </div>
             <p>
@@ -1373,7 +1373,7 @@ function TranscribeTab({
                       className={cn(
                         "w-full text-left rounded-lg px-3 py-2.5 transition-colors group relative",
                         isViewing
-                          ? "bg-primary/10 text-primary"
+                          ? "bg-primary/10 text-primary-ink"
                           : "hover:bg-muted text-foreground",
                       )}
                     >
@@ -1499,7 +1499,7 @@ function TranscribeTab({
                   className={"matrx-glyph-trim " + (cn(
                     "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
                     !state.selectedDevice
-                      ? "border-primary bg-primary/10 text-primary font-medium"
+                      ? "border-primary bg-primary/10 text-primary-ink font-medium"
                       : "border-border text-muted-foreground hover:border-primary/40",
                   ))}
                 >
@@ -1513,7 +1513,7 @@ function TranscribeTab({
                     className={cn(
                       "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors max-w-[200px]",
                       state.selectedDevice === dev.name
-                        ? "border-primary bg-primary/10 text-primary font-medium"
+                        ? "border-primary bg-primary/10 text-primary-ink font-medium"
                         : "border-border text-muted-foreground hover:border-primary/40",
                     )}
                   >
@@ -2489,7 +2489,7 @@ function ModelsTab({
           </span>
           <div className="flex items-center gap-2">
             {downloadQueue.length > 0 && (
-              <span className="text-xs bg-primary/15 text-primary rounded-full px-2 py-0.5 tabular-nums">
+              <span className="text-xs bg-primary/15 text-primary-ink rounded-full px-2 py-0.5 tabular-nums">
                 {downloadQueue.length} queued
               </span>
             )}
@@ -2533,7 +2533,7 @@ function ModelsTab({
                         {tierLabel(model.tier)}
                       </span>
                       {isRecommended && (
-                        <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">
+                        <span className="text-xs bg-primary/10 text-primary-ink px-2 py-0.5 rounded-full">
                           Recommended
                         </span>
                       )}
@@ -3139,7 +3139,7 @@ function DevicesTab({
             {/* Device header */}
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary-ink shrink-0">
                   <Mic className="h-7 w-7" />
                 </div>
                 <div>
@@ -3153,7 +3153,7 @@ function DevicesTab({
                       </span>
                     )}
                     {state.selectedDevice === activeDevice.name ? (
-                      <span className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">
+                      <span className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary-ink px-2 py-0.5 rounded-full font-medium">
                         <CheckCircle2 className="h-3 w-3" />
                         Manually selected
                       </span>

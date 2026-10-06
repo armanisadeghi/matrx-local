@@ -376,7 +376,7 @@ export function WorkspaceApprovalTree({
 
       {workspaceRoots.length > 0 && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter projects and paths" aria-label="Filter code locations and projects" />}
       {feedback && <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground" role="status">{feedback}</div>}
-      {localError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><span>{localError}</span><Button type="button" variant="outline" size="sm" onClick={() => { setLocalError(null); void discover(); }}>Clear and scan again</Button></div>}
+      {localError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive-ink" role="alert"><span>{localError}</span><Button type="button" variant="outline" size="sm" onClick={() => { setLocalError(null); void discover(); }}>Clear and scan again</Button></div>}
 
       {workspaceRoots.length === 0 && !loading && (
         <div className="rounded-md border border-dashed p-5 text-center">

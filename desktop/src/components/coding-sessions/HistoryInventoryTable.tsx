@@ -108,7 +108,7 @@ export function HistoryInventoryTable({ review, selected, onSelectedChange, onPa
   };
 
   return <div className="space-y-3">
-    {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</div>}
+    {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive-ink" role="alert">{error}</div>}
     {copyFeedback && <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground" role="status">{copyFeedback}</div>}
     <MatrxDataTable
       data={pageData.items}

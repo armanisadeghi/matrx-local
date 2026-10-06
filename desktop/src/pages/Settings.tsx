@@ -2628,7 +2628,7 @@ export function Settings({
                                             <code className="font-mono text-sm font-medium">
                                               {entry.rawKey}
                                             </code>
-                                            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">
+                                            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary-ink">
                                               → {entry.label}
                                             </span>
                                             {alreadyConfigured && !savedOk && (
@@ -3257,7 +3257,7 @@ export function Settings({
                   </div>
                 ) : nativeVaultProvider === null ? (
                   nativeVaultAction ? (
-                    <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive-ink">
                       {nativeVaultAction.message}
                     </div>
                   ) : (

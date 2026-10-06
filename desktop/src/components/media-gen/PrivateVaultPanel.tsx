@@ -321,7 +321,7 @@ function BatchResultsNote({
   const failures = results.filter((r) => !r.ok);
   if (failures.length === 0) return null;
   return (
-    <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive space-y-1">
+    <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive-ink space-y-1">
       <div className="flex items-center gap-2">
         <AlertCircle className="h-3.5 w-3.5 shrink-0" />
         <span className="font-medium flex-1">

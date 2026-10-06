@@ -184,7 +184,7 @@ export function Files({ engineStatus }: { engineStatus: EngineStatus }) {
           {!connected ? (
             <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">Connect to the engine to browse this device.</div>
           ) : error ? (
-            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">{error}</div>
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive-ink">{error}</div>
           ) : result ? (
             <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
               <FilesystemResultController result={result} layout="page" onNavigate={(path) => void browse(path)} />

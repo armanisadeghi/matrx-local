@@ -98,7 +98,7 @@ export function DeliveryEvidenceDialog({
           <span className="text-sm text-muted-foreground">{page ? `${formatCount(page.total)} matching envelopes` : "Loading count…"}</span>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Refresh</Button>
         </div>
-        {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
+        {error && <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive-ink" role="alert"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
         <div className="max-h-[60vh] overflow-auto rounded-md border">
           <table className="w-full min-w-[900px] text-sm">
             <thead className="sticky top-0 border-b bg-background text-left"><tr><th className="px-3 py-2">Receipt</th><th className="px-3 py-2">Provider work</th><th className="px-3 py-2">Contents</th><th className="px-3 py-2">Stored</th><th className="px-3 py-2">Delivery</th><th className="px-3 py-2">Actions</th></tr></thead>

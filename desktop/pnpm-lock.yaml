@@ -14,7 +14,7 @@ importers:
     dependencies:
       '@ai-matrx/agents':
         specifier: latest
-        version: 0.45.9(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.45.10(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/content-ir':
         specifier: latest
         version: 0.21.2
@@ -215,8 +215,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/agents@0.45.9':
-    resolution: {integrity: sha512-QHN39zjp9rUXJ3GxI+4OHNbjcCNfmXSzKpUimsIaK77BbcebIwBOx/Aa9sQXnj4Y646MeeNhgEsc+RKgKyM3ig==}
+  '@ai-matrx/agents@0.45.10':
+    resolution: {integrity: sha512-FbrIAbsSl/HvW8poP92sKcdzB+NAvK5J9gu60ZQOlBvA+VhBzVx0h7N+mbU8qqhSDPvfKUu0Ay8YgdABdB9tIg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3170,7 +3170,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/agents@0.45.9(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/agents@0.45.10(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/associations': 0.13.150(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/content-ir': 0.21.2

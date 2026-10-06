@@ -393,7 +393,7 @@ export function QuickTranscriptModal({
             {pushError && (
               <div
                 role="alert"
-                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1">{pushError}</span>
@@ -408,7 +408,7 @@ export function QuickTranscriptModal({
             {polishError && (
               <div
                 role="alert"
-                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1">{polishError}</span>

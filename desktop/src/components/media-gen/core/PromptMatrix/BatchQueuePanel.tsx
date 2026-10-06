@@ -219,7 +219,7 @@ export function BatchQueuePanel() {
       </div>
 
       {imageJobsError !== null && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive-ink">
           {imageJobsError}
         </p>
       )}

@@ -117,7 +117,7 @@ export function SyncTruthSection({
       <div className="flex flex-col gap-3 px-3 py-3">
         {error && (
           <div
-            className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-sm text-destructive"
+            className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-sm text-destructive-ink"
             role="alert"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

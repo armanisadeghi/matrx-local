@@ -163,7 +163,7 @@ function ToastStack({
           role="status"
           className={`pointer-events-auto flex max-w-md items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg ${
             t.kind === "error"
-              ? "border-destructive/40 bg-destructive/10 text-destructive"
+              ? "border-destructive/40 bg-destructive/10 text-destructive-ink"
               : "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
           }`}
         >

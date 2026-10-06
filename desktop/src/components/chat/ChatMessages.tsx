@@ -234,7 +234,7 @@ function MessageBlocks({
             return (
               <div
                 key={key}
-                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span className="whitespace-pre-wrap">{block.message}</span>
@@ -343,7 +343,7 @@ function AssistantMessage({
         {(message.error || message.streamDiagnostics?.length) && (
           <div className="mt-3 space-y-1.5">
             {message.error && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-ink">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span className="whitespace-pre-wrap">{message.error}</span>
               </div>

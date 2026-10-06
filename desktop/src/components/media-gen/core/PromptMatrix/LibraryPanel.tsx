@@ -85,7 +85,7 @@ export function LibraryPanel({
       </div>
 
       {error !== null && (
-        <div className="flex gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive">
+        <div className="flex gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive-ink">
           <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
           <span>{error}</span>
         </div>

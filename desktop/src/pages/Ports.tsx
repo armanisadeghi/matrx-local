@@ -741,7 +741,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
       </PageHeader>
 
       {inlineKillError && (
-        <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-ink">
           <span className="flex items-center gap-2 min-w-0">
             <ShieldAlert className="h-4 w-4 shrink-0" />
             <span className="truncate">{inlineKillError}</span>
@@ -768,7 +768,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
           <TabsList className="w-full max-w-[620px] grid grid-cols-3 bg-background/40 backdrop-blur-xl border border-border shadow-sm shrink-0 mt-6 mb-4">
             <TabsTrigger
               value="user"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary-ink"
             >
               <Server className="h-4 w-4 mr-2" />
               Dev Services
@@ -778,7 +778,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
             </TabsTrigger>
             <TabsTrigger
               value="all"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary-ink"
             >
               <Network className="h-4 w-4 mr-2" />
               All Ports
@@ -788,7 +788,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
             </TabsTrigger>
             <TabsTrigger
               value="terminals"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary-ink"
             >
               <MonitorDot className="h-4 w-4 mr-2" />
               Terminals
@@ -910,7 +910,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
             </DialogDescription>
           </DialogHeader>
           {killError && (
-            <p className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <p className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-ink">
               <ShieldAlert className="h-4 w-4 shrink-0" />
               {killError}
             </p>
@@ -922,7 +922,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
             <div className="flex-1" />
             <Button
               variant="outline"
-              className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              className="border-destructive/50 text-destructive-ink hover:bg-destructive/10"
               onClick={() => handleKill(false)}
               disabled={isKilling}
             >
@@ -1090,7 +1090,7 @@ function PortTable({
                         <Button
                           variant="outline"
                           size="sm"
-                          className="w-full justify-start text-xs h-8 border-destructive/30 text-destructive hover:bg-destructive/10"
+                          className="w-full justify-start text-xs h-8 border-destructive/30 text-destructive-ink hover:bg-destructive/10"
                           disabled={port.pid === 0}
                           onClick={(e) => {
                             e.stopPropagation();

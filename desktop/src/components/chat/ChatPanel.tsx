@@ -361,7 +361,7 @@ export function ChatPanel({
         <div className="shrink-0 px-4 pt-1">
           <div
             role="alert"
-            className="flex items-start gap-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            className="flex items-start gap-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
           >
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span className="flex-1">

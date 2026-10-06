@@ -319,7 +319,7 @@ function InfoBody({ item }: { item: MediaDescriptor }) {
                   variant={armed ? "destructive" : "outline"}
                   className={
                     e.danger && !armed
-                      ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      ? "text-destructive-ink hover:bg-destructive/10 hover:text-destructive-ink"
                       : ""
                   }
                   onClick={() => {

@@ -275,7 +275,7 @@ export function MonitoringPanel({ onInvoke, loading, result }: MonitoringPanelPr
                 className={cn(
                   "rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors",
                   processSort === s
-                    ? "border-primary/50 bg-primary/10 text-primary"
+                    ? "border-primary/50 bg-primary/10 text-primary-ink"
                     : "border-border text-muted-foreground hover:text-foreground"
                 )}>
                 {s.toUpperCase()}

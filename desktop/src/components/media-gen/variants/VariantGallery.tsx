@@ -543,7 +543,7 @@ export function VariantGallery() {
                       <SlidersHorizontal className="h-3 w-3" />
                       Advanced
                       {!advancedResult.ok ? (
-                        <span className="rounded-full bg-destructive/15 px-1.5 text-[10px] font-medium text-destructive">
+                        <span className="rounded-full bg-destructive/15 px-1.5 text-[10px] font-medium text-destructive-ink">
                           !
                         </span>
                       ) : advancedCount > 0 ? (

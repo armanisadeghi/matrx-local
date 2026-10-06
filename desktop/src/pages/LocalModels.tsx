@@ -570,7 +570,7 @@ function SetupTab() {
           )}
 
           {error && (
-            <div className="text-xs text-destructive flex items-start gap-2 bg-destructive/10 rounded px-3 py-2">
+            <div className="text-xs text-destructive-ink flex items-start gap-2 bg-destructive/10 rounded px-3 py-2">
               <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
               <span className="whitespace-pre-wrap">{error}</span>
             </div>
@@ -1637,7 +1637,7 @@ function ModelsTab() {
       {dmActiveCount > 0 && (
         <button
           onClick={openDownloadModal}
-          className="flex items-center gap-2 w-full rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary hover:bg-primary/10 transition-colors"
+          className="flex items-center gap-2 w-full rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary-ink hover:bg-primary/10 transition-colors"
         >
           <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
           <span className="flex-1 text-left font-medium">
@@ -1648,7 +1648,7 @@ function ModelsTab() {
       )}
 
       {(error || localError) && (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive-ink">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <span className="whitespace-pre-wrap flex-1">
             {error ?? localError}
@@ -1736,7 +1736,7 @@ function ModelsTab() {
                 </Button>
               )}
               {downloadQueue.length > 0 && (
-                <span className="text-[10px] bg-primary/15 text-primary rounded-full px-1.5 py-0.5 tabular-nums">
+                <span className="text-[10px] bg-primary/15 text-primary-ink rounded-full px-1.5 py-0.5 tabular-nums">
                   {downloadQueue.length}
                 </span>
               )}
@@ -2216,7 +2216,7 @@ function AudioChatMode({
             onClick={() => voiceChatActions.setAutoMode(!autoMode)}
             className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
               autoMode
-                ? "bg-primary/15 text-primary border-primary/30"
+                ? "bg-primary/15 text-primary-ink border-primary/30"
                 : "text-muted-foreground border-border hover:text-foreground"
             }`}
             title={
@@ -2327,7 +2327,7 @@ function AudioChatMode({
                   if (isSpeaking) voiceChatActions.stopSpeaking();
                   if (isGenerating) stopGeneration();
                 }}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/15 text-destructive-ink hover:bg-destructive/25 transition-colors"
                 title={isSpeaking ? "Stop speaking" : "Stop generation"}
               >
                 <Square className="h-5 w-5 fill-current" />
@@ -2904,7 +2904,7 @@ function SaveToNoteModal({
                 <button
                   className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                     selectedFolderId === null
-                      ? "bg-primary/10 text-primary"
+                    ? "bg-primary/10 text-primary-ink"
                       : "hover:bg-muted/50"
                   }`}
                   onClick={() => handleFolderSelect(null)}
@@ -2917,7 +2917,7 @@ function SaveToNoteModal({
                     key={f.id}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                       selectedFolderId === f.id
-                        ? "bg-primary/10 text-primary"
+                    ? "bg-primary/10 text-primary-ink"
                         : "hover:bg-muted/50"
                     }`}
                     onClick={() => handleFolderSelect(f)}
@@ -4553,7 +4553,7 @@ function InferenceTab() {
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
-              <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+              <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-ink">
                 <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
@@ -4715,7 +4715,7 @@ function InferenceTab() {
                 key={conv.id}
                 className={`group flex items-center gap-1 min-w-0 rounded-lg px-2 py-2 cursor-pointer text-sm transition-colors ${
                   conv.id === activeConvId
-                    ? "bg-primary/10 text-primary"
+                    ? "bg-primary/10 text-primary-ink"
                     : "hover:bg-muted/60 text-foreground"
                 }`}
                 onClick={() => {
@@ -4840,7 +4840,7 @@ function InferenceTab() {
         </div>
 
         {error && (
-          <div className="flex gap-2 px-4 py-3 text-sm text-destructive bg-destructive/10 border-b shrink-0">
+          <div className="flex gap-2 px-4 py-3 text-sm text-destructive-ink bg-destructive/10 border-b shrink-0">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
             <span className="flex-1 whitespace-pre-wrap leading-relaxed">
               {error}
@@ -5229,7 +5229,7 @@ function InferenceTab() {
                 {chatTts.readAloudError && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded px-3 py-2 mb-2"
+                    className="flex items-start gap-2 text-xs text-destructive-ink bg-destructive/10 rounded px-3 py-2 mb-2"
                   >
                     <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                     <span className="flex-1">
@@ -5458,7 +5458,7 @@ function InferenceTab() {
                           onClick={() => setAutoReadAloud((v) => !v)}
                           className={`flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
                             autoReadAloud
-                              ? "bg-primary/15 text-primary"
+                              ? "bg-primary/15 text-primary-ink"
                               : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                           }`}
                           title={
@@ -5694,7 +5694,7 @@ function InferenceTab() {
                                       }
                                       className={`flex items-start gap-2 w-full rounded-md px-2 py-1.5 text-left transition-colors ${
                                         isSelected
-                                          ? "bg-primary/10 text-primary"
+                                          ? "bg-primary/10 text-primary-ink"
                                           : "hover:bg-muted/40 text-foreground"
                                       }`}
                                     >
@@ -5752,7 +5752,7 @@ function InferenceTab() {
               )}
 
               {agentError && (
-                <div className="flex gap-2 px-4 py-3 text-sm text-destructive bg-destructive/10 border-b shrink-0">
+                <div className="flex gap-2 px-4 py-3 text-sm text-destructive-ink bg-destructive/10 border-b shrink-0">
                   <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span className="flex-1">{agentError}</span>
                   <button
@@ -6229,7 +6229,7 @@ function ServerTab() {
     <div className="space-y-4 max-w-2xl">
       {/* Error banner */}
       {localError && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive space-y-1">
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive-ink space-y-1">
           <div className="flex items-start gap-2">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
             <pre className="whitespace-pre-wrap font-sans break-words flex-1">

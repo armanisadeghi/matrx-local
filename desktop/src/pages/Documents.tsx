@@ -381,7 +381,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 <p className="text-sm">Select a note or create a new one</p>
                 <button
                   onClick={handleCreateNote}
-                  className="matrx-glyph-trim mt-3 flex items-center gap-1 mx-auto rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
+                  className="matrx-glyph-trim mt-3 flex items-center gap-1 mx-auto rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary-ink hover:bg-primary/20"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   New Note
@@ -399,7 +399,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 className={cn(
                   "rounded-md px-2 py-1 text-xs transition-colors",
                   rightPanelTab === "versions"
-                    ? "bg-primary/15 text-primary"
+                    ? "bg-primary/15 text-primary-ink"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
@@ -410,7 +410,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 className={cn(
                   "rounded-md px-2 py-1 text-xs transition-colors",
                   rightPanelTab === "tags"
-                    ? "bg-primary/15 text-primary"
+                    ? "bg-primary/15 text-primary-ink"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
@@ -421,7 +421,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 className={cn(
                   "rounded-md px-2 py-1 text-xs transition-colors",
                   rightPanelTab === "info"
-                    ? "bg-primary/15 text-primary"
+                    ? "bg-primary/15 text-primary-ink"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
@@ -443,7 +443,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                   {docs.activeNote.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                      className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary-ink"
                     >
                       {tag}
                     </span>

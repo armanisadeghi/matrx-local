@@ -112,7 +112,7 @@ export function VoiceChatBar({
               className={cn(
                 "flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
                 autoMode
-                  ? "bg-primary/15 text-primary border border-primary/30"
+                  ? "bg-primary/15 text-primary-ink border border-primary/30"
                   : "text-muted-foreground border border-border hover:text-foreground",
               )}
               title={
@@ -217,7 +217,7 @@ export function VoiceChatBar({
             {canStopGeneration && (
               <button
                 onClick={stopGeneration}
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/15 text-destructive-ink hover:bg-destructive/25 transition-colors"
                 title="Stop generation"
               >
                 <Square className="h-3 w-3 fill-current" />
@@ -228,7 +228,7 @@ export function VoiceChatBar({
             {canStopSpeaking && (
               <button
                 onClick={voiceChatActions.stopSpeaking}
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/15 text-destructive-ink hover:bg-destructive/25 transition-colors"
                 title="Stop speaking"
               >
                 <Square className="h-3 w-3 fill-current" />

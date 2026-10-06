@@ -148,7 +148,7 @@ export function WakeWordActivePopup({
           </span>
           <button
             onClick={onDismiss}
-            className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-destructive-ink hover:bg-destructive/10 transition-colors"
             title="Dismiss"
           >
             <X className="h-3 w-3" />
@@ -229,7 +229,7 @@ export function WakeWordActivePopup({
           className={cn(
             "text-[10px] font-medium px-2 py-0.5 rounded-full border transition-colors",
             autoMode
-              ? "bg-primary/15 text-primary border-primary/30"
+              ? "bg-primary/15 text-primary-ink border-primary/30"
               : "text-muted-foreground border-border/50 hover:text-foreground",
           )}
           title={autoMode ? "Auto mode on" : "Manual mode"}
@@ -242,7 +242,7 @@ export function WakeWordActivePopup({
           {canStopGeneration && (
             <button
               onClick={stopGeneration}
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/15 text-destructive-ink hover:bg-destructive/25 transition-colors"
               title="Stop generation"
             >
               <Square className="h-3 w-3 fill-current" />
@@ -253,7 +253,7 @@ export function WakeWordActivePopup({
           {canStopSpeaking && (
             <button
               onClick={voiceChatActions.stopSpeaking}
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/15 text-destructive-ink hover:bg-destructive/25 transition-colors"
               title="Stop speaking"
             >
               <Square className="h-3 w-3 fill-current" />

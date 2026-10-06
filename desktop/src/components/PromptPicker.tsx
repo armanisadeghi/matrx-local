@@ -303,7 +303,7 @@ function PromptManageDialog({
           <div className="flex gap-1 flex-wrap">
             <button
               className={`text-xs px-2 py-1 rounded-md border transition-colors ${
-                !filterCategory ? "bg-primary/10 border-primary/30 text-primary" : "border-transparent hover:bg-muted"
+                !filterCategory ? "bg-primary/10 border-primary/30 text-primary-ink" : "border-transparent hover:bg-muted"
               }`}
               onClick={() => setFilterCategory(null)}
             >
@@ -313,7 +313,7 @@ function PromptManageDialog({
               <button
                 key={cat}
                 className={`text-xs px-2 py-1 rounded-md border transition-colors ${
-                  filterCategory === cat ? "bg-primary/10 border-primary/30 text-primary" : "border-transparent hover:bg-muted"
+                filterCategory === cat ? "bg-primary/10 border-primary/30 text-primary-ink" : "border-transparent hover:bg-muted"
                 }`}
                 onClick={() => setFilterCategory(filterCategory === cat ? null : cat)}
               >

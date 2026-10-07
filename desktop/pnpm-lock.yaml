@@ -14,7 +14,7 @@ importers:
     dependencies:
       '@ai-matrx/agents':
         specifier: latest
-        version: 0.48.0(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.48.1(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/content-ir':
         specifier: latest
         version: 0.22.2
@@ -215,8 +215,8 @@ importers:
 
 packages:
 
-  '@ai-matrx/agents@0.48.0':
-    resolution: {integrity: sha512-U31LGTg/mFrc9ca7WgDzKPqt961cGbt5xjlVg4YYnvySql4J5xcm7RTrq0ygN/skNa+g/AKzoE1D37wAzR7WwA==}
+  '@ai-matrx/agents@0.48.1':
+    resolution: {integrity: sha512-r3cJySwEs7QEdjMpVz1JLNEWWF/PLe5M8cFhIB1Yr28z2IyyggtetbOnCtDxIfpwu9OXULHKFGyNck5W8RyOlg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -297,8 +297,8 @@ packages:
     peerDependencies:
       react: '>=18.0.0'
 
-  '@ai-matrx/print@0.8.68':
-    resolution: {integrity: sha512-oj3J4gxaItwM/11WlklBxBONRfZSnEJ3kcO+82/pEaeMMmrx3Jm2/kgtPhNeZHuGxctCaa1FcJDIJ2qnqDYgCw==}
+  '@ai-matrx/print@0.8.69':
+    resolution: {integrity: sha512-ZkchYp4rBonNb7lAtpNwtcYewI7r0G2ccNEYXI3+CvM7BKKZAFM3GOhH0e7sryvi6P9i7SS2FtW4ywTjb+nH5g==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3582,7 +3582,7 @@ packages:
 
 snapshots:
 
-  '@ai-matrx/agents@0.48.0(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/agents@0.48.1(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/alchemy': 0.16.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/associations': 0.13.153(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3605,7 +3605,7 @@ snapshots:
     dependencies:
       '@ai-matrx/design-system': 0.70.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.28.0(react@19.3.0)
-      '@ai-matrx/print': 0.8.68(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/print': 0.8.69(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       html2canvas: 1.4.1
       jspdf: 4.2.1
     optionalDependencies:
@@ -3723,7 +3723,7 @@ snapshots:
       jsqr: 1.4.0
       react: 19.3.0
 
-  '@ai-matrx/print@0.8.68(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/print@0.8.69(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/content-ir': 0.22.2
       '@ai-matrx/kit': 0.28.0(react@19.3.0)

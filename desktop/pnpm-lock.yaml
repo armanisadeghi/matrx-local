@@ -17,13 +17,13 @@ importers:
         version: 0.54.1(@supabase/supabase-js@2.117.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/content-ir':
         specifier: latest
-        version: 0.22.6
+        version: 0.22.7
       '@ai-matrx/content-ir-react':
         specifier: latest
         version: 0.25.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/design-system':
         specifier: latest
-        version: 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit':
         specifier: latest
         version: 0.34.0(react@19.3.0)
@@ -260,8 +260,8 @@ packages:
     peerDependencies:
       react: '>=19.0.0'
 
-  '@ai-matrx/content-ir@0.22.6':
-    resolution: {integrity: sha512-T+uvMnWssgqlJn1OySdgBlKwlHKPBDAwl4kgI/SeAxls+DaBWR014JgGnCkDYdj3wcHvtutkzy2s54sEQU9CxA==}
+  '@ai-matrx/content-ir@0.22.7':
+    resolution: {integrity: sha512-qjVm7g7QVLx8KzmulkxYRG1Ew9bcArKhc630CQB1jnGnBVTOYM1tvPDhpvl3yP3syk95grMD9gYVsshthXkeHA==}
     engines: {node: '>=20'}
 
   '@ai-matrx/data@0.18.39':
@@ -274,8 +274,8 @@ packages:
       react:
         optional: true
 
-  '@ai-matrx/design-system@0.78.1':
-    resolution: {integrity: sha512-NtwzSxh5nE38mWyHC4OXU3H/o+AZOJ1M+PXeGGR7y8TIp8vKq++LSOd7WN5ikr9yfHROqZSF3vaLczG9ONFvEA==}
+  '@ai-matrx/design-system@0.78.4':
+    resolution: {integrity: sha512-CHU/gPNH16cU2CB22erNLJZs1YLsU3M+8YHftB0kRRyA7PxPhPqQPWpr0Tna3qMQD3EXi5vldVK7Kup8DfMjHA==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -3072,8 +3072,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-resizable-panels@4.14.2:
-    resolution: {integrity: sha512-s35mfXhwpPEPnB+BKPCZJ9VZU0CHb1I9trm9tijEGBNv1Srl0HzIweENeXnsQvd0Xm9BeOBkEzDGVJOZM2mkEQ==}
+  react-resizable-panels@4.14.3:
+    resolution: {integrity: sha512-t/mJDWKBvc7sHcm/HJxJJKniqyQH6vK7oWyv8QODawYCcDwn0waBlGw0yFEwoMe6xPNKpbOFh2wN0yyina30ow==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -3589,9 +3589,9 @@ snapshots:
     dependencies:
       '@ai-matrx/alchemy': 0.20.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/associations': 0.13.158(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@ai-matrx/content-ir': 0.22.6
+      '@ai-matrx/content-ir': 0.22.7
       '@ai-matrx/data': 0.18.39(@supabase/supabase-js@2.117.2)(react@19.3.0)
-      '@ai-matrx/design-system': 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/icons': 0.3.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
     optionalDependencies:
@@ -3606,7 +3606,7 @@ snapshots:
 
   '@ai-matrx/alchemy@0.20.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/design-system': 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
       '@ai-matrx/print': 0.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       html-to-image: 1.11.13
@@ -3621,7 +3621,7 @@ snapshots:
 
   '@ai-matrx/associations@0.13.158(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/design-system': 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
       '@ai-matrx/tap-target': 0.2.20(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     optionalDependencies:
@@ -3635,8 +3635,8 @@ snapshots:
   '@ai-matrx/content-ir-react@0.25.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/alchemy': 0.20.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@ai-matrx/content-ir': 0.22.6
-      '@ai-matrx/design-system': 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/content-ir': 0.22.7
+      '@ai-matrx/design-system': 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
       react: 19.3.0
     transitivePeerDependencies:
@@ -3646,7 +3646,7 @@ snapshots:
       - recharts
       - supports-color
 
-  '@ai-matrx/content-ir@0.22.6':
+  '@ai-matrx/content-ir@0.22.7':
     dependencies:
       '@types/react': 19.3.0
       ajv: 8.20.0
@@ -3662,7 +3662,7 @@ snapshots:
     transitivePeerDependencies:
       - react-native
 
-  '@ai-matrx/design-system@0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/design-system@0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
       '@dnd-kit/core': 6.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3696,7 +3696,7 @@ snapshots:
       cmdk: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
-      react-resizable-panels: 4.14.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react-resizable-panels: 4.14.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tailwind-merge: 3.7.0
       vaul: 1.1.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       zod: 4.6.5
@@ -3719,7 +3719,7 @@ snapshots:
 
   '@ai-matrx/kit@0.34.0(react@19.3.0)':
     dependencies:
-      '@ai-matrx/content-ir': 0.22.6
+      '@ai-matrx/content-ir': 0.22.7
       idb: 8.0.4
       json5: 2.2.3
       jsqr: 1.4.0
@@ -3727,7 +3727,7 @@ snapshots:
 
   '@ai-matrx/print@0.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/content-ir': 0.22.6
+      '@ai-matrx/content-ir': 0.22.7
       '@ai-matrx/kit': 0.34.0(react@19.3.0)
       '@radix-ui/react-dialog': 1.1.23(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       bidi-js: 1.1.0
@@ -3766,7 +3766,7 @@ snapshots:
 
   '@ai-matrx/tap-target@0.2.20(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@ai-matrx/design-system': 0.78.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@ai-matrx/design-system': 0.78.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-tooltip': 1.2.16(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
     transitivePeerDependencies:
@@ -6617,7 +6617,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.3.0
 
-  react-resizable-panels@4.14.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  react-resizable-panels@4.14.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
     dependencies:
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)

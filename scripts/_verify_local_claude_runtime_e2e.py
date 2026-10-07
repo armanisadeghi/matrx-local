@@ -133,9 +133,11 @@ async def _probe_production(provider_session_id: str) -> dict[str, object]:
         )
         if session is None:
             return {"found": False}
+        # The kept shape (aidream coding_session_bridge/kept_shape.py): the raw
+        # entry ledger receives no rows; a turn's proof is its canonical message.
         entries = await conn.fetchval(
-            "SELECT count(*) FROM chat.coding_session_entry WHERE coding_session_id=$1",
-            session["id"],
+            "SELECT count(*) FROM chat.message WHERE conversation_id=$1 AND deleted_at IS NULL",
+            session["conversation_id"],
         )
         messages = await conn.fetch(
             "SELECT role, left(content::text, 200) AS content FROM chat.message "

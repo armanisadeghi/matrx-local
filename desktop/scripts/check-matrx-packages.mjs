@@ -432,6 +432,7 @@ export function scanNodeModules(projectRoot, graph = emptyGraph()) {
         if (entry.startsWith('.')) continue; // .ignored, .pnpm, .bin, .cache
         if (entry.startsWith('@')) {
             for (const scoped of safeReaddir(join(nodeModules, entry))) {
+                if (scoped.startsWith('.')) continue; // parked `.ignored_<name>` copies
                 roots.add(join(nodeModules, entry, scoped, 'node_modules'));
             }
             continue;
@@ -443,6 +444,8 @@ export function scanNodeModules(projectRoot, graph = emptyGraph()) {
         const storeOnly = root.includes(`${sep}.pnpm${sep}`);
         const scopeDir = join(root, SCOPE.slice(0, -1));
         for (const pkg of safeReaddir(scopeDir)) {
+            // pnpm parks a replaced copy as `@ai-matrx/.ignored_<name>`; it is not a package.
+            if (pkg.startsWith('.')) continue;
             const dir = join(scopeDir, pkg);
             if (isWorkspaceLink(dir)) continue;
             const manifest = readManifestVersion(dir);

@@ -27,6 +27,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { downloadFile } from "@ai-matrx/kit/download";
 import { Button, BasicInput as Input, Label, Tooltip, TooltipContent, TooltipTrigger } from "@ai-matrx/design-system";
 import {
   Dialog,
@@ -552,26 +553,12 @@ export function ListLibraryCore() {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${slug || "list"}-for-ai.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile(`${slug || "list"}-for-ai.json`, json, "application/json");
     flash(`list:${id}:export`);
   };
 
   const handleExportAllForAi = () => {
-    const blob = new Blob([actions.exportAllForAi()], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "matrx-lists-for-ai.json";
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile("matrx-lists-for-ai.json", actions.exportAllForAi(), "application/json");
     flash("all:export");
   };
 

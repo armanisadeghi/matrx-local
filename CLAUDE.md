@@ -107,15 +107,17 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   12-14): this device's last choice → the account's last active organization → its start-up
   organization → the first organization, each only if a current membership. The ladder lives in
   `desktop/src/lib/org/active-org.ts` — the ONLY reader of the two account columns — and a
-  ladder answer is held in memory, never stored as the device choice or pushed to the engine. ONE
+  ladder answer is held in memory (never stored as a device choice) and pushed to the engine as the
+  window's active organization, so the sidecar acts in what the window shows. ONE
   state, ONE stored value, ONE selector: the store is `active-org.ts` (`useActiveOrganization()`
   in React), the control is `desktop/src/features/org/OrganizationSwitcher.tsx` in the top bar.
   A deliberate switch writes the device choice, calls `users.set_last_active_organization`, and
   crosses to the engine through `PUT /organization/active` (which also mirrors it to the server's
   coding-session filing organization). No window request holds or prompts. The Python sidecar is
-  HEADLESS (`app/services/aidream/organization.py`): it shows no organization, keeps rule 13 — the
-  organization the person chose for this connection, else it asks once with an
-  `organization_required` action-needed item — and never runs the ladder. "Default organization"
+  HEADLESS (`app/services/aidream/organization.py`): it shows no organization, acts in the
+  organization the window shows (pushed to it), and only when no window ever showed one (truly
+  headless) asks once with an `organization_required` item — it never runs the ladder. A failed account
+  save after a switch shows in the switcher (`saveError`). "Default organization"
   is a retired term. Guard: `pnpm check:org-default-ban` in `desktop/`.
 - **The access ladder decides who can open a record.** Every table starts at Organization; only Arman approves Confidential or Private; sharing sits outside the ladder; children inherit their parent; organizations are unlimited and equal, with no personal type. → `/Users/armanisadeghi/code/common-docs/policies/access-ladder.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,

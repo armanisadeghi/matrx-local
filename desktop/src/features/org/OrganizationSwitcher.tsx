@@ -45,7 +45,7 @@ export interface OrganizationSwitcherProps {
 }
 
 export function OrganizationSwitcher({ variant = "bar", className }: OrganizationSwitcherProps) {
-  const { organization, organizations, loading, error, userId, choose, reload } =
+  const { organization, organizations, loading, error, saveError, userId, choose, reload } =
     useActiveOrganization();
   const [savingId, setSavingId] = useState<string | null>(null);
   const [chooseError, setChooseError] = useState<string | null>(null);
@@ -69,6 +69,7 @@ export function OrganizationSwitcher({ variant = "bar", className }: Organizatio
   const attention = !organization;
 
   return (
+    <>
     <DropdownMenu>
       <Tooltip delayDuration={150}>
         <TooltipTrigger asChild>
@@ -170,5 +171,11 @@ export function OrganizationSwitcher({ variant = "bar", className }: Organizatio
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+    {saveError && (
+      <span role="alert" data-testid="organization-save-error" className="text-xs text-destructive">
+        {saveError}
+      </span>
+    )}
+    </>
   );
 }

@@ -227,7 +227,7 @@ describe("resolveActiveOrganization — the load ladder", () => {
     expect((await resolveActiveOrganization())?.id).toBe("org-1");
   });
 
-  it("a ladder answer is NOT stored as the device choice and NOT pushed to the engine", async () => {
+  it("a ladder answer is NOT stored as a device choice, but IS pushed to the engine as the window's organization", async () => {
     mockMemberships(["org-1", "org-2"]);
     mockOrganizationsTable(TWO_ORGS);
     mockAccountChoice("org-2", null);
@@ -237,8 +237,11 @@ describe("resolveActiveOrganization — the load ladder", () => {
 
     expect(mod.getActiveOrganizationSnapshot().organization?.id).toBe("org-2");
     expect(storage.getItem(STORAGE_KEY)).toBeNull();
-    expect(mod.getDeviceOrganizationChoice()).toBeNull();
-    expect(enginePut).not.toHaveBeenCalled();
+    // The window SHOWS org-2, so the engine acts in it — nobody is asked.
+    await vi.waitFor(() =>
+      expect(enginePut).toHaveBeenCalledWith("/organization/active", { organization_id: "org-2" }),
+    );
+    // Opening the app is not a switch: nothing is saved to the account.
     expect(schemaRpc).not.toHaveBeenCalled();
     // Set once at load: the next request reuses it with no second ladder run.
     rpc.mockClear();
@@ -315,6 +318,26 @@ describe("requireActiveOrganizationId — no hold, no picker", () => {
     await expect(mod.requireActiveOrganizationId()).resolves.toBe("org-2");
   });
 
+  it("a failed account save is VISIBLE on the snapshot while the local switch stands", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    schemaRpc.mockResolvedValue({ error: { message: "rpc down" } });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mod = await import("./active-org");
+    await mod.setActiveOrganization("org-2");
+
+    const snap = mod.getActiveOrganizationSnapshot();
+    expect(snap.organization?.id).toBe("org-2");
+    expect(storedFor("user-1")).toMatchObject({ id: "org-2" });
+    expect(snap.saveError).toMatch(/could not be saved to your account/i);
+
+    // The next successful switch clears it.
+    schemaRpc.mockResolvedValue({ error: null });
+    await mod.setActiveOrganization("org-1");
+    expect(mod.getActiveOrganizationSnapshot().saveError).toBeNull();
+  });
+
   it("refuses to switch to an organization the user is not a member of — nothing is written", async () => {
     mockMemberships(["org-1"]);
     mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
@@ -372,15 +395,16 @@ describe("republishActiveOrganizationToEngine — the engine inherits this Mac's
     await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(false);
   });
 
-  it("never re-states the load ladder's answer — that is not a choice for the headless engine", async () => {
+  it("re-states the window's ladder organization to the engine, so a multi-org person is never asked", async () => {
     mockMemberships(["org-1", "org-2"]);
     mockOrganizationsTable(TWO_ORGS);
     mockAccountChoice("org-2", null);
 
     const mod = await import("./active-org");
     await mod.resolveActiveOrganization();
+    enginePut.mockClear();
     await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(true);
-    expect(enginePut).not.toHaveBeenCalled();
+    expect(enginePut).toHaveBeenCalledWith("/organization/active", { organization_id: "org-2" });
   });
 
   it("has nothing to re-state when this device never chose — and says so", async () => {

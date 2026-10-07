@@ -76,6 +76,8 @@ export interface ActiveOrganizationSnapshot {
   error: string | null;
   /** The user the snapshot belongs to, or null when signed out. */
   userId: string | null;
+  /** Set when a switch worked here but could not be saved to the account; cleared on the next switch. */
+  saveError: string | null;
 }
 
 /**
@@ -136,6 +138,7 @@ let snapshot: ActiveOrganizationSnapshot = {
   loading: false,
   error: null,
   userId: null,
+  saveError: null,
 };
 
 function knownUserId(): string | null {
@@ -386,21 +389,18 @@ async function saveLastActiveOrganization(organizationId: string): Promise<void>
       "[active-org] could not save the last active organization to the account",
       err,
     );
+    // Visible, not silent: the switcher shows this. The switch itself stands.
+    patch({
+      saveError:
+        "Switched here, but your choice could not be saved to your account, so other devices won't follow it. Switch again to retry.",
+    });
   }
 }
 
 async function persistSelection(userId: string, org: MemberOrganization): Promise<void> {
+  patch({ saveError: null });
   writeStoredSelection(userId, org);
   await Promise.all([pushSelectionToEngine(org.id), saveLastActiveOrganization(org.id)]);
-}
-
-/**
- * The organization the person CHOSE on this device (the persistent value) —
- * unlike the snapshot's `organization`, which may be the load ladder's answer.
- * The headless engine only ever inherits this one.
- */
-export function getDeviceOrganizationChoice(): MemberOrganization | null {
-  return readStoredSelection(getActiveOrganizationSnapshot().userId ?? knownUserId());
 }
 
 /**
@@ -419,9 +419,9 @@ export function getDeviceOrganizationChoice(): MemberOrganization | null {
  * nothing set yet, so there is nothing to re-state and no reason to retry).
  */
 export async function republishActiveOrganizationToEngine(): Promise<boolean> {
-  const stored = getDeviceOrganizationChoice();
-  if (!stored) return true;
-  return pushSelectionToEngine(stored.id);
+  const shown = getActiveOrganizationSnapshot().organization;
+  if (!shown) return true;
+  return pushSelectionToEngine(shown.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +507,11 @@ async function runLadder(userId: string): Promise<MemberOrganization | null> {
     (account.lastActive ? byId.get(account.lastActive) : undefined) ??
     (account.startup ? byId.get(account.startup) : undefined) ??
     (organizations[0] as MemberOrganization);
-  // In memory only: shown and carried by requests, never stored as a choice.
+  // In memory only: shown and carried by requests, never stored as a device
+  // choice. The window SHOWS this organization, so the engine acts in it too —
+  // pushed as the window's active organization, so nobody is asked about it.
   patch({ userId, organization: chosen });
+  void pushSelectionToEngine(chosen.id);
   return chosen;
 }
 

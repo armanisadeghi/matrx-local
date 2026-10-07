@@ -14,10 +14,10 @@ This resolver is for HEADLESS callers — sidecar jobs, background sync,
 delegation, coding-session handlers. They show no organization, so they never
 run the window's load ladder (device choice -> account last active ->
 start-up organization -> first organization) and never read either account
-column. They keep STATE rule 13: the connection carries only an organization
-the person deliberately chose for it (the desktop pushes a deliberate switch
-through ``PUT /organization/active``), or it asks once and saves the answer
-here.
+column. They act in the organization the desktop window SHOWS (the window
+pushes its active organization — ladder pick or deliberate switch — through
+``PUT /organization/active``); only with no window ever opened do they keep
+STATE rule 13 and ask once, saving the answer here.
 
     "one missed org check that should have just failed turns into 50 in a
     month and 5,000 in a year, and suddenly we don't have orgs any more, we

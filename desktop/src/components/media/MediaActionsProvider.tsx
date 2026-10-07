@@ -30,6 +30,7 @@ import {
   useState,
 } from "react";
 import { Check, Lock, X } from "lucide-react";
+import { downloadUrl } from "@ai-matrx/kit/download";
 import {
   Dialog,
   DialogContent,
@@ -407,10 +408,7 @@ export function MediaActionsProvider({
   const download = useCallback(
     async (item: MediaDescriptor) => {
       try {
-        const a = document.createElement("a");
-        a.href = item.url;
-        a.download = downloadName(item);
-        a.click();
+        downloadUrl(item.url, downloadName(item));
         notify("Download started");
       } catch (e) {
         notify(

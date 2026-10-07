@@ -6,6 +6,7 @@
  * localStorage.
  */
 
+import { downloadFile } from "@ai-matrx/kit/download";
 import type { MatrixSpec } from "./types";
 import { coerceSpec, isMatrixSpec } from "./storage";
 
@@ -125,11 +126,5 @@ export function downloadMatrixExport(
   name?: string,
 ): void {
   const text = serializeMatrixExport(targetId, spec, name);
-  const blob = new Blob([text], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = matrixExportFilename(name);
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadFile(matrixExportFilename(name), text, "application/json");
 }

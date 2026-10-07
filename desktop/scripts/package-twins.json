@@ -169,10 +169,6 @@
       ],
       "shapeCensus": [
         {
-          "file": "src/pages/Ports.tsx",
-          "reason": "IS a duration formatter, on a voice @ai-matrx/kit/format does not have. It prints ONE coarsest unit with a BARE SECONDS tier below a minute and NO seconds above it (45s -> 90m -> 5h -> 3d). `compact` always keeps a seconds tier under an hour (\"30m 00s\"), `coarse` never prints seconds at all (\"< 1 min\"), and no option reaches the shape in between. Collapsing it onto either style changes what a live screen reads, so the honest fix is a new kit style \u2014 a decision for the kit package's own program \u2014 not a silent re-voicing by the lane that taught this guard the seconds base. Loud and ratcheted: the moment kit grows that voice and this body goes, the entry FAILS as stale."
-        },
-        {
           "file": "src/pages/Settings.tsx",
           "reason": "IS a duration formatter, on a voice @ai-matrx/kit/format does not have. It prints ONE coarsest unit with a BARE SECONDS tier below a minute and NO seconds above it (45s -> 90m -> 5h -> 3d). `compact` always keeps a seconds tier under an hour (\"30m 00s\"), `coarse` never prints seconds at all (\"< 1 min\"), and no option reaches the shape in between. Collapsing it onto either style changes what a live screen reads, so the honest fix is a new kit style \u2014 a decision for the kit package's own program \u2014 not a silent re-voicing by the lane that taught this guard the seconds base. Loud and ratcheted: the moment kit grows that voice and this body goes, the entry FAILS as stale."
         },

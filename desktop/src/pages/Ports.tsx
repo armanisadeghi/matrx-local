@@ -32,6 +32,7 @@ import {
 import { engine } from "@/lib/api";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { logWarn } from "@/lib/error-reporting";
+import { formatDurationSeconds } from "@ai-matrx/kit/format";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -367,11 +368,11 @@ function sortTerminals(
 }
 
 function formatElapsed(s: number): string {
-  if (s < 60) return `${s}s`;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  return formatDurationSeconds(s, {
+    style: "long",
+    parts: 2,
+    abbreviate: true,
+  });
 }
 
 function CategoryPills<T extends { id: string; label: string; color: string }>({

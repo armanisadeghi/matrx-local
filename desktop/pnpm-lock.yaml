@@ -2323,8 +2323,8 @@ packages:
   dlv@1.1.3:
     resolution: {integrity: sha512-+HlytyjlPKnIG8XuRG8WvmBP8xs8P71y+SKKS6ZXWoEgLuePxtDoUEiH7WkdePWrQ5JBpE6aoVqfZfJUQkjXwA==}
 
-  docx@9.8.1:
-    resolution: {integrity: sha512-bv4yDxgiV9aRyh327HG+V36wG0f23wk32SDhXGQpUhnykVtIPaR1K4ISi8E+DYJ7OcRQRkR8Y70QYlSS08V1cA==}
+  docx@9.9.0:
+    resolution: {integrity: sha512-qefptMMO31ZCfVnFANQWSLtnvUrYkqd7cLr+Bi4e+kl4LvYOmdk314iwp8XHHyQs3TPtPcQwqgZgN/MJxT7Ttw==}
     engines: {node: '>=10'}
 
   dompurify@3.4.16:
@@ -3728,7 +3728,7 @@ snapshots:
       bidi-js: 1.1.0
       bwip-js: 4.11.4
       citeproc: 2.4.63
-      docx: 9.8.1
+      docx: 9.9.0
       fontkit: 2.0.4
       hast-util-from-html: 2.0.3
       hast-util-sanitize: 5.0.2
@@ -5539,7 +5539,7 @@ snapshots:
 
   dlv@1.1.3: {}
 
-  docx@9.8.1:
+  docx@9.9.0:
     dependencies:
       '@types/node': 26.6.4
       hash.js: 1.1.7

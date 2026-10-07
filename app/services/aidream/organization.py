@@ -8,26 +8,25 @@ NEVER pick one for the caller — a server that guesses is exactly how work
 lands in the wrong tenant. The caller states it; the server only verifies
 membership.
 
-## The ruling this module enforces (Arman, 2026-09-19)
+## The ruling this module enforces (Arman, 2026-10-07; STATE rules 11-14)
 
-A "default organization" is at most a per-client DISPLAY preference. Nothing
-that builds a request may read the user-level saved preference
-(``users.user_preferences -> organization.defaultOrganizationId``), and
-nothing may fall back to the personal organization. Both rungs used to live
-here and both are gone.
+This resolver is for HEADLESS callers — sidecar jobs, background sync,
+delegation, coding-session handlers. They show no organization, so they never
+run the window's load ladder (device choice -> account last active ->
+start-up organization -> first organization) and never read either account
+column. They keep STATE rule 13: the connection carries only an organization
+the person deliberately chose for it (the desktop pushes a deliberate switch
+through ``PUT /organization/active``), or it asks once and saves the answer
+here.
 
     "one missed org check that should have just failed turns into 50 in a
     month and 5,000 in a year, and suddenly we don't have orgs any more, we
     have a user and a default org, which means we just have user now."
 
-What a client MAY remember is the organization the USER THEMSELVES SET on
-this device. That is the little picker's state, not a preference read out of
-their account.
-
 ## Resolution order
 
-    1. THIS DEVICE'S SET organization — the id the user chose in the desktop
-       picker, which the desktop pushes to the engine (``PUT
+    1. THIS CONNECTION'S CHOSEN organization — the id the user chose in the
+       desktop switcher or picker, which the desktop pushes to the engine (``PUT
        /organization/active``) and this module reads back out of the local
        app-settings row. Honoured only when it belongs to the SAME user and
        is still one of their live memberships.

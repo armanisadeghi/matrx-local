@@ -103,16 +103,20 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 - **Human steps are guided sessions.** Anything only Arman can do: one link, one task, what to
   look for, what to report — never a list or menu. →
   `/Users/armanisadeghi/code/common-docs/policies/talk-to-arman-like-a-person.md`
-- **The organization is what the USER SET on this device — never a saved default, never the
-  organization created at signup**. The TS resolver is `desktop/src/lib/org/active-org.ts`,
-  the engine's is `app/services/aidream/organization.py`, and each SET crosses to the other
-  through `PUT /organization/active` (which also mirrors it to the server's coding-session
-  filing organization). ONE state, ONE stored value, ONE selector (Arman, 2026-09-21): the store
-  is `active-org.ts` (`useActiveOrganization()` in React), the control is
-  `desktop/src/features/org/OrganizationSwitcher.tsx` in the top bar — never a second copy of
-  the organization, never a second "choose organization" control. With nothing set, the work HOLDS and the picker is
-  raised (the sidecar does it with an `organization_required` action-needed item) — it never
-  fails with "no default organization". Guard: `pnpm check:org-default-ban` in `desktop/`.
+- **The window's organization is set once at load, never none** (Arman, 2026-10-07; STATE rules
+  12-14): this device's last choice → the account's last active organization → its start-up
+  organization → the first organization, each only if a current membership. The ladder lives in
+  `desktop/src/lib/org/active-org.ts` — the ONLY reader of the two account columns — and a
+  ladder answer is held in memory, never stored as the device choice or pushed to the engine. ONE
+  state, ONE stored value, ONE selector: the store is `active-org.ts` (`useActiveOrganization()`
+  in React), the control is `desktop/src/features/org/OrganizationSwitcher.tsx` in the top bar.
+  A deliberate switch writes the device choice, calls `users.set_last_active_organization`, and
+  crosses to the engine through `PUT /organization/active` (which also mirrors it to the server's
+  coding-session filing organization). No window request holds or prompts. The Python sidecar is
+  HEADLESS (`app/services/aidream/organization.py`): it shows no organization, keeps rule 13 — the
+  organization the person chose for this connection, else it asks once with an
+  `organization_required` action-needed item — and never runs the ladder. "Default organization"
+  is a retired term. Guard: `pnpm check:org-default-ban` in `desktop/`.
 - **The access ladder decides who can open a record.** Every table starts at Organization; only Arman approves Confidential or Private; sharing sits outside the ladder; children inherit their parent; organizations are unlimited and equal, with no personal type. → `/Users/armanisadeghi/code/common-docs/policies/access-ladder.md`
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
   signup-organization/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:

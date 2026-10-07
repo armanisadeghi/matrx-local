@@ -1,15 +1,16 @@
 /**
  * React access to THE organization store (`active-org.ts`). One hook, one
  * snapshot: every component that shows or changes the organization reads
- * this, so the top-bar switcher, the held-request picker and every page
+ * this, so the top-bar switcher, the headless-ask picker and every page
  * banner agree by construction.
  */
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 
 import {
   getActiveOrganizationSnapshot,
   listMemberOrganizations,
+  resolveActiveOrganization,
   setActiveOrganization,
   subscribeActiveOrganization,
   type ActiveOrganizationSnapshot,
@@ -32,6 +33,7 @@ export function useActiveOrganization(options?: { load?: boolean }): UseActiveOr
   const reload = useCallback(async () => {
     try {
       await listMemberOrganizations();
+      if (!getActiveOrganizationSnapshot().organization) await resolveActiveOrganization();
     } catch {
       // The store already carries `error`; the caller renders it.
     }
@@ -50,6 +52,23 @@ export function useActiveOrganization(options?: { load?: boolean }): UseActiveOr
     if (!wantLoad || !userId || organizations !== null || loading) return;
     void reload();
   }, [wantLoad, userId, organizations, loading, reload]);
+
+  // THE LOAD LADDER runs once per signed-in user when a window that shows the
+  // organization mounts: the window opens on one and is never left empty. A
+  // failed run keeps its error on the snapshot (an honest retry state) and is
+  // not re-run in a loop — `reload` retries.
+  const laddered = useRef<string | null>(null);
+  useEffect(() => {
+    if (!wantLoad || !userId) {
+      laddered.current = null;
+      return;
+    }
+    if (snapshot.organization || laddered.current === userId) return;
+    laddered.current = userId;
+    void resolveActiveOrganization().catch(() => {
+      // The store already carries `error`; the switcher renders it.
+    });
+  }, [wantLoad, userId, snapshot.organization]);
 
   return { ...snapshot, choose, reload };
 }

@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
- * check:org-default-ban — nothing that builds a request may read a saved
- * "default organization", and nothing may fall back to an organization type.
+ * check:org-default-ban — the term "default organization" is retired, only the
+ * window's load ladder reads the two account organization columns, and the
+ * personal-organization type stays dead.
  *
- * THE RULING (Arman, 2026-09-19)
+ * THE RULING (Arman, 2026-10-07; STATE rules 11-14)
  *
- *   A "default organization" is at most a per-client DISPLAY preference. A
- *   client MAY remember the organization the user THEMSELVES SET on this
- *   device. If nothing is set, the request is HELD, the picker is shown, the
- *   user SETS one, and the request proceeds. Never fail with "no default
- *   organization".
+ *   The window sets its organization once at load, never none: this device's
+ *   last choice -> the account's `last_active_organization_id` ->
+ *   `startup_organization_id` -> the first organization. Only
+ *   `desktop/src/lib/org/active-org.ts` reads those columns, to choose what the
+ *   window opens to. The headless sidecar (Python, Rust, Swift) shows no
+ *   organization, keeps rule 13 (the person's choice for the connection, or
+ *   ask once) and never reads either column. His 2026-09-19 reason stands:
  *
  *   "one missed org check that should have just failed turns into 50 in a
  *   month and 5,000 in a year, and suddenly we don't have orgs any more, we
@@ -17,6 +20,8 @@
  *
  * WHAT THIS FAILS ON
  *
+ *   0. Any file other than the ladder (`desktop/src/lib/org/active-org.ts`) and
+ *      tests naming `last_active_organization_id` / `startup_organization_id`.
  *   1. Any read of `defaultOrganizationId` / `default_organization_id` — the
  *      user-level preference row. The rung this ruling deleted.
  *   2. Any call to the deleted `current_personal_org_id` /
@@ -82,6 +87,11 @@ const PREFERENCE_READ = /\bdefault_?[Oo]rganization_?[Ii]d\b/;
 const PERSONAL_RPC = /\b(?:current_personal_org_id|ensure_personal_organization)\b/;
 /** The retired organization type. Banned in code and literals everywhere. */
 const PERSONAL_TOKEN = /\b(is_personal|isPersonal)\b/;
+const ACCOUNT_COLUMNS = /\b(?:last_active_organization_id|startup_organization_id)\b/;
+/** The ONLY non-test file that may read the two account columns: the load ladder. */
+const LADDER_FILE = "desktop/src/lib/org/active-org.ts";
+const isLadderOrTest = (where) =>
+  where === LADDER_FILE || /\.test\.[cm]?[jt]sx?$/.test(where) || /(^|\/)tests?\//.test(where);
 const COPY_PHRASE = /default\s+organization/i;
 const EXEMPT = /org-default-exempt:\s*\S.{19,}/;
 
@@ -124,6 +134,11 @@ export function findingsIn(text, where) {
   if (PREFERENCE_READ.test(code)) {
     out.push(
       `${where}: reads a saved default-organization preference — a request may never read it`,
+    );
+  }
+  if (ACCOUNT_COLUMNS.test(code) && !isLadderOrTest(where)) {
+    out.push(
+      `${where}: reads an account organization column outside the load ladder (${LADDER_FILE})`,
     );
   }
   if (PERSONAL_RPC.test(code)) {
@@ -174,6 +189,7 @@ function scan() {
     if (
       !PREFERENCE_READ.test(text) &&
       !PERSONAL_RPC.test(text) &&
+      !ACCOUNT_COLUMNS.test(text) &&
       !COPY_PHRASE.test(text) &&
       !/is_personal|isPersonal/.test(text)
     )
@@ -233,6 +249,30 @@ function selfTest() {
     ],
     ["const id = readStoredSelection()?.id ?? null;", "x.ts", 0, "device selection"],
     [
+      '.select("last_active_organization_id,startup_organization_id")',
+      "desktop/src/lib/org/active-org.ts",
+      0,
+      "the load ladder reading the account columns (allowed here only)",
+    ],
+    [
+      '.select("last_active_organization_id")',
+      "desktop/src/lib/aidream-client.ts",
+      1,
+      "a second reader of the account columns in the window",
+    ],
+    [
+      'row = prefs.get("startup_organization_id")',
+      "app/services/aidream/organization.py",
+      1,
+      "the headless engine reading the account columns",
+    ],
+    [
+      'await supabase.schema("users").rpc("set_last_active_organization", { p_organization_id: id });',
+      "desktop/src/features/org/Anything.tsx",
+      0,
+      "the write door RPC (not a column read)",
+    ],
+    [
       '// org-default-exempt: named here only so the fake client can refuse it\nBANNED = ("current_personal_org_id",)',
       "x.py",
       0,
@@ -275,23 +315,22 @@ if (isMain) {
   const findings = scan();
   if (findings.length) {
     console.error(
-      "\n🚨 A DEFAULT ORGANIZATION IS BACK\n\n" +
-        "Nothing that builds a request may read a saved default-organization preference,\n" +
-        "and no organization is ever a fallback. If this device has nothing\n" +
-        "SET, HOLD the request, show the picker, and continue once the user picks.\n",
+      "\n🚨 THE ORGANIZATION LADDER CONTRACT IS BROKEN\n\n" +
+        "The window sets its organization once at load (device choice, account last active,\n" +
+        "start-up organization, first organization). Only the ladder reads the two account\n" +
+        "columns; the headless engine never does; \"default organization\" is a retired term.\n",
     );
     for (const f of findings) console.error("  ✗ " + f);
     console.error(
-      "\nThe one resolver is desktop/src/lib/org/active-org.ts (TS) /\n" +
-        "app/services/aidream/organization.py (engine). Arman, 2026-09-19: \"one missed org\n" +
-        "check that should have just failed turns into 50 in a month and 5,000 in a year,\n" +
-        "and suddenly we don't have orgs any more, we have a user and a default org, which\n" +
-        "means we just have user now.\"\n",
+      "\nThe ladder is desktop/src/lib/org/active-org.ts; the engine's headless resolver is\n" +
+        "app/services/aidream/organization.py. Arman, 2026-09-19: \"one missed org check that\n" +
+        "should have just failed turns into 50 in a month and 5,000 in a year, and suddenly we\n" +
+        "don't have orgs any more, we have a user and a default org.\"\n",
     );
     process.exit(1);
   }
   console.log(
-    "check:org-default-ban: no saved default-organization read, no personal-org RPC or fallback,\n" +
-      '  and no "default organization" in user-facing copy.',
+    "check:org-default-ban: only the ladder reads the account organization columns, no personal-org\n" +
+      '  RPC or fallback, and no "default organization" in user-facing copy.',
   );
 }

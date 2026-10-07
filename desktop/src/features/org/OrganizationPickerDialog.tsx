@@ -1,24 +1,25 @@
 /**
- * The "choose your organization" prompt for a request that is WAITING — the
- * surfaced side of `OrganizationNotSelectedError`. aidream refuses to guess an
- * organization for a caller, and this app refuses to invent one either, so
- * when resolution comes back empty the ONLY correct move is to ask the user.
+ * The "choose your organization" prompt for the HEADLESS side of this app
+ * (STATE rule 13). The window shows an organization from the load ladder and
+ * never asks; the Python sidecar shows none, so it carries only an
+ * organization the person chose for this connection — or asks once, through
+ * its `organization_required` action-needed item, which opens this dialog.
+ * Choosing here saves the choice on the connection (the engine) and as the
+ * account's last active organization.
  *
- * Same store, same list, same write as the top-bar `OrganizationSwitcher`:
- * this is that control in a modal, raised by `requireActiveOrganizationId()`
- * (via `requestOrganizationPicker()` / `REQUEST_PICKER_EVENT`), which then
- * WAITS — the held request proceeds the moment the user picks here.
+ * Same store, same list, same write as the top-bar `OrganizationSwitcher`
+ * (`requestOrganizationPicker()` / `REQUEST_PICKER_EVENT`).
  *
  * Mount ONCE near the app root. It also owns the two ways THE ENGINE's copy
- * of this Mac's answer is kept equal to this store's:
+ * of this Mac's choice is kept equal to this store's DEVICE CHOICE:
  *
- *   - every time the engine becomes reachable, the store's value is re-stated
- *     to it (retried until it takes it);
+ *   - every time the engine becomes reachable, the device choice is
+ *     re-stated to it (retried until it takes it);
  *   - when the engine publishes its own `organization_required` ask (its copy
  *     is empty — a fresh engine, a reinstall, a `--fresh` dev home) while this
- *     device already has an answer, the answer is re-sent and the person is
- *     NOT asked again. Only when this device has no answer either does the
- *     picker open.
+ *     device already has a deliberate choice, that choice is re-sent and the
+ *     person is NOT asked again. A window answer that only came from the load
+ *     ladder is not a choice for the engine, so the picker opens, once.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -36,7 +37,7 @@ import { getAppRuntimeConfig } from "@/lib/app-config";
 import { openExternal } from "@/lib/open-external";
 import {
   REQUEST_PICKER_EVENT,
-  getActiveOrganizationSnapshot,
+  getDeviceOrganizationChoice,
   republishActiveOrganizationToEngine,
   requestOrganizationPicker,
 } from "@/lib/org/active-org";
@@ -74,7 +75,7 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
     // `organization_required` action-needed item. Acting on that item answers
     // it from THIS store when there is an answer, and only otherwise asks.
     const unregister = registerActionNeededHandler("choose_organization", async () => {
-      if (getActiveOrganizationSnapshot().organization) {
+      if (getDeviceOrganizationChoice()) {
         const accepted = await republishActiveOrganizationToEngine();
         if (accepted) return;
       }
@@ -95,7 +96,7 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
     (item) => item.fingerprint === ENGINE_ORGANIZATION_ASK_FINGERPRINT,
   );
   useEffect(() => {
-    if (!engineAsking || !organization) return;
+    if (!engineAsking || !getDeviceOrganizationChoice()) return;
     void republishActiveOrganizationToEngine();
   }, [engineAsking, organization]);
 
@@ -155,9 +156,9 @@ export function OrganizationPickerDialog({ engineStatus }: OrganizationPickerDia
         <DialogHeader>
           <DialogTitle>Choose your organization</DialogTitle>
           <DialogDescription>
-            Every request needs to know which organization it acts in, and
-            nothing picks one for you. Choose one and whatever was waiting will
-            continue. You can change it any time from the top bar.
+            Background work on this Mac needs an organization chosen for it.
+            Choose one and whatever was waiting will continue. You can change
+            it any time from the top bar.
           </DialogDescription>
         </DialogHeader>
         {shownError && <p className="text-sm text-destructive">{shownError}</p>}

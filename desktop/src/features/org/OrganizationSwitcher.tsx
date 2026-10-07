@@ -2,17 +2,20 @@
  * THE organization selector — the one control that shows and changes the
  * organization this device acts in. Mounted once, in the top bar.
  *
- * It renders THE state value (`useActiveOrganization`) and writes through THE
- * one write (`choose` -> `setActiveOrganization`), which persists the choice,
- * mirrors it to the engine, and — through the engine — to the server's
- * coding-session filing organization. Nothing else in the app has its own
- * idea of the organization: every page banner that says "choose an
- * organization" opens the same list (`OrganizationPickerDialog`, which is
- * this control's list in a modal for a request that is waiting).
+ * It renders THE state value (`useActiveOrganization`) — the window opens on
+ * the load ladder's organization (this device's last choice, the account's
+ * last active, its start-up organization, the first) — and writes through THE
+ * one write (`choose` -> `setActiveOrganization`), which persists the device
+ * choice, mirrors it to the headless engine, saves the account's last active
+ * organization, and — through the engine — sets the server's coding-session
+ * filing organization. Nothing else in the app has its own idea of the
+ * organization: every "choose an organization" button opens the same list
+ * (`OrganizationPickerDialog`, this control's list in a modal for the engine's
+ * ask-once).
  *
- * The button always tells the truth: the current organization's name when
- * one is set, "Choose organization" in attention colors when none is — a
- * screen never shows a chosen organization it is not actually using.
+ * The button always tells the truth: the current organization's name, or
+ * "Choose organization" in attention colors only when there is none to show
+ * (no memberships, or the read failed).
  */
 
 import { useState } from "react";

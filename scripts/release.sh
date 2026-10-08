@@ -818,11 +818,21 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     # desktop/scripts/await-matrx-latest.mjs.
     # Wait for the npm publish runs already in flight (max 6 min) so the update adopts aidream's
     # whole publish train, not the half of it that has landed (2026-10-07; sync-main.py).
-    python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
     IMPORTS_BEFORE=0
     (cd desktop && node scripts/check-matrx-imports.mjs >/dev/null 2>&1) || IMPORTS_BEFORE=1
-    (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
-    (cd desktop && pnpm update -r "@ai-matrx/*" --latest) || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest) failed (see above)."
+    # Both passes, exactly as `pnpm sync:matrx-packages`: --latest moves the direct specs, and only
+    # --depth Infinity moves TRANSITIVE copies (runs 37822841564 / 37823724796 failed the gate on
+    # transitive associations / diff / media the single pass never touched). aidream publishes
+    # every few minutes, so a version that lands DURING the catch-up still loses to the gate; the
+    # catch-up repeats (max 3 rounds) while the gate reports the graph stale, and the gate below
+    # still decides.
+    for CATCHUP_ROUND in 1 2 3; do
+        python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
+        (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
+        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest, then --depth Infinity) failed (see above)."
+        if (cd desktop && pnpm -s check:matrx-packages >/dev/null 2>&1); then break; fi
+        [[ $CATCHUP_ROUND -lt 3 ]] && info "A newer @ai-matrx version landed during catch-up round $CATCHUP_ROUND; catching up again..."
+    done
     # Never adopt an update that only breaks the build: one that adds a check-matrx-imports failure
     # goes back to HEAD (frozen reinstall) and the release stops naming it.
     if [[ $IMPORTS_BEFORE -eq 0 ]] && ! (cd desktop && node scripts/check-matrx-imports.mjs 2>&1 | grep -v '^MATRX-ITEM' | tail -8 >&2; exit "${PIPESTATUS[0]}"); then

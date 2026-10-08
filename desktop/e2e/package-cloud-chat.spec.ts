@@ -83,9 +83,13 @@ test.describe("Cloud Chat on the chat package (opt-in)", () => {
 
     const pastId = await newestAnsweredConversation();
     expect(pastId, "a past conversation exists for the harness account").toBeTruthy();
+    const opened = Date.now();
     await page.goto(`/#/cloud-chat?chat=package&conversation=${pastId}`);
     await closeEngineMonitor(page);
     await expect(root).toBeVisible({ timeout: 60_000 });
+    // A past answer must paint its content, not sit on the lazy block renderer's placeholder.
+    await expect(root.getByText("Loading content…")).toHaveCount(0, { timeout: 30_000 });
+    console.log(`past answer content painted ${Date.now() - opened} ms after opening`);
     await expect
       .poll(async () => (await root.innerText().catch(() => "")).trim().length, { timeout: 60_000 })
       .toBeGreaterThan(200);

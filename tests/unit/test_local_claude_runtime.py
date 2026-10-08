@@ -990,8 +990,10 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
         # persisted; the idle clock starts only when the receive loop begins.
         # Idle must therefore win by a margin far larger than any setup latency
         # (a 20ms margin lost on a slow CI runner, CI run 37820384037), or the
-        # wall clock legitimately fires first.
-        config["execution_timeout_seconds"] = 0.25
+        # wall clock legitimately fires first. 250ms also lost (CI run
+        # on the 22:11Z run, 2026-10-08); the wall limit costs nothing here because idle
+        # ends the run at ~20ms, so give it seconds, not milliseconds.
+        config["execution_timeout_seconds"] = 5.0
         config["idle_timeout_seconds"] = 0.02
     config["mirror_timeout_seconds"] = 0.01
     run = _LocalRun(

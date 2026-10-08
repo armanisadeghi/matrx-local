@@ -816,8 +816,20 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     # BEFORE pnpm touches the lockfile; a 404 that outlives the window (10 min)
     # exits non-zero and fails the release. One behavior across all repos:
     # desktop/scripts/await-matrx-latest.mjs.
+    # Wait for the npm publish runs already in flight (max 6 min) so the update adopts aidream's
+    # whole publish train, not the half of it that has landed (2026-10-07; sync-main.py).
+    python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
+    IMPORTS_BEFORE=0
+    (cd desktop && node scripts/check-matrx-imports.mjs >/dev/null 2>&1) || IMPORTS_BEFORE=1
     (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
     (cd desktop && pnpm update -r "@ai-matrx/*" --latest) || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest) failed (see above)."
+    # Never adopt an update that only breaks the build: one that adds a check-matrx-imports failure
+    # goes back to HEAD (frozen reinstall) and the release stops naming it.
+    if [[ $IMPORTS_BEFORE -eq 0 ]] && ! (cd desktop && node scripts/check-matrx-imports.mjs 2>&1 | grep -v '^MATRX-ITEM' | tail -8 >&2; exit "${PIPESTATUS[0]}"); then
+        git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml
+        (cd desktop && pnpm install --frozen-lockfile) || true
+        fail "The @ai-matrx update breaks an import this repo uses (above), so it was rolled back (lockfile at HEAD). Fix the importers or restore the export in the package, then re-run."
+    fi
     if git diff --quiet -- desktop/pnpm-lock.yaml; then
         ok "The @ai-matrx lock graph was already current."
     else

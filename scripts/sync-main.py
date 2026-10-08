@@ -1227,6 +1227,10 @@ def report(fixed, docs, held, headline):
 
 
 def main():
+    if sys.argv[1:2] == ["--wait-for-publish-train"]:
+        # release.sh's @ai-matrx catch-up: wait for the npm publish runs in flight, print one line.
+        say(wait_for_publish_train())
+        return
     if sys.argv[1:2] == ["--replay"]:
         _, top, _ = git("rev-parse", "--show-toplevel")
         os.chdir(top.strip())

@@ -982,9 +982,17 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
     if hang_stage == "receive-wall-first":
         config["execution_timeout_seconds"] = 0.01
         config["idle_timeout_seconds"] = 0.03
-    else:
+    elif hang_stage == "query":
         config["execution_timeout_seconds"] = 0.03
         config["idle_timeout_seconds"] = 0.01
+    else:
+        # The wall clock starts before the client opens and runtime_started is
+        # persisted; the idle clock starts only when the receive loop begins.
+        # Idle must therefore win by a margin far larger than any setup latency
+        # (a 20ms margin lost on a slow CI runner, CI run 37820384037), or the
+        # wall clock legitimately fires first.
+        config["execution_timeout_seconds"] = 0.25
+        config["idle_timeout_seconds"] = 0.02
     config["mirror_timeout_seconds"] = 0.01
     run = _LocalRun(
         runtime_id=f"rt-{hang_stage}-timeout",
@@ -1034,6 +1042,16 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
         return None
 
     monkeypatch.setattr(runtime, "_mirror", _no_mirror)
+    real_emit = runtime._emit
+
+    async def _slow_setup_emit(run_: _LocalRun, event: dict[str, Any]) -> None:
+        # Simulate a slow runner between the wall-clock start and the receive
+        # loop; the classification must not depend on setup being fast.
+        if event.get("event") == "runtime_started":
+            await asyncio.sleep(0.025)
+        await real_emit(run_, event)
+
+    monkeypatch.setattr(runtime, "_emit", _slow_setup_emit)
     request = LocalRuntimeStartRequest(workspace=str(workspace_root), prompt="secret")
 
     await asyncio.wait_for(runtime._execute(run, request), timeout=0.3)

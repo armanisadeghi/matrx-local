@@ -20,7 +20,7 @@ importers:
         version: 0.22.7
       '@ai-matrx/content-ir-react':
         specifier: latest
-        version: 0.25.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.25.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/design-system':
         specifier: latest
         version: 0.80.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -254,8 +254,8 @@ packages:
       react-dom:
         optional: true
 
-  '@ai-matrx/content-ir-react@0.25.2':
-    resolution: {integrity: sha512-LrANmOQFmf6h+k8NJNCHc/ap4aHZgwTM98C6VlPBLwFAYSGeJc3HhsvLq4PH60Dhx0dtTW79t6+wZ4a7jLB5OQ==}
+  '@ai-matrx/content-ir-react@0.25.3':
+    resolution: {integrity: sha512-J4LBIKi7xwY5bp/Y02k+99+g/KYNCMVkcXGbroDtgrZEesuu3+5Giruzyo68mbRvATKoMRRGcAZsv3/yFJ0W1A==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=19.0.0'
@@ -3632,7 +3632,7 @@ snapshots:
       - '@types/react-dom'
       - recharts
 
-  '@ai-matrx/content-ir-react@0.25.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@ai-matrx/content-ir-react@0.25.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@ai-matrx/alchemy': 0.20.5(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/content-ir': 0.22.7

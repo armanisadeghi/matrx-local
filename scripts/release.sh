@@ -854,7 +854,43 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     fi
 fi
 info "Checking @ai-matrx packages are npm latest..."
-(cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
+if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
+    FINAL_PACKAGE_GATE_PASSED=false
+    for FINAL_CATCHUP_ROUND in 1 2 3; do
+        if (cd desktop && pnpm check:matrx-packages); then
+            FINAL_PACKAGE_GATE_PASSED=true
+            break
+        fi
+        if [[ $FINAL_CATCHUP_ROUND -eq 3 ]]; then
+            break
+        fi
+
+        info "A newer @ai-matrx version landed after import validation; refreshing before the final gate (round $FINAL_CATCHUP_ROUND)..."
+        python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
+        (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the final catch-up was not attempted."
+        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || fail "The final @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest, then --depth Infinity) failed (see above)."
+
+        if [[ $IMPORTS_BEFORE -eq 0 ]] && ! (cd desktop && node scripts/check-matrx-imports.mjs 2>&1 | grep -v '^MATRX-ITEM' | tail -8 >&2; exit "${PIPESTATUS[0]}"); then
+            git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml
+            (cd desktop && pnpm install --frozen-lockfile) || true
+            fail "The final @ai-matrx update breaks an import this repo uses (above); the lockfile was restored to HEAD."
+        fi
+
+        UNEXPECTED_FINAL_CATCHUP="$(git status --porcelain | awk '$2 != "desktop/pnpm-lock.yaml" { print }')"
+        if [[ -n "$UNEXPECTED_FINAL_CATCHUP" ]]; then
+            echo "$UNEXPECTED_FINAL_CATCHUP" >&2
+            fail "The final @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); that needs consumer adoption, not automation."
+        fi
+        if ! git diff --quiet -- desktop/pnpm-lock.yaml; then
+            git add desktop/pnpm-lock.yaml
+            git commit -q -m "chore(deps): every @ai-matrx package to npm latest [skip actions]"
+            ok "Committed the final @ai-matrx lock catch-up; it is pushed with the release commit."
+        fi
+    done
+    [[ "$FINAL_PACKAGE_GATE_PASSED" == "true" ]] || fail "@ai-matrx packages remained stale or pinned after three final gate checks (see above)."
+else
+    (cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
+fi
 # Package logic is NEVER duplicated outside the package: a local re-definition of a
 # collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
 # run means the guard can actually fail.

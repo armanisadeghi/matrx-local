@@ -155,6 +155,7 @@ jobs:
       - name: Boot smoke (production bundle must render)
         run: SMOKE_PREVIEW=1 pnpm exec playwright test boot.spec.ts --reporter=list
         env:
+          NODE_OPTIONS: --max-old-space-size=6144
           VITE_SUPABASE_URL: http://127.0.0.1:54321
           VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: test-publishable-key
 

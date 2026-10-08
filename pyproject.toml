@@ -128,8 +128,10 @@ dependencies = [
     # dependency declaration (Hard Rule 5). Deliberately NOT installed:
     # [db] (no Postgres here — durable storage is SQLite + the server),
     # [dedup] (datasketch pulls numpy, which the single-ML-stack doctrine
-    # reserves for the managed media runtime slot).
-    "matrx-scraper[browser,pdf,ocr]>=0.2.295",
+    # reserves for the managed media runtime slot). [files]: matrx-files is an
+    # optional extra of the scraper since 2026-10-08; this host uses its
+    # files-backed paths, so it says so.
+    "matrx-scraper[browser,files,pdf,ocr]>=0.2.353",
     # The Claude Code history importer + capture reconciler, shared with Matrx 2. It lives IN this
     # repo (packages/matrx-coding-history, a uv workspace member), so CI and release builds resolve
     # it without any sibling checkout; Matrx 2 pins it by commit from this public repo.

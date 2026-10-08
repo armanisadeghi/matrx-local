@@ -11,6 +11,8 @@ export default {
     // THE ONE AGENT PICKER ships from this package and lays out with ordinary
     // Tailwind utilities; Tailwind only generates what it can SEE.
     "./node_modules/@ai-matrx/agents/dist/**/*.{js,mjs}",
+    // Cloud Chat on the chat package (opt-in, L1) lays out with the same utilities.
+    "./node_modules/@ai-matrx/chat/dist/**/*.{js,mjs}",
   ],
   theme: {
     container: {

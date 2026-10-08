@@ -36,6 +36,7 @@ import {
 } from "@/lib/coding-sessions/reply-door";
 import { DEFAULT_CHAT_MANDATE_KEY, DEFAULT_CHAT_MANDATE_REF } from "@/lib/mandates";
 import { cn } from "@/lib/utils";
+import { PackageCloudChat } from "@/features/package-chat/PackageCloudChat";
 import type { PromptVariable } from "@/types/agents";
 
 function CloudEmptyState({ agentName }: { agentName: string | null }) {
@@ -59,6 +60,11 @@ interface CloudChatProps {
  * differs (ruling D4). `lib/agent-catalog.ts` holds both clients.
  */
 export function CloudChat(props: CloudChatProps) {
+  // Opt-in: Cloud Chat on @ai-matrx/chat (L1). The default stays this screen until proven live.
+  const [searchParams] = useSearchParams();
+  if (searchParams.get("chat") === "package") {
+    return <PackageCloudChat conversationId={searchParams.get("conversation")} />;
+  }
   return (
     <AgentCatalogProvider catalog={getCloudAgentCatalog()}>
       <CloudChatSurface {...props} />

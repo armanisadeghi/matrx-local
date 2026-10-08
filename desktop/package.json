@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && node --max-old-space-size=4096 node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
-    "build:harness": "vite build --mode harness",
+    "build:harness": "node --max-old-space-size=4096 node_modules/vite/bin/vite.js build --mode harness",
     "preview:harness": "vite preview --mode harness",
     "sync-types": "node scripts/sync-types.mjs",
     "sync-types:local": "node scripts/sync-types.mjs --local",

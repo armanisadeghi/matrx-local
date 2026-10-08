@@ -12,7 +12,20 @@ import { ChatProvider, usePathname, useRouter } from "@ai-matrx/chat/host/react"
 import { Button } from "@ai-matrx/design-system";
 import { PanelLeft, SquarePen } from "lucide-react";
 import { useEffect, useState } from "react";
+import { CodingReplyNotice } from "@ai-matrx/chat/agents/coding-session-reply/CodingReplyNotice";
+import { useCodingReplyResponder } from "@ai-matrx/chat/agents/coding-session-reply/useCodingReplyResponder";
+import { useChatServerResponderRead } from "@ai-matrx/chat/agents/coding-session-reply/useChatServerResponderRead";
+import { registerDesktopToolRenderers } from "./desktop-tool-renderers";
 import { createDesktopChatHost } from "./host";
+
+registerDesktopToolRenderers();
+
+/** Who answers a reply on a mirrored coding session — the package's one notice, over the chat server port. */
+function ReplyNotice({ conversationId }: { conversationId: string }) {
+  const read = useChatServerResponderRead();
+  const state = useCodingReplyResponder({ conversationId, enabled: true, read });
+  return <CodingReplyNotice state={state} className="shrink-0 px-4 pt-1" />;
+}
 
 function Screens() {
   const pathname = usePathname();
@@ -49,6 +62,7 @@ function Screens() {
             <SquarePen className="size-4" />
           </Button>
         </div>
+        {conversationId ? <ReplyNotice key={conversationId} conversationId={conversationId} /> : null}
         <div className="min-h-0 flex-1">
           {conversationId ? (
             <ChatConversationRoom

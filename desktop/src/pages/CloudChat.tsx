@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle,
   ArrowLeft,
   Cloud,
   Cpu,
@@ -30,10 +29,9 @@ import {
 } from "@/hooks/use-cloud-chat";
 import { useCodingReplyResponder } from "@/hooks/use-coding-reply-responder";
 import type { EngineStatus } from "@/hooks/use-engine";
-import {
-  replyDoorErrorSentence,
-  replyDoorView,
-} from "@/lib/coding-sessions/reply-door";
+import { replyDoorView } from "@ai-matrx/chat/agents/coding-session-reply/reply-door";
+import { CodingReplyNotice } from "@ai-matrx/chat/agents/coding-session-reply/CodingReplyNotice";
+import { referencePathsText } from "@/features/filesystem/reference-paths";
 import { DEFAULT_CHAT_MANDATE_KEY, DEFAULT_CHAT_MANDATE_REF } from "@/lib/mandates";
 import { cn } from "@/lib/utils";
 import { PackageCloudChat } from "@/features/package-chat/PackageCloudChat";
@@ -167,10 +165,7 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
   const door = replyDoorView(replyDoor);
 
   const handleReferencePaths = useCallback((paths: string[]) => {
-    const text = paths.length === 1
-      ? `Use this local path: ${paths[0]}`
-      : `Use these local paths:\n${paths.map((path) => `- ${path}`).join("\n")}`;
-    setDraftInsertion({ id: Date.now(), text });
+    setDraftInsertion({ id: Date.now(), text: referencePathsText(paths) });
   }, []);
 
   // The default choice is the `local.cloud_chat` Mandate — a platform answer,
@@ -448,43 +443,8 @@ function CloudChatSurface({ engineStatus, engineUrl }: CloudChatProps) {
             shown whenever this conversation is a mirrored coding session, so a
             person always knows their reply is answered by AI Matrx and that
             the coding tool will not see it. */}
-        {(door.label ||
-          door.refusalSentence ||
-          replyDoor.status === "loading" ||
-          replyDoor.status === "error") && (
-          <div className="shrink-0 px-4 pt-1">
-            <div className="mx-auto max-w-3xl">
-              {replyDoor.status === "loading" ? (
-                <p
-                  className="flex items-center gap-2 text-xs text-muted-foreground"
-                  data-testid="reply-door-checking"
-                >
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                  Checking who answers here…
-                </p>
-              ) : replyDoor.status === "error" ? (
-                <p
-                  className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400"
-                  data-testid="reply-door-error"
-                >
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>{replyDoorErrorSentence(replyDoor.error ?? "no reason given")}</span>
-                </p>
-              ) : (
-                <p
-                  className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400"
-                  data-testid="reply-door-label"
-                >
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {door.label ?? door.refusalSentence}
-                    {door.standInNotice ? ` ${door.standInNotice}` : ""}
-                  </span>
-                </p>
-              )}
-            </div>
-          </div>
-        )}
+        {/* Who answers here — the server's own sentence, the package's one notice. */}
+        <CodingReplyNotice state={replyDoor} className="shrink-0 px-4 pt-1 [&>*]:mx-auto [&>*]:max-w-3xl" />
 
         <div className={cn("shrink-0 px-4 pb-3", showVariables ? "pt-0" : "pt-1")}>
           <ChatInput

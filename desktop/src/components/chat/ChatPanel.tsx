@@ -1,3 +1,4 @@
+import { referencePathsText } from "@/features/filesystem/reference-paths";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { AlertCircle } from "lucide-react";
 import { useChat } from "@/hooks/use-chat";
@@ -203,10 +204,7 @@ export function ChatPanel({
   );
 
   const handleReferencePaths = useCallback((paths: string[]) => {
-    const text = paths.length === 1
-      ? `Use this local path: ${paths[0]}`
-      : `Use these local paths:\n${paths.map((path) => `- ${path}`).join("\n")}`;
-    setDraftInsertion({ id: Date.now(), text });
+    setDraftInsertion({ id: Date.now(), text: referencePathsText(paths) });
   }, []);
 
   const handleSend = useCallback(

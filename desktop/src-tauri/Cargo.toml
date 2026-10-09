@@ -1,6 +1,6 @@
 [package]
 name = "aimatrx-desktop"
-version = "1.4.427"
+version = "1.4.428"
 description = "AI Matrx Desktop — Local companion for the AI Matrx platform"
 authors = ["AI Matrx"]
 edition = "2021"

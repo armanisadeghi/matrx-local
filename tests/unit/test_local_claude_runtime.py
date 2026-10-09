@@ -1048,15 +1048,27 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
 
     async def _slow_setup_emit(run_: _LocalRun, event: dict[str, Any]) -> None:
         # Simulate a slow runner between the wall-clock start and the receive
-        # loop; the classification must not depend on setup being fast.
+        # loop; the classification must not depend on setup being fast. Keep
+        # this above the old 300ms test watchdog so a CI-only scheduling delay
+        # cannot hide the regression this test is meant to catch.
         if event.get("event") == "runtime_started":
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.35)
         await real_emit(run_, event)
 
     monkeypatch.setattr(runtime, "_emit", _slow_setup_emit)
     request = LocalRuntimeStartRequest(workspace=str(workspace_root), prompt="secret")
 
-    await asyncio.wait_for(runtime._execute(run, request), timeout=0.3)
+    # This watchdog proves every timeout path settles while allowing the
+    # receive-idle case's intentionally generous wall clock to cover slow
+    # setup. The behavior under test still has a 20ms idle limit.
+    await asyncio.wait_for(
+        runtime._execute(run, request),
+        timeout=max(
+            float(config["execution_timeout_seconds"]),
+            float(config["idle_timeout_seconds"]),
+        )
+        + 1.0,
+    )
 
     assert run.status == "failed"
     assert expected_error in (run.error or "")

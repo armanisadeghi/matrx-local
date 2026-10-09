@@ -153,7 +153,9 @@ function clientOver(rows: unknown[]): AgentCatalogClient {
     };
     return builder as ReturnType<AgentCatalogClient["rpc"]>;
   };
-  return { rpc: call };
+  // Since @ai-matrx/associations 0.14.0 the catalog's associations store calls
+  // through `schema(name).rpc(...)`, so the stand-in carries both doors.
+  return { rpc: call, schema: () => ({ rpc: call }) } as unknown as AgentCatalogClient;
 }
 
 async function renderPicker(

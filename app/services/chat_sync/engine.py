@@ -192,7 +192,7 @@ def _report_snapshot_drift(table: str, unknown: list[str]) -> None:
         "[chat_sync] chat.%s: the cloud sends %s and this build has no column for "
         "them, so those values are NOT being stored locally (every pulled row of "
         "this table, silently, until fixed). WHAT TO DO: refresh "
-        "schema_mirror/snapshot.json from the live schema, run "
+        "schema_mirror/description/ (scripts/refresh_mirror_snapshot.py), run "
         "scripts/generate_mirror_schema.py, and ship it — "
         "scripts/check_mirror_snapshot_drift.py finds this before release. "
         "Reported once per column; the row count keeps accruing in "

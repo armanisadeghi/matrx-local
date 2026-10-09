@@ -1,49 +1,37 @@
-# schema_mirror — canonical cloud schema snapshot
+# schema_mirror — the cloud schema, from the ONE database description
 
 The cloud database (Supabase project `brsgrqvjdzwihsvnfqkf`) is the spec for
-the local SQLite mirror. `snapshot.json` is a checked-in introspection dump of
-the cloud schemas (`chat`, `workbench`, `ai`) that
+the local SQLite mirror. `description/` holds byte copies of the ONE database description's
+`ai`, `chat`, `files` and `workbench` schemas (aidream `db-contract/`) that
 `scripts/generate_mirror_schema.py` turns into
 `app/services/local_db/mirror_schema.py` — the generated DDL the engine uses
 to create and drift-check the local mirror tables.
 
-**Never hand-edit `snapshot.json` or `mirror_schema.py`.** The whole point is
+**Never hand-edit `description/` or `mirror_schema.py`.** The whole point is
 that drift between local and cloud is mechanically detectable.
 
-## Refreshing the snapshot
+## Refreshing the description
 
-When the cloud schema changes (or on suspicion of drift):
+matrx-local no longer introspects the cloud itself. The ONE database
+description is emitted by `@ai-matrx/data` in aidream and read by every client
+(TypeScript doors, Swift/Kotlin later, and this mirror):
 
-1. From an environment with the canonical `SUPABASE_MATRIX_HOST`,
-   `SUPABASE_MATRIX_PORT`, `SUPABASE_MATRIX_USER`, and
-   `SUPABASE_MATRIX_PASSWORD`, run `python scripts/refresh_mirror_snapshot.py`.
-   It reads this catalog query from the live DB and refuses removed columns or
-   changed table/primary-key identity until the retirement impact is reviewed:
-
-```sql
-select table_schema, table_name, column_name, ordinal_position,
-       data_type, udt_name, is_nullable, column_default
-from information_schema.columns
-where table_schema in ('chat','workbench','ai')
-order by table_schema, table_name, ordinal_position;
-```
-
-   Also confirm which relations are views (`pg_views`) and the primary keys
-   (`information_schema.table_constraints` / `key_column_usage`) — the
-   snapshot stores `kind` and `pk` per relation.
-
-2. The refresh command rebuilds `snapshot.json` (same shape:
-   `schemas.<schema>.<table>` with `kind`, `pk`,
-   `columns[{name,udt,data_type,nullable,default}]`) and bumps `generated_at`.
-
+1. In aidream: `node apps/shared/data/bin/matrx-data.mjs emit --out db-contract`
+   (read-only against the live DB; `--check` fails on drift).
+2. Here: `python scripts/refresh_mirror_snapshot.py` copies the mirrored schemas
+   (`ai`, `chat`, `files`, `workbench`) into `description/` with `source.json`
+   naming the contract hash. It refuses removed columns or changed table /
+   primary-key identity on a mirrored table until the retirement impact is reviewed.
 3. When the refresh removes a column that an older app already mirrored, add
    it to `retired_columns.json`. This is a non-destructive local upgrade ledger:
    the column remains on disk, is excluded from sync, and is no longer reported
    as unknown drift. Never remove an entry while supported installations may
    still carry that column.
+4. `python scripts/generate_mirror_schema.py` and commit the description copies,
+   retirement ledger (when changed), and generated module together.
 
-4. `python scripts/generate_mirror_schema.py` and commit the snapshot, retirement
-   ledger (when changed), and generated module together.
+`python scripts/refresh_mirror_snapshot.py --check` fails when the copies differ
+from aidream's `db-contract/` (needs the sibling checkout).
 
 CI/parity: `python scripts/generate_mirror_schema.py --check` fails when the
 generated module is stale relative to the snapshot.

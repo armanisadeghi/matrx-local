@@ -1,0 +1,7730 @@
+{
+ "enums": {
+  "platform.shown_to": [
+   "only_me",
+   "my_team",
+   "everyone",
+   "everyone_on_ai_matrx"
+  ],
+  "platform.visibility": [
+   "personal",
+   "internal",
+   "link",
+   "public"
+  ],
+  "public.artifact_status": [
+   "draft",
+   "published",
+   "archived",
+   "failed"
+  ],
+  "public.artifact_type": [
+   "html_page",
+   "flashcard_deck",
+   "org_chart",
+   "diagram",
+   "data_table",
+   "timeline",
+   "comparison_table",
+   "quiz",
+   "summary",
+   "outline",
+   "report",
+   "code_snippet",
+   "spreadsheet",
+   "presentation",
+   "other"
+  ],
+  "public.code_edit_status": [
+   "applied",
+   "rejected",
+   "reverted"
+  ],
+  "public.code_message_file_status": [
+   "in_progress",
+   "completed",
+   "reverted"
+  ],
+  "public.cx_agent_task_creator": [
+   "agent",
+   "user"
+  ],
+  "public.cx_agent_task_status": [
+   "pending",
+   "in_progress",
+   "done",
+   "blocked",
+   "skipped"
+  ],
+  "public.cx_plan_status": [
+   "proposed",
+   "approved",
+   "rejected",
+   "superseded"
+  ]
+ },
+ "format": "matrx-db-description/1",
+ "functions": {
+  "_message_tool_call_ids": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_content",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_content jsonb",
+    "name": "_message_tool_call_ids",
+    "registered": false,
+    "returns": {
+     "array": true,
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "admin_explore_conversation_facets": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_filters",
+      "optional": true,
+      "type": "jsonb"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_super_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_filters jsonb",
+    "name": "admin_explore_conversation_facets",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "admin_explore_conversations": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_filters",
+      "optional": true,
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_sort",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_dir",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_limit",
+      "optional": true,
+      "type": "integer"
+     },
+     {
+      "mode": "in",
+      "name": "p_offset",
+      "optional": true,
+      "type": "integer"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_super_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_filters jsonb, p_sort text, p_dir text, p_limit integer, p_offset integer",
+    "name": "admin_explore_conversations",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "admin_user_usage_rollup": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_from",
+      "optional": true,
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "in",
+      "name": "p_to",
+      "optional": true,
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "table",
+      "name": "user_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "email",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "total_requests",
+      "type": "bigint"
+     },
+     {
+      "mode": "table",
+      "name": "input_tokens",
+      "type": "bigint"
+     },
+     {
+      "mode": "table",
+      "name": "output_tokens",
+      "type": "bigint"
+     },
+     {
+      "mode": "table",
+      "name": "total_tokens",
+      "type": "bigint"
+     },
+     {
+      "mode": "table",
+      "name": "total_cost",
+      "type": "numeric"
+     },
+     {
+      "mode": "table",
+      "name": "distinct_models",
+      "type": "bigint"
+     },
+     {
+      "mode": "table",
+      "name": "last_activity",
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "table",
+      "name": "by_origin",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_from timestamp with time zone, p_to timestamp with time zone",
+    "name": "admin_user_usage_rollup",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "agent_run_lane_rows": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_scope",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_org_id",
+      "optional": true,
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_scope text, p_org_id uuid",
+    "name": "agent_run_lane_rows",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "chat.agent_run"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "agent_run_list_lanes": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_org_id",
+      "optional": true,
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_kind",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "lane",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "organization_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_org_id uuid, p_kind text",
+    "name": "agent_run_list_lanes",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "artifact_templates": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_organization_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_purpose",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "organization_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "name",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "body",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "template_version",
+      "type": "integer"
+     },
+     {
+      "mode": "table",
+      "name": "metadata",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "is_platform_default",
+      "type": "boolean"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_organization_id uuid, p_purpose text",
+    "name": "artifact_templates",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "coding_projects_of": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_user uuid",
+    "name": "coding_projects_of",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "conversation_lane": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "source_app",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "source_feature",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "origin_class",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "conversation_type",
+      "type": "text"
+     }
+    ],
+    "identity": "source_app text, source_feature text, origin_class text, conversation_type text",
+    "name": "conversation_lane",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "cx_overview_kpis": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_start",
+      "optional": true,
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "in",
+      "name": "p_end",
+      "optional": true,
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "in",
+      "name": "p_user_id",
+      "optional": true,
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_start timestamp with time zone, p_end timestamp with time zone, p_user_id uuid",
+    "name": "cx_overview_kpis",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "cx_usage_analytics": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_start",
+      "optional": true,
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "in",
+      "name": "p_end",
+      "optional": true,
+      "type": "timestamp with time zone"
+     }
+    ],
+    "identity": "p_start timestamp with time zone, p_end timestamp with time zone",
+    "name": "cx_usage_analytics",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "kind_readable_text": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p",
+      "type": "text"
+     }
+    ],
+    "identity": "p text",
+    "name": "kind_readable_text",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "lane": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "c",
+      "type": "chat.conversation"
+     }
+    ],
+    "identity": "c chat.conversation",
+    "name": "lane",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "message_search_text": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_content",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_content jsonb",
+    "name": "message_search_text",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "message_search_tsv": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_content",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_content jsonb",
+    "name": "message_search_tsv",
+    "registered": false,
+    "returns": {
+     "type": "tsvector"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "move_coding_conversations_to_organization": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_conversation_ids",
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_target",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_user uuid, p_conversation_ids jsonb, p_target uuid",
+    "name": "move_coding_conversations_to_organization",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "volatile"
+   }
+  ],
+  "root_conversation_id": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_conversation_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_conversation_id uuid",
+    "name": "root_conversation_id",
+    "registered": false,
+    "returns": {
+     "type": "uuid"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ]
+ },
+ "schema": "chat",
+ "tables": {
+  "agent_memory": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "memory_type",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "scope",
+     "type": "text"
+    },
+    {
+     "name": "scope_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "key",
+     "type": "text"
+    },
+    {
+     "name": "content",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "importance",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "default": true,
+     "name": "access_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_accessed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "expires_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "agent_memory_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "agent_memory_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "agent_memory_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "agent_memory",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": "key",
+    "token": "cx_agent_memory",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "agent_plan": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "steps",
+     "type": "jsonb"
+    },
+    {
+     "name": "reasoning",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "array": true,
+     "name": "domains",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "estimated_minutes",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "public.cx_plan_status",
+     "name": "status",
+     "type": "cx_plan_status"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "agent_plan_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "agent_plan_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "agent_plan_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_agent_plan_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "agent_plan",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "cx_agent_plan",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "agent_run": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "input_fingerprint",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "request",
+     "type": "jsonb"
+    },
+    {
+     "name": "result",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "total_cost",
+     "type": "numeric"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "episode_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "last_heartbeat_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "agent_run_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "episode_id"
+     ],
+     "name": "agent_run_episode_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "podcast.pc_episodes"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "agent_run_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "agent_run_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "agent_run",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "agent_run",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "agent_run_stage": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "run_id",
+     "type": "uuid"
+    },
+    {
+     "name": "stage_key",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "output",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "default": true,
+     "name": "started_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "finished_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "agent_run_stage_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "agent_run_stage_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "run_id"
+     ],
+     "name": "agent_run_stage_run_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.agent_run"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "agent_run_stage_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "agent_run_stage",
+   "org": {
+    "parent": "chat.agent_run",
+    "rule": "parent",
+    "via": "run_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "agent_run_stage",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "agent_task": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "plan_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "public.cx_agent_task_status",
+     "name": "status",
+     "type": "cx_agent_task_status"
+    },
+    {
+     "name": "note",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "position",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "public.cx_agent_task_creator",
+     "name": "creator_kind",
+     "nullable": true,
+     "type": "cx_agent_task_creator"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "agent_task_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "agent_task_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "agent_task_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_agent_task_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "plan_id"
+     ],
+     "name": "cx_agent_task_plan_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.agent_plan"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "agent_task",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "cx_agent_task",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "artifact": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "message_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "enum": "public.artifact_type",
+     "name": "artifact_type",
+     "type": "artifact_type"
+    },
+    {
+     "default": true,
+     "enum": "public.artifact_status",
+     "name": "status",
+     "type": "artifact_status"
+    },
+    {
+     "name": "external_system",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "external_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "external_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "title",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "thumbnail_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "canvas_item_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "source_system",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "artifact_index",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "artifact_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "artifact_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "artifact_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "canvas_item_id"
+     ],
+     "name": "cx_artifact_canvas_item_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "canvas.canvas_items"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_artifact_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "message_id"
+     ],
+     "name": "cx_artifact_message_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.message"
+    },
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "cx_artifact_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "artifact",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "artifact",
+    "type": "detail",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "code_edit": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "message_file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "message_id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "block_index",
+     "type": "integer"
+    },
+    {
+     "name": "search_text",
+     "type": "text"
+    },
+    {
+     "name": "replace_text",
+     "type": "text"
+    },
+    {
+     "enum": "public.code_edit_status",
+     "name": "status",
+     "type": "code_edit_status"
+    },
+    {
+     "name": "applied_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "rejected_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "reverted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "reject_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "code_edit_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "code_edit_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "code_edit_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_code_edit_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "message_file_id"
+     ],
+     "name": "cx_code_edit_message_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.code_message_file"
+    },
+    {
+     "columns": [
+      "message_id"
+     ],
+     "name": "cx_code_edit_message_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.message"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "code_edit",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_code_edit",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "code_message_file": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "message_id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_adapter",
+     "type": "text"
+    },
+    {
+     "name": "file_path",
+     "type": "text"
+    },
+    {
+     "name": "library_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "before_content",
+     "type": "text"
+    },
+    {
+     "name": "after_content",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "edits_applied_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "edits_rejected_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "edits_pending_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "public.code_message_file_status",
+     "name": "status",
+     "type": "code_message_file_status"
+    },
+    {
+     "name": "reverted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "git_commit_sha",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "git_branch",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "code_message_file_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "code_message_file_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "code_message_file_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_code_message_file_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "message_id"
+     ],
+     "name": "cx_code_message_file_message_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.message"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "code_message_file",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_code_message_file",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "coding_session": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "provider",
+     "type": "text"
+    },
+    {
+     "name": "provider_session_id",
+     "type": "text"
+    },
+    {
+     "name": "provider_project_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "fidelity",
+     "type": "text"
+    },
+    {
+     "name": "origin",
+     "type": "text"
+    },
+    {
+     "name": "runtime_kind",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "runtime_ref",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "workspace_fingerprint",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "last_seen_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "ended_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "retention_expires_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "capabilities",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "writer_runtime_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "writer_lease_expires_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "coding_session_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "coding_session_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "coding_session_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "coding_session_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "coding_session",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "coding_session",
+    "type": "restricted",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "coding_session_entry": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "coding_session_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "stream_key",
+     "type": "text"
+    },
+    {
+     "name": "entry_format",
+     "type": "text"
+    },
+    {
+     "name": "source_sequence",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "identity": true,
+     "name": "ingest_order",
+     "type": "bigint"
+    },
+    {
+     "name": "provider_entry_id",
+     "type": "text"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "name": "occurred_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "payload",
+     "type": "jsonb"
+    },
+    {
+     "name": "payload_sha256",
+     "type": "text"
+    },
+    {
+     "name": "source_cursor",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "projection_status",
+     "type": "text"
+    },
+    {
+     "name": "projector_version",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "projection_receipt",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "projection_error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "coding_session_id"
+     ],
+     "name": "coding_session_entry_coding_session_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.coding_session"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "coding_session_entry_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "coding_session_entry_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "coding_session_entry_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "coding_session_entry",
+   "org": {
+    "parent": "chat.coding_session",
+    "rule": "parent",
+    "via": "coding_session_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "coding_session_entry",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "conversation": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "system_instruction",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "config",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "message_count",
+     "type": "integer"
+    },
+    {
+     "name": "forked_from_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "forked_at_position",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "last_model_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "parent_conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "variables",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "overrides",
+     "type": "jsonb"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "array": true,
+     "name": "keywords",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "source_app",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "source_feature",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "is_ephemeral",
+     "type": "boolean"
+    },
+    {
+     "name": "initial_agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "initial_agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_favorite",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "cache_state",
+     "type": "jsonb"
+    },
+    {
+     "name": "last_context_breakdown",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "sandbox_instance_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "last_request_status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "last_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "app_instance_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "exclude_from_kg",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "conversation_type",
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "origin_class",
+     "type": "text"
+    },
+    {
+     "array": true,
+     "default": true,
+     "name": "host_value_names",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "conversation_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "conversation_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "app_instance_id"
+     ],
+     "name": "cx_conversation_app_instance_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "public.app_instances"
+    },
+    {
+     "columns": [
+      "forked_from_id"
+     ],
+     "name": "cx_conversation_forked_from_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "initial_agent_id"
+     ],
+     "name": "cx_conversation_initial_agent_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "agent.definition"
+    },
+    {
+     "columns": [
+      "initial_agent_version_id"
+     ],
+     "name": "cx_conversation_initial_agent_version_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "agent.definition_version"
+    },
+    {
+     "columns": [
+      "last_model_id"
+     ],
+     "name": "cx_conversation_last_model_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "cx_conversation_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "parent_conversation_id"
+     ],
+     "name": "cx_conversation_parent_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "sandbox_instance_id"
+     ],
+     "name": "cx_conversation_sandbox_instance_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "public.sandbox_instances"
+    },
+    {
+     "columns": [
+      "task_id"
+     ],
+     "name": "cx_conversation_task_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "projects.tasks"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "conversation",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "conversation",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "conversation_value": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "key",
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "name": "content",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "content_json",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "json_schema",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "chars",
+     "type": "integer"
+    },
+    {
+     "name": "source_agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "source_call_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_execution_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "conversation_value_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "conversation_value_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "conversation_value_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "conversation_value_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "conversation_value",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "key",
+    "token": "conversation_value",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "media": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "name": "url",
+     "type": "text"
+    },
+    {
+     "name": "file_uri",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "mime_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "file_size_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_media_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "media_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "media_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "media_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "media",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_media",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "message": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "role",
+     "type": "text"
+    },
+    {
+     "name": "position",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "content",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "content_history",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "source",
+     "type": "text"
+    },
+    {
+     "name": "agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_visible_to_user",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_visible_to_model",
+     "type": "boolean"
+    },
+    {
+     "name": "user_content",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "content_chars",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "tool_results_chars",
+     "type": "integer"
+    },
+    {
+     "name": "tools_on_call",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "model_context",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "voice",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "agent_id"
+     ],
+     "name": "cx_message_agx_agent_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "agent.definition"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_message_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "message_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "message_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "message_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "message",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "message",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "observational_memory": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "scope",
+     "type": "text"
+    },
+    {
+     "name": "active_observations",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "observation_token_count",
+     "type": "integer"
+    },
+    {
+     "name": "current_task",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "suggested_response",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "last_observed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "observed_message_ids",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "pending_message_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "buffered_observations",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "is_buffering_observation",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "last_buffered_at_tokens",
+     "type": "integer"
+    },
+    {
+     "name": "last_buffered_at_time",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "buffered_reflection",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "buffered_reflection_input_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "buffered_reflection_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "is_buffering_reflection",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "reflected_observation_line_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "generation_count",
+     "type": "integer"
+    },
+    {
+     "name": "observed_timezone",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "config",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_observational_memory_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "observational_memory_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "observational_memory_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "observational_memory_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "observational_memory",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_observational_memory",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "observational_memory_event": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "memory_record_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "user_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "event_type",
+     "type": "text"
+    },
+    {
+     "name": "model",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "input_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "output_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "cost",
+     "type": "numeric"
+    },
+    {
+     "name": "duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "triggered_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "success",
+     "type": "boolean"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "trigger_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "memory_record_id"
+     ],
+     "name": "cx_observational_memory_event_memory_record_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.observational_memory"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "observational_memory_event_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "observational_memory_event_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "observational_memory_event_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "observational_memory_event_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "user_request_id"
+     ],
+     "name": "observational_memory_event_user_request_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.user_request"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "observational_memory_event",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_observational_memory_event",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "pending_injection": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "content",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "source",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "is_visible_to_user",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_visible_to_model",
+     "type": "boolean"
+    },
+    {
+     "identity": true,
+     "name": "enqueued_seq",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "consumed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "consumed_by_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "consumed_message_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "delivery",
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_pending_injection_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "pending_injection_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "pending_injection_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "pending_injection_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "pending_injection",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_pending_injection",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "request": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "user_request_id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "provider",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "iteration",
+     "type": "smallint"
+    },
+    {
+     "name": "input_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "output_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cached_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "api_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "tool_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "tool_calls_count",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "tool_calls_details",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "finish_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "response_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "ai_model_id",
+     "type": "uuid"
+    },
+    {
+     "name": "raw_usage",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "trim_summary",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "execution_kind",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "execution_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "ai_model_id"
+     ],
+     "name": "cx_request_ai_model_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_request_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "user_request_id"
+     ],
+     "name": "cx_request_user_request_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.user_request"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "request_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "request_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "request_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "request",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_request",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "request_snapshot": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "user_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "cx_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "iteration",
+     "type": "smallint"
+    },
+    {
+     "name": "trigger_message_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "response_message_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "provider",
+     "type": "text"
+    },
+    {
+     "name": "model",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "request_payload",
+     "type": "jsonb"
+    },
+    {
+     "name": "response_payload",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "unified_payload",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "pinned_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "pin_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "agent_definition_version",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "workflow_definition_version",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "request_snapshot_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "request_snapshot_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "request_snapshot_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "request_snapshot_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "user_request_id"
+     ],
+     "name": "request_snapshot_user_request_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.user_request"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "request_snapshot",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_request_snapshot",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "tool_call": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "message_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "user_request_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "tool_name",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "tool_type",
+     "type": "text"
+    },
+    {
+     "name": "call_id",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "arguments",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "success",
+     "type": "boolean"
+    },
+    {
+     "name": "output",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "output_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "is_error",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "error_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "error_message",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "duration_ms",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "started_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "completed_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "input_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "output_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "cost_usd",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "default": true,
+     "name": "iteration",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "retry_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "parent_call_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "execution_events",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "persist_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "file_path",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "output_chars",
+     "type": "integer"
+    },
+    {
+     "name": "output_preview",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "is_client_delegated",
+     "type": "boolean"
+    },
+    {
+     "name": "expires_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "resolved_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "resolution_source",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "tool_name_as_called",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "fault_domain",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "value_ref_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "model_stub_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "runtime_execution_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "target_instance_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "claimed_by_instance_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "claimed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "claim_expires_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "refetch_args_hash",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "refetch_out_hash",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "refetch_seq",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "refetch_first_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "refetch_prior",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "refetch_trimmed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "refetch_settled_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_tool_call_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "message_id"
+     ],
+     "name": "cx_tool_call_message_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.message"
+    },
+    {
+     "columns": [
+      "user_request_id"
+     ],
+     "name": "cx_tool_call_user_request_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.user_request"
+    },
+    {
+     "columns": [
+      "parent_call_id"
+     ],
+     "name": "fk_cx_tool_call_parent",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.tool_call"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "tool_call_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "tool_call_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "tool_call_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "tool_call",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "tool_call",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "tool_trace": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "process_pid",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "process_started_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "ts",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "event",
+     "type": "text"
+    },
+    {
+     "name": "tool_name",
+     "type": "text"
+    },
+    {
+     "name": "kind",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "args",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "result_preview",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "err_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "err_msg",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "call_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "fault_domain",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "tool_trace_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "tool_trace_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "tool_trace_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "tool_trace_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "tool_trace",
+   "org": {
+    "parent": "chat.conversation",
+    "rule": "parent",
+    "via": "conversation_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_tool_trace",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "user_request": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "total_input_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "total_output_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "total_cached_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "total_tokens",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "api_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "tool_duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "iterations",
+     "type": "smallint"
+    },
+    {
+     "default": true,
+     "name": "total_tool_calls",
+     "type": "smallint"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "finish_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "source_app",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "source_feature",
+     "type": "text"
+    },
+    {
+     "name": "agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "last_activity_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "origin_class",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "origin_witness",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "workflow_run_id",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "agent_id"
+     ],
+     "name": "cx_user_request_agent_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "agent.definition"
+    },
+    {
+     "columns": [
+      "agent_version_id"
+     ],
+     "name": "cx_user_request_agent_version_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "agent.definition_version"
+    },
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "user_request_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "user_request_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "user_request_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "user_request_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "workflow_run_id"
+     ],
+     "name": "user_request_workflow_run_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workflow.run"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "user_request",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "cx_user_request",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "user_todo": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "type": "text"
+    },
+    {
+     "name": "context",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "due",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "done",
+     "type": "boolean"
+    },
+    {
+     "name": "done_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "ctx_task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "conversation_id"
+     ],
+     "name": "cx_user_todo_conversation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "chat.conversation"
+    },
+    {
+     "columns": [
+      "ctx_task_id"
+     ],
+     "name": "cx_user_todo_ctx_task_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "projects.tasks"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "user_todo_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "user_todo_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "user_todo_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "user_todo",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "cx_user_todo",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "user_usage_summary": {
+   "columns": [
+    {
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "auth_type",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "cost_6h_mcents",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "cost_24h_mcents",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "requests_6h",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "requests_24h",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "tokens_6h",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "tokens_24h",
+     "type": "bigint"
+    },
+    {
+     "name": "last_request_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "window_6h_starts_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "window_24h_starts_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "daily_blocked",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "window_blocked",
+     "type": "boolean"
+    },
+    {
+     "name": "blocked_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "cx_user_usage_summary_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "user_usage_summary",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "user_id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "chat_user_usage_summary",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  }
+ },
+ "views": {
+  "_tool_call_facts": {
+   "columns": [
+    {
+     "name": "tool_call_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "tool_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "person_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "output_chars",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "is_repeat",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "same_data",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "new_data",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "unknown_data",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "after_trim",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "chars_refetched_same_data",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "gap_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "gap_secs",
+     "nullable": true,
+     "type": "numeric"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "_tool_call_facts",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "admin_conversation_summary": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_app",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_feature",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "is_ephemeral",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_public",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_favorite",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "message_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_model_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "project_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "updated_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "request_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "error_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_request_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_request_status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "tool_call_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "snapshot_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_model_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "last_model_provider",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "initial_agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "initial_agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "known_cost_subtotal",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "unknown_cost_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cost_complete",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "conversation_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "origin_class",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "admin_conversation_summary",
+   "org": {
+    "rule": "column"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "admin_user_request_summary": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "finish_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_app",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_feature",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_activity_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "stored_total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "stored_total_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "request_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "conversation_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_input_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_output_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cached_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "api_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "tool_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_tool_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "error_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_request_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "known_cost_subtotal",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "unknown_cost_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cost_complete",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "iterations",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "origin_class",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "admin_user_request_summary",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "conversation_summary": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "title",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_app",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_feature",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "is_ephemeral",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_public",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_favorite",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "message_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_model_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "project_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "updated_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "request_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "error_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_request_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_request_status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "tool_call_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "snapshot_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_model_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "last_model_provider",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "initial_agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "initial_agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "known_cost_subtotal",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "unknown_cost_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cost_complete",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "conversation_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "origin_class",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "conversation_summary",
+   "org": {
+    "rule": "column"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "mv_tool_refetch_summary": {
+   "columns": [
+    {
+     "name": "tool_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "total_calls",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_conversations",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "repeat_rate",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "same_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "same_data_rate",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "new_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "unknown_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "after_trim_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "median_gap_calls",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "median_gap_secs",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "chars_refetched_same_data",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "conversations",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "last_repeat_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "refreshed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "materialized_view",
+   "lifecycle": {},
+   "name": "mv_tool_refetch_summary",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "user_request_summary": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "finish_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_app",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "source_feature",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "agent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "agent_version_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_activity_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "stored_total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "stored_total_tokens",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "request_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "conversation_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "total_input_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_output_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cached_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_cost",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "api_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "tool_duration_ms",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_tool_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "error_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "last_request_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "known_cost_subtotal",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "unknown_cost_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "cost_complete",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "iterations",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "origin_class",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "user_request_summary",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "vw_tool_gate_verdict": {
+   "columns": [
+    {
+     "name": "tool_call_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "call_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "tool_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "retained_output_chars",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "decided_by",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "mandate_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "limits_source",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "result_format",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "threshold",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "total_chars",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "shown_chars",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "section_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "kept_sections",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "withheld_sections_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "unjudged_kept_sections",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "withheld_sections",
+     "nullable": true,
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "vw_tool_gate_verdict",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "vw_tool_refetch": {
+   "columns": [
+    {
+     "name": "conversation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "tool_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "arguments",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "repeat_tool_call_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "repeat_call_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "repeat_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "repeat_iteration",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "repeat_output_chars",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "first_tool_call_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "first_call_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "first_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "first_iteration",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "first_output_chars",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "prior_identical_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "same_data",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "gap_calls",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "gap_secs",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "gap_iterations",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "first_result_trimmed_before_repeat",
+     "nullable": true,
+     "type": "boolean"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "vw_tool_refetch",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "vw_tool_refetch_summary": {
+   "columns": [
+    {
+     "name": "tool_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "total_calls",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "total_conversations",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "repeat_rate",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "same_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "same_data_rate",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "new_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "unknown_data_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "after_trim_repeats",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "median_gap_calls",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "median_gap_secs",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "chars_refetched_same_data",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "conversations",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "last_repeat_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "vw_tool_refetch_summary",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  }
+ }
+}

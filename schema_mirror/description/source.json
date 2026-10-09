@@ -1,0 +1,11 @@
+{
+ "contractSha256": "da5ddb373a53a7d124087368aeffaee226fffdf08ac97a566f263e571667229d",
+ "format": "matrx-db-description/1",
+ "from": "aidream db-contract/ (matrx-data emit)",
+ "schemas": {
+  "ai": "330eb3625c0d4a6fa5a34bb2d0343433457564188cd8c5319a545b5a82f5b335",
+  "chat": "db645234385208d820e4a4ab71101dfa5eeeec663c210da8eb3096bad68ecbd2",
+  "files": "cf5332bd989542965ded12f5ccc9ac0b1fc2d042cf04d87b1421cff7ed9ecd6c",
+  "workbench": "d7c3b07eeacc55b9a3c016f4ad6b6ad98afdb0a29ef67a2e89bb9d11af47d89c"
+ }
+}

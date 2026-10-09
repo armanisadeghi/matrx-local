@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
-"""Refresh the checked-in mirror snapshot from the canonical cloud database.
+"""Refresh the mirror's copy of the ONE database description.
 
-Requires SUPABASE_MATRIX_HOST/PORT/USER/PASSWORD in the environment. This is
-read-only against Postgres and refuses a destructive snapshot change: removed
-relations/columns or changed relation/primary-key identity require review.
+matrx-local no longer introspects the cloud itself (the retired
+``schema_mirror/snapshot.json`` was a second catalogue emitter). The description
+is emitted once, by ``@ai-matrx/data``:
+
+    (aidream) node apps/shared/data/bin/matrx-data.mjs emit --out db-contract
+
+and this script copies the schemas the mirror reads (``mirror_description.SCHEMAS``)
+from that directory into ``schema_mirror/description/`` with ``source.json`` naming
+the contract hash. It refuses a destructive change to a mirrored relation (removed
+relation/column, changed kind or primary key) until the retirement ledger is reviewed.
+
+    python scripts/refresh_mirror_snapshot.py [--from ../aidream/db-contract] [--check]
+
+--check: exit 1 when the copies differ from the source description (CI parity with aidream).
 """
-
 from __future__ import annotations
 
+import argparse
 import json
-import os
-from datetime import date
+import sys
 from pathlib import Path
 
-import sys
-
-import psycopg
-
-
 ROOT = Path(__file__).resolve().parents[1]
-SNAPSHOT = ROOT / "schema_mirror" / "snapshot.json"
 sys.path.insert(0, str(ROOT / "scripts"))
 from generate_mirror_schema import MIRRORED_SCHEMAS  # noqa: E402
+from mirror_description import DESCRIPTION_DIR, SCHEMAS, SOURCE_PATH, load_snapshot, read_schema, to_snapshot  # noqa: E402
+
+DEFAULT_FROM = ROOT.parent / "aidream" / "db-contract"
 
 
 def is_mirrored(schema: str, relation: str) -> bool:
@@ -43,7 +50,7 @@ def validate_non_destructive(old: dict, updated: dict) -> None:
     concerns = []
     for schema, tables in old["schemas"].items():
         for relation, details in tables.items():
-            if not is_mirrored(schema, relation):
+            if not is_mirrored(schema, relation) or details["kind"] != "table":
                 continue
             live = updated["schemas"].get(schema, {}).get(relation)
             if live is None:
@@ -60,83 +67,45 @@ def validate_non_destructive(old: dict, updated: dict) -> None:
         raise SystemExit("review retired columns or changed identity before refresh: " + ", ".join(concerns))
 
 
-def main() -> None:
-    old = json.loads(SNAPSHOT.read_text())
-    schemas = tuple(old["schemas"])
-    if set(schemas) != {"ai", "chat", "files", "workbench"}:
-        raise SystemExit("unexpected snapshot schema scope")
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--from", dest="source", default=str(DEFAULT_FROM), help="the description directory (aidream db-contract/)")
+    parser.add_argument("--check", action="store_true", help="exit 1 when the copies differ from the source")
+    args = parser.parse_args()
+    source = Path(args.source)
+    index_path = source / "index.json"
+    if not index_path.exists():
+        print(f"no database description at {source} — emit it in aidream first (matrx-data emit)", file=sys.stderr)
+        return 2
+    index = json.loads(index_path.read_text())
+    texts = {schema: (source / f"{schema}.json").read_text() for schema in SCHEMAS}
+    src = {
+        "contractSha256": index["contractSha256"],
+        "format": index["format"],
+        "from": "aidream db-contract/ (matrx-data emit)",
+        "schemas": {schema: index["schemas"][schema]["sha256"] for schema in SCHEMAS},
+    }
+    src_text = json.dumps(src, indent=1, sort_keys=True) + "\n"
 
-    with psycopg.connect(
-        host=os.environ["SUPABASE_MATRIX_HOST"],
-        port=os.environ["SUPABASE_MATRIX_PORT"],
-        user=os.environ["SUPABASE_MATRIX_USER"],
-        password=os.environ["SUPABASE_MATRIX_PASSWORD"],
-        dbname="postgres",
-        sslmode="require",
-        connect_timeout=10,
-    ) as conn:
-        conn.read_only = True
-        with conn.cursor() as cur:
-            cur.execute(
-                """select table_schema, table_name, table_type
-                   from information_schema.tables
-                  where table_schema = any(%s)
-                  order by table_schema, table_name""",
-                (list(schemas),),
-            )
-            relations = cur.fetchall()
-            cur.execute(
-                """select table_schema, table_name, column_name,
-                          data_type, udt_name, is_nullable, column_default
-                   from information_schema.columns
-                  where table_schema = any(%s)
-                  order by table_schema, table_name, ordinal_position""",
-                (list(schemas),),
-            )
-            columns = cur.fetchall()
-            cur.execute(
-                """select tc.table_schema, tc.table_name, kcu.column_name
-                   from information_schema.table_constraints tc
-                   join information_schema.key_column_usage kcu
-                     on tc.table_catalog = kcu.table_catalog
-                    and tc.table_schema = kcu.table_schema
-                    and tc.table_name = kcu.table_name
-                    and tc.constraint_catalog = kcu.constraint_catalog
-                    and tc.constraint_schema = kcu.constraint_schema
-                    and tc.constraint_name = kcu.constraint_name
-                  where tc.constraint_type = 'PRIMARY KEY'
-                    and tc.table_schema = any(%s)
-                  order by tc.table_schema, tc.table_name, kcu.ordinal_position""",
-                (list(schemas),),
-            )
-            primary_keys = cur.fetchall()
+    if args.check:
+        stale = [s for s in SCHEMAS if not (DESCRIPTION_DIR / f"{s}.json").exists() or (DESCRIPTION_DIR / f"{s}.json").read_text() != texts[s]]
+        if stale:
+            print(f"DRIFT: schema_mirror/description/ differs from {source} for: {', '.join(stale)}. "
+                  "Run scripts/refresh_mirror_snapshot.py then scripts/generate_mirror_schema.py.", file=sys.stderr)
+            return 1
+        print(f"schema_mirror/description/ matches contract {index['contractSha256'][:12]}.")
+        return 0
 
-    if old.get("snapshot_version") != 1:
-        raise SystemExit("unexpected or missing snapshot_version")
-    updated = {**old, "generated_at": date.today().isoformat(), "schemas": {}}
-    for schema, relation, table_type in relations:
-        updated["schemas"].setdefault(schema, {})[relation] = {
-            "columns": [],
-            "kind": "view" if table_type == "VIEW" else "table",
-            "pk": [],
-        }
-    for schema, relation, name, data_type, udt, nullable, default in columns:
-        updated["schemas"][schema][relation]["columns"].append(
-            {
-                "data_type": data_type,
-                "default": default,
-                "name": name,
-                "nullable": nullable == "YES",
-                "udt": udt,
-            }
-        )
-    for schema, relation, name in primary_keys:
-        updated["schemas"][schema][relation]["pk"].append(name)
+    old = load_snapshot() if SOURCE_PATH.exists() else {"schemas": {}}
+    updated = to_snapshot({s: json.loads(t) for s, t in texts.items()}, src["contractSha256"][:12])
     validate_non_destructive(old, updated)
-
-    SNAPSHOT.write_text(json.dumps(updated, indent=1) + "\n")
-    print(f"Refreshed {len(relations)} relations and {len(columns)} columns")
+    DESCRIPTION_DIR.mkdir(parents=True, exist_ok=True)
+    for schema, text in texts.items():
+        (DESCRIPTION_DIR / f"{schema}.json").write_text(text)
+    SOURCE_PATH.write_text(src_text)
+    print(f"copied {', '.join(SCHEMAS)} from contract {index['contractSha256'][:12]} — now run scripts/generate_mirror_schema.py")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

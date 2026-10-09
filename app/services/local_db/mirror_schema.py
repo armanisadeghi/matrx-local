@@ -2,12 +2,12 @@
 
 Structural mirror of the canonical cloud schemas for the local SQLite store.
 Regenerate with: python scripts/generate_mirror_schema.py
-Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
+Source: schema_mirror/description/ — the ONE database description (cloud DB is the spec).
 Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
-SNAPSHOT_HASH = "ea1eec6fd1fe85f23a8b041a6744c8256c73bbf1378b764d3aeefd865f575a2c"
-SNAPSHOT_GENERATED_AT = "2026-09-29"
+SNAPSHOT_HASH = "76ba0c5c5f1d012ba169cb46b8bd53b6db10ddb88388a5c3ca8f54e79834377b"
+SNAPSHOT_GENERATED_AT = "contract da5ddb373a53"
 
 # Cloud columns removed after older app versions created them locally. The
 # mirror preserves their data but excludes them from every sync contract.
@@ -1246,6 +1246,13 @@ MIRROR_TABLES = {
                 "output_type": "TEXT",
                 "parent_call_id": "TEXT",
                 "persist_key": "TEXT",
+                "refetch_args_hash": "TEXT",
+                "refetch_first_id": "TEXT",
+                "refetch_out_hash": "TEXT",
+                "refetch_prior": "INTEGER",
+                "refetch_seq": "INTEGER",
+                "refetch_settled_at": "TEXT",
+                "refetch_trimmed": "INTEGER",
                 "resolution_source": "TEXT",
                 "resolved_at": "TEXT",
                 "retry_count": "INTEGER",
@@ -1264,7 +1271,7 @@ MIRROR_TABLES = {
                 "value_ref_key": "TEXT",
                 "version": "INTEGER"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_call\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"message_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"tool_name\" TEXT,\n    \"tool_type\" TEXT,\n    \"call_id\" TEXT,\n    \"status\" TEXT,\n    \"arguments\" TEXT,\n    \"success\" INTEGER,\n    \"output\" TEXT,\n    \"output_type\" TEXT,\n    \"is_error\" INTEGER,\n    \"error_type\" TEXT,\n    \"error_message\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"started_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost_usd\" REAL,\n    \"iteration\" INTEGER,\n    \"retry_count\" INTEGER,\n    \"parent_call_id\" TEXT,\n    \"execution_events\" TEXT,\n    \"persist_key\" TEXT,\n    \"file_path\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"output_chars\" INTEGER,\n    \"output_preview\" TEXT,\n    \"is_client_delegated\" INTEGER,\n    \"expires_at\" TEXT,\n    \"resolved_at\" TEXT,\n    \"resolution_source\" TEXT,\n    \"tool_name_as_called\" TEXT,\n    \"fault_domain\" TEXT,\n    \"organization_id\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"updated_at\" TEXT,\n    \"version\" INTEGER,\n    \"value_ref_key\" TEXT,\n    \"model_stub_at\" TEXT,\n    \"runtime_execution_id\" TEXT,\n    \"target_instance_id\" TEXT,\n    \"claimed_by_instance_id\" TEXT,\n    \"claimed_at\" TEXT,\n    \"claim_expires_at\" TEXT,\n    \"custom_fields\" TEXT, PRIMARY KEY (\"id\")\n)",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"tool_call\" (\n    \"id\" TEXT NOT NULL,\n    \"conversation_id\" TEXT,\n    \"message_id\" TEXT,\n    \"user_request_id\" TEXT,\n    \"tool_name\" TEXT,\n    \"tool_type\" TEXT,\n    \"call_id\" TEXT,\n    \"status\" TEXT,\n    \"arguments\" TEXT,\n    \"success\" INTEGER,\n    \"output\" TEXT,\n    \"output_type\" TEXT,\n    \"is_error\" INTEGER,\n    \"error_type\" TEXT,\n    \"error_message\" TEXT,\n    \"duration_ms\" INTEGER,\n    \"started_at\" TEXT,\n    \"completed_at\" TEXT,\n    \"input_tokens\" INTEGER,\n    \"output_tokens\" INTEGER,\n    \"total_tokens\" INTEGER,\n    \"cost_usd\" REAL,\n    \"iteration\" INTEGER,\n    \"retry_count\" INTEGER,\n    \"parent_call_id\" TEXT,\n    \"execution_events\" TEXT,\n    \"persist_key\" TEXT,\n    \"file_path\" TEXT,\n    \"metadata\" TEXT,\n    \"created_at\" TEXT,\n    \"deleted_at\" TEXT,\n    \"output_chars\" INTEGER,\n    \"output_preview\" TEXT,\n    \"is_client_delegated\" INTEGER,\n    \"expires_at\" TEXT,\n    \"resolved_at\" TEXT,\n    \"resolution_source\" TEXT,\n    \"tool_name_as_called\" TEXT,\n    \"fault_domain\" TEXT,\n    \"organization_id\" TEXT,\n    \"created_by\" TEXT,\n    \"updated_by\" TEXT,\n    \"updated_at\" TEXT,\n    \"version\" INTEGER,\n    \"value_ref_key\" TEXT,\n    \"model_stub_at\" TEXT,\n    \"runtime_execution_id\" TEXT,\n    \"target_instance_id\" TEXT,\n    \"claimed_by_instance_id\" TEXT,\n    \"claimed_at\" TEXT,\n    \"claim_expires_at\" TEXT,\n    \"custom_fields\" TEXT,\n    \"refetch_args_hash\" TEXT,\n    \"refetch_out_hash\" TEXT,\n    \"refetch_seq\" INTEGER,\n    \"refetch_first_id\" TEXT,\n    \"refetch_prior\" INTEGER,\n    \"refetch_trimmed\" INTEGER,\n    \"refetch_settled_at\" TEXT, PRIMARY KEY (\"id\")\n)",
             "cursor_col": "updated_at",
             "has_deleted_at": True,
             "index_sql": [
@@ -1309,6 +1316,13 @@ MIRROR_TABLES = {
                 "output_type": "text",
                 "parent_call_id": "uuid",
                 "persist_key": "text",
+                "refetch_args_hash": "text",
+                "refetch_first_id": "uuid",
+                "refetch_out_hash": "text",
+                "refetch_prior": "int4",
+                "refetch_seq": "int4",
+                "refetch_settled_at": "timestamptz",
+                "refetch_trimmed": "bool",
                 "resolution_source": "text",
                 "resolved_at": "timestamptz",
                 "retry_count": "int4",
@@ -1542,6 +1556,7 @@ MIRROR_TABLES = {
                 "custom_fields": "TEXT",
                 "daily_blocked": "INTEGER",
                 "last_request_at": "TEXT",
+                "metadata": "TEXT",
                 "requests_24h": "INTEGER",
                 "requests_6h": "INTEGER",
                 "tokens_24h": "INTEGER",
@@ -1552,7 +1567,7 @@ MIRROR_TABLES = {
                 "window_6h_starts_at": "TEXT",
                 "window_blocked": "INTEGER"
             },
-            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"user_usage_summary\" (\n    \"user_id\" TEXT NOT NULL,\n    \"auth_type\" TEXT,\n    \"cost_6h_mcents\" INTEGER,\n    \"cost_24h_mcents\" INTEGER,\n    \"requests_6h\" INTEGER,\n    \"requests_24h\" INTEGER,\n    \"tokens_6h\" INTEGER,\n    \"tokens_24h\" INTEGER,\n    \"last_request_at\" TEXT,\n    \"window_6h_starts_at\" TEXT,\n    \"window_24h_starts_at\" TEXT,\n    \"daily_blocked\" INTEGER,\n    \"window_blocked\" INTEGER,\n    \"blocked_reason\" TEXT,\n    \"updated_at\" TEXT,\n    \"custom_fields\" TEXT, PRIMARY KEY (\"user_id\")\n)",
+            "create_sql": "CREATE TABLE IF NOT EXISTS \"chat\".\"user_usage_summary\" (\n    \"user_id\" TEXT NOT NULL,\n    \"auth_type\" TEXT,\n    \"cost_6h_mcents\" INTEGER,\n    \"cost_24h_mcents\" INTEGER,\n    \"requests_6h\" INTEGER,\n    \"requests_24h\" INTEGER,\n    \"tokens_6h\" INTEGER,\n    \"tokens_24h\" INTEGER,\n    \"last_request_at\" TEXT,\n    \"window_6h_starts_at\" TEXT,\n    \"window_24h_starts_at\" TEXT,\n    \"daily_blocked\" INTEGER,\n    \"window_blocked\" INTEGER,\n    \"blocked_reason\" TEXT,\n    \"updated_at\" TEXT,\n    \"custom_fields\" TEXT,\n    \"metadata\" TEXT, PRIMARY KEY (\"user_id\")\n)",
             "cursor_col": "updated_at",
             "has_deleted_at": False,
             "index_sql": [
@@ -1566,6 +1581,7 @@ MIRROR_TABLES = {
                 "custom_fields": "jsonb",
                 "daily_blocked": "bool",
                 "last_request_at": "timestamptz",
+                "metadata": "jsonb",
                 "requests_24h": "int4",
                 "requests_6h": "int4",
                 "tokens_24h": "int8",

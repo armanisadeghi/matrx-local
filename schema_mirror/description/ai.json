@@ -1,0 +1,4350 @@
+{
+ "enums": {
+  "platform.shown_to": [
+   "only_me",
+   "my_team",
+   "everyone",
+   "everyone_on_ai_matrx"
+  ],
+  "platform.visibility": [
+   "personal",
+   "internal",
+   "link",
+   "public"
+  ]
+ },
+ "format": "matrx-db-description/1",
+ "functions": {
+  "__cost_tier_hold_conformance": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "check_key",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "ok",
+      "type": "boolean"
+     },
+     {
+      "mode": "table",
+      "name": "severity",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "detail",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "",
+    "name": "__cost_tier_hold_conformance",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "volatile"
+   }
+  ],
+  "_translation_cell_target_ok": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_layer",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_layer_owner_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_setting_key",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_rule",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_layer text, p_layer_owner_id uuid, p_setting_key text, p_rule jsonb",
+    "name": "_translation_cell_target_ok",
+    "registered": false,
+    "returns": {
+     "type": "void"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "_validate_rules_envelope": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_doc",
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_where",
+      "type": "text"
+     }
+    ],
+    "identity": "p_doc jsonb, p_where text",
+    "name": "_validate_rules_envelope",
+    "registered": false,
+    "returns": {
+     "type": "void"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "volatile"
+   }
+  ],
+  "archive_translation_cell": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_cell_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_cell_id": {
+        "foreign": {
+         "bounded": true,
+         "note": "Any translation cell; the caller is a platform admin."
+        },
+        "optional": false,
+        "position": 1,
+        "type": "uuid"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_cell_id uuid",
+    "name": "archive_translation_cell",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "audit_ui_enum_drift": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "model_name",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "control_key",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "category",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "resolved_enum",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "legacy_enum",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "",
+    "name": "audit_ui_enum_drift",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "endpoint_admin_columns": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "byok_secret_key",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "auth_ref",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "base_url",
+      "type": "text"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "",
+    "name": "endpoint_admin_columns",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "jsonb_num": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "n",
+      "type": "numeric"
+     }
+    ],
+    "identity": "n numeric",
+    "name": "jsonb_num",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "model_cost_rating_history": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_model_id",
+      "optional": true,
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_limit",
+      "optional": true,
+      "type": "integer"
+     },
+     {
+      "mode": "table",
+      "name": "model_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "model_name",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "version",
+      "type": "integer"
+     },
+     {
+      "mode": "table",
+      "name": "operation",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "occurred_at",
+      "type": "timestamp with time zone"
+     },
+     {
+      "mode": "table",
+      "name": "actor_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "actor_tier",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "from_rating",
+      "type": "smallint"
+     },
+     {
+      "mode": "table",
+      "name": "to_rating",
+      "type": "smallint"
+     },
+     {
+      "mode": "table",
+      "name": "held_rating",
+      "type": "smallint"
+     }
+    ],
+    "identity": "p_model_id uuid, p_limit integer",
+    "name": "model_cost_rating_history",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "model_message_flag_profile": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_model_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_id uuid",
+    "name": "model_message_flag_profile",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   },
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_model_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_offering_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_model_id": {
+        "check": "any model id; only offering catalog facts (route + prices) are read, signed-in callers only",
+        "foreign": {
+         "bounded": true,
+         "note": "An unknown model answers NULL."
+        },
+        "null_rule": {
+         "means": "required by the function signature"
+        },
+        "optional": false,
+        "position": 1,
+        "type": "uuid"
+       },
+       "p_offering_id": {
+        "check": "must be an available offering of p_model_id",
+        "foreign": {
+         "bounded": true,
+         "note": "Only narrows to an offering of the given model; any other id raises P0002."
+        },
+        "null_rule": {
+         "means": "the preferred offering"
+        },
+        "optional": true,
+        "position": 2,
+        "type": "uuid"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_id uuid, p_offering_id uuid",
+    "name": "model_message_flag_profile",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "offering_admin_columns": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "pricing",
+      "type": "jsonb"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "",
+    "name": "offering_admin_columns",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "offering_capabilities": [
+   {
+    "args": [
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_model_ids",
+      "optional": true,
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "model_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "offering_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "reference_roles",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "multi_speaker",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "supports_prefill",
+      "type": "boolean"
+     },
+     {
+      "mode": "table",
+      "name": "is_decision_model",
+      "type": "boolean"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_ids uuid[]",
+    "name": "offering_capabilities",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   },
+   {
+    "args": [
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_model_ids",
+      "type": "uuid"
+     },
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_offering_ids",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "model_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "offering_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "reference_roles",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "multi_speaker",
+      "type": "jsonb"
+     },
+     {
+      "mode": "table",
+      "name": "supports_prefill",
+      "type": "boolean"
+     },
+     {
+      "mode": "table",
+      "name": "is_decision_model",
+      "type": "boolean"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_model_ids": {
+        "check": "rows only for catalogue models, platform admin, or iam.has_org_access(model.organization_id)",
+        "foreign": {
+         "bounded": true,
+         "note": "Unreachable or invented models are silently absent, exactly like the one-argument form."
+        },
+        "null_rule": {
+         "means": "every reachable model"
+        },
+        "optional": true,
+        "position": 1,
+        "type": "uuid[]"
+       },
+       "p_offering_ids": {
+        "check": "parallel to p_model_ids (22023 otherwise); each non-null element must be an available offering of the reachable model at the same index",
+        "foreign": {
+         "bounded": true,
+         "note": "Only narrows to an offering of an already-authorized model; any other id raises P0002."
+        },
+        "null_rule": {
+         "means": "every model on its preferred offering"
+        },
+        "optional": true,
+        "position": 2,
+        "type": "uuid[]"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_ids uuid[], p_offering_ids uuid[]",
+    "name": "offering_capabilities",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "offering_rules_compiled_map": [
+   {
+    "args": [],
+    "identity": "",
+    "name": "offering_rules_compiled_map",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "propose_translation_cell": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_layer",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_layer_owner_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_setting_key",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_rule",
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_confidence",
+      "type": "numeric"
+     },
+     {
+      "mode": "in",
+      "name": "p_rationale",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_evidence",
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_source",
+      "type": "text"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_layer_owner_id": {
+        "foreign": {
+         "bounded": true,
+         "note": "Must name a live ai.api / ai.setting_profile / ai.offering row for the layer; the caller is a platform admin, who may write any catalogue cell."
+        },
+        "optional": false,
+        "position": 2,
+        "type": "uuid"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_layer text, p_layer_owner_id uuid, p_setting_key text, p_rule jsonb, p_confidence numeric, p_rationale text, p_evidence jsonb, p_source text",
+    "name": "propose_translation_cell",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "queue_rejection_fixer": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_event",
+      "type": "jsonb"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": "server_only: the ops.system_error insert trigger (ai._queue_rejection_fixer_on_record) and the settings_rejection_sweep system task on the aidream server queue the fixer; no client ever queues a server job.",
+     "refusalOnly": false,
+     "signedInCallers": false
+    },
+    "identity": "p_event jsonb",
+    "name": "queue_rejection_fixer",
+    "registered": true,
+    "returns": {
+     "type": "uuid"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "resolve_model_config": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_model_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": true,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_id uuid",
+    "name": "resolve_model_config",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "anon",
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   },
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_model_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_offering_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": true,
+     "argumentRules": {
+      "arguments": {
+       "p_model_id": {
+        "check": "catalogue model, platform admin, or iam.has_org_access(model.organization_id), decided before any read",
+        "foreign": {
+         "bounded": true,
+         "note": "An unreachable or invented model answers NULL before any read, exactly like the one-argument form."
+        },
+        "null_rule": {
+         "means": "required by the function signature"
+        },
+        "optional": false,
+        "position": 1,
+        "type": "uuid"
+       },
+       "p_offering_id": {
+        "check": "must be an available offering of p_model_id, read only after the model access decision",
+        "foreign": {
+         "bounded": true,
+         "note": "Only narrows to an offering of the already-authorized model; any other id raises P0002."
+        },
+        "null_rule": {
+         "means": "the preferred offering"
+        },
+        "optional": true,
+        "position": 2,
+        "type": "uuid"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_model_id uuid, p_offering_id uuid",
+    "name": "resolve_model_config",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "anon",
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "save_translation_cell": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_layer",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_layer_owner_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_setting_key",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_rule",
+      "type": "jsonb"
+     },
+     {
+      "mode": "in",
+      "name": "p_rationale",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_approve",
+      "optional": true,
+      "type": "boolean"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_layer_owner_id": {
+        "foreign": {
+         "bounded": true,
+         "note": "Must name a live ai.api / ai.setting_profile / ai.offering row for the layer; the caller is a platform admin."
+        },
+        "optional": false,
+        "position": 2,
+        "type": "uuid"
+       }
+      },
+      "version": 1
+     },
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_layer text, p_layer_owner_id uuid, p_setting_key text, p_rule jsonb, p_rationale text, p_approve boolean",
+    "name": "save_translation_cell",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "set_endpoint_admin_columns": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_values",
+      "type": "jsonb"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_id uuid, p_values jsonb",
+    "name": "set_endpoint_admin_columns",
+    "registered": true,
+    "returns": {
+     "type": "void"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "set_offering_admin_columns": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_values",
+      "type": "jsonb"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "public.is_platform_admin()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_id uuid, p_values jsonb",
+    "name": "set_offering_admin_columns",
+    "registered": true,
+    "returns": {
+     "type": "void"
+    },
+    "roles": [
+     "authenticated"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "translation_evidence_proven": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_evidence",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_evidence jsonb",
+    "name": "translation_evidence_proven",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "translation_rationale_code": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_text",
+      "type": "text"
+     }
+    ],
+    "identity": "p_text text",
+    "name": "translation_rationale_code",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ]
+ },
+ "schema": "ai",
+ "tables": {
+  "api": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "name": "display_name",
+     "type": "text"
+    },
+    {
+     "name": "translator_key",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "transport",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "rules",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "request_defaults",
+     "type": "jsonb"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "api_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "api_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "api_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "api",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "ai_api",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "endpoint": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "vendor",
+     "type": "text"
+    },
+    {
+     "name": "internal_name",
+     "type": "text"
+    },
+    {
+     "name": "display_name",
+     "type": "text"
+    },
+    {
+     "name": "base_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "auth_ref",
+     "type": "jsonb"
+    },
+    {
+     "name": "byok_secret_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "priority",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "is_active",
+     "type": "boolean"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "doc_sources",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "endpoint_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "endpoint_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "endpoint_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "endpoint",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [
+     "byok_secret_key",
+     "auth_ref",
+     "base_url"
+    ],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "display_name",
+    "token": "ai_endpoint",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "model_alias": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "alias",
+     "type": "text"
+    },
+    {
+     "name": "model_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "model_alias_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "model_id"
+     ],
+     "name": "model_alias_model_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "model_alias_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "model_alias_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "model_alias",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "ai_model_alias",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "model_definition": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "type": "character varying"
+    },
+    {
+     "name": "common_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "context_window",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "capabilities",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "provider_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_deprecated",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_primary",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_premium",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "mid_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "guest_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "release_date",
+     "nullable": true,
+     "type": "date"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "cost_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "speed_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "retry_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "retry_max_attempts",
+     "type": "smallint"
+    },
+    {
+     "name": "retired_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "successor_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "pending_cost_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "pending_cost_rating_by",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "pending_cost_rating_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "guest_fallback_id"
+     ],
+     "name": "ai_model_guest_fallback_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "mid_fallback_id"
+     ],
+     "name": "ai_model_mid_fallback_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "provider_id"
+     ],
+     "name": "ai_model_model_provider_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.provider"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "model_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "retry_fallback_id"
+     ],
+     "name": "model_definition_retry_fallback_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "successor_id"
+     ],
+     "name": "model_definition_successor_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "model_definition_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "model_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "model_definition",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "ai_model",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "offering": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "name": "model_id",
+     "type": "uuid"
+    },
+    {
+     "name": "provider_model_id",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "priority",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "is_available",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "pricing",
+     "type": "jsonb"
+    },
+    {
+     "name": "usage_basis",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "capabilities_override",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "override",
+     "type": "jsonb"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "token_billed",
+     "type": "boolean"
+    },
+    {
+     "name": "endpoint_id",
+     "type": "uuid"
+    },
+    {
+     "name": "api_id",
+     "type": "uuid"
+    },
+    {
+     "name": "pricing_verified_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "setting_profile_id",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "api_id"
+     ],
+     "name": "offering_api_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.api"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "offering_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "endpoint_id"
+     ],
+     "name": "offering_endpoint_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.endpoint"
+    },
+    {
+     "columns": [
+      "model_id"
+     ],
+     "name": "offering_model_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.model_definition"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "offering_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "setting_profile_id",
+      "api_id"
+     ],
+     "name": "offering_setting_profile_fkey",
+     "referencedColumns": [
+      "id",
+      "api_id"
+     ],
+     "references": "ai.setting_profile"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "offering_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "offering",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [
+     "pricing"
+    ],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "ai_offering",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "provider": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "type": "character varying"
+    },
+    {
+     "name": "company_description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "documentation_link",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "models_link",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "provider_models_cache",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "slug",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "website_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "logo_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "doc_sources",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "sync_policy",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "provider_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "provider_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "provider_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "provider",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "ai_provider",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "setting": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "name": "key",
+     "type": "text"
+    },
+    {
+     "name": "value_type",
+     "type": "text"
+    },
+    {
+     "name": "canonical_min",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "canonical_max",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "canonical_values",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "default_value",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "ui",
+     "type": "jsonb"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "family",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "value_positions",
+     "nullable": true,
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "setting_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "family"
+     ],
+     "name": "setting_family_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "platform.categories"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "setting_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "setting_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "setting",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "key",
+    "token": "ai_setting",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "setting_profile": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "api_id",
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "name": "modality",
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "api_id"
+     ],
+     "name": "setting_profile_api_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "ai.api"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "setting_profile_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "setting_profile_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "setting_profile_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "setting_profile",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "ai_setting_profile",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "translation_cell": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "layer",
+     "type": "text"
+    },
+    {
+     "name": "layer_owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "setting_key",
+     "type": "text"
+    },
+    {
+     "name": "rule",
+     "type": "jsonb"
+    },
+    {
+     "name": "state",
+     "type": "text"
+    },
+    {
+     "name": "confidence",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "rationale",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "evidence",
+     "type": "jsonb"
+    },
+    {
+     "name": "source",
+     "type": "text"
+    },
+    {
+     "name": "conflict",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "rejection_fingerprint",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "approved_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "approved_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "approved_by"
+     ],
+     "name": "translation_cell_approved_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "translation_cell_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "translation_cell_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "setting_key"
+     ],
+     "name": "translation_cell_setting_key_fkey",
+     "referencedColumns": [
+      "key"
+     ],
+     "references": "ai.setting"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "translation_cell_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "translation_cell",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": true,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "ai_translation_cell",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "voices": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "provider",
+     "type": "text"
+    },
+    {
+     "name": "provider_voice_id",
+     "type": "text"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "voice_type",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "gender",
+     "type": "text"
+    },
+    {
+     "name": "accent",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "age",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "language",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "array": true,
+     "default": true,
+     "name": "languages",
+     "type": "text"
+    },
+    {
+     "array": true,
+     "default": true,
+     "name": "tags",
+     "type": "text"
+    },
+    {
+     "name": "quality_score",
+     "nullable": true,
+     "type": "numeric"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "style",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "sample_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "sample_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "preview_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "enabled",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_verified",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "sort_order",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "voices_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "voices_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "sample_file_id"
+     ],
+     "name": "voices_sample_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "voices_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "voices",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "voice",
+    "type": "reference",
+    "versioned": true
+   },
+   "rls": true
+  }
+ },
+ "views": {
+  "model_admin": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "common_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "capabilities",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "context_window",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "is_deprecated",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_primary",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_premium",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "provider_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "mid_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "guest_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "retry_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "retry_max_attempts",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "cost_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "speed_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "release_date",
+     "nullable": true,
+     "type": "date"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "maker",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "offering_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "provider_model_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "pricing",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "usage_basis",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "token_billed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "endpoint_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "api_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "endpoint_internal_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "endpoint_display_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "vendor",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "endpoint_has_base_url",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "api_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "translator_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "transport",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "retired_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "successor_id",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "model_admin",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "model_config": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "common_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "maker",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "cost_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "speed_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "is_premium",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_primary",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "context_window",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "capabilities",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "controls",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "constraints",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "is_deprecated",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "retired_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "successor_id",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "model_config",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "model_offering": {
+   "columns": [
+    {
+     "name": "offering_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "model_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "model_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "model_common_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "priority",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "is_available",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "usage_basis",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "points_per_million_input",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "points_per_million_output",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "points_per_million_cached_input",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "effective_capabilities",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "token_billed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "served_via",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "served_via_endpoint_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "model_is_deprecated",
+     "nullable": true,
+     "type": "boolean"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "model_offering",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "model_offering_admin": {
+   "columns": [
+    {
+     "name": "model_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "offering_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "provider_model_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "pricing",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "usage_basis",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "token_billed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "priority",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "is_available",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "endpoint_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "endpoint_internal_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "endpoint_display_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "vendor",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "api_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "api_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "translator_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "transport",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "points_per_million_input",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "points_per_million_output",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "points_per_million_cached_input",
+     "nullable": true,
+     "type": "bigint"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "model_offering_admin",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "model_public": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "common_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "capabilities",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "context_window",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_tokens",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "is_primary",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "is_premium",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "mid_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "guest_fallback_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "release_date",
+     "nullable": true,
+     "type": "date"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "cost_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "speed_rating",
+     "nullable": true,
+     "type": "smallint"
+    },
+    {
+     "name": "maker",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "usage_basis",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "token_billed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "points_per_million_input",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "points_per_million_output",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "is_deprecated",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "retired_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "successor_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "controls",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "constraints",
+     "nullable": true,
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "model_public",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "offering_rules_compiled": {
+   "columns": [
+    {
+     "name": "offering_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "api_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "setting_profile_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "setting_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "cell_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "layer",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "rule",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "state",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "version",
+     "nullable": true,
+     "type": "integer"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "version": true
+   },
+   "name": "offering_rules_compiled",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "provider_sync_candidates": {
+   "columns": [
+    {
+     "name": "provider_name",
+     "nullable": true,
+     "type": "character varying"
+    },
+    {
+     "name": "provider_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "model_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "display_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "released_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "fetched_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "status",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "in_db",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "excluded",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "before_cutoff",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "min_release_date",
+     "nullable": true,
+     "type": "date"
+    },
+    {
+     "name": "provider_entry",
+     "nullable": true,
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "provider_sync_candidates",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "ui_enum_drift": {
+   "columns": [
+    {
+     "name": "model_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "control_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "category",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "resolved_enum",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "legacy_enum",
+     "nullable": true,
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {},
+   "name": "ui_enum_drift",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  }
+ }
+}

@@ -1,0 +1,4991 @@
+{
+ "enums": {
+  "platform.shown_to": [
+   "only_me",
+   "my_team",
+   "everyone",
+   "everyone_on_ai_matrx"
+  ],
+  "platform.visibility": [
+   "personal",
+   "internal",
+   "link",
+   "public"
+  ],
+  "public.permission_level": [
+   "viewer",
+   "commenter",
+   "edit_content",
+   "editor",
+   "admin"
+  ]
+ },
+ "format": "matrx-db-description/1",
+ "functions": {
+  "_adopt_chat_attachment_ids": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_conversation_id",
+      "type": "uuid"
+     },
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_file_ids",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": "server_only: called only by the chat.message and platform.associations triggers (T-11); no client ever calls it.",
+     "refusalOnly": false,
+     "signedInCallers": false
+    },
+    "identity": "p_conversation_id uuid, p_file_ids uuid[]",
+    "name": "_adopt_chat_attachment_ids",
+    "registered": true,
+    "returns": {
+     "type": "integer"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "_adopt_chat_output_ids": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_conversation_id",
+      "type": "uuid"
+     },
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_file_ids",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": "server_only: called only by the chat.tool_trace and chat.conversation adoption triggers (T-13 2.1); no client ever calls it.",
+     "refusalOnly": false,
+     "signedInCallers": false
+    },
+    "identity": "p_conversation_id uuid, p_file_ids uuid[]",
+    "name": "_adopt_chat_output_ids",
+    "registered": true,
+    "returns": {
+     "type": "integer"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "assert_safe_file_name": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_raw",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_max_segment",
+      "optional": true,
+      "type": "integer"
+     }
+    ],
+    "identity": "p_raw text, p_max_segment integer",
+    "name": "assert_safe_file_name",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "assert_storable_file_name": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_raw",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_max_segment",
+      "optional": true,
+      "type": "integer"
+     }
+    ],
+    "identity": "p_raw text, p_max_segment integer",
+    "name": "assert_storable_file_name",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "chat_file_ids_in": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_text",
+      "type": "text"
+     }
+    ],
+    "identity": "p_text text",
+    "name": "chat_file_ids_in",
+    "registered": false,
+    "returns": {
+     "array": true,
+     "type": "uuid"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "crawl_site_conveys": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_user_id uuid, p_file_id uuid",
+    "name": "crawl_site_conveys",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "crawl_variant_tagging_drift": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "variant_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "master_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "missing_tags",
+      "type": "boolean"
+     },
+     {
+      "mode": "table",
+      "name": "org_mismatch",
+      "type": "boolean"
+     },
+     {
+      "mode": "table",
+      "name": "bad_visibility",
+      "type": "boolean"
+     }
+    ],
+    "identity": "",
+    "name": "crawl_variant_tagging_drift",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "file_path_matches_parent": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_file_id uuid",
+    "name": "file_path_matches_parent",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "has_access_for": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     },
+     {
+      "enum": "public.permission_level",
+      "mode": "in",
+      "name": "p_required",
+      "optional": true,
+      "type": "permission_level"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_file_id": {
+        "check": "p_file_id -> files.has_access_for(...)",
+        "foreign": {
+         "decided_before_read": true,
+         "note": "decision found by the static reading with helper closure: p_file_id -> files.has_access_for(...)"
+        },
+        "null_rule": {},
+        "optional": false,
+        "position": 2,
+        "type": "uuid",
+        "verified": "static reading 2026-09-17"
+       },
+       "p_required": {
+        "foreign": {
+         "not_an_id": true
+        },
+        "null_rule": {},
+        "optional": true,
+        "position": 3,
+        "sql_default": "'viewer'::permission_level",
+        "type": "permission_level"
+       },
+       "p_user_id": {
+        "check": "p_user_id -> files.has_access_for(...)",
+        "foreign": {
+         "decided_before_read": true,
+         "note": "decision found by the static reading with helper closure: p_user_id -> files.has_access_for(...)"
+        },
+        "null_rule": {},
+        "optional": false,
+        "position": 1,
+        "type": "uuid",
+        "verified": "static reading 2026-09-17"
+       }
+      },
+      "declared_by": "0851_every_door_names_every_argument.sql",
+      "version": 1
+     },
+     "gatePredicate": "auth.uid()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_user_id uuid, p_file_id uuid, p_required permission_level",
+    "name": "has_access_for",
+    "registered": true,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "is_crawl_artifact": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_file_id uuid",
+    "name": "is_crawl_artifact",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "is_dictation_chunk": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_path",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_file_name",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_metadata",
+      "type": "jsonb"
+     }
+    ],
+    "identity": "p_file_path text, p_file_name text, p_metadata jsonb",
+    "name": "is_dictation_chunk",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "is_discoverable_for": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     },
+     {
+      "enum": "public.permission_level",
+      "mode": "in",
+      "name": "p_required",
+      "optional": true,
+      "type": "permission_level"
+     }
+    ],
+    "identity": "p_user_id uuid, p_file_id uuid, p_required permission_level",
+    "name": "is_discoverable_for",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "is_listable_for": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": {
+      "arguments": {
+       "p_file_id": {
+        "check": "p_file_id in statement with strong primitive",
+        "foreign": {
+         "decided_before_read": true,
+         "note": "decision found by the static reading with helper closure: p_file_id in statement with strong primitive"
+        },
+        "null_rule": {},
+        "optional": false,
+        "position": 2,
+        "type": "uuid",
+        "verified": "static reading 2026-09-17"
+       },
+       "p_user_id": {
+        "check": "p_user_id -> public.has_permission_for(...)",
+        "foreign": {
+         "decided_before_read": true,
+         "note": "decision found by the static reading with helper closure: p_user_id -> public.has_permission_for(...)"
+        },
+        "null_rule": {},
+        "optional": false,
+        "position": 1,
+        "type": "uuid",
+        "verified": "static reading 2026-09-17"
+       }
+      },
+      "declared_by": "0851_every_door_names_every_argument.sql",
+      "version": 1
+     },
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_user_id uuid, p_file_id uuid",
+    "name": "is_listable_for",
+    "registered": true,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "is_recent_activity": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_row",
+      "type": "files.files"
+     }
+    ],
+    "identity": "p_row files.files",
+    "name": "is_recent_activity",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "is_recent_activity_path": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_path",
+      "type": "text"
+     }
+    ],
+    "identity": "p_file_path text",
+    "name": "is_recent_activity_path",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "is_safe_webhook_url": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_url",
+      "type": "text"
+     }
+    ],
+    "identity": "p_url text",
+    "name": "is_safe_webhook_url",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "is_user_visible": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_row",
+      "type": "files.files"
+     }
+    ],
+    "identity": "p_row files.files",
+    "name": "is_user_visible",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "is_user_visible_folder_path": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_folder_path",
+      "type": "text"
+     }
+    ],
+    "identity": "p_folder_path text",
+    "name": "is_user_visible_folder_path",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "is_user_visible_path": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_path",
+      "type": "text"
+     }
+    ],
+    "identity": "p_file_path text",
+    "name": "is_user_visible_path",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "is_user_visible_paths": [
+   {
+    "args": [
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_paths",
+      "type": "text"
+     }
+    ],
+    "identity": "p_paths text[]",
+    "name": "is_user_visible_paths",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "immutable"
+   }
+  ],
+  "min_tombstone_retention_days": [
+   {
+    "args": [],
+    "identity": "",
+    "name": "min_tombstone_retention_days",
+    "registered": false,
+    "returns": {
+     "type": "integer"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "my_rag_jobs": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_status",
+      "optional": true,
+      "type": "text"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "auth.uid()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_status text",
+    "name": "my_rag_jobs",
+    "registered": true,
+    "returns": {
+     "set": true,
+     "type": "files.file_rag_jobs"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "private_children_missing_parent": [
+   {
+    "args": [
+     {
+      "mode": "table",
+      "name": "check_name",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "file_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "table",
+      "name": "parent_type",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "parent_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "",
+    "name": "private_children_missing_parent",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "ultimate_parent_record": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_file_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "out",
+      "name": "parent_type",
+      "type": "text"
+     },
+     {
+      "mode": "out",
+      "name": "parent_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_file_id uuid, OUT parent_type text, OUT parent_id uuid",
+    "name": "ultimate_parent_record",
+    "registered": false,
+    "returns": {
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "webhook_create": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_target_url",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_organization_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_description",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_event_types",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "array": true,
+      "mode": "in",
+      "name": "p_resource_types",
+      "optional": true,
+      "type": "text"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "auth.uid()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_target_url text, p_organization_id uuid, p_description text, p_event_types text[], p_resource_types text[]",
+    "name": "webhook_create",
+    "registered": true,
+    "returns": {
+     "type": "files.webhooks"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_dispatch": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_limit",
+      "optional": true,
+      "type": "integer"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_limit integer",
+    "name": "webhook_dispatch",
+    "registered": true,
+    "returns": {
+     "type": "integer"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_event_payload": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_event_id",
+      "type": "bigint"
+     },
+     {
+      "mode": "in",
+      "name": "p_webhook_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_event_id bigint, p_webhook_id uuid",
+    "name": "webhook_event_payload",
+    "registered": false,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ],
+  "webhook_reconcile": [
+   {
+    "args": [],
+    "identity": "",
+    "name": "webhook_reconcile",
+    "registered": false,
+    "returns": {
+     "type": "integer"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_redeliver": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_delivery_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "auth.uid()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_delivery_id uuid",
+    "name": "webhook_redeliver",
+    "registered": true,
+    "returns": {
+     "type": "uuid"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_rotate_secret": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_webhook_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": "auth.uid()",
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_webhook_id uuid",
+    "name": "webhook_rotate_secret",
+    "registered": true,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_send_test": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_webhook_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_webhook_id uuid",
+    "name": "webhook_send_test",
+    "registered": true,
+    "returns": {
+     "type": "uuid"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ],
+  "webhook_sign": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_secret",
+      "type": "text"
+     },
+     {
+      "mode": "in",
+      "name": "p_payload",
+      "type": "text"
+     }
+    ],
+    "identity": "p_secret text, p_payload text",
+    "name": "webhook_sign",
+    "registered": false,
+    "returns": {
+     "type": "text"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "webhook_tick": [
+   {
+    "args": [],
+    "identity": "",
+    "name": "webhook_tick",
+    "registered": false,
+    "returns": {
+     "type": "void"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "volatile"
+   }
+  ]
+ },
+ "schema": "files",
+ "tables": {
+  "account_tiers": {
+   "columns": [
+    {
+     "name": "tier_key",
+     "type": "text"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "is_default_for_users",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_default_for_guests",
+     "type": "boolean"
+    },
+    {
+     "name": "max_storage_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_file_size_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_files",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "max_versions_per_file",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "max_daily_uploads",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "max_daily_upload_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "max_share_links_per_resource",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "max_bulk_items",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "rate_limit_uploads_per_min",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "rate_limit_downloads_per_min",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "rate_limit_general_per_min",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "features",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "files_account_tiers_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_account_tiers_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "files_account_tiers_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "account_tiers",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "tier_key"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "files_account_tier",
+    "type": "reference",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "analysis": {
+   "columns": [
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "mime_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "analyzer_version",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "detectors_run",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "progress",
+     "type": "jsonb"
+    },
+    {
+     "name": "classification",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "page_count",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "summary_counts",
+     "type": "jsonb"
+    },
+    {
+     "name": "text_source_map",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "thumbnail_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "started_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_analysis_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "file_analysis_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_analysis_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true
+   },
+   "name": "analysis",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "file_id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "file_analysis",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "analysis_result": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "detector_kind",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "detector_version",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "confidence_tier",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "array": true,
+     "default": true,
+     "name": "text_sources",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "elapsed_ms",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "summary",
+     "type": "jsonb"
+    },
+    {
+     "name": "payload",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "payload_uri",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "payload_bytes",
+     "type": "bigint"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "page_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_analysis_result_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "page_id"
+     ],
+     "name": "file_analysis_result_page_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.pages"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_analysis_result_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "analysis_result",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "analysis_result",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "entities": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "label",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "label_category",
+     "type": "text"
+    },
+    {
+     "name": "canonical_value",
+     "type": "text"
+    },
+    {
+     "name": "normalized_value",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "source_annotation_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_user_named",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_entities_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "file_entities_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "source_annotation_id"
+     ],
+     "name": "file_entities_source_annotation_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.page_annotations"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_entities_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "entities",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "label",
+    "token": "file_entities",
+    "type": "detail",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "file_rag_jobs": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "trigger_source",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "scheduled_for",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "started_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "attempt_count",
+     "type": "integer"
+    },
+    {
+     "name": "skipped_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "error",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "cld_file_rag_jobs_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "cld_file_rag_jobs_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "cld_file_rag_jobs_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "file_rag_jobs",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "file_rag_job",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "file_versions": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "version_number",
+     "type": "integer"
+    },
+    {
+     "name": "storage_uri",
+     "type": "text"
+    },
+    {
+     "name": "size_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "checksum",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "change_summary",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "cld_file_versions_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "file_versions_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "file_versions_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "file_versions",
+   "org": {
+    "parent": "files.files",
+    "rule": "parent",
+    "via": "file_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [
+     "storage_uri"
+    ],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "file_version",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "files": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "file_path",
+     "type": "text"
+    },
+    {
+     "name": "file_name",
+     "type": "text"
+    },
+    {
+     "name": "mime_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "size_bytes",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "checksum",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "current_version",
+     "type": "integer"
+    },
+    {
+     "name": "parent_folder_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "parent_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "derivation_kind",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "derivation_metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "storage_uri",
+     "type": "text"
+    },
+    {
+     "name": "duplicate_of_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "canonical_processed_document_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "width",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "height",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "duration_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "origin_device_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "client_modified_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "artifact_kind",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "provider_session_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "parent_record_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "parent_record_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "canonical_processed_document_id"
+     ],
+     "name": "cld_files_canonical_processed_document_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "docproc.processed_documents"
+    },
+    {
+     "columns": [
+      "duplicate_of_file_id"
+     ],
+     "name": "cld_files_duplicate_of_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "parent_file_id"
+     ],
+     "name": "cld_files_parent_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "parent_folder_id"
+     ],
+     "name": "cld_files_parent_folder_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.folders"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "files_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "origin_device_id"
+     ],
+     "name": "files_origin_device_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "public.app_instances"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "files_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "files",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [
+     "storage_uri"
+    ],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "file_name",
+    "token": "file",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "folders": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "folder_path",
+     "type": "text"
+    },
+    {
+     "name": "folder_name",
+     "type": "text"
+    },
+    {
+     "name": "parent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_system",
+     "type": "boolean"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "parent_id"
+     ],
+     "name": "cld_folders_parent_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.folders"
+    },
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "folders_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "folders_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "folders_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "folders",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "folder_name",
+    "token": "folder",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "idempotency": {
+   "columns": [
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "idempotency_key",
+     "type": "text"
+    },
+    {
+     "name": "request_hash",
+     "type": "text"
+    },
+    {
+     "name": "endpoint",
+     "type": "text"
+    },
+    {
+     "name": "status_code",
+     "type": "integer"
+    },
+    {
+     "name": "response_body",
+     "type": "jsonb"
+    },
+    {
+     "name": "resource_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "resource_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "expires_at",
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "idempotency_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "idempotency",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "owner_id",
+    "idempotency_key"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "idempotency",
+    "type": "system",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "machine_written_prefixes": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "prefix",
+     "type": "text"
+    },
+    {
+     "name": "label",
+     "type": "text"
+    },
+    {
+     "name": "writer",
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "deselect_by_default",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "is_active",
+     "type": "boolean"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "machine_written_prefixes_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "machine_written_prefixes_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "machine_written_prefixes_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "machine_written_prefixes",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "files_machine_written_prefix",
+    "type": "reference",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "overrides": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "page_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "override_kind",
+     "type": "text"
+    },
+    {
+     "name": "override_value",
+     "type": "jsonb"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "file_overrides_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_overrides_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "file_overrides_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "page_id"
+     ],
+     "name": "file_overrides_page_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.pages"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_overrides_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "overrides",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "file_overrides",
+    "type": "detail",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "page_annotations": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "page_number",
+     "type": "integer"
+    },
+    {
+     "name": "bbox",
+     "type": "jsonb"
+    },
+    {
+     "name": "label",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "label_category",
+     "type": "text"
+    },
+    {
+     "name": "extracted_text",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "extracted_text_source",
+     "type": "text"
+    },
+    {
+     "name": "normalized_value",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "source",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "redact",
+     "type": "boolean"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "parent_result_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "redaction_span_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "last_edited_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "page_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_user_locked",
+     "type": "boolean"
+    },
+    {
+     "name": "entity_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "file_page_annotations_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "entity_id"
+     ],
+     "name": "file_page_annotations_entity_fk",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.entities"
+    },
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_page_annotations_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "last_edited_by"
+     ],
+     "name": "file_page_annotations_last_edited_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "file_page_annotations_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "page_id"
+     ],
+     "name": "file_page_annotations_page_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.pages"
+    },
+    {
+     "columns": [
+      "parent_result_id"
+     ],
+     "name": "file_page_annotations_parent_result_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.analysis_result"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_page_annotations_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "page_annotations",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": "label",
+    "token": "file_page_annotations",
+    "type": "detail",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "pages": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "page_index",
+     "type": "integer"
+    },
+    {
+     "name": "source_page_index",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "excluded_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "excluded_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "excluded_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "user_modified",
+     "type": "boolean"
+    },
+    {
+     "name": "width_pt",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "height_pt",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "default": true,
+     "name": "rotation",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "text_source",
+     "type": "text"
+    },
+    {
+     "name": "ocr_confidence",
+     "nullable": true,
+     "type": "double precision"
+    },
+    {
+     "name": "thumbnail_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "processed_document_page_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "excluded_by"
+     ],
+     "name": "file_pages_excluded_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "file_pages_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "file_pages_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "processed_document_page_id"
+     ],
+     "name": "file_pages_processed_document_page_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "docproc.processed_document_pages"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_pages_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true
+   },
+   "name": "pages",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "file_pages",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "rate_limit_buckets": {
+   "columns": [
+    {
+     "name": "actor_id",
+     "type": "uuid"
+    },
+    {
+     "name": "bucket_kind",
+     "type": "text"
+    },
+    {
+     "name": "minute_bucket",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "counter",
+     "type": "integer"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "rate_limit_buckets",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "actor_id",
+    "bucket_kind",
+    "minute_bucket"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "rate_limit_buckets",
+    "type": "system",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "structure": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "bucket_id",
+     "type": "text"
+    },
+    {
+     "name": "path",
+     "type": "text"
+    },
+    {
+     "name": "is_folder",
+     "type": "boolean"
+    },
+    {
+     "name": "file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "parent_path",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_structure_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "structure_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "structure",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "structure",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "sync_mappings": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "device_id",
+     "type": "uuid"
+    },
+    {
+     "name": "folder_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "local_path",
+     "type": "text"
+    },
+    {
+     "name": "local_path_display",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "direction",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "desired_state",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "state",
+     "type": "text"
+    },
+    {
+     "name": "state_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "state_changed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_seen_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_synced_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "items_total",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "bytes_total",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "knobs",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "sync_mappings_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "device_id"
+     ],
+     "name": "sync_mappings_device_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "public.app_instances"
+    },
+    {
+     "columns": [
+      "folder_id"
+     ],
+     "name": "sync_mappings_folder_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.folders"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "sync_mappings_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "sync_mappings_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "sync_mappings",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "files_sync_mapping",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "uploads_inflight": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "owner_id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_path",
+     "type": "text"
+    },
+    {
+     "name": "bucket",
+     "type": "text"
+    },
+    {
+     "name": "key",
+     "type": "text"
+    },
+    {
+     "name": "multipart_upload_id",
+     "type": "text"
+    },
+    {
+     "name": "upload_length",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "upload_offset",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "visibility",
+     "type": "text"
+    },
+    {
+     "name": "mime_type",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "file_name",
+     "type": "text"
+    },
+    {
+     "name": "idempotency_key",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "parts",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "expires_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "owner_id"
+     ],
+     "name": "uploads_inflight_owner_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "uploads_inflight",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "uploads_inflight",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "user_account": {
+   "columns": [
+    {
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "name": "tier_id",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "custom_limits",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "is_blocked",
+     "type": "boolean"
+    },
+    {
+     "name": "blocked_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "notes",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "tier_id"
+     ],
+     "name": "cld_user_account_tier_id_fkey",
+     "referencedColumns": [
+      "tier_key"
+     ],
+     "references": "files.account_tiers"
+    },
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "user_account_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "user_account",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "user_id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "files_user_account",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "user_storage_usage": {
+   "columns": [
+    {
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "bytes_used",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "files_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "daily_upload_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "daily_upload_bytes",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "daily_reset_at",
+     "type": "date"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "user_storage_usage_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "user_storage_usage",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "user_id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "user_storage_usage",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "webhook_deliveries": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "webhook_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "attempt",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "http_status",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "latency_ms",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "name": "error_message",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "next_attempt_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "completed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "activity_log_id",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "net_request_id",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "signature",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "dispatched_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "webhook_id"
+     ],
+     "name": "cld_webhook_deliveries_webhook_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.webhooks"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "files_webhook_deliveries_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "activity_log_id"
+     ],
+     "name": "webhook_deliveries_activity_log_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "platform.activity_log"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "webhook_deliveries",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "webhook_deliveries",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "webhook_dispatch_state": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "last_activity_log_id",
+     "type": "bigint"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "webhook_dispatch_state",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "webhook_dispatch_state",
+    "type": "system",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "webhooks": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "target_url",
+     "type": "text"
+    },
+    {
+     "name": "secret",
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "is_active",
+     "type": "boolean"
+    },
+    {
+     "array": true,
+     "name": "event_types",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "array": true,
+     "name": "resource_types",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "last_attempt_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_success_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "consecutive_failures",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "max_consecutive_failures",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "files_webhooks_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "files_webhooks_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "webhooks_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "webhooks",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [
+     "secret"
+    ],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "webhooks",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  }
+ },
+ "views": {
+  "sync_mapping_admin_status": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "device_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "direction",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "desired_state",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "state",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "state_changed_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_seen_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "last_synced_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "items_total",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "bytes_total",
+     "nullable": true,
+     "type": "bigint"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "sync_mapping_admin_status",
+   "org": {
+    "rule": "column"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  }
+ }
+}

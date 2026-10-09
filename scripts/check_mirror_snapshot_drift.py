@@ -172,8 +172,8 @@ def main() -> int:
         print(
             "\nEvery value in those columns is being DROPPED by chat_sync on every "
             "pulled row (one WARNING per row, and no other signal).\n"
-            "WHAT TO DO: refresh schema_mirror/snapshot.json from the live schema "
-            "(the SQL is in schema_mirror/README.md), add any column the cloud "
+            "WHAT TO DO: re-emit the database description in aidream (matrx-data emit), "
+            "run `python scripts/refresh_mirror_snapshot.py`, add any column the cloud "
             "REMOVED to schema_mirror/retired_columns.json, run "
             "`python scripts/generate_mirror_schema.py`, and commit all three "
             "together."

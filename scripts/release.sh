@@ -986,7 +986,7 @@ mandate_scan_step || true
 
 # ── Mirror snapshot drift (confirmed drift blocks; unavailable is loud) ──────
 # The cloud schema is the spec for the local chat replica, and schema_mirror/
-# snapshot.json is how this build knows it. When the cloud grows a column the
+# description/ (the ONE database description) is how this build knows it. When the cloud grows a column the
 # snapshot lacks, chat_sync DROPS that value on every pulled row: 8,566 such
 # rows in the 72h to 2026-09-14, for a snapshot a month stale. Self-test first
 # so a green run means the detector can still fail.

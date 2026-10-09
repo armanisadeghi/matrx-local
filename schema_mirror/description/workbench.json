@@ -1,0 +1,2927 @@
+{
+ "enums": {
+  "platform.shown_to": [
+   "only_me",
+   "my_team",
+   "everyone",
+   "everyone_on_ai_matrx"
+  ],
+  "platform.visibility": [
+   "personal",
+   "internal",
+   "link",
+   "public"
+  ],
+  "public.document_source": [
+   "created",
+   "imported_docx",
+   "imported_md",
+   "imported_txt"
+  ],
+  "public.workbook_source": [
+   "created",
+   "imported_xlsx",
+   "imported_gsheet",
+   "imported_csv",
+   "linked_gsheet"
+  ]
+ },
+ "format": "matrx-db-description/1",
+ "functions": {
+  "dataset_readable_by": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_user",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_dataset_id",
+      "type": "uuid"
+     }
+    ],
+    "identity": "p_user uuid, p_dataset_id uuid",
+    "name": "dataset_readable_by",
+    "registered": false,
+    "returns": {
+     "type": "boolean"
+    },
+    "roles": [
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "note_folder_counts": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_scope",
+      "optional": true,
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "folder_name",
+      "type": "text"
+     },
+     {
+      "mode": "table",
+      "name": "note_count",
+      "type": "bigint"
+     }
+    ],
+    "identity": "p_scope text",
+    "name": "note_folder_counts",
+    "registered": false,
+    "returns": {
+     "set": true,
+     "type": "record"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "stable"
+   }
+  ],
+  "note_folder_get_or_create": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_organization_id",
+      "type": "uuid"
+     },
+     {
+      "mode": "in",
+      "name": "p_name",
+      "type": "text"
+     }
+    ],
+    "identity": "p_organization_id uuid, p_name text",
+    "name": "note_folder_get_or_create",
+    "registered": false,
+    "returns": {
+     "type": "uuid"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "invoker",
+    "volatility": "volatile"
+   }
+  ],
+  "older_table_moved_to": [
+   {
+    "args": [
+     {
+      "mode": "in",
+      "name": "p_id",
+      "type": "uuid"
+     }
+    ],
+    "door": {
+     "anonymousCallers": false,
+     "argumentRules": null,
+     "gatePredicate": null,
+     "nonClientLane": null,
+     "refusalOnly": false,
+     "signedInCallers": true
+    },
+    "identity": "p_id uuid",
+    "name": "older_table_moved_to",
+    "registered": true,
+    "returns": {
+     "type": "jsonb"
+    },
+    "roles": [
+     "authenticated",
+     "service_role"
+    ],
+    "security": "definer",
+    "volatility": "stable"
+   }
+  ]
+ },
+ "schema": "workbench",
+ "tables": {
+  "google_document": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "resource_id",
+     "type": "uuid"
+    },
+    {
+     "name": "external_id",
+     "type": "text"
+    },
+    {
+     "name": "external_url",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "title",
+     "type": "text"
+    },
+    {
+     "name": "mime_kind",
+     "type": "text"
+    },
+    {
+     "name": "owner_email",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "external_modified_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "body_text",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "synced_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "synced_via_connection_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "sync_status",
+     "type": "text"
+    },
+    {
+     "name": "sync_status_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "google_document_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "google_document_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "resource_id"
+     ],
+     "name": "google_document_resource_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "users.integration_connection_resources"
+    },
+    {
+     "columns": [
+      "synced_via_connection_id"
+     ],
+     "name": "google_document_synced_via_connection_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "users.integration_connections"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "google_document_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "google_document",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "google_document",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "heatmap_saves": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "title",
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "data",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "view_settings",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "workbench_heatmap_saves_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "workbench_heatmap_saves_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "workbench_heatmap_saves_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "heatmap_saves",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": "title",
+    "token": "heatmap_save",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "note_folders": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "name": "parent_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "path",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "position",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "note_folders_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "note_folders_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "parent_id"
+     ],
+     "name": "note_folders_parent_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.note_folders"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "note_folders_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "note_folders",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "name",
+    "token": "note_folder",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "notes": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "label",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "content",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "folder_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "array": true,
+     "default": true,
+     "name": "tags",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "position",
+     "nullable": true,
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "folder_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "file_path",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "content_hash",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "sync_version",
+     "type": "integer"
+    },
+    {
+     "name": "last_device_id",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "project_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "generated": true,
+     "name": "content_preview",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "search_engine_indexed",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "notes_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "folder_id"
+     ],
+     "name": "notes_folder_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.note_folders"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "notes_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "notes_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "inherit_org_from_parent",
+    "refuse_org_foreign_to_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "notes",
+   "org": {
+    "parent": "workbench.note_folders",
+    "rule": "parent",
+    "via": "folder_id"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": "label",
+    "token": "note",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "product_capture_file": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "item_id",
+     "type": "uuid"
+    },
+    {
+     "name": "file_id",
+     "type": "uuid"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "product_capture_file_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "file_id"
+     ],
+     "name": "product_capture_file_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "item_id"
+     ],
+     "name": "product_capture_file_item_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.product_capture_item"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "product_capture_file_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "product_capture_file_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "_guard_soft_delete_parent"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "product_capture_file",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "product_capture_file",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "product_capture_item": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "code",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "code_source",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "notes",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "folder_path",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "default": true,
+     "name": "stage",
+     "type": "text"
+    },
+    {
+     "name": "featured_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "product_capture_item_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "featured_file_id"
+     ],
+     "name": "product_capture_item_featured_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "product_capture_item_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "product_capture_item_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [
+    "_cascade_soft_delete"
+   ],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "product_capture_item",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "organization",
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "product_capture_item",
+    "type": "entity",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "product_capture_payload": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "item_id",
+     "type": "uuid"
+    },
+    {
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "data",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "product_capture_payload_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "item_id"
+     ],
+     "name": "product_capture_payload_item_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.product_capture_item"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "product_capture_payload_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "product_capture_payload_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true,
+    "version": true
+   },
+   "name": "product_capture_payload",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "product_capture_payload",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "product_capture_product": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "item_id",
+     "type": "uuid"
+    },
+    {
+     "name": "product_index",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "name",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "category",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "intake",
+     "type": "jsonb"
+    },
+    {
+     "name": "research",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "name": "verdict",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "realistic_used_range",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "research_run_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "product_capture_product_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "item_id"
+     ],
+     "name": "product_capture_product_item_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.product_capture_item"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "product_capture_product_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "product_capture_product_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true,
+    "version": true
+   },
+   "name": "product_capture_product",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "product_capture_product",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "product_capture_question": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "item_id",
+     "type": "uuid"
+    },
+    {
+     "name": "prompt",
+     "type": "text"
+    },
+    {
+     "name": "context",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "kind",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "options",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "source",
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "status",
+     "type": "text"
+    },
+    {
+     "name": "answer",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "answered_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "deferred_reason",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "skip_count",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "priority",
+     "type": "integer"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "product_capture_question_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "item_id"
+     ],
+     "name": "product_capture_question_item_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.product_capture_item"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "product_capture_question_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "product_capture_question_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true,
+    "version": true
+   },
+   "name": "product_capture_question",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "product_capture_question",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "schema_templates": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "template_name",
+     "type": "character varying"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": true,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "version": true
+   },
+   "name": "schema_templates",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": true,
+    "titleColumn": null,
+    "token": "schema_templates",
+    "type": "reference",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "udt_document_snapshots": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "document_id",
+     "type": "uuid"
+    },
+    {
+     "name": "snapshot",
+     "type": "jsonb"
+    },
+    {
+     "name": "label",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "origin",
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "udt_document_snapshots_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "document_id"
+     ],
+     "name": "udt_document_snapshots_document_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.udt_documents"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {},
+   "name": "udt_document_snapshots",
+   "org": {
+    "rule": "none"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "udt_document_snapshot",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "udt_documents": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "document_name",
+     "type": "character varying"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "public.document_source",
+     "name": "source",
+     "type": "document_source"
+    },
+    {
+     "name": "original_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "project_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_public",
+     "type": "boolean"
+    },
+    {
+     "name": "metadata",
+     "nullable": true,
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "udt_documents_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "udt_documents_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "original_file_id"
+     ],
+     "name": "udt_documents_original_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "udt_documents_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "udt_documents_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "udt_documents",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": "document_name",
+    "token": "udt_document",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  },
+  "udt_workbook_snapshots": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "workbook_id",
+     "type": "uuid"
+    },
+    {
+     "name": "snapshot",
+     "type": "jsonb"
+    },
+    {
+     "name": "label",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "name": "origin",
+     "type": "text"
+    },
+    {
+     "name": "created_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "udt_workbook_snapshots_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "workbook_id"
+     ],
+     "name": "udt_workbook_snapshots_workbook_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "workbench.udt_workbooks"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "workbench_udt_workbook_snapshots_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "udt_workbook_snapshots",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": true,
+    "governedColumns": [],
+    "listScope": null,
+    "softDelete": false,
+    "titleColumn": null,
+    "token": "udt_workbook_snapshot",
+    "type": "detail",
+    "versioned": false
+   },
+   "rls": true
+  },
+  "udt_workbooks": {
+   "columns": [
+    {
+     "default": true,
+     "name": "id",
+     "type": "uuid"
+    },
+    {
+     "name": "workbook_name",
+     "type": "character varying"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "default": true,
+     "enum": "public.workbook_source",
+     "name": "source",
+     "type": "workbook_source"
+    },
+    {
+     "name": "original_file_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "user_id",
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "type": "uuid"
+    },
+    {
+     "name": "project_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "task_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "is_public",
+     "type": "boolean"
+    },
+    {
+     "default": true,
+     "name": "metadata",
+     "type": "jsonb"
+    },
+    {
+     "default": true,
+     "name": "created_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "updated_at",
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "created_by",
+     "type": "uuid"
+    },
+    {
+     "name": "updated_by",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "default": true,
+     "name": "version",
+     "type": "integer"
+    },
+    {
+     "enum": "platform.visibility",
+     "name": "visibility",
+     "type": "platform.visibility"
+    },
+    {
+     "name": "deleted_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "default": true,
+     "name": "custom_fields",
+     "type": "jsonb"
+    },
+    {
+     "enum": "platform.shown_to",
+     "name": "shown_to",
+     "nullable": true,
+     "type": "platform.shown_to"
+    },
+    {
+     "default": true,
+     "name": "published_to_web",
+     "type": "boolean"
+    },
+    {
+     "name": "published_to_web_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "published_to_web_by",
+     "nullable": true,
+     "type": "uuid"
+    }
+   ],
+   "foreignKeys": [
+    {
+     "columns": [
+      "created_by"
+     ],
+     "name": "udt_workbooks_created_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "organization_id"
+     ],
+     "name": "udt_workbooks_organization_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.organizations"
+    },
+    {
+     "columns": [
+      "original_file_id"
+     ],
+     "name": "udt_workbooks_original_file_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "files.files"
+    },
+    {
+     "columns": [
+      "updated_by"
+     ],
+     "name": "udt_workbooks_updated_by_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    },
+    {
+     "columns": [
+      "user_id"
+     ],
+     "name": "udt_workbooks_user_id_fkey",
+     "referencedColumns": [
+      "id"
+     ],
+     "references": "iam.users"
+    }
+   ],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "table",
+   "lifecycle": {
+    "deleted_at": true,
+    "organization_id": true,
+    "version": true
+   },
+   "name": "udt_workbooks",
+   "org": {
+    "rule": "binding"
+   },
+   "primaryKey": [
+    "id"
+   ],
+   "realtime": [
+    "supabase_realtime"
+   ],
+   "registry": {
+    "active": true,
+    "clientDeletesRefused": false,
+    "clientExcludedColumns": [],
+    "clientReadOnly": false,
+    "clientReadOnlyColumns": [],
+    "component": false,
+    "governedColumns": [],
+    "listScope": "mine",
+    "softDelete": true,
+    "titleColumn": "workbook_name",
+    "token": "workbook",
+    "type": "entity",
+    "versioned": true
+   },
+   "rls": true
+  }
+ },
+ "views": {
+  "pick_list_item_live": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "list_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "label",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "help_text",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "group_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "icon_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "updated_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "lives_in",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "pick_list_item_live",
+   "org": {
+    "rule": "column"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  },
+  "pick_list_live": {
+   "columns": [
+    {
+     "name": "id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "list_name",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "description",
+     "nullable": true,
+     "type": "text"
+    },
+    {
+     "name": "user_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "organization_id",
+     "nullable": true,
+     "type": "uuid"
+    },
+    {
+     "name": "is_public",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "public_read",
+     "nullable": true,
+     "type": "boolean"
+    },
+    {
+     "name": "created_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "updated_at",
+     "nullable": true,
+     "type": "timestamp with time zone"
+    },
+    {
+     "name": "lives_in",
+     "nullable": true,
+     "type": "text"
+    }
+   ],
+   "foreignKeys": [],
+   "grants": {
+    "anon": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "authenticated": {
+     "delete": false,
+     "insert": false,
+     "select": false,
+     "update": false
+    },
+    "service_role": {
+     "delete": true,
+     "insert": true,
+     "select": true,
+     "update": true
+    }
+   },
+   "guards": [],
+   "kind": "view",
+   "lifecycle": {
+    "organization_id": true
+   },
+   "name": "pick_list_live",
+   "org": {
+    "rule": "column"
+   },
+   "primaryKey": [],
+   "realtime": [],
+   "rls": false
+  }
+ }
+}

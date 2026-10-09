@@ -661,7 +661,7 @@ ON agent_execution_definitions(fetched_at)
 # Migration 11: File sync — local state sidecar for the files.* mirror
 #
 # The cloud rows live in the ATTACHed structural mirror (files.files /
-# files.folders — schema_mirror/snapshot.json is the spec). This table is
+# files.folders — schema_mirror/description/ is the spec). This table is
 # the LOCAL half the mirror deliberately does not carry: per-file on-disk
 # state for the ~/Documents/Matrx/Files replica.
 #

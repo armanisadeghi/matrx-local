@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,6 +10,7 @@ from app.services.chat_sync import engine as chat_sync_module
 from app.services.chat_sync.engine import ChatSyncEngine
 from app.services.local_db.mirror_schema import MIRROR_TABLES
 from scripts.generate_mirror_schema import generate
+from scripts.mirror_description import load_snapshot
 
 
 def test_owner_only_raw_bridge_tables_are_excluded_from_generation_and_runtime() -> (
@@ -20,8 +19,7 @@ def test_owner_only_raw_bridge_tables_are_excluded_from_generation_and_runtime()
     assert "coding_session" not in MIRROR_TABLES["chat"]
     assert "coding_session_entry" not in MIRROR_TABLES["chat"]
 
-    snapshot_path = Path(__file__).parents[2] / "schema_mirror" / "snapshot.json"
-    snapshot = json.loads(snapshot_path.read_text())
+    snapshot = load_snapshot()
     table_spec = {
         "kind": "table",
         "pk": ["id"],

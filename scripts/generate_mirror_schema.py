@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the local SQLite mirror schema from the canonical cloud snapshot.
+"""Generate the local SQLite mirror schema from the ONE database description.
 
-The cloud database (Supabase project brsgrqvjdzwihsvnfqkf) is the spec. This
-script consumes ``schema_mirror/snapshot.json`` — a checked-in introspection
-dump of the cloud schemas — and emits
+The cloud database (Supabase project brsgrqvjdzwihsvnfqkf) is the spec. Its
+description is emitted once by ``@ai-matrx/data`` (``matrx-data emit`` →
+aidream ``db-contract/``) and read by every client; this script reads the
+copies in ``schema_mirror/description/`` (``scripts/mirror_description.py``)
+and emits
 ``app/services/local_db/mirror_schema.py``, the generated module the engine
 uses to create and drift-check the local mirror tables.
 
@@ -22,10 +24,11 @@ names, SQLite-compatible types. Constraints are intentionally relaxed:
 - No cloud defaults. Local writers supply what they need; pulled rows carry
   cloud-computed values.
 
-Refreshing the snapshot (when the cloud schema changes):
-1. Run the introspection SQL in schema_mirror/README.md against the live DB
-   (Supabase MCP execute_sql or psql) and rebuild snapshot.json.
-2. Re-run this script. Commit both files together.
+Refreshing the description (when the cloud schema changes):
+1. In aidream: ``node apps/shared/data/bin/matrx-data.mjs emit --out db-contract``.
+2. Here: ``python scripts/refresh_mirror_snapshot.py`` (copies the mirrored
+   schemas, refuses a destructive change), then re-run this script. Commit the
+   description copies and the generated module together.
 
 Usage:
     python scripts/generate_mirror_schema.py            # regenerate
@@ -41,7 +44,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOT_PATH = REPO_ROOT / "schema_mirror" / "snapshot.json"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from mirror_description import load_snapshot  # noqa: E402
 RETIRED_COLUMNS_PATH = REPO_ROOT / "schema_mirror" / "retired_columns.json"
 OUTPUT_PATH = REPO_ROOT / "app" / "services" / "local_db" / "mirror_schema.py"
 
@@ -198,7 +202,7 @@ def generate(snapshot: dict) -> str:
     for schema, opts in MIRRORED_SCHEMAS.items():
         tables = snapshot["schemas"].get(schema)
         if tables is None:
-            raise SystemExit(f"schema '{schema}' missing from snapshot — refresh snapshot.json")
+            raise SystemExit(f"schema '{schema}' missing from the description — run scripts/refresh_mirror_snapshot.py")
         mirror[schema] = {}
         table_scope = opts.get("tables")
         excluded = frozenset(opts.get("exclude_tables", ()))
@@ -226,7 +230,7 @@ def generate(snapshot: dict) -> str:
 
 Structural mirror of the canonical cloud schemas for the local SQLite store.
 Regenerate with: python scripts/generate_mirror_schema.py
-Source snapshot: schema_mirror/snapshot.json (cloud DB is the spec).
+Source: schema_mirror/description/ — the ONE database description (cloud DB is the spec).
 Local upgrade ledger: schema_mirror/retired_columns.json.
 """
 
@@ -252,7 +256,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="verify the generated module is current")
     args = parser.parse_args()
 
-    snapshot = json.loads(SNAPSHOT_PATH.read_text())
+    snapshot = load_snapshot()
     rendered = generate(snapshot)
 
     if args.check:
@@ -260,7 +264,7 @@ def main() -> int:
         if current != rendered:
             print(
                 "DRIFT: app/services/local_db/mirror_schema.py is stale relative to "
-                "schema_mirror/snapshot.json. Run scripts/generate_mirror_schema.py.",
+                "schema_mirror/description/. Run scripts/generate_mirror_schema.py.",
                 file=sys.stderr,
             )
             return 1
@@ -268,8 +272,8 @@ def main() -> int:
         return 0
 
     OUTPUT_PATH.write_text(rendered)
-    n = sum(len(t) for t in json.loads(SNAPSHOT_PATH.read_text())["schemas"].values())
-    print(f"wrote {OUTPUT_PATH} (snapshot has {n} relations)")
+    n = sum(len(t) for t in snapshot["schemas"].values())
+    print(f"wrote {OUTPUT_PATH} (description has {n} relations)")
     return 0
 
 

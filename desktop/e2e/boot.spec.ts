@@ -67,17 +67,33 @@ async function expectNoCrashScreen(page: Page): Promise<void> {
   ).toHaveCount(0);
 }
 
+async function expectLoginHeading(page: Page, fatalErrors: () => string[]): Promise<void> {
+  try {
+    await expect(page.getByRole("heading", { name: "Matrx Local" })).toBeVisible({ timeout: 45_000 });
+  } catch (cause) {
+    const state = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      rootText: document.getElementById("root")?.textContent?.slice(0, 800) ?? null,
+      rootChildren: document.getElementById("root")?.childElementCount ?? null,
+    })).catch((error: unknown) => ({ inspectionError: String(error) }));
+    throw new Error(
+      `Matrx Local login did not render. Page state: ${JSON.stringify(state)}. Browser errors: ${JSON.stringify(fatalErrors())}`,
+      { cause },
+    );
+  }
+}
+
 test.describe("boot", () => {
   for (const theme of ["light", "dark"] as const) {
     test(`applies the ${theme} theme before the app renders`, async ({ page }) => {
+      const fatalErrors = collectFatalErrors(page);
       await page.addInitScript((value) => {
         localStorage.setItem("matrx-theme", value);
       }, theme);
 
       await page.goto("/");
-      await expect(page.getByRole("heading", { name: "Matrx Local" })).toBeVisible({
-        timeout: 45_000,
-      });
+      await expectLoginHeading(page, fatalErrors);
       await expect(page.getByTitle(/^Matrx Local version \d+\.\d+\.\d+$/)).toBeVisible();
 
       const state = await page.evaluate(() => ({
@@ -102,9 +118,7 @@ test.describe("boot", () => {
     await page.goto("/");
 
     // The real Login page — proof we rendered the app, not a blank body.
-    await expect(page.getByRole("heading", { name: "Matrx Local" })).toBeVisible(
-      { timeout: 45_000 },
-    );
+    await expectLoginHeading(page, fatalErrors);
     await expectNoCrashScreen(page);
 
     // Late-mounting providers/overlays (DownloadManagerModal, UpdateBanner,

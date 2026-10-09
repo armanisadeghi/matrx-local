@@ -21,6 +21,14 @@ vi.mock("@/lib/supabase", () => ({ default: { auth: { getSession: vi.fn() } } })
 
 import { getLocalAgentCatalogClient } from "./agent-catalog";
 
+function getSchemaClientForTest(name: string) {
+  const schema = getLocalAgentCatalogClient().schema;
+  if (!schema) {
+    throw new Error("the local catalog test client must expose schema RPCs");
+  }
+  return schema(name);
+}
+
 const ROW_A = { id: "b", name: "Beta", agent_type: "user", is_active: true };
 const ROW_B = { id: "a", name: "Alpha", agent_type: "builtin", is_active: true };
 
@@ -73,8 +81,7 @@ describe("the offline catalog client", () => {
   });
 
   it("exposes schema RPCs required by the associations data source and refuses unsupported reads", async () => {
-    const result = await getLocalAgentCatalogClient()
-      .schema("public")
+    const result = await getSchemaClientForTest("public")
       .rpc("ues_get_bulk", { p_entity_type: "agent" });
 
     expect(post).not.toHaveBeenCalled();
@@ -82,8 +89,7 @@ describe("the offline catalog client", () => {
   });
 
   it("REFUSES a supported RPC in the wrong schema", async () => {
-    const result = await getLocalAgentCatalogClient()
-      .schema("platform")
+    const result = await getSchemaClientForTest("platform")
       .rpc("agx_get_list_full");
 
     expect(post).not.toHaveBeenCalled();
@@ -91,7 +97,7 @@ describe("the offline catalog client", () => {
   });
 
   it("REFUSES table reads outside the offline catalog mirror", () => {
-    expect(() => getLocalAgentCatalogClient().schema("public").from("agents"))
+    expect(() => getSchemaClientForTest("public").from("agents"))
       .toThrow("reconnect to read this table from Supabase");
     expect(post).not.toHaveBeenCalled();
   });

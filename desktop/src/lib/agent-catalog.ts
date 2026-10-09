@@ -241,14 +241,17 @@ function offlineRefusalCall(fn: string): AgentCatalogRpcCall {
 const localCatalogRpc: AgentCatalogClient["rpc"] = (fn) =>
   fn === OFFLINE_RPC ? offlineListCall() : offlineRefusalCall(fn);
 
-export const localCatalogClient: AgentCatalogClient & {
-  schema(name: string): { rpc: AgentCatalogClient["rpc"] };
-} = {
+export const localCatalogClient: AgentCatalogClient = {
   rpc: localCatalogRpc,
   // Associations 0.14+ sends its data operations through this Supabase door.
   // The offline mirror still only serves the one catalog read; all other
   // schema RPCs retain the explicit refusal above.
   schema: (name) => ({
+    from: (table) => {
+      throw new Error(
+        `"${name}.${table}" is not served by the offline agent catalog; reconnect to read this table from Supabase.`,
+      );
+    },
     rpc: (fn) =>
       name === "public"
         ? localCatalogRpc(fn)

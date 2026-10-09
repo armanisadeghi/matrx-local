@@ -90,6 +90,12 @@ describe("the offline catalog client", () => {
     expect(result.error?.code).toBe("matrx_local_rpc_not_mirrored");
   });
 
+  it("REFUSES table reads outside the offline catalog mirror", () => {
+    expect(() => getLocalAgentCatalogClient().schema("public").from("agents"))
+      .toThrow("reconnect to read this table from Supabase");
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("REFUSES the offline favourite write instead of faking success", async () => {
     // Stars are written through `ues_set` (package 0.16+); offline it must be
     // refused loudly, never answered with a fake success.

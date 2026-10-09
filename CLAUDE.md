@@ -284,3 +284,5 @@ Put all work directly on main--no worktrees, local branches or anything else!
 - Commit often (Locally)
 - Commit and push to `origin/main` as you go, then run this repo's release yourself when your work is verified (see § Release: you run it). Only `aidream` and `ai-matrx` have a twice-hourly release agent; this repo does not.
 - Focus on writing code that is going to do stuff and is going to get us to production! Do not waste time or we will lose the opportunity to go to production forever.
+
+Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/policies/ai-model-and-spend-rules.md — read it before picking a model or running work that spends; system-agent links use `https://manage.aimatrx.com/administration/agents/system-agents/agents/<id>/build`.

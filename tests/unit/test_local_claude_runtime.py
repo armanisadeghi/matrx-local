@@ -980,8 +980,10 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
     runtime, _outbox, _config, workspace_root, _settings, _db = env
     config = CodingSessionRuntimeConfig().model_dump(mode="json")
     if hang_stage == "receive-wall-first":
-        config["execution_timeout_seconds"] = 0.01
-        config["idle_timeout_seconds"] = 0.03
+        # The execution clock starts before the client opens, so leave enough
+        # time to enter receive before proving the earlier wall deadline wins.
+        config["execution_timeout_seconds"] = 0.5
+        config["idle_timeout_seconds"] = 1.0
     elif hang_stage == "query":
         config["execution_timeout_seconds"] = 0.03
         config["idle_timeout_seconds"] = 0.01
@@ -1007,6 +1009,7 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
     )
     await runtime._persist_run(run)
     runtime._runs[run.runtime_id] = run
+    entered_hang_stage: list[str] = []
 
     class _Options:
         def __init__(self, **_kwargs: Any) -> None:
@@ -1024,10 +1027,12 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
 
         async def query(self, _prompt: str, *, session_id: str) -> None:  # noqa: ARG002
             if hang_stage == "query":
+                entered_hang_stage.append("query")
                 await asyncio.Event().wait()
 
         def receive_response(self):
             async def _messages():
+                entered_hang_stage.append("receive")
                 await asyncio.Event().wait()
                 yield None
 
@@ -1048,10 +1053,10 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
 
     async def _slow_setup_emit(run_: _LocalRun, event: dict[str, Any]) -> None:
         # Simulate a slow runner between the wall-clock start and the receive
-        # loop; the classification must not depend on setup being fast. Keep
-        # this above the old 300ms test watchdog so a CI-only scheduling delay
-        # cannot hide the regression this test is meant to catch.
-        if event.get("event") == "runtime_started":
+        # loop; the classification must not depend on setup being fast. Only
+        # the receive-idle case permits this delay: query and wall-first must
+        # reach their own intended hang point before the wall deadline fires.
+        if hang_stage == "receive" and event.get("event") == "runtime_started":
             await asyncio.sleep(0.35)
         await real_emit(run_, event)
 
@@ -1072,6 +1077,7 @@ async def test_execution_hangs_settle_with_distinct_timeout_reason(
 
     assert run.status == "failed"
     assert expected_error in (run.error or "")
+    assert entered_hang_stage == (["query"] if hang_stage == "query" else ["receive"])
     assert run.events[-1]["event"] == "runtime_finished"
 
 

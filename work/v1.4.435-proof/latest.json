@@ -1,0 +1,43 @@
+{
+  "version": "1.4.435",
+  "notes": "See the assets below to download and install this version.",
+  "pub_date": "2026-10-09T16:32:25.265Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNFExTXBNS2pWZS9vcDRpa3JwN29OU2pqM3RaWXhtSjVKUVVmRmxWRjZRdHo5Z2hGaHNJcUM5WkdtaytuWjlPN3Z0T2NQOU13T2ZTOXhVcXU4d0Z6Q1FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYxNzUwCWZpbGU6QUkgTWF0cnhfMS40LjQzNV9hbWQ2NC5kZWIJdmVyc2lvbjoxLjQuNDM1Ck9OcWxHdjRCVS9zSFNyT3RiNVNCeWpUajZXSnUxUDZrTFNXWEEvUit0STVnR3ZtU2RYNnI1QnRaN2Y0dkQ3TGd0M1huRCt6WGdzTGZ3RzI2czdTd0RnPT0K",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-linux-1.4.435.deb"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNFExTXBNS2pWZS9vcDRpa3JwN29OU2pqM3RaWXhtSjVKUVVmRmxWRjZRdHo5Z2hGaHNJcUM5WkdtaytuWjlPN3Z0T2NQOU13T2ZTOXhVcXU4d0Z6Q1FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYxNzUwCWZpbGU6QUkgTWF0cnhfMS40LjQzNV9hbWQ2NC5kZWIJdmVyc2lvbjoxLjQuNDM1Ck9OcWxHdjRCVS9zSFNyT3RiNVNCeWpUajZXSnUxUDZrTFNXWEEvUit0STVnR3ZtU2RYNnI1QnRaN2Y0dkQ3TGd0M1huRCt6WGdzTGZ3RzI2czdTd0RnPT0K",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-linux-1.4.435.deb"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNGZlZlBkOVEremVyMFE4NHJnWUFuSmxyelhOT0FrR2VuOWpaNzJqMVE0TWgwZTlsekFkU1M0dGcwdFFtSUNCdW9NQWFHbDJJekdEOElXSEREVTNaV3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzMDM3CWZpbGU6QUkgTWF0cnhfMS40LjQzNV94NjRfZW4tVVMubXNpCXZlcnNpb246MS40LjQzNQpPUGpTK3JlZHJOT0R0ZTg1cXZjS0FMbElkQmNqaHBSZDFlcVRvMThvaTF1RW9jNXVtcW1oR3NxR2xwUmpqdVdpWGQzSkRaS2xWNThFb3dXTkxwekZEdz09Cg==",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-windows-1.4.435.msi"
+    },
+    "windows-x86_64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNGZlZlBkOVEremVyMFE4NHJnWUFuSmxyelhOT0FrR2VuOWpaNzJqMVE0TWgwZTlsekFkU1M0dGcwdFFtSUNCdW9NQWFHbDJJekdEOElXSEREVTNaV3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzMDM3CWZpbGU6QUkgTWF0cnhfMS40LjQzNV94NjRfZW4tVVMubXNpCXZlcnNpb246MS40LjQzNQpPUGpTK3JlZHJOT0R0ZTg1cXZjS0FMbElkQmNqaHBSZDFlcVRvMThvaTF1RW9jNXVtcW1oR3NxR2xwUmpqdVdpWGQzSkRaS2xWNThFb3dXTkxwekZEdz09Cg==",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-windows-1.4.435.msi"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNFFRWUNVNG1NS0Z2MitUeGVJN1FJVWt0Z0NZNkhINGgzM1FUVE8veFY2NG9XRkM1UUtlcXhEOC9rTS8wOWd5OVdFclh5VTQ3M3h4WVR6ODFodVU0RkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzMDM4CWZpbGU6QUkgTWF0cnhfMS40LjQzNV94NjQtc2V0dXAuZXhlCXZlcnNpb246MS40LjQzNQp1UjFkQkxtVDV5dnh6bUdyNXdaL1hqNGxwWENMcjc5aXFRYUpscjlmR2NTR1BTY2ZHakdPV1drU1NSV2EybE9qYUtiVkhUa3g3SkpQcW1pVElUSkZCZz09Cg==",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-windows-installer-1.4.435.exe"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNGVCa2Rsa3pjWlAxVXE1elVmVzlWaURHQ2VVYmUySHlRKzJ4NzEzbTBaOG9UQ0lGbmc4L1Y4czR2V2RtQnZrdDJ1OFBLL3VLam5MZ1dDV3d0cnZOcWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzMjcwCWZpbGU6QUkgTWF0cnguYXBwLnRhci5negl2ZXJzaW9uOjEuNC40MzUKQmpXYUM0elJVNlliZ3ZsY1ROT3l0b2ZCRmlWRlhBOVhYeXBwajk5NW03YmViRG0wQmNSOEx3eFdVRkhObjYyaFV0L1l1VmErSjVYbmVzMXFuM1ZRQ2c9PQo=",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-mac-intel-1.4.435.app.tar.gz"
+    },
+    "darwin-x86_64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNGVCa2Rsa3pjWlAxVXE1elVmVzlWaURHQ2VVYmUySHlRKzJ4NzEzbTBaOG9UQ0lGbmc4L1Y4czR2V2RtQnZrdDJ1OFBLL3VLam5MZ1dDV3d0cnZOcWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzMjcwCWZpbGU6QUkgTWF0cnguYXBwLnRhci5negl2ZXJzaW9uOjEuNC40MzUKQmpXYUM0elJVNlliZ3ZsY1ROT3l0b2ZCRmlWRlhBOVhYeXBwajk5NW03YmViRG0wQmNSOEx3eFdVRkhObjYyaFV0L1l1VmErSjVYbmVzMXFuM1ZRQ2c9PQo=",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-mac-intel-1.4.435.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNFVQSkJzNU13OTJ1bG1XSlBHYjBYZTZSa3RHSlozZzBCN2Zabk5oN1grY0dYaGMxSndyZklzdzB0RW5xUXFubGNFamR5b2FVY3RTaCt4T1oram1mblE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzNDk2CWZpbGU6QUkgTWF0cnguYXBwLnRhci5negl2ZXJzaW9uOjEuNC40MzUKVWV0WHRkck44R1NLU0hVVG1GUXU4c2s2VGZTN0wzS2piVlVjQzhnRkc2ZjIwUnhQMUxSU1pqTXRjSkxISTBMbENkSWJqYUNpUkQwNkl0dDJMQlVHQ2c9PQo=",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-mac-silicon-1.4.435.app.tar.gz"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSWjNHK245dGhMNFVQSkJzNU13OTJ1bG1XSlBHYjBYZTZSa3RHSlozZzBCN2Zabk5oN1grY0dYaGMxSndyZklzdzB0RW5xUXFubGNFamR5b2FVY3RTaCt4T1oram1mblE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTYzNDk2CWZpbGU6QUkgTWF0cnguYXBwLnRhci5negl2ZXJzaW9uOjEuNC40MzUKVWV0WHRkck44R1NLU0hVVG1GUXU4c2s2VGZTN0wzS2piVlVjQzhnRkc2ZjIwUnhQMUxSU1pqTXRjSkxISTBMbENkSWJqYUNpUkQwNkl0dDJMQlVHQ2c9PQo=",
+      "url": "https://github.com/armanisadeghi/matrx-local/releases/download/v1.4.435/ai-matrx-mac-silicon-1.4.435.app.tar.gz"
+    }
+  }
+}

@@ -23,8 +23,8 @@
  *                            `app/api/agent_catalog_routes.py` and
  *                            `app/services/agent_catalog/FEATURE.md`).
  *
- * The structural client is a subset of `SupabaseClient` — `rpc()` (thenable,
- * `.order()`, `.range()`) — exactly the
+ * The structural client is a subset of `SupabaseClient` — `rpc()` and
+ * `schema(name).rpc()` (thenable, `.order()`, `.range()`) — exactly the
  * seam the package already reads online. It is a TRANSPORT, never a second
  * implementation.
  *
@@ -238,10 +238,22 @@ function offlineRefusalCall(fn: string): AgentCatalogRpcCall {
  * the package already speaks to Supabase. Exported so its contract can be
  * tested directly — this seam is the whole of ruling D4's enforcement.
  */
-export const localCatalogClient: AgentCatalogClient = {
-  rpc(fn) {
-    return fn === OFFLINE_RPC ? offlineListCall() : offlineRefusalCall(fn);
-  },
+const localCatalogRpc: AgentCatalogClient["rpc"] = (fn) =>
+  fn === OFFLINE_RPC ? offlineListCall() : offlineRefusalCall(fn);
+
+export const localCatalogClient: AgentCatalogClient & {
+  schema(name: string): { rpc: AgentCatalogClient["rpc"] };
+} = {
+  rpc: localCatalogRpc,
+  // Associations 0.14+ sends its data operations through this Supabase door.
+  // The offline mirror still only serves the one catalog read; all other
+  // schema RPCs retain the explicit refusal above.
+  schema: (name) => ({
+    rpc: (fn) =>
+      name === "public"
+        ? localCatalogRpc(fn)
+        : offlineRefusalCall(`${name}.${fn}`),
+  }),
 };
 
 // ── The two catalogs ─────────────────────────────────────────────────────────
@@ -306,6 +318,6 @@ export function getLocalAgentCatalog(): AgentCatalog {
 }
 
 /** The offline structural client, for tests and for the local catalog above. */
-export function getLocalAgentCatalogClient(): AgentCatalogClient {
+export function getLocalAgentCatalogClient(): typeof localCatalogClient {
   return localCatalogClient;
 }

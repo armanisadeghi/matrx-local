@@ -72,6 +72,24 @@ describe("the offline catalog client", () => {
     expect(result.error?.message).toContain("agx_get_list_full");
   });
 
+  it("exposes schema RPCs required by the associations data source and refuses unsupported reads", async () => {
+    const result = await getLocalAgentCatalogClient()
+      .schema("public")
+      .rpc("ues_get_bulk", { p_entity_type: "agent" });
+
+    expect(post).not.toHaveBeenCalled();
+    expect(result.error?.code).toBe("matrx_local_rpc_not_mirrored");
+  });
+
+  it("REFUSES a supported RPC in the wrong schema", async () => {
+    const result = await getLocalAgentCatalogClient()
+      .schema("platform")
+      .rpc("agx_get_list_full");
+
+    expect(post).not.toHaveBeenCalled();
+    expect(result.error?.code).toBe("matrx_local_rpc_not_mirrored");
+  });
+
   it("REFUSES the offline favourite write instead of faking success", async () => {
     // Stars are written through `ues_set` (package 0.16+); offline it must be
     // refused loudly, never answered with a fake success.

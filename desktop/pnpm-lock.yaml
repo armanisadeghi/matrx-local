@@ -383,8 +383,8 @@ packages:
       react-redux:
         optional: true
 
-  '@ai-matrx/messaging@0.18.24':
-    resolution: {integrity: sha512-Qdyem8yY+BWZqRNOTCHlEbnuOCLZn3iOipZZPpZUABJxYlR6A4M7SX7Qn6PYn3Vqo7DbpqL4crnbli0U/vYaUA==}
+  '@ai-matrx/messaging@0.18.25':
+    resolution: {integrity: sha512-5MZhxaOXDY9moCqfE1xX3nWtrEHkDNlm9y/Oi8MZcOoT6K/KDbKRGQGqeAETIAgtQaVy2mOf+WEqhx3QzzDtcg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=18.0.0'
@@ -4626,7 +4626,7 @@ snapshots:
       '@ai-matrx/icons': 0.3.64(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))
       '@ai-matrx/kit': 0.42.1(react@19.3.0)
       '@ai-matrx/media': 0.15.73(@reduxjs/toolkit@2.13.0(react-redux@9.3.0(@types/react@19.3.0)(react@19.3.0)(redux@5.0.1))(react@19.3.0))(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-redux@9.3.0(@types/react@19.3.0)(react@19.3.0)(redux@5.0.1))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))
-      '@ai-matrx/messaging': 0.18.24(@supabase/supabase-js@2.117.2)(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))
+      '@ai-matrx/messaging': 0.18.25(@supabase/supabase-js@2.117.2)(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))
       '@ai-matrx/print': 0.12.25(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@ai-matrx/realtime': 0.10.6(react@19.3.0)
       '@ai-matrx/records': 0.98.7(@tanstack/react-query@5.104.1(react@19.3.0))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -4818,7 +4818,7 @@ snapshots:
       - supports-color
       - ws
 
-  '@ai-matrx/messaging@0.18.24(@supabase/supabase-js@2.117.2)(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))':
+  '@ai-matrx/messaging@0.18.25(@supabase/supabase-js@2.117.2)(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))':
     dependencies:
       '@ai-matrx/agents': 0.59.52(@supabase/supabase-js@2.117.2)(@tailwindcss/typography@0.5.20(tailwindcss@3.4.19(yaml@2.9.1)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(recharts@3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@19.3.0)(react@19.3.0)(redux@5.0.1))
       '@ai-matrx/data': 0.29.4(@supabase/supabase-js@2.117.2)(react@19.3.0)

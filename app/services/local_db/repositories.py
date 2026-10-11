@@ -1180,7 +1180,7 @@ class NotesRepo:
 
     async def list_all(
         self,
-        folder_id: str | None = None,
+        home_scope_id: str | None = None,
         include_deleted: bool = False,
         search: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -1188,9 +1188,9 @@ class NotesRepo:
         clauses: list[str] = []
         if not include_deleted:
             clauses.append("is_deleted = 0")
-        if folder_id is not None:
-            clauses.append("folder_id = ?")
-            params.append(folder_id)
+        if home_scope_id is not None:
+            clauses.append("home_scope_id = ?")
+            params.append(home_scope_id)
         if search:
             clauses.append("(label LIKE ? OR title LIKE ? OR content LIKE ?)")
             like = f"%{search}%"
@@ -1243,13 +1243,14 @@ class NotesRepo:
         now = _now()
         cursor = await self._db.execute(
             """INSERT INTO notes
-               (id, user_id, folder_id, title, label, content, content_hash, file_path,
+               (id, user_id, home_scope_id, title, label, content, content_hash, file_path,
                 is_deleted, is_pinned, tags, sync_version, supabase_updated_at,
                 sync_status, last_synced_at, sync_enabled, remote_content_hash,
-                folder_name, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                home_dir, metadata, created_at, updated_at, organization_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
-                 user_id=excluded.user_id, folder_id=excluded.folder_id,
+                 user_id=excluded.user_id, home_scope_id=excluded.home_scope_id,
+                 organization_id=COALESCE(excluded.organization_id, notes.organization_id),
                  title=excluded.title, label=excluded.label,
                  content=excluded.content,
                  content_hash=excluded.content_hash, file_path=excluded.file_path,
@@ -1260,14 +1261,14 @@ class NotesRepo:
                  last_synced_at=excluded.last_synced_at,
                  sync_enabled=excluded.sync_enabled,
                  remote_content_hash=excluded.remote_content_hash,
-                 folder_name=excluded.folder_name,
+                 home_dir=excluded.home_dir,
                  metadata=excluded.metadata,
                  updated_at=excluded.updated_at
                WHERE notes.user_id = excluded.user_id""",
             (
                 note["id"],
                 note.get("user_id", ""),
-                note.get("folder_id"),
+                note.get("home_scope_id"),
                 note.get("title", note.get("label", "")),
                 note.get("label", note.get("title", "")),
                 note.get("content", ""),
@@ -1282,10 +1283,11 @@ class NotesRepo:
                 note.get("last_synced_at"),
                 int(note.get("sync_enabled", True)),
                 note.get("remote_content_hash"),
-                note.get("folder_name", "General"),
+                note.get("home_dir") or "General",
                 _json_dumps(note.get("metadata", {})),
                 note.get("created_at", now),
                 note.get("updated_at", now),
+                note.get("organization_id"),
             ),
         )
         await self._db.commit()
@@ -1304,7 +1306,8 @@ class NotesRepo:
     ) -> None:
         allowed = {
             "title", "label", "content", "content_hash", "file_path",
-            "folder_id", "folder_name", "tags", "metadata", "is_deleted",
+            "home_scope_id", "home_dir", "organization_id", "tags", "metadata",
+            "is_deleted",
             "is_pinned", "sync_version", "sync_status", "last_synced_at",
             "sync_enabled", "remote_content_hash", "supabase_updated_at",
         }
@@ -1515,62 +1518,6 @@ class NoteVersionsRepo:
             (note_id, note_id, keep),
         )
         await self._db.commit()
-
-
-# ==================================================================
-# NoteFoldersRepo — note_folders table
-# ==================================================================
-
-class NoteFoldersRepo:
-    def __init__(self, db: LocalDatabase | None = None):
-        self._db = db or get_db()
-
-    async def list_for_user(
-        self, user_id: str, include_deleted: bool = False
-    ) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM note_folders WHERE user_id = ?"
-        if not include_deleted:
-            sql += " AND is_deleted = 0"
-        sql += " ORDER BY path"
-        rows = await self._db.fetchall(sql, (user_id,))
-        return [self._deserialize(r) for r in rows]
-
-    async def get(self, folder_id: str) -> dict[str, Any] | None:
-        row = await self._db.fetchone(
-            "SELECT * FROM note_folders WHERE id = ?", (folder_id,)
-        )
-        return self._deserialize(row) if row else None
-
-    async def upsert(self, folder: dict[str, Any]) -> None:
-        await self._db.execute(
-            """INSERT INTO note_folders
-               (id, user_id, parent_id, name, path, is_deleted, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 user_id=excluded.user_id, parent_id=excluded.parent_id,
-                 name=excluded.name, path=excluded.path,
-                 is_deleted=excluded.is_deleted, updated_at=excluded.updated_at""",
-            (
-                folder["id"],
-                folder.get("user_id", ""),
-                folder.get("parent_id"),
-                folder.get("name", ""),
-                folder.get("path", ""),
-                int(folder.get("is_deleted", False)),
-                folder.get("created_at", _now()),
-                folder.get("updated_at", _now()),
-            ),
-        )
-        await self._db.commit()
-
-    async def upsert_many(self, folders: list[dict[str, Any]]) -> None:
-        for f in folders:
-            await self.upsert(f)
-
-    def _deserialize(self, row) -> dict[str, Any]:
-        d = _row_to_dict(row)
-        d["is_deleted"] = bool(d.get("is_deleted", 0))
-        return d
 
 
 # ==================================================================

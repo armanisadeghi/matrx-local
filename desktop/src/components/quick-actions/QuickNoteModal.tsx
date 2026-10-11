@@ -25,25 +25,20 @@ export function QuickNoteModal({
 }: QuickNoteModalProps) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [folderId, setFolderId] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const docs = useDocuments(userId, engineStatus);
-  const folders = docs.tree?.folders ?? [];
 
   const handleSave = useCallback(async () => {
     if (!title.trim() && !content.trim()) return;
     setSaving(true);
     setSaveError(null);
     try {
-      const folder = folders.find((f) => f.id === folderId);
       // createNote NEVER throws — it returns null on failure (and when the
       // engine isn't ready). Clearing the form on null silently lost the note.
       const note = await docs.createNote({
         label: title.trim() || "Untitled Note",
         content: content.trim(),
-        ...(folder?.name !== undefined ? { folder_name: folder.name } : {}),
-        ...(folderId ? { folder_id: folderId } : {}),
       });
       if (!note) {
         setSaveError(
@@ -53,14 +48,13 @@ export function QuickNoteModal({
       }
       setTitle("");
       setContent("");
-      setFolderId("");
       onOpenChange(false);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }, [title, content, folderId, folders, docs, onOpenChange]);
+  }, [title, content, docs, onOpenChange]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -79,8 +73,7 @@ export function QuickNoteModal({
         if (!v) {
           setTitle("");
           setContent("");
-          setFolderId("");
-        }
+            }
         onOpenChange(v);
       }}
     >
@@ -95,20 +88,6 @@ export function QuickNoteModal({
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
           />
-          {folders.length > 0 && (
-            <select
-              value={folderId}
-              onChange={(e) => setFolderId(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value="">No folder (unfiled)</option>
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-          )}
           <Textarea
             placeholder="Write your note…"
             value={content}

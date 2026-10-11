@@ -17,6 +17,7 @@ import type {
   DocNote,
   DocVersion,
   CreateNoteData,
+  UpdateNoteData,
   SyncStatus,
   SyncResult,
   ConflictDetail,
@@ -32,7 +33,7 @@ export interface DocumentsState {
   versions: DocVersion[];
   syncStatus: SyncStatus | null;
   conflicts: ConflictDetail[];
-  activeFolderId: string | null;
+  activeHomeId: string | null;
   searchQuery: string;
   loading: boolean;
   saving: boolean;
@@ -48,7 +49,7 @@ const INITIAL_STATE: DocumentsState = {
   versions: [],
   syncStatus: null,
   conflicts: [],
-  activeFolderId: null,
+  activeHomeId: null,
   searchQuery: "",
   loading: true,
   saving: false,
@@ -62,10 +63,10 @@ export function useDocuments(
   engineStatus?: EngineStatus,
 ) {
   const [state, setState] = useState<DocumentsState>(INITIAL_STATE);
-  // Callbacks read transient state (activeNote, activeFolderId) through this
+  // Callbacks read transient state (activeNote, activeHomeId) through this
   // ref instead of closing over `state`. Closing over state put it in every
   // useCallback dep array, so EVERY keystroke (which updates activeNote)
-  // recreated every action — cascading re-renders through NoteList/FolderTree
+  // recreated every action — cascading re-renders through NoteList/HomesList
   // and defeating memoization (a real contributor to the paste-freeze bug).
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -75,7 +76,7 @@ export function useDocuments(
   // Track pending flush so we can await it on unmount and not discard unsaved edits
   const pendingSaveRef = useRef<{
     noteId: string;
-    data: Partial<CreateNoteData>;
+    data: UpdateNoteData;
   } | null>(null);
 
   const update = useCallback((partial: Partial<DocumentsState>) => {
@@ -91,7 +92,7 @@ export function useDocuments(
     !!engine.engineUrl &&
     (engineStatus === undefined || engineStatus === "connected");
 
-  // ── Load folder tree — local filesystem, no auth required ───────────────
+  // ── Load homes — local filesystem, no auth required ───────────────
 
   const loadTree = useCallback(async () => {
     if (!engineReady) return;
@@ -100,19 +101,19 @@ export function useDocuments(
       update({ tree });
     } catch (err) {
       console.warn("[docs] Failed to load tree:", err);
-      update({ tree: { folders: [], total_notes: 0, unfiled_notes: 0 } });
+      update({ tree: { homes: [], total_notes: 0, unfiled_notes: 0 } });
     }
   }, [engineReady, userId, update]);
 
   // ── Load notes — local filesystem, no auth required ─────────────────────
 
   const loadNotes = useCallback(
-    async (folderId?: string | null, search?: string) => {
+    async (homeId?: string | null, search?: string) => {
       if (!engineReady) return;
       try {
         update({ loading: true, error: null });
         const notes = await engine.listNotes(userId ?? "local", {
-          ...(folderId != null ? { folder_id: folderId } : {}),
+          ...(homeId != null ? { home_scope_id: homeId } : {}),
           ...(search !== undefined ? { search } : {}),
         });
         update({ notes, loading: false });
@@ -126,20 +127,20 @@ export function useDocuments(
     [engineReady, userId, update],
   );
 
-  // Refresh the list under the CURRENT filter (folder + search). Realtime
+  // Refresh the list under the CURRENT filter (home + search). Realtime
   // callbacks must use this instead of bare loadNotes(), which lists ALL
-  // notes and silently discards the active folder/search filter.
+  // notes and silently discards the active home/search filter.
   const refreshNotes = useCallback(async () => {
-    const { activeFolderId, searchQuery } = stateRef.current;
-    await loadNotes(activeFolderId, searchQuery || undefined);
+    const { activeHomeId, searchQuery } = stateRef.current;
+    await loadNotes(activeHomeId, searchQuery || undefined);
   }, [loadNotes]);
 
-  // ── Select folder ────────────────────────────────────────────────────────
+  // ── Select home ────────────────────────────────────────────────────────
 
-  const selectFolder = useCallback(
-    (folderId: string | null) => {
-      update({ activeFolderId: folderId, activeNote: null, searchQuery: "" });
-      loadNotes(folderId);
+  const selectHome = useCallback(
+    (homeId: string | null) => {
+      update({ activeHomeId: homeId, activeNote: null, searchQuery: "" });
+      loadNotes(homeId);
     },
     [update, loadNotes],
   );
@@ -148,7 +149,7 @@ export function useDocuments(
 
   const search = useCallback(
     (query: string) => {
-      update({ searchQuery: query, activeFolderId: null, activeNote: null });
+      update({ searchQuery: query, activeHomeId: null, activeNote: null });
       loadNotes(null, query);
     },
     [update, loadNotes],
@@ -199,7 +200,7 @@ export function useDocuments(
         update({ saving: true, error: null });
         const note = await engine.createNote(userId ?? "local", data);
         await loadTree();
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
         update({ saving: false, activeNote: note });
         return note;
       } catch (err) {
@@ -218,7 +219,7 @@ export function useDocuments(
   const updateNote = useCallback(
     async (
       noteId: string,
-      data: Partial<CreateNoteData>,
+      data: UpdateNoteData,
       immediate = false,
     ) => {
       if (!engineReady) return;
@@ -266,9 +267,9 @@ export function useDocuments(
           update({ saving: true });
           await engine.updateNote(noteId, userId ?? "local", data);
           update({ saving: false });
-          if (data.label || data.folder_id || data.folder_name) {
+          if (data.label || data.home_scope_id) {
             await loadTree();
-            await loadNotes(stateRef.current.activeFolderId);
+            await loadNotes(stateRef.current.activeHomeId);
           }
         } catch (err) {
           update({
@@ -315,7 +316,7 @@ export function useDocuments(
         await engine.deleteNote(noteId, userId ?? "local");
         update({ activeNote: null, versions: [] });
         await loadTree();
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
       } catch (err) {
         update({
           error: err instanceof Error ? err.message : "Failed to delete",
@@ -325,60 +326,20 @@ export function useDocuments(
     [engineReady, userId, update, loadTree, loadNotes],
   );
 
-  // ── Create folder ────────────────────────────────────────────────────────
-
-  const createFolder = useCallback(
-    async (name: string, parentId?: string) => {
-      if (!engineReady) return null;
-      try {
-        const folder = await engine.createFolder(userId ?? "local", {
-          name,
-          ...(parentId !== undefined ? { parent_id: parentId } : {}),
-        });
-        await loadTree();
-        return folder;
-      } catch (err) {
-        update({
-          error: err instanceof Error ? err.message : "Failed to create folder",
-        });
-        return null;
-      }
-    },
-    [engineReady, userId, update, loadTree],
-  );
-
-  // ── Rename folder ────────────────────────────────────────────────────────
-
-  const renameFolder = useCallback(
-    async (folderId: string, name: string) => {
-      if (!engineReady) return;
-      try {
-        await engine.updateFolder(folderId, userId ?? "local", { name });
-        await loadTree();
-      } catch (err) {
-        update({
-          error: err instanceof Error ? err.message : "Failed to rename folder",
-        });
-      }
-    },
-    [engineReady, userId, update, loadTree],
-  );
-
-  // ── Move note to a different folder ──────────────────────────────────────
+  // ── Move note to a different home (set_home) ─────────────────────────────
 
   const moveNote = useCallback(
-    async (noteId: string, folderId: string | null, folderName: string) => {
+    async (noteId: string, homeScopeId: string) => {
       if (!engineReady) return;
       try {
         const updatedNote = await engine.updateNote(noteId, userId ?? "local", {
-          ...(folderId != null ? { folder_id: folderId } : {}),
-          folder_name: folderName,
+          home_scope_id: homeScopeId,
         });
         if (stateRef.current.activeNote?.id === noteId) {
           update({ activeNote: updatedNote });
         }
         await loadTree();
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
       } catch (err) {
         update({
           error: err instanceof Error ? err.message : "Failed to move note",
@@ -400,7 +361,7 @@ export function useDocuments(
         if (stateRef.current.activeNote?.id === noteId) {
           update({ activeNote: updatedNote });
         }
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
         await loadTree();
       } catch (err) {
         update({
@@ -409,27 +370,6 @@ export function useDocuments(
       }
     },
     [engineReady, userId, update, loadNotes, loadTree],
-  );
-
-  // ── Delete folder ────────────────────────────────────────────────────────
-
-  const deleteFolder = useCallback(
-    async (folderId: string) => {
-      if (!engineReady) return;
-      try {
-        await engine.deleteFolder(folderId, userId ?? "local");
-        if (stateRef.current.activeFolderId === folderId) {
-          update({ activeFolderId: null, activeNote: null });
-        }
-        await loadTree();
-        await loadNotes(null);
-      } catch (err) {
-        update({
-          error: err instanceof Error ? err.message : "Failed to delete folder",
-        });
-      }
-    },
-    [engineReady, userId, update, loadTree, loadNotes],
   );
 
   // ── Revert note — requires cloud sync (needs userId) ────────────────────
@@ -464,7 +404,7 @@ export function useDocuments(
         update({ syncing: true, error: null });
         const result = await engine.triggerSync(userId, mode);
         await loadTree();
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
         const syncStatus = await engine.getSyncStatus(userId);
         update({ syncing: false, syncStatus, lastSyncResult: result });
         return result;
@@ -522,7 +462,7 @@ export function useDocuments(
         await loadConflicts();
         await loadSyncStatus();
         await loadTree();
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
       } catch (err) {
         update({
           error:
@@ -548,7 +488,7 @@ export function useDocuments(
    */
   const reloadAfterAccessRestored = useCallback(async () => {
     await loadTree();
-    await loadNotes(stateRef.current.activeFolderId);
+    await loadNotes(stateRef.current.activeHomeId);
     if (userId) {
       await loadSyncStatus();
       await loadConflicts();
@@ -560,7 +500,7 @@ export function useDocuments(
       if (!engineReady) return;
       try {
         await engine.setNoteExcluded(noteId, userId ?? "local", excluded);
-        await loadNotes(stateRef.current.activeFolderId);
+        await loadNotes(stateRef.current.activeHomeId);
       } catch (err) {
         update({
           error:
@@ -632,15 +572,12 @@ export function useDocuments(
     loadTree,
     loadNotes,
     refreshNotes,
-    selectFolder,
+    selectHome,
     search,
     selectNote,
     createNote,
     updateNote,
     deleteNote,
-    createFolder,
-    renameFolder,
-    deleteFolder,
     moveNote,
     renameNote,
     revertNote,

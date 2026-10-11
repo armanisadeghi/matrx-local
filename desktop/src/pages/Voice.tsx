@@ -210,7 +210,7 @@ export function Voice() {
       await engine.createNote("local", {
         label: `Voice Note — ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
         content: text,
-        folder_name: "Voice Notes",
+        tags: ["Voice Notes"],
       });
       emitStatus({ ok: true });
     } catch (e) {
@@ -1197,7 +1197,7 @@ function TranscribeTab({
         await engine.createNote("local", {
           label,
           content: currentText,
-          folder_name: "Voice Notes",
+          tags: ["Voice Notes"],
         });
         setPushSuccess(session.id);
         setTimeout(() => setPushSuccess(null), 3000);

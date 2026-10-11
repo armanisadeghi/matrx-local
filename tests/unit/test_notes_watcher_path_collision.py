@@ -83,8 +83,8 @@ def test_watcher_uses_historical_hash_keeper_regardless_of_row_order(
     historical = content_hash("last synced")
     local_rows = [_owner("keeper", historical), _owner("replica", content_hash("other"))]
     remote_rows = [
-        {"id": "keeper", "created_by": "user-1", "file_path": "Draft/shared.md", "content_hash": historical, "label": "keeper", "folder_name": "Draft"},
-        {"id": "replica", "created_by": "user-1", "file_path": "Draft/shared.md", "content_hash": content_hash("other"), "label": "replica", "folder_name": "Draft"},
+        {"id": "keeper", "created_by": "user-1", "file_path": "Draft/shared.md", "content_hash": historical, "label": "keeper", "home_dir": "Draft"},
+        {"id": "replica", "created_by": "user-1", "file_path": "Draft/shared.md", "content_hash": content_hash("other"), "label": "replica", "home_dir": "Draft"},
     ]
     if reverse_local:
         local_rows.reverse()

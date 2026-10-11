@@ -42,21 +42,21 @@ async def tool_list_documents(
             metadata={"documents": []},
         )
 
-    # Group by folder
-    by_folder: dict[str, list] = {}
+    # Group by home (a home is a directory)
+    by_home: dict[str, list] = {}
     for f in files:
-        folder_name = f.get("folder", "General")
-        by_folder.setdefault(folder_name, []).append(f)
+        home_dir = f.get("folder", "General")
+        by_home.setdefault(home_dir, []).append(f)
 
     lines = [f"Documents ({len(files)} total):"]
-    for folder_name, docs in sorted(by_folder.items()):
-        lines.append(f"\n  [{folder_name}] ({len(docs)} files)")
+    for home_dir, docs in sorted(by_home.items()):
+        lines.append(f"\n  [{home_dir}] ({len(docs)} files)")
         for d in docs:
             lines.append(f"    {d['label']}.md")
 
     return ToolResult(
         output="\n".join(lines),
-        metadata={"total": len(files), "folders": by_folder},
+        metadata={"total": len(files), "folders": by_home},
     )
 
 

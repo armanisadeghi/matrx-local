@@ -77,7 +77,7 @@ def test_mapped_dir_failure_degrades_only_that_mapping(
 
     try:
         written = fm.sync_to_mapped_dirs(
-            "General/hello.md", [str(bad_dir), str(good_dir)], folder_id="f1"
+            "General/hello.md", [str(bad_dir), str(good_dir)], home_scope_id="f1"
         )
     finally:
         bad_dir.chmod(0o700)

@@ -191,7 +191,7 @@ async def test_pending_push_reads_only_its_eligible_file_not_the_corpus(
     engine.configure("account-a", "token-a")
     engine._get_notes_repo = lambda: _PendingRepo([{
         "id": "queued", "file_path": "General/.md", "sync_enabled": True,
-        "label": "queued", "folder_name": "General",
+        "label": "queued", "home_dir": "General",
     }])  # type: ignore[method-assign]
     engine._push_note = AsyncMock(return_value={"_synced_to_cloud": True})
 
@@ -288,7 +288,7 @@ async def test_conflict_snapshot_read_keeps_health_equivalent_work_responsive(
     repo = AsyncMock()
     repo.get.return_value = {
         "id": "note-1", "user_id": "account-a", "label": "Note",
-        "folder_name": "General", "file_path": "General/Note.md",
+        "home_dir": "General", "file_path": "General/Note.md",
     }
     engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
     engine._push_note = AsyncMock(return_value={"_synced_to_cloud": True})
@@ -381,7 +381,7 @@ async def test_keep_local_defers_edit_made_after_worker_captures_snapshot(
     repo = AsyncMock()
     repo.get.return_value = {
         "id": "note-1", "user_id": "account-a", "label": "Note",
-        "folder_name": "General", "file_path": "General/Note.md",
+        "home_dir": "General", "file_path": "General/Note.md",
     }
     engine._get_notes_repo = lambda: repo  # type: ignore[method-assign]
     engine._push_note = AsyncMock(return_value={"_synced_to_cloud": True})
@@ -448,7 +448,7 @@ async def test_pull_defers_post_capture_edit_before_remote_overwrite(
     monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
     pull = asyncio.create_task(engine._pull_note("note-1", {
         "id": "note-1", "created_by": "account-a", "file_path": "General/Note.md",
-        "label": "Note", "folder_name": "General", "content": "remote-body",
+        "label": "Note", "home_dir": "General", "content": "remote-body",
         "content_hash": content_hash("remote-body"),
     }))
     await _wait_for(started)
@@ -501,7 +501,7 @@ async def test_reroute_cleanup_preserves_post_capture_old_path_edit(
     monkeypatch.setattr(fm, "read_note_snapshot", controlled_snapshot)
     pull = asyncio.create_task(engine._pull_note("note-1", {
         "id": "note-1", "created_by": "account-a", "file_path": "General/New.md",
-        "label": "Note", "folder_name": "General", "content": "remote-body",
+        "label": "Note", "home_dir": "General", "content": "remote-body",
         "content_hash": content_hash("remote-body"),
     }))
     await _wait_for(started)

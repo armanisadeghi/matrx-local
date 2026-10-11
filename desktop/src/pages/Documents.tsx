@@ -1,6 +1,5 @@
-import type { DocFolder } from "@/lib/api";
 /**
- * Documents page — full document management with folder tree, markdown editor,
+ * Documents page — full document management with a homes list, markdown editor,
  * sync status, version history, sharing, and directory mappings.
  */
 
@@ -23,7 +22,7 @@ import { useDocuments } from "@/hooks/use-documents";
 import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
 import { deriveAccessPresentation } from "@/hooks/use-access-health";
 import { useRealtimeSync } from "@/hooks/use-realtime-sync";
-import { FolderTree } from "@/components/documents/FolderTree";
+import { HomesList } from "@/components/documents/HomesList";
 import { NoteList } from "@/components/documents/NoteList";
 import { NoteEditor } from "@/components/documents/NoteEditor";
 import { NotesAccessPrompt } from "@/components/documents/NotesAccessPrompt";
@@ -108,9 +107,6 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
       },
       [loadTree, refreshNotes, selectNote],
     ),
-    onFolderChange: useCallback(() => {
-      loadTree();
-    }, [loadTree]),
     // Catch-up pull found changes made while this device was offline.
     onCatchUp: useCallback(() => {
       loadTree();
@@ -127,19 +123,11 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
   };
 
   const handleCreateNote = async () => {
-    // Flatten — nested folders are selectable in the tree, but a top-level
-    // find() sent folder_name "General" with the NESTED folder_id (an
-    // internally inconsistent payload).
-    const flatten = (folders: DocFolder[]): DocFolder[] =>
-      folders.flatMap((f) => [f, ...flatten(f.children ?? [])]);
-    const folderName =
-      flatten(docs.tree?.folders ?? []).find((f) => f.id === docs.activeFolderId)
-        ?.name ?? "General";
+    // A new note carries the active organization and NO home: the database
+    // files it in that organization's General.
     await docs.createNote({
       label: "New Note",
       content: "",
-      folder_name: folderName,
-      ...(docs.activeFolderId ? { folder_id: docs.activeFolderId } : {}),
     });
   };
 
@@ -209,7 +197,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
     );
   }
 
-  const allFolders = docs.tree?.folders ?? [];
+  const allHomes = docs.tree?.homes ?? [];
 
   return (
     <div className="flex h-full flex-col">
@@ -341,21 +329,18 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
         {showSidebar && (
           <div className="flex w-72 shrink-0 flex-col border-r overflow-hidden">
             <div className="border-b p-3 overflow-auto max-h-[40%]">
-              <FolderTree
-                folders={allFolders}
-                activeFolderId={docs.activeFolderId}
-                unfiledCount={docs.tree?.unfiled_notes ?? 0}
-                onSelect={docs.selectFolder}
-                onCreate={docs.createFolder}
-                onDelete={docs.deleteFolder}
-                onRename={docs.renameFolder}
+              <HomesList
+                homes={allHomes}
+                activeHomeId={docs.activeHomeId}
+                totalCount={docs.tree?.total_notes ?? 0}
+                onSelect={docs.selectHome}
               />
             </div>
 
             <div className="flex-1 overflow-auto p-2">
               <NoteList
                 notes={docs.notes}
-                folders={allFolders}
+                homes={allHomes}
                 activeNoteId={docs.activeNote?.id ?? null}
                 onSelect={docs.selectNote}
                 onDelete={docs.deleteNote}
@@ -461,7 +446,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
                 <div className="space-y-1.5">
                   <div>
                     <span className="text-muted-foreground">Folder: </span>
-                    {docs.activeNote.folder_name}
+                    {docs.activeNote.home_dir}
                   </div>
                   <div>
                     <span className="text-muted-foreground">File: </span>
@@ -518,7 +503,7 @@ export function Documents({ engineStatus, userId }: DocumentsProps) {
       {showMappingsDialog && (
         <DirectoryMappings
           userId={userId ?? "local"}
-          folders={allFolders}
+          homes={allHomes}
           onClose={() => setShowMappingsDialog(false)}
         />
       )}

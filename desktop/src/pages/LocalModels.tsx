@@ -57,8 +57,6 @@ import {
   KeyRound,
   RefreshCw,
   BookmarkPlus,
-  Folder,
-  FolderPlus,
   FileText,
   Volume2,
   VolumeX,
@@ -125,7 +123,6 @@ import { refreshBuiltinPrompts } from "@/lib/system-prompts";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
 import { engine } from "@/lib/api";
-import type { DocFolder, DocTree } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useTtsApp, useTtsAppOptional } from "@/contexts/TtsContext";
 import { useChatTts } from "@/hooks/use-chat-tts";
@@ -2723,82 +2720,24 @@ function SaveToNoteModal({
   userId,
   enginePort,
 }: SaveToNoteModalProps) {
-  const [tree, setTree] = useState<DocTree | null>(null);
-  const [loadingTree, setLoadingTree] = useState(false);
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [selectedFolderName, setSelectedFolderName] =
-    useState<string>("General");
   const [noteTitle, setNoteTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [newFolderMode, setNewFolderMode] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
-  const [creatingFolder, setCreatingFolder] = useState(false);
 
-  // Load folder tree when modal opens
+  // Reset when the modal opens. A saved note carries the active organization
+  // and no home: the database files it in that organization's General.
   useEffect(() => {
     if (!open || !enginePort) return;
     setSaved(false);
     setSaveError(null);
-    setNewFolderMode(false);
-    setNewFolderName("");
     setNoteTitle(
       scope === "conversation"
         ? `Conversation — ${new Date().toLocaleDateString()}`
         : `Note — ${new Date().toLocaleDateString()}`,
     );
 
-    const uid = userId ?? "local";
-    setLoadingTree(true);
-    engine
-      .getDocTree(uid)
-      .then((t) => {
-        setTree(t);
-        // Pre-select first folder if any
-        const firstFolder = t.folders[0];
-        if (firstFolder) {
-          setSelectedFolderId(firstFolder.id);
-          setSelectedFolderName(firstFolder.name);
-        } else {
-          setSelectedFolderId(null);
-          setSelectedFolderName("General");
-        }
-      })
-      .catch(() => {
-        setTree({ folders: [], total_notes: 0, unfiled_notes: 0 });
-      })
-      .finally(() => setLoadingTree(false));
-  }, [open, enginePort, userId, scope]);
-
-  const handleFolderSelect = (folder: DocFolder | null) => {
-    setSelectedFolderId(folder?.id ?? null);
-    setSelectedFolderName(folder?.name ?? "General");
-  };
-
-  const handleCreateFolder = async () => {
-    if (!newFolderName.trim() || !enginePort) return;
-    setCreatingFolder(true);
-    try {
-      const uid = userId ?? "local";
-      const created = await engine.createFolder(uid, {
-        name: newFolderName.trim(),
-      });
-      setTree((prev) =>
-        prev
-          ? { ...prev, folders: [...prev.folders, created] }
-          : { folders: [created], total_notes: 0, unfiled_notes: 0 },
-      );
-      setSelectedFolderId(created.id);
-      setSelectedFolderName(created.name);
-      setNewFolderMode(false);
-      setNewFolderName("");
-    } catch {
-      // silently ignore — user can retry
-    } finally {
-      setCreatingFolder(false);
-    }
-  };
+  }, [open, enginePort, scope]);
 
   const handleSave = async () => {
     if (!enginePort || !noteTitle.trim()) return;
@@ -2809,8 +2748,6 @@ function SaveToNoteModal({
       await engine.createNote(uid, {
         label: noteTitle.trim(),
         content,
-        folder_name: selectedFolderName,
-        ...(selectedFolderId ? { folder_id: selectedFolderId } : {}),
       });
       setSaved(true);
       setTimeout(onClose, 900);
@@ -2847,97 +2784,6 @@ function SaveToNoteModal({
               className="text-sm"
               autoFocus
             />
-          </div>
-
-          {/* Folder picker */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Folder</Label>
-              <button
-                className="matrx-glyph-trim flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => setNewFolderMode((v) => !v)}
-              >
-                <FolderPlus className="h-3 w-3" />
-                New folder
-              </button>
-            </div>
-
-            {newFolderMode && (
-              <div className="flex gap-2">
-                <Input
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="Folder name…"
-                  className="text-sm h-8"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleCreateFolder();
-                    if (e.key === "Escape") {
-                      setNewFolderMode(false);
-                      setNewFolderName("");
-                    }
-                  }}
-                  autoFocus
-                />
-                <Button
-                  size="sm"
-                  className="h-8 text-xs px-3 shrink-0"
-                  disabled={!newFolderName.trim() || creatingFolder}
-                  onClick={() => void handleCreateFolder()}
-                >
-                  {creatingFolder ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    "Create"
-                  )}
-                </Button>
-              </div>
-            )}
-
-            {loadingTree ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading folders…
-              </div>
-            ) : (
-              <div className="rounded-md border divide-y max-h-48 overflow-y-auto">
-                {/* Unfiled option */}
-                <button
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
-                    selectedFolderId === null
-                    ? "bg-primary/10 text-primary-ink"
-                      : "hover:bg-muted/50"
-                  }`}
-                  onClick={() => handleFolderSelect(null)}
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                  <span className="truncate">Unfiled</span>
-                </button>
-                {(tree?.folders ?? []).map((f) => (
-                  <button
-                    key={f.id}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
-                      selectedFolderId === f.id
-                    ? "bg-primary/10 text-primary-ink"
-                        : "hover:bg-muted/50"
-                    }`}
-                    onClick={() => handleFolderSelect(f)}
-                  >
-                    <Folder className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                    <span className="truncate">{f.name}</span>
-                    {f.note_count !== undefined && (
-                      <span className="ml-auto text-[10px] text-muted-foreground">
-                        {f.note_count}
-                      </span>
-                    )}
-                  </button>
-                ))}
-                {(tree?.folders ?? []).length === 0 && !loadingTree && (
-                  <p className="px-3 py-2 text-xs text-muted-foreground">
-                    No folders yet — note will be saved as Unfiled.
-                  </p>
-                )}
-              </div>
-            )}
           </div>
 
           {saveError && (

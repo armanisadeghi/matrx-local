@@ -18,16 +18,16 @@ import { confirm } from "@ai-matrx/kit/confirm-opener";
 // package owns the "2m ago" / "3d ago" voice for the whole fleet.
 import { formatRelativeTime } from "@ai-matrx/kit/format";
 import { cn } from "@/lib/utils";
-import type { DocNote, DocFolder } from "@/lib/api";
+import type { DocNote, DocHome } from "@/lib/api";
 
 interface NoteListProps {
   notes: DocNote[];
-  folders: DocFolder[];
+  homes: DocHome[];
   activeNoteId: string | null;
   onSelect: (noteId: string) => void;
   onDelete: (noteId: string) => void;
   onRename: (noteId: string, newLabel: string) => void;
-  onMove: (noteId: string, folderId: string | null, folderName: string) => void;
+  onMove: (noteId: string, homeScopeId: string) => void;
 }
 
 interface ContextMenuState {
@@ -47,7 +47,7 @@ interface InlineRenameState {
 // this skips re-rendering the whole note list per keystroke.
 export const NoteList = memo(function NoteList({
   notes,
-  folders,
+  homes,
   activeNoteId,
   onSelect,
   onDelete,
@@ -122,14 +122,12 @@ export const NoteList = memo(function NoteList({
     })();
   };
 
-  const handleMove = (
-    noteId: string,
-    folderId: string | null,
-    folderName: string,
-  ) => {
+  const handleMove = (noteId: string, homeScopeId: string) => {
     setContextMenu(null);
-    onMove(noteId, folderId, folderName);
+    onMove(noteId, homeScopeId);
   };
+
+  const [homeQuery, setHomeQuery] = useState("");
 
   if (notes.length === 0) {
     return (
@@ -207,9 +205,9 @@ export const NoteList = memo(function NoteList({
                       <Clock className="h-3 w-3" />
                       {formatRelativeTime(note.updated_at)}
                     </span>
-                    {note.folder_name && note.folder_name !== "General" && (
+                    {note.home_dir && !note.home_dir.startsWith("General") && (
                       <span className="text-xs text-muted-foreground truncate">
-                        {note.folder_name}
+                        {note.home_dir}
                       </span>
                     )}
                     {note.tags && note.tags.length > 0 && (
@@ -261,7 +259,7 @@ export const NoteList = memo(function NoteList({
               {contextMenu.submenu === "move" ? (
                 <>
                   <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground flex items-center justify-between">
-                    <span>Move to folder</span>
+                    <span>Move to home</span>
                     <button
                       onClick={() =>
                         setContextMenu({ ...contextMenu, submenu: null })
@@ -272,35 +270,39 @@ export const NoteList = memo(function NoteList({
                     </button>
                   </div>
                   <div className="border-t border-border my-1" />
-                  <button
-                    onClick={() => handleMove(note.id, null, "General")}
-                    className={cn(
-                      "flex w-full items-center gap-2 px-3 py-1.5 hover:bg-accent",
-                      !note.folder_id && "text-primary font-medium",
-                    )}
-                  >
-                    <FileText className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">General (unfiled)</span>
-                    {!note.folder_id && (
-                      <Check className="h-3 w-3 ml-auto shrink-0" />
-                    )}
-                  </button>
-                  {folders.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => handleMove(note.id, f.id, f.name)}
-                      className={cn(
-                        "flex w-full items-center gap-2 px-3 py-1.5 hover:bg-accent",
-                        note.folder_id === f.id && "text-primary font-medium",
-                      )}
-                    >
-                      <FolderInput className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                      <span className="truncate">{f.name}</span>
-                      {note.folder_id === f.id && (
-                        <Check className="h-3 w-3 ml-auto shrink-0" />
-                      )}
-                    </button>
-                  ))}
+                  <input
+                    value={homeQuery}
+                    onChange={(e) => setHomeQuery(e.target.value)}
+                    placeholder="Homes"
+                    aria-label="Search homes"
+                    autoFocus
+                    className="mx-2 mb-1 h-7 w-[calc(100%-1rem)] rounded-md border bg-transparent px-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                  <div className="max-h-64 overflow-auto">
+                    {homes
+                      .filter((h) => h.id !== null && !h.unmatched)
+                      .filter(
+                        (h) =>
+                          !homeQuery.trim() ||
+                          h.name.toLowerCase().includes(homeQuery.trim().toLowerCase()),
+                      )
+                      .map((h) => (
+                        <button
+                          key={h.id as string}
+                          onClick={() => handleMove(note.id, h.id as string)}
+                          className={cn(
+                            "flex w-full items-center gap-2 px-3 py-1.5 hover:bg-accent",
+                            note.home_scope_id === h.id && "text-primary font-medium",
+                          )}
+                        >
+                          <FolderInput className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                          <span className="truncate">{h.name}</span>
+                          {note.home_scope_id === h.id && (
+                            <Check className="h-3 w-3 ml-auto shrink-0" />
+                          )}
+                        </button>
+                      ))}
+                  </div>
                 </>
               ) : (
                 <>

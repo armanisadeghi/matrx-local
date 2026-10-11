@@ -1,7 +1,7 @@
 /**
  * Supabase Realtime subscription for notes sync.
  *
- * Subscribes to changes on `workbench.notes` / `workbench.note_folders`
+ * Subscribes to changes on `workbench.notes`
  * (NOT `public` — the notes tables moved to the workbench schema in the
  * 2026-06 cloud reorganization; both tables are in the supabase_realtime
  * publication and RLS-filtered to the signed-in user via `created_by`).
@@ -39,7 +39,6 @@ interface UseRealtimeSyncOptions {
   deviceId: string | null;
   /** selfEcho=true means the event is this device's own push bouncing back. */
   onNoteChange?: (noteId: string, eventType: string, selfEcho: boolean) => void;
-  onFolderChange?: (folderId: string, eventType: string) => void;
   /** Fired after the on-subscribe catch-up pull completes with changes. */
   onCatchUp?: (result: SyncResult) => void;
 }
@@ -65,12 +64,11 @@ export function useRealtimeSync({
   enabled,
   deviceId,
   onNoteChange,
-  onFolderChange,
   onCatchUp,
 }: UseRealtimeSyncOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const callbacksRef = useRef({ onNoteChange, onFolderChange, onCatchUp });
-  callbacksRef.current = { onNoteChange, onFolderChange, onCatchUp };
+  const callbacksRef = useRef({ onNoteChange, onCatchUp });
+  callbacksRef.current = { onNoteChange, onCatchUp };
   const deviceIdRef = useRef(deviceId);
   deviceIdRef.current = deviceId;
 
@@ -158,24 +156,6 @@ export function useRealtimeSync({
           }
 
           callbacksRef.current.onNoteChange?.(noteId, payload.eventType, false);
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "workbench",
-          table: "note_folders",
-          filter: `created_by=eq.${userId}`,
-        },
-        (payload) => {
-          const folderId =
-            ((payload.new as Record<string, unknown>)?.id as string) ||
-            ((payload.old as Record<string, unknown>)?.id as string);
-
-          if (folderId) {
-            callbacksRef.current.onFolderChange?.(folderId, payload.eventType);
-          }
         },
       )
       .subscribe((status) => {

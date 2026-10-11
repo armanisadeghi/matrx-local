@@ -1,6 +1,6 @@
 """Local notes file manager — reads/writes .md/.txt files on the user's machine.
 
-Canonical location: ~/Documents/Matrx/Notes/<folder>/<note>.md
+Canonical location: ~/Documents/Matrx/Notes/<home>/<note>.md
   (resolved from MATRX_NOTES_DIR — see config.py)
 
 Additional mapped directories are synced copies of the canonical files.
@@ -217,11 +217,11 @@ class DocumentFileManager:
 
     # ── Path helpers ─────────────────────────────────────────────────────────
 
-    def folder_path(self, folder_name: str) -> Path:
-        return self.base_dir / _safe_filename(folder_name)
+    def folder_path(self, home_dir: str) -> Path:
+        return self.base_dir / _safe_filename(home_dir)
 
-    def note_path(self, folder_name: str, label: str) -> Path:
-        return self.folder_path(folder_name) / f"{_safe_filename(label)}.md"
+    def note_path(self, home_dir: str, label: str) -> Path:
+        return self.folder_path(home_dir) / f"{_safe_filename(label)}.md"
 
     def note_path_from_file_path(self, file_path: str) -> Path:
         """Resolve a stored file_path (e.g. 'React/hooks.md') to absolute."""
@@ -231,7 +231,7 @@ class DocumentFileManager:
         """Convert an absolute path back to a relative file_path string."""
         return str(absolute.relative_to(self.base_dir))
 
-    def unique_file_path(self, folder_name: str, label: str) -> str:
+    def unique_file_path(self, home_dir: str, label: str) -> str:
         """Return a relative file_path that does not yet exist on disk.
 
         If ``folder/label.md`` is taken, appends _2, _3 … _99, then falls back
@@ -240,12 +240,12 @@ class DocumentFileManager:
         ``<folder>/<label>.md`` directly silently overwrites whichever note
         currently occupies that path.
         """
-        base_path = self.note_path(folder_name, label)
+        base_path = self.note_path(home_dir, label)
         if not base_path.exists():
             return self.relative_path(base_path)
 
         safe_label = _safe_filename(label)
-        folder_dir = self.folder_path(folder_name)
+        folder_dir = self.folder_path(home_dir)
         folder_dir.mkdir(parents=True, exist_ok=True)
 
         for n in range(2, 100):
@@ -258,8 +258,8 @@ class DocumentFileManager:
 
     # ── Folder operations ────────────────────────────────────────────────────
 
-    def create_folder(self, folder_name: str) -> Path:
-        p = self.folder_path(folder_name)
+    def create_folder(self, home_dir: str) -> Path:
+        p = self.folder_path(home_dir)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -272,8 +272,8 @@ class DocumentFileManager:
             new_p.mkdir(parents=True, exist_ok=True)
         return new_p
 
-    def delete_folder(self, folder_name: str) -> bool:
-        p = self.folder_path(folder_name)
+    def delete_folder(self, home_dir: str) -> bool:
+        p = self.folder_path(home_dir)
         if p.exists():
             shutil.rmtree(p)
             return True
@@ -317,7 +317,7 @@ class DocumentFileManager:
 
     def write_note(
         self,
-        folder_name: str,
+        home_dir: str,
         label: str,
         content: str,
         file_path: str | None = None,
@@ -332,7 +332,7 @@ class DocumentFileManager:
         if file_path:
             target = self.note_path_from_file_path(file_path)
         else:
-            target = self.note_path(folder_name, label)
+            target = self.note_path(home_dir, label)
 
         with _observing_notes(Capability.REPLACE, f"writing note {target.name}", target):
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -474,6 +474,32 @@ class DocumentFileManager:
         os.replace(old_target, new_target)
         return self.relative_path(new_target)
 
+    def move_note_to_dir(self, old_file_path: str, home_dir: str) -> str:
+        """Move a note file into another home's directory, keeping its filename.
+
+        Returns the new relative file_path. Never overwrites: a taken name
+        gets a numeric suffix. A missing source returns the intended path.
+        """
+        old_target = self.note_path_from_file_path(old_file_path)
+        stem = old_target.stem
+        new_target = self.folder_path(home_dir) / f"{stem}.md"
+        new_target.parent.mkdir(parents=True, exist_ok=True)
+        if not old_target.is_file():
+            return self.relative_path(new_target)
+        if new_target.exists() and not old_target.samefile(new_target):
+            for n in range(2, 100):
+                candidate = new_target.parent / f"{stem}_{n}.md"
+                if not candidate.exists():
+                    new_target = candidate
+                    break
+            else:
+                from datetime import datetime, timezone as _tz
+
+                ts = datetime.now(_tz.utc).strftime("%Y%m%d_%H%M%S")
+                new_target = new_target.parent / f"{stem}_{ts}.md"
+        os.replace(old_target, new_target)
+        return self.relative_path(new_target)
+
     def note_hash(self, file_path: str) -> str | None:
         """Compute content hash for a local file."""
         content = self.read_note(file_path)
@@ -481,9 +507,9 @@ class DocumentFileManager:
             return content_hash(content)
         return None
 
-    def list_notes_in_folder(self, folder_name: str) -> list[dict[str, str]]:
+    def list_notes_in_folder(self, home_dir: str) -> list[dict[str, str]]:
         """List all .md files in a folder with their hashes."""
-        folder = self.folder_path(folder_name)
+        folder = self.folder_path(home_dir)
         if not folder.is_dir():
             return []
         results = []
@@ -614,7 +640,7 @@ class DocumentFileManager:
         self,
         file_path: str,
         mapped_paths: list[str],
-        folder_id: str = "",
+        home_scope_id: str = "",
     ) -> list[str]:
         """Copy a canonical .md file to all mapped directories.
 
@@ -636,7 +662,7 @@ class DocumentFileManager:
 
         for mapped_dir in mapped_paths:
             target = Path(mapped_dir) / filename
-            resource_id = mapping_resource_id(folder_id, mapped_dir)
+            resource_id = mapping_resource_id(home_scope_id, mapped_dir)
             try:
                 # Atomic temp+rename like the canonical note write, so a crash
                 # mid-write can't leave a truncated/corrupt mapped-dir copy.
@@ -743,7 +769,7 @@ class DocumentFileManager:
     def load_local_mappings(self) -> dict[str, list[str]]:
         """Load directory mappings config.
 
-        Returns {folder_id: [local_path, ...]}.
+        Returns {home_scope_id: [local_path, ...]}.
         """
         _ensure_dirs()
         mappings_file = self._mappings_file()

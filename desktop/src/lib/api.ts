@@ -4107,18 +4107,28 @@ class EngineAPI {
     return resp.json();
   }
 
-  /** Get folder tree with note counts. */
+  /** The homes (one local directory each) with how many notes each holds. */
   async getDocTree(userId: string): Promise<DocTree> {
     return this.docRequest("GET", "/tree", undefined, userId);
   }
 
-  /** List notes, optionally filtered by folder or search. */
+  /** Every home the person can see: each organization's General + scopes. */
+  async listHomes(userId: string): Promise<{ homes: DocHomeChoice[] }> {
+    return this.docRequest("GET", "/homes", undefined, userId);
+  }
+
+  /** Moves the app could not honour (a file put in a directory that is no home). */
+  async getHomeNotices(userId: string): Promise<{ notices: DocHomeNotice[] }> {
+    return this.docRequest("GET", "/home-notices", undefined, userId);
+  }
+
+  /** List notes, optionally filtered by home or search. */
   async listNotes(
     userId: string,
-    opts?: { folder_id?: string; search?: string },
+    opts?: { home_scope_id?: string; search?: string },
   ): Promise<DocNote[]> {
     const params = new URLSearchParams();
-    if (opts?.folder_id) params.set("folder_id", opts.folder_id);
+    if (opts?.home_scope_id) params.set("home_scope_id", opts.home_scope_id);
     if (opts?.search) params.set("search", opts.search);
     const qs = params.toString();
     return this.docRequest(
@@ -4134,50 +4144,32 @@ class EngineAPI {
     return this.docRequest("GET", `/notes/${noteId}`, undefined, userId);
   }
 
-  /** Create a new note. */
+  /** Create a new note (active organization, no home: the database files it in General). */
   async createNote(userId: string, data: CreateNoteData): Promise<DocNote> {
     return this.docRequest("POST", "/notes", data, userId);
   }
 
-  /** Update a note. */
+  /** Update a note. Pass `home_scope_id` to move it to another home. */
   async updateNote(
     noteId: string,
     userId: string,
-    data: Partial<CreateNoteData>,
+    data: UpdateNoteData,
   ): Promise<DocNote> {
     return this.docRequest("PUT", `/notes/${noteId}`, data, userId);
+  }
+
+  /** Move a note to another home (set_home as the signed-in person). */
+  async moveNoteHome(
+    noteId: string,
+    userId: string,
+    homeScopeId: string,
+  ): Promise<{ id: string; home_scope_id: string; home_dir: string; file_path: string | null }> {
+    return this.docRequest("POST", `/notes/${noteId}/home`, { home_scope_id: homeScopeId }, userId);
   }
 
   /** Delete a note (soft delete). */
   async deleteNote(noteId: string, userId: string): Promise<void> {
     await this.docRequest("DELETE", `/notes/${noteId}`, undefined, userId);
-  }
-
-  /** Create a folder. */
-  async createFolder(
-    userId: string,
-    data: { name: string; parent_id?: string },
-  ): Promise<DocFolder> {
-    return this.docRequest("POST", "/folders", data, userId);
-  }
-
-  /** Update a folder. */
-  async updateFolder(
-    folderId: string,
-    userId: string,
-    data: Partial<{
-      name: string;
-      parent_id: string;
-      path: string;
-      position: number;
-    }>,
-  ): Promise<DocFolder> {
-    return this.docRequest("PUT", `/folders/${folderId}`, data, userId);
-  }
-
-  /** Delete a folder (soft delete). */
-  async deleteFolder(folderId: string, userId: string): Promise<void> {
-    await this.docRequest("DELETE", `/folders/${folderId}`, undefined, userId);
   }
 
   /** Get version history for a note. */
@@ -4343,7 +4335,7 @@ class EngineAPI {
   /** Create a directory mapping. */
   async createMapping(
     userId: string,
-    data: { folder_id: string; local_path: string },
+    data: { home_scope_id: string; local_path: string },
   ): Promise<unknown> {
     return this.docRequest("POST", "/mappings", data, userId);
   }
@@ -4352,11 +4344,11 @@ class EngineAPI {
   async deleteMapping(
     mappingId: string,
     userId: string,
-    folderId?: string,
+    homeScopeId?: string,
     localPath?: string,
   ): Promise<void> {
     const params = new URLSearchParams();
-    if (folderId) params.set("folder_id", folderId);
+    if (homeScopeId) params.set("home_scope_id", homeScopeId);
     if (localPath) params.set("local_path", localPath);
     const qs = params.toString();
     await this.docRequest(
@@ -5402,22 +5394,39 @@ class EngineAPI {
 
 // ---- Document types ----
 
-export interface DocFolder {
-  id: string;
-  user_id: string;
+/** A home on this Mac: a directory named after the home (the organization is
+ * appended only when two visible homes share a name). `unmatched` directories
+ * are plain local folders that match no home. */
+export interface DocHome {
+  id: string | null;
   name: string;
-  parent_id: string | null;
-  path: string;
-  position: number;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-  note_count?: number;
-  children?: DocFolder[];
+  home_name: string;
+  organization_id: string | null;
+  organization_name: string;
+  note_count: number;
+  unmatched: boolean;
+}
+
+export interface DocHomeChoice {
+  id: string;
+  organization_id: string | null;
+  organization_name: string;
+  name: string;
+  dir: string;
+}
+
+export interface DocHomeNotice {
+  kind: "home_unmatched" | "home_move_failed";
+  note_id: string;
+  label: string;
+  directory: string | null;
+  home: string;
+  message: string;
+  at: string;
 }
 
 export interface DocTree {
-  folders: DocFolder[];
+  homes: DocHome[];
   total_notes: number;
   unfiled_notes: number;
 }
@@ -5427,8 +5436,9 @@ export interface DocNote {
   user_id?: string;
   label: string;
   content?: string;
-  folder_name: string;
-  folder_id: string | null;
+  home_dir: string;
+  home_scope_id: string | null;
+  organization_id?: string | null;
   tags: string[];
   file_path: string | null;
   content_hash: string | null;
@@ -5445,8 +5455,14 @@ export interface DocNote {
 export interface CreateNoteData {
   label: string;
   content: string;
-  folder_name?: string;
-  folder_id?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateNoteData {
+  label?: string;
+  content?: string;
+  home_scope_id?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
 }
@@ -5571,7 +5587,7 @@ export interface ConflictDetail {
   local_content?: string;
   remote_content?: string;
   label?: string;
-  folder_name?: string;
+  home_dir?: string;
 }
 
 export interface ConflictList {

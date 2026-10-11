@@ -152,7 +152,7 @@ def test_contested_pull_identical_content_preserves_both_identities(
         "content": "same body",
         "content_hash": content_hash("same body"),
         "label": "idea",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     engine.sb.notes["dupe-id"] = dict(incoming)
     result = _run(engine._pull_note("dupe-id", note=incoming))
@@ -186,7 +186,7 @@ def test_contested_pull_identical_content_preserves_pending_identity_edit(
         "content": "same body",
         "content_hash": content_hash("same body"),
         "label": "idea",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     engine.sb.notes["dupe-id"] = dict(incoming)
     first = _run(engine._pull_note("dupe-id", note=incoming))
@@ -212,7 +212,7 @@ def test_contested_pull_divergent_content_reroutes_and_converges_cloud(
         "content": "different body",
         "content_hash": content_hash("different body"),
         "label": "idea",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     result = _run(engine._pull_note("other-id", note=dict(engine.sb.notes["other-id"])))
     assert result is not None and result.get("_conflict") is None
@@ -243,7 +243,7 @@ def test_contested_pull_cas_loser_retries_same_identity_path(
         "content": "same body",
         "content_hash": content_hash("same body"),
         "label": "idea",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     engine.sb.notes["dupe-id"] = dict(incoming)
     cas_calls: list[tuple[str, str, str]] = []
@@ -304,7 +304,7 @@ def test_contested_reroute_keeps_other_identity_real_file_and_mapping(
         "content": "B remote body",
         "content_hash": content_hash("B remote body"),
         "label": "idea",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     sb.notes["incoming-b"] = dict(incoming)
     state = engine._load_sync_state()
@@ -369,7 +369,7 @@ def test_real_sqlite_collision_set_preserves_both_ids_in_direct_and_full_sync(
                 "content": "A synced body",
                 "content_hash": content_hash("A synced body"),
                 "label": "idea",
-                "folder_name": "Draft",
+                "home_dir": "Draft",
             }
             remote_b = {
                 "id": "incoming-b",
@@ -377,7 +377,7 @@ def test_real_sqlite_collision_set_preserves_both_ids_in_direct_and_full_sync(
                 "content": "B remote body",
                 "content_hash": content_hash("B remote body"),
                 "label": "idea",
-                "folder_name": "Draft",
+                "home_dir": "Draft",
             }
             remotes = {"incoming-b": remote_b, "owner-a": remote_a}
             sb.notes = {note_id: dict(remotes[note_id]) for note_id in remote_order}
@@ -436,12 +436,12 @@ def test_ambiguous_same_hash_collision_preserves_files_as_conflict(tmp_path: Pat
             remote_a = {
                 "id": "owner-a", "file_path": contested_path,
                 "content": "A remote body", "content_hash": content_hash("A remote body"),
-                "label": "idea", "folder_name": "Draft",
+                "label": "idea", "home_dir": "Draft",
             }
             remote_b = {
                 "id": "incoming-b", "file_path": contested_path,
                 "content": "B remote body", "content_hash": content_hash("B remote body"),
-                "label": "idea", "folder_name": "Draft",
+                "label": "idea", "home_dir": "Draft",
             }
             sb.notes = {"incoming-b": remote_b, "owner-a": remote_a}
             state = engine._load_sync_state()
@@ -488,7 +488,7 @@ def test_singleton_remote_sibling_preserves_unmatched_local_keeper(tmp_path: Pat
             remote_b = {
                 "id": "incoming-b", "file_path": contested_path,
                 "content": "B remote body", "content_hash": content_hash("B remote body"),
-                "label": "idea", "folder_name": "Draft",
+                "label": "idea", "home_dir": "Draft",
             }
             sb.notes = {"incoming-b": remote_b}
             state = engine._load_sync_state()
@@ -526,11 +526,11 @@ def test_clean_initial_remote_duplicate_group_materializes_all_identities(tmp_pa
             contested_path = "Draft/idea.md"
             remote_a = {
                 "id": "owner-a", "file_path": contested_path, "content": "A remote body",
-                "content_hash": content_hash("A remote body"), "label": "idea", "folder_name": "Draft",
+                "content_hash": content_hash("A remote body"), "label": "idea", "home_dir": "Draft",
             }
             remote_b = {
                 "id": "incoming-b", "file_path": contested_path, "content": "B remote body",
-                "content_hash": content_hash("B remote body"), "label": "idea", "folder_name": "Draft",
+                "content_hash": content_hash("B remote body"), "label": "idea", "home_dir": "Draft",
             }
             sb.notes = {"incoming-b": remote_b, "owner-a": remote_a}
             stats = await engine.full_sync()
@@ -609,7 +609,7 @@ def test_pending_incoming_collision_is_explicit_conflict(tmp_path: Path) -> None
     engine._save_sync_state(state)
     result = _run(engine._pull_note("incoming-b", note={
         "id": "incoming-b", "file_path": contested_path, "content": "B remote bytes",
-        "content_hash": content_hash("B remote bytes"), "label": "idea", "folder_name": "Draft",
+        "content_hash": content_hash("B remote bytes"), "label": "idea", "home_dir": "Draft",
     }))
     assert result is not None and result.get("_collision_conflict") is True
     assert repo.rows["incoming-b"]["file_path"] == contested_path
@@ -632,7 +632,7 @@ def test_full_sync_identity_loss_adopts_pathless_twin(engine: SyncEngine) -> Non
         "content": "twin body",
         "content_hash": h,
         "label": "lost",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
         "sync_version": 3,
     }
     stats = _run(engine.full_sync())
@@ -654,7 +654,7 @@ def test_full_sync_identity_loss_skips_bound_twin(engine: SyncEngine) -> None:
         "content": "shared body",
         "content_hash": content_hash("shared body"),
         "label": "original",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     # The bound twin's own path also exists locally so it reads "unchanged".
     _seed_owner(engine, "Draft/original.md", "shared body", "bound-id")
@@ -689,7 +689,7 @@ def _seed_tombstoned_remote(engine: SyncEngine, fp: str, content: str, note_id: 
         "content": content,
         "content_hash": content_hash(content),
         "label": Path(fp).stem,
-        "folder_name": "Draft",
+        "home_dir": "Draft",
         "is_deleted": True,
     }
 
@@ -741,7 +741,7 @@ def test_external_change_identical_bytes_not_pushed_as_new_note(
         "content": "shared body",
         "content_hash": content_hash("shared body"),
         "label": "original",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     engine.fm.notes["Draft/artifact-copy.md"] = "shared body"
     engine._repo.rows["artifact-copy"] = {
@@ -809,7 +809,7 @@ def test_push_all_never_synced_duplicate_bytes_not_minted(engine: SyncEngine) ->
         "content": "same body",
         "content_hash": content_hash("same body"),
         "label": "original",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
     }
     _seed_pending_file(engine, "Draft/original 2.md", "same body", "finder-copy-id")
     stats = _run(engine.push_all())
@@ -840,7 +840,7 @@ def test_push_all_unchanged_pending_with_remote_tombstone_propagates_delete(
         "content": body,
         "content_hash": content_hash(body),
         "label": "dead",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
         "is_deleted": True,
     }
     _seed_pending_file(
@@ -870,7 +870,7 @@ def test_push_all_edited_pending_with_remote_tombstone_still_resurrects(
         "content": "old body",
         "content_hash": content_hash("old body"),
         "label": "edited",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
         "is_deleted": True,
     }
     _seed_pending_file(
@@ -902,7 +902,7 @@ def test_push_all_stale_pending_with_edited_then_deleted_remote_resurrects(
         "content": "newer edited body",
         "content_hash": content_hash("newer edited body"),
         "label": "stale",
-        "folder_name": "Draft",
+        "home_dir": "Draft",
         "is_deleted": True,
     }
     _seed_pending_file(
@@ -924,7 +924,7 @@ def test_full_sync_deferred_ordinary_pull_keeps_success_timestamp(engine: SyncEn
     engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
     engine.sb.notes["ordinary"] = {
         "id": "ordinary", "file_path": "Draft/ordinary.md", "content": "cloud",
-        "content_hash": content_hash("cloud"), "label": "ordinary", "folder_name": "Draft",
+        "content_hash": content_hash("cloud"), "label": "ordinary", "home_dir": "Draft",
     }
 
     async def deferred_pull(note_id: str, note: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -948,7 +948,7 @@ def test_full_sync_deferred_collision_counts_each_unmaterialized_identity(
     for note_id in ("keeper", "sibling"):
         engine.sb.notes[note_id] = {
             "id": note_id, "file_path": "Draft/shared.md", "content": note_id,
-            "content_hash": content_hash(note_id), "label": "shared", "folder_name": "Draft",
+            "content_hash": content_hash(note_id), "label": "shared", "home_dir": "Draft",
         }
 
     async def keeper_resolution(file_path: str, actor_user_id: str) -> dict[str, Any]:
@@ -973,7 +973,7 @@ def test_full_sync_account_deferral_keeps_success_timestamp(engine: SyncEngine) 
     engine.fm.state["accounts"]["user-1"]["last_full_sync"] = 101.0
     engine.sb.notes["foreign"] = {
         "id": "foreign", "file_path": "Draft/foreign.md", "content": "cloud",
-        "content_hash": content_hash("cloud"), "label": "foreign", "folder_name": "Draft",
+        "content_hash": content_hash("cloud"), "label": "foreign", "home_dir": "Draft",
     }
     engine._repo.rows["foreign"] = {
         "id": "foreign", "user_id": "another-account", "file_path": "Draft/foreign.md",
@@ -1010,7 +1010,7 @@ def test_full_sync_counts_push_conflict_from_its_shared_result_accounting(
     _seed_owner(engine, "Draft/conflict.md", "local", "conflict")
     engine.sb.notes["conflict"] = {
         "id": "conflict", "file_path": "Draft/conflict.md", "content": "remote",
-        "content_hash": content_hash("remote"), "label": "conflict", "folder_name": "Draft",
+        "content_hash": content_hash("remote"), "label": "conflict", "home_dir": "Draft",
     }
     state = engine._load_sync_state()
     state["note_hashes"] = {"Draft/conflict.md": content_hash("remote")}
@@ -1038,7 +1038,7 @@ def test_full_sync_counts_remote_delete_transport_failure_as_failed(
     }
     engine.sb.notes["deleted-local"] = {
         "id": "deleted-local", "file_path": "Draft/gone.md", "content": "remote",
-        "content_hash": content_hash("remote"), "label": "gone", "folder_name": "Draft",
+        "content_hash": content_hash("remote"), "label": "gone", "home_dir": "Draft",
     }
 
     async def fail_delete(*args: Any, **kwargs: Any) -> None:

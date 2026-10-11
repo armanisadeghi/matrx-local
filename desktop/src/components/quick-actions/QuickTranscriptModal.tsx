@@ -197,7 +197,7 @@ export function QuickTranscriptModal({
       await engine.createNote(userId ?? "local", {
         label,
         content: fullTranscript.trim(),
-        folder_name: "Voice Notes",
+        tags: ["Voice Notes"],
       });
       setPushSuccess(true);
       setTimeout(() => setPushSuccess(false), 3000);

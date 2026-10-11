@@ -107,7 +107,7 @@ def test_live_snapshot_requests_and_returns_created_by_projection(
     _TransportHandler.body = [{
         "id": "note-1", "created_by": "account-1", "file_path": "Draft/note.md",
         "content_hash": "hash", "sync_version": 3, "label": "note",
-        "folder_name": "Draft", "folder_id": None, "updated_at": "now",
+        "home_dir": "Draft", "home_scope_id": None, "updated_at": "now",
         "last_device_id": "device",
     }]
 

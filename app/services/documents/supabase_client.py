@@ -3,11 +3,11 @@
 All operations use the user's JWT (forwarded from the frontend) so that
 Row Level Security policies are enforced server-side.
 
-Schema note: the remote `notes` and `note_folders` tables live in the
+Schema note: the remote `notes` table lives in the
 `workbench` Postgres schema (NOT `public`). PostgREST targets a non-public
 schema via the `Accept-Profile` (reads) / `Content-Profile` (writes) headers —
 that is exactly what supabase-js's `.schema("workbench")` sends under the hood.
-The notes/folders methods pass `schema=_WORKBENCH`; everything else
+The notes methods pass `schema=_WORKBENCH`; everything else
 (`note_versions`/`note_shares` in `public`, the sync-log tables) keeps the
 default `public` profile.
 
@@ -47,7 +47,7 @@ def _utcnow_iso() -> str:
 
 _REST_BASE = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ""
 
-# The notes/note_folders tables live in this Postgres schema, reached over
+# The notes table lives in this Postgres schema, reached over
 # PostgREST via the Accept-Profile / Content-Profile headers.
 _WORKBENCH = "workbench"
 # HTTP methods that mutate state use Content-Profile; reads use Accept-Profile.
@@ -105,6 +105,10 @@ class SupabaseDocClient:
 
     def set_jwt(self, token: str | None) -> None:
         self._jwt.set(token)
+
+    @property
+    def current_jwt(self) -> str | None:
+        return self._jwt.get()
 
     @property
     def available(self) -> bool:
@@ -189,79 +193,96 @@ class SupabaseDocClient:
             resp.raise_for_status()
             return resp.json() if resp.text else []
 
-    # ── Folders ──────────────────────────────────────────────────────────────
+    # ── Homes ────────────────────────────────────────────────────────────────
+    # Every note has exactly one home, a scope (item-homes plan). Names are read
+    # from the custom.context_scopes view; organization names from iam.
 
-    async def list_folders(self, user_id: str) -> list[dict[str, Any]]:
+    async def list_scopes(self) -> list[dict[str, Any]]:
+        """Every home the signed-in person can see: id, organization_id, name."""
         return await self._request(
             "GET",
-            "note_folders",
-            params={
-                "created_by": f"eq.{user_id}",
-                "deleted_at": "is.null",
-                "order": "path.asc,position.asc",
-            },
-            schema=_WORKBENCH,
+            "context_scopes",
+            params={"select": "id,organization_id,name", "order": "name.asc"},
+            schema="custom",
         )
 
-    async def create_folder(
-        self,
-        user_id: str,
-        name: str,
-        parent_id: str | None = None,
-        path: str = "",
-    ) -> dict[str, Any]:
-        body = {
-            "id": str(uuid4()),
-            "created_by": user_id,
-            "name": name,
-            "parent_id": parent_id,
-            "path": path,
+    async def list_organization_names(self) -> dict[str, str]:
+        rows = await self._request(
+            "GET",
+            "organizations",
+            params={"select": "id,name"},
+            schema="iam",
+        )
+        return {str(r["id"]): str(r.get("name") or "") for r in rows if r.get("id")}
+
+    async def ensure_general_scope(self, organization_id: str) -> str | None:
+        """An organization's General home (created for a member if missing)."""
+        rows = await self._rpc(
+            "ensure_general_scope", {"p_org": organization_id}, schema="platform"
+        )
+        if isinstance(rows, str):
+            return rows
+        if isinstance(rows, list) and rows:
+            first = rows[0]
+            return first if isinstance(first, str) else (first or {}).get("id")
+        if isinstance(rows, dict):
+            return rows.get("id")
+        return None
+
+    async def set_home(
+        self, note_id: str, scope_id: str, expected_version: int | None = None
+    ) -> Any:
+        """Move a note to a home as the signed-in person (never PATCH
+        organization_id: the database refuses it)."""
+        args: dict[str, Any] = {
+            "p_entity_type": "note",
+            "p_entity_id": note_id,
+            "p_scope_id": scope_id,
         }
-        rows = await self._request(
-            "POST", "note_folders", json_body=body, schema=_WORKBENCH
-        )
-        return rows[0] if rows else body
+        if expected_version is not None:
+            args["p_expected_version"] = expected_version
+        return await self._rpc("set_home", args, schema="platform")
 
-    async def update_folder(
-        self, folder_id: str, updates: dict[str, Any]
-    ) -> dict[str, Any]:
-        rows = await self._request(
-            "PATCH",
-            "note_folders",
-            params={"id": f"eq.{folder_id}"},
-            json_body=updates,
-            schema=_WORKBENCH,
-        )
-        return rows[0] if rows else {}
-
-    async def delete_folder(self, folder_id: str) -> None:
-        await self._request(
-            "PATCH",
-            "note_folders",
-            params={"id": f"eq.{folder_id}"},
-            json_body={"deleted_at": _utcnow_iso()},
-            schema=_WORKBENCH,
-        )
+    async def _rpc(self, fn: str, args: dict[str, Any], *, schema: str) -> Any:
+        if not _REST_BASE:
+            raise RuntimeError("SUPABASE_URL not configured")
+        if not self._jwt.get():
+            raise RuntimeError("No JWT set — user must be authenticated")
+        headers = self._headers()
+        headers["Content-Profile"] = schema
+        headers["Accept-Profile"] = schema
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            resp = await client.post(
+                f"{_REST_BASE}/rpc/{fn}", json=args, headers=headers
+            )
+            if resp.status_code >= 300:
+                logger.warning(
+                    "Supabase rpc rejected fn=%s schema=%s status=%s postgrest_error_id=%s",
+                    fn, schema, resp.status_code, _safe_postgrest_error_code(resp),
+                )
+            resp.raise_for_status()
+            return resp.json() if resp.text else None
 
     # ── Notes ────────────────────────────────────────────────────────────────
 
     async def list_notes(
         self,
         user_id: str,
-        folder_id: str | None = None,
+        home_scope_id: str | None = None,
         search: str | None = None,
         include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
         params: dict[str, str] = {
             "created_by": f"eq.{user_id}",
             "order": "updated_at.desc",
-            "select": "id,label,folder_name,folder_id,tags,file_path,content_hash,"
-            "sync_version,position,deleted_at,created_at,updated_at,metadata",
+            "select": "id,label,home_scope_id,organization_id,tags,file_path,"
+            "content_hash,sync_version,position,deleted_at,created_at,"
+            "updated_at,metadata",
         }
         if not include_deleted:
             params["deleted_at"] = "is.null"
-        if folder_id:
-            params["folder_id"] = f"eq.{folder_id}"
+        if home_scope_id:
+            params["home_scope_id"] = f"eq.{home_scope_id}"
         if search:
             params["or"] = f"(label.ilike.%{search}%,content.ilike.%{search}%)"
         rows = await self._request("GET", "notes", params=params, schema=_WORKBENCH)
@@ -278,8 +299,7 @@ class SupabaseDocClient:
         user_id: str,
         label: str,
         content: str = "",
-        folder_name: str = "General",
-        folder_id: str | None = None,
+        organization_id: str | None = None,
         file_path: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
@@ -291,8 +311,6 @@ class SupabaseDocClient:
             "created_by": user_id,
             "label": label,
             "content": content,
-            "folder_name": folder_name,
-            "folder_id": folder_id,
             "file_path": file_path,
             "tags": tags or [],
             # CONVERGE: C-7 — caller-supplied metadata written with no reserved-key guard; metadata is system-only — declared 2026-09-10, Data Doctrine §3.2. Register: /projects/data-doctrine-adoption/REGISTER.md#DD-060
@@ -301,6 +319,10 @@ class SupabaseDocClient:
             "sync_version": 1,
             "last_device_id": device_id,
         }
+        # Carry the active organization and NO home: the database places the
+        # note in that organization's General.
+        if organization_id:
+            body["organization_id"] = organization_id
         rows = await self._request("POST", "notes", json_body=body, schema=_WORKBENCH)
         return rows[0] if rows else body
 
@@ -310,8 +332,7 @@ class SupabaseDocClient:
         user_id: str,
         label: str,
         content: str = "",
-        folder_name: str = "General",
-        folder_id: str | None = None,
+        organization_id: str | None = None,
         file_path: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
@@ -332,8 +353,6 @@ class SupabaseDocClient:
             "created_by": user_id,
             "label": label,
             "content": content,
-            "folder_name": folder_name,
-            "folder_id": folder_id,
             "file_path": file_path,
             "tags": tags or [],
             # CONVERGE: C-7 — caller-supplied metadata written with no reserved-key guard; metadata is system-only — declared 2026-09-10, Data Doctrine §3.2. Register: /projects/data-doctrine-adoption/REGISTER.md#DD-060
@@ -346,6 +365,12 @@ class SupabaseDocClient:
             # never destructive).
             "deleted_at": None,
         }
+        # organization_id is sent ONLY when creating (the caller passes it
+        # only for a note the cloud does not have yet): the database refuses
+        # any later change to it, and a home never rides an upsert — moving a
+        # note is set_home.
+        if organization_id:
+            body["organization_id"] = organization_id
         rows = await self._request(
             "POST",
             "notes",
@@ -575,7 +600,7 @@ class SupabaseDocClient:
                 "created_by": f"eq.{user_id}",
                 "deleted_at": "is.null",
                 "select": "id,created_by,file_path,content_hash,sync_version,label,"
-                "folder_name,folder_id,updated_at,last_device_id",
+                "home_scope_id,organization_id,updated_at,last_device_id",
             },
             schema=_WORKBENCH,
         )

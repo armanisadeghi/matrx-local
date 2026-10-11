@@ -65,12 +65,12 @@ class FakeFileManager:
     # -- notes --------------------------------------------------------------
     def write_note(
         self,
-        folder_name: str,
+        home_dir: str,
         label: str,
         content: str,
         file_path: str | None = None,
     ) -> str:
-        fp = file_path or f"{folder_name}/{label}.md"
+        fp = file_path or f"{home_dir}/{label}.md"
         self.notes[fp] = content
         return fp
 
@@ -141,14 +141,14 @@ class FakeFileManager:
         self.deleted.append(file_path)
         return self.notes.pop(file_path, None) is not None
 
-    def unique_file_path(self, folder_name: str, label: str) -> str:
-        base = f"{folder_name}/{label}.md"
+    def unique_file_path(self, home_dir: str, label: str) -> str:
+        base = f"{home_dir}/{label}.md"
         if base not in self.notes:
             return base
         n = 2
-        while f"{folder_name}/{label}_{n}.md" in self.notes:
+        while f"{home_dir}/{label}_{n}.md" in self.notes:
             n += 1
-        return f"{folder_name}/{label}_{n}.md"
+        return f"{home_dir}/{label}_{n}.md"
 
     def relative_path(self, absolute: Path) -> str:
         return str(absolute.relative_to(self.base_dir))
@@ -204,7 +204,7 @@ class FakeFileManager:
         return {}
 
     def sync_to_mapped_dirs(
-        self, file_path: str, mapped: list[str], folder_id: str = ""
+        self, file_path: str, mapped: list[str], home_scope_id: str = ""
     ) -> None:
         raise AssertionError("sync_to_mapped_dirs must not run with empty mappings")
 
@@ -221,7 +221,7 @@ class FakeSupabase:
 
     async def list_folders(self, user_id: str) -> list[dict[str, Any]]:
         # No remote folders in the fake — the push-time folder resolver falls
-        # back to a null folder_id (folder_name carries the organization).
+        # back to a null home_scope_id (home_dir carries the organization).
         return []
 
     async def get_note(self, note_id: str) -> dict[str, Any] | None:
@@ -392,7 +392,7 @@ def test_push_with_user_but_sb_unavailable_saves_locally_only(engine: SyncEngine
     _configure(engine)
     _seed_owned_note(engine, "n1")
     engine.sb.available = False
-    result = _run(engine.push_note("n1", "Hello", "body", folder_name="Work"))
+    result = _run(engine.push_note("n1", "Hello", "body", home_dir="Work"))
     assert result["_synced_to_cloud"] is False
     assert engine.fm.notes["Work/Hello.md"] == "body"
     # note_hashes means "hash at last SUCCESSFUL cloud sync" — it must NOT be
@@ -457,7 +457,7 @@ def _seed_remote(engine: SyncEngine, fp: str, remote_content: str) -> str:
         "label": Path(fp).stem,
         "content": remote_content,
         "content_hash": content_hash(remote_content),
-        "folder_name": "General",
+        "home_dir": "General",
         "file_path": fp,
         "sync_version": 5,
     }
@@ -632,7 +632,7 @@ def _seed_conflict(
                 "user_id": "user-1",
                 "label": "Conflicted",
                 "title": "Conflicted",
-                "folder_name": "General",
+                "home_dir": "General",
                 "file_path": fp,
                 "sync_status": "pending_push",
             }
@@ -769,7 +769,7 @@ def test_pull_allocates_path_for_pathless_cloud_note_without_clobbering(
     engine.sb.notes["cloud-1"] = {
         "id": "cloud-1",
         "label": "Todo",
-        "folder_name": "General",
+        "home_dir": "General",
         "content": "web-authored note",
         "content_hash": content_hash("web-authored note"),
         "file_path": None,

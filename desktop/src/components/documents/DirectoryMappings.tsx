@@ -9,7 +9,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { engine } from "@/lib/api";
-import type { DocFolder, DocMappings } from "@/lib/api";
+import type { DocHome, DocMappings } from "@/lib/api";
 import { Button, BasicInput as Input } from "@ai-matrx/design-system";
 import {
   Select,
@@ -21,13 +21,13 @@ import {
 
 interface DirectoryMappingsProps {
   userId: string;
-  folders: DocFolder[];
+  homes: DocHome[];
   onClose: () => void;
 }
 
 export function DirectoryMappings({
   userId,
-  folders,
+  homes,
   onClose,
 }: DirectoryMappingsProps) {
   const [mappings, setMappings] = useState<DocMappings | null>(null);
@@ -56,7 +56,7 @@ export function DirectoryMappings({
     setAdding(true);
     try {
       await engine.createMapping(userId, {
-        folder_id: newFolderId,
+        home_scope_id: newFolderId,
         local_path: newPath.trim(),
       });
       setNewFolderId("");
@@ -79,21 +79,15 @@ export function DirectoryMappings({
     }
   };
 
-  // local_mappings is Record<folder_id, local_path[]> — flatten for display.
+  // local_mappings is Record<home_scope_id, local_path[]> — flatten for display.
   const activeMappings = Object.entries(mappings?.local_mappings ?? {}).flatMap(
-    ([folderId, paths]) => paths.map((p) => ({ folder_id: folderId, local_path: p })),
+    ([folderId, paths]) => paths.map((p) => ({ home_scope_id: folderId, local_path: p })),
   );
 
-  // Flatten folder tree for the select dropdown
-  const flatFolders: { id: string; name: string; path: string }[] = [];
-  const flatten = (items: DocFolder[], prefix = "") => {
-    for (const f of items) {
-      const display = prefix ? `${prefix} / ${f.name}` : f.name;
-      flatFolders.push({ id: f.id, name: display, path: f.path });
-      if (f.children) flatten(f.children, display);
-    }
-  };
-  flatten(folders);
+  // The person's homes for the select dropdown.
+  const flatFolders: { id: string; name: string }[] = homes
+    .filter((h) => h.id !== null && !h.unmatched)
+    .map((h) => ({ id: h.id as string, name: h.name }));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -135,16 +129,16 @@ export function DirectoryMappings({
                 <div className="flex flex-col gap-1">
                   {activeMappings.map((m) => {
                     const folder = flatFolders.find(
-                      (f) => f.id === m.folder_id,
+                      (f) => f.id === m.home_scope_id,
                     );
                     return (
                       <div
-                        key={`${m.folder_id}:${m.local_path}`}
+                        key={`${m.home_scope_id}:${m.local_path}`}
                         className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
                       >
                         <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
                         <span className="font-medium">
-                          {folder?.name ?? m.folder_id}
+                          {folder?.name ?? m.home_scope_id}
                         </span>
                         <span className="text-muted-foreground mx-1">→</span>
                         <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -152,7 +146,7 @@ export function DirectoryMappings({
                           {m.local_path}
                         </span>
                         <button
-                          onClick={() => handleDelete(m.folder_id, m.local_path)}
+                          onClick={() => handleDelete(m.home_scope_id, m.local_path)}
                           className="text-muted-foreground hover:text-destructive"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

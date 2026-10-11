@@ -1523,6 +1523,24 @@ CREATE TABLE IF NOT EXISTS mandate_resolutions (
 """
 
 
+_V39_NOTE_HOMES = """
+-- Item homes (2026-10-10): every note has exactly one HOME, a scope. Note
+-- folders are retired. home_scope_id is the cloud scope id (NULL until the
+-- cloud assigns one: a note created here carries the active organization and
+-- no home, and the DB places it in that organization's General). home_dir is
+-- the LOCAL directory the note's file lives in = the home's name (with the
+-- organization appended only when two visible homes share a name).
+-- The legacy folder_id / folder_name columns stay physically (SQLite cannot
+-- cheaply drop an indexed column) but NOTHING reads or writes them any more.
+ALTER TABLE notes ADD COLUMN home_scope_id TEXT;
+ALTER TABLE notes ADD COLUMN home_dir TEXT NOT NULL DEFAULT 'General';
+ALTER TABLE notes ADD COLUMN organization_id TEXT;
+UPDATE notes SET home_dir = folder_name WHERE folder_name IS NOT NULL AND folder_name != '';
+DROP INDEX IF EXISTS idx_notes_folder;
+CREATE INDEX IF NOT EXISTS idx_notes_home ON notes(home_scope_id);
+DROP TABLE IF EXISTS note_folders;
+"""
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1562,4 +1580,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (36, _V36_SYNC_OPERATION_WRITABLE_PROBED),
     (37, _V37_CUSTOM_RECORD_MIRROR),
     (38, _V38_MANDATE_RESOLUTIONS),
+    (39, _V39_NOTE_HOMES),
 ]

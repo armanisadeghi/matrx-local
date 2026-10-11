@@ -86,15 +86,15 @@ def test_task_switch_keeps_note_owner_and_transport_token_paired(tmp_path: Path,
             engine._device_id = 'isolated-test-device'
             waiting, resume = asyncio.Event(), asyncio.Event()
             seen = []
-            async def folders(user_id):
+            async def existing_remote(note_id):
                 waiting.set()
                 await resume.wait()
-                seen.append(('folder', user_id, client._headers()['Authorization']))
-                return []
+                seen.append(('lookup', 'account-a', client._headers()['Authorization']))
+                return None
             async def upsert(**kwargs):
                 seen.append(('push', kwargs['user_id'], client._headers()['Authorization']))
                 return {'id': kwargs['note_id'], 'sync_version': 1}
-            monkeypatch.setattr(client, 'list_folders', folders)
+            monkeypatch.setattr(client, 'get_note', existing_remote)
             monkeypatch.setattr(client, 'upsert_note', upsert)
             engine.configure('account-a', 'test-token-a')
             task = asyncio.create_task(engine.push_note('owned', 'note', 'body', file_path='General/note.md'))
@@ -103,7 +103,7 @@ def test_task_switch_keeps_note_owner_and_transport_token_paired(tmp_path: Path,
             resume.set()
             result = await task
             assert result['_synced_to_cloud']
-            assert seen == [('folder', 'account-a', 'Bearer test-token-a'), ('push', 'account-a', 'Bearer test-token-a')]
+            assert seen == [('lookup', 'account-a', 'Bearer test-token-a'), ('push', 'account-a', 'Bearer test-token-a')]
             assert engine._user_id == 'account-b'
             assert client._headers()['Authorization'] == 'Bearer test-token-b'
         finally:
@@ -210,37 +210,40 @@ def test_push_uses_account_cas_hash_instead_of_legacy_hash(tmp_path: Path) -> No
     asyncio.run(check())
 
 
-@pytest.mark.parametrize('action', ['rename', 'delete'])
-def test_unknown_folder_contents_block_before_mutation(tmp_path: Path, monkeypatch, action: str) -> None:
+def test_move_home_refuses_a_note_owned_by_another_account(tmp_path: Path, monkeypatch) -> None:
+    """Moving a note to another home is set_home as the signed-in person: a
+    note another account owns is not found, and the cloud is never called."""
     from fastapi import HTTPException
     from starlette.requests import Request
     from app.api import document_routes
+    from app.services.documents.homes import Home, HomesDirectory
     from tests.characterization.test_documents_sync_characterization import FakeNotesRepo
     fm = FakeFileManager(tmp_path)
-    fm.notes['General/unindexed.md'] = 'keep'
-    fm.list_folders = lambda: ['General']
-    mutations = []
-    fm.rename_folder = lambda *args: mutations.append(('rename', args))
-    fm.delete_folder = lambda *args: mutations.append(('delete', args))
+    fm.notes['General/theirs.md'] = 'keep'
     repo = FakeNotesRepo()
-    monkeypatch.setattr(document_routes, 'file_manager', fm)
-    monkeypatch.setattr(document_routes, '_get_notes_repo', lambda: repo)
-    monkeypatch.setattr(document_routes, '_configure_sync', lambda request: None)
-    engine = SyncEngine(fm=fm, sb=FakeSupabaseFull())
+    repo.rows['theirs'] = {'id': 'theirs', 'user_id': 'account-a', 'file_path': 'General/theirs.md', 'home_dir': 'General'}
+    sb = FakeSupabaseFull()
+    sb.available = True
+    set_home_calls = []
+    async def set_home(*args, **kwargs):
+        set_home_calls.append(args)
+    sb.set_home = set_home
+    engine = SyncEngine(fm=fm, sb=sb)
     engine._device_id = 'isolated-test-device'
+    engine._user_id = 'account-b'
+    engine._get_notes_repo = lambda: repo
+    async def homes(force=False):
+        return HomesDirectory([Home('scope-1', 'org-1', 'Clients', 'Org', 'Clients')])
+    engine.get_homes = homes
     monkeypatch.setattr(document_routes, 'sync_engine', engine)
+    monkeypatch.setattr(document_routes, '_configure_sync', lambda request: None)
     request = Request({'type': 'http', 'headers': [(b'x-user-id', b'account-b')]})
-    folder_id = document_routes._folder_id_for_name('General')
     async def check() -> None:
         with pytest.raises(HTTPException) as exc:
-            if action == 'rename':
-                await document_routes.update_folder(folder_id, document_routes.UpdateFolderRequest(name='Moved'), request)
-            else:
-                await document_routes.delete_folder(folder_id, request)
+            await document_routes.move_note_home('theirs', document_routes.MoveHomeRequest(home_scope_id='scope-1'), request)
         assert exc.value.status_code == 404
-        assert mutations == []
-        assert repo.soft_deleted == []
-        assert fm.notes['General/unindexed.md'] == 'keep'
+        assert set_home_calls == []
+        assert fm.notes['General/theirs.md'] == 'keep'
     asyncio.run(check())
 
 

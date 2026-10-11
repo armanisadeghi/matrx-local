@@ -48,9 +48,20 @@ from app.services.documents.file_manager import (
     content_hash,
     file_manager,
 )
+from app.services.documents.homes import (
+    DEFAULT_HOME_DIR,
+    HomesDirectory,
+    build_directory,
+)
 from app.services.documents.supabase_client import SupabaseDocClient, supabase_docs
 
 logger = logging.getLogger(__name__)
+
+
+def _dir_of(file_path: str | None) -> str:
+    """The local directory a note path lives in (its home's directory)."""
+    parts = Path(file_path or "").parts
+    return parts[0] if len(parts) > 1 else DEFAULT_HOME_DIR
 
 
 def _now() -> str:
@@ -124,14 +135,12 @@ class SyncEngine:
         self._auto_stop = asyncio.Event()
         self._auto_last_skip_reason: str | None = None
         self._auto_last_token: str | None = None
-        # Remote folder resolution cache (id-set + name→id), short TTL. The
-        # local folder_id is a deterministic uuid5 of the folder NAME (see
-        # document_routes._folder_id_for_name) and almost never matches the
-        # cloud's uuid4 note_folders.id, so pushing it verbatim violates
-        # notes_folder_id_fkey → PostgREST 409. We resolve to a real remote
-        # folder (by id-presence, else by name) or fall back to NULL — the
-        # folder_name column carries the organization regardless.
-        self._folder_cache_by_user: dict[str, tuple[set[str], dict[str, str], float]] = {}
+        # Homes (scopes the person can see) -> local directory names, short
+        # TTL per user. Names come from custom.context_scopes + iam.organizations.
+        self._homes_by_user: dict[str, tuple[HomesDirectory, float]] = {}
+        # Plain-language notices about moves the app could not honour (a file
+        # dragged into a directory that matches no home). Newest last, capped.
+        self.home_notices: list[dict[str, Any]] = []
         self._recovery_hook_installed = False
 
     @property
@@ -288,8 +297,8 @@ class SyncEngine:
         note_id: str,
         label: str,
         content: str,
-        folder_name: str = "General",
-        folder_id: str | None = None,
+        home_dir: str = DEFAULT_HOME_DIR,
+        home_scope_id: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         file_path: str | None = None,
@@ -311,8 +320,8 @@ class SyncEngine:
                 note_id=note_id,
                 label=label,
                 content=content,
-                folder_name=folder_name,
-                folder_id=folder_id,
+                home_dir=home_dir,
+                home_scope_id=home_scope_id,
                 tags=tags,
                 metadata=metadata,
                 file_path=file_path,
@@ -320,74 +329,240 @@ class SyncEngine:
                 owner_user_id=owner_user_id,
             )
 
-    async def _resolve_remote_folder_id(
-        self, folder_id: str | None, folder_name: str | None
-    ) -> str | None:
-        """Map a note's local folder to a folder_id that EXISTS in
-        workbench.note_folders, or ``None``.
+    # ── Homes ────────────────────────────────────────────────────────────────
 
-        The local folder_id is a uuid5 of the folder name and is not a real
-        cloud folder row, so sending it verbatim in a push violates
-        ``notes_folder_id_fkey`` (PostgREST → HTTP 409). Resolution order:
-          1. If the given folder_id is already a live remote folder, keep it
-             (notes created on the frontend carry a real uuid4).
-          2. Otherwise match by folder name (case-insensitive) to a live
-             remote folder and use its real id.
-          3. Otherwise return ``None`` — push with a null folder_id; the
-             ``folder_name`` text column preserves the organization and the FK
-             is satisfied. No cloud folder is fabricated from the desktop.
-        Best-effort: any lookup failure resolves to ``None`` so a folder
-        service hiccup never blocks a note push.
+    def _note_notice(self, notice: dict[str, Any]) -> None:
+        self.home_notices.append({**notice, "at": _now()})
+        del self.home_notices[:-50]
+
+    async def get_homes(self, *, force: bool = False) -> HomesDirectory:
+        """Every home the signed-in person can see, with its local directory.
+
+        Cached ~60s. A failed read keeps the last good directory (offline
+        works from each note's persisted ``home_dir``), else an empty one.
         """
-        if not folder_id and not folder_name:
-            return None
-        actor_user_id = self._user_id
-        if not actor_user_id:
-            return None
-
         user_id = self._user_id
         if not user_id:
-            return None
+            return HomesDirectory()
+        cached = self._homes_by_user.get(user_id)
         now = time.monotonic()
-        cache_ids, cache_by_name, cache_at = self._folder_cache_by_user.get(
-            user_id, (set(), {}, 0.0)
-        )
-        if now - cache_at > 60.0:
+        if cached and not force and now - cached[1] < 60.0:
+            return cached[0]
+        if not getattr(self.sb, "available", False):
+            return cached[0] if cached else HomesDirectory()
+        try:
+            scopes = await self.sb.list_scopes()
             try:
-                remote_folders = await self.sb.list_folders(user_id)
+                org_names = await self.sb.list_organization_names()
             except Exception:
-                logger.debug("Folder resolve: list_folders failed", exc_info=True)
-                remote_folders = []
-                # Keep any prior cache; only refresh the timestamp on success.
-            else:
-                cache_ids = {
-                    f["id"] for f in remote_folders if f.get("id")
-                }
-                cache_by_name = {
-                    str(f.get("name", "")).strip().lower(): f["id"]
-                    for f in remote_folders
-                    if f.get("id") and f.get("name")
-                }
-                cache_at = now
-                self._folder_cache_by_user[user_id] = (
-                    cache_ids, cache_by_name, cache_at
-                )
+                logger.debug("Homes: organization names unavailable", exc_info=True)
+                org_names = {}
+            directory = build_directory(scopes, org_names)
+        except Exception:
+            logger.debug("Homes: list_scopes failed", exc_info=True)
+            return cached[0] if cached else HomesDirectory()
+        self._homes_by_user[user_id] = (directory, now)
+        return directory
 
-        if folder_id and folder_id in cache_ids:
-            return folder_id
-        if folder_name:
-            match = cache_by_name.get(folder_name.strip().lower())
-            if match:
-                return match
-        return None
+    @property
+    def homes_cached(self) -> HomesDirectory:
+        cached = self._homes_by_user.get(self._user_id or "")
+        return cached[0] if cached else HomesDirectory()
+
+    async def active_organization_id(self) -> str | None:
+        """The organization new notes are saved in (never guessed)."""
+        jwt = getattr(self.sb, "current_jwt", None)
+        if not jwt:
+            return None
+        try:
+            from app.services.aidream.organization import (
+                resolve_active_organization_id,
+            )
+
+            return await resolve_active_organization_id(jwt)
+        except Exception:
+            logger.debug("No active organization resolved for notes", exc_info=True)
+            return None
+
+    async def default_home_dir(self) -> str:
+        """Directory for a note that has no home yet: the active
+        organization's General when known, else 'General'."""
+        org = await self.active_organization_id()
+        home = (await self.get_homes()).general_for_org(org) if org else None
+        return home.dir if home else DEFAULT_HOME_DIR
+
+    async def move_note_home(
+        self, note_id: str, scope_id: str, *, expected_version: int | None = None
+    ) -> dict[str, Any]:
+        """Move a note to another home (cloud set_home, then the local file).
+
+        Raises ``LookupError`` for an unknown home / note and ``RuntimeError``
+        when the cloud cannot be reached: a move is never faked offline.
+        """
+        actor_user_id = self._user_id
+        if not actor_user_id:
+            raise RuntimeError("Sign in to move a note to another home.")
+        homes = await self.get_homes(force=True)
+        home = next((h for h in homes.homes if h.id == scope_id), None)
+        if home is None:
+            raise LookupError("That home is not one you can see.")
+        if not self.sb.available:
+            raise RuntimeError("Moving a note to another home needs a connection.")
+        async with self._sync_lock:
+            repo = self._get_notes_repo()
+            row = await repo.get(note_id)
+            if row is None or not self._is_owned_by(row, actor_user_id):
+                raise LookupError("Note not found.")
+            if row.get("home_scope_id") == home.id:
+                return {
+                    "id": note_id,
+                    "home_scope_id": home.id,
+                    "home_dir": home.dir,
+                    "file_path": row.get("file_path"),
+                }
+            await self.sb.set_home(note_id, home.id, expected_version)
+            new_fp = await self._relocate_local_file(row, home.dir)
+            await repo.update_fields(
+                note_id,
+                {
+                    "home_scope_id": home.id,
+                    "home_dir": home.dir,
+                    "organization_id": home.organization_id,
+                    "file_path": new_fp,
+                },
+                user_id=actor_user_id,
+            )
+            if new_fp != row.get("file_path"):
+                try:
+                    await self.sb.update_note(
+                        note_id, {"file_path": new_fp}, self.device_id
+                    )
+                except Exception:
+                    logger.debug("Could not write moved file_path to cloud for %s", note_id)
+            return {
+                "id": note_id,
+                "home_scope_id": home.id,
+                "home_dir": home.dir,
+                "file_path": new_fp,
+            }
+
+    async def _relocate_local_file(
+        self, row: dict[str, Any], home_dir: str
+    ) -> str | None:
+        """Move a note's file into ``home_dir`` (no-op when already there),
+        carrying its sync-state hash. Returns the (new) relative path."""
+        old_fp = row.get("file_path")
+        if not old_fp:
+            return old_fp
+        parts = Path(old_fp).parts
+        if len(parts) > 1 and parts[0] == home_dir:
+            return old_fp
+        if not self.fm.note_path_from_file_path(old_fp).is_file():
+            return old_fp
+        new_fp = self.fm.move_note_to_dir(old_fp, home_dir)
+        state = self._load_sync_state()
+        hashes = state.setdefault("note_hashes", {})
+        if old_fp in hashes:
+            hashes[new_fp] = hashes.pop(old_fp)
+            self._save_sync_state(state)
+        last = self._last_push_hashes.pop(old_fp, None)
+        if last:
+            self._last_push_hashes[new_fp] = last
+        return new_fp
+
+    async def _apply_local_move(
+        self, row: dict[str, Any], new_fp: str, actor_user_id: str
+    ) -> bool:
+        """A person moved a note's file to ``new_fp`` on disk.
+
+        A directory that matches a home -> set_home on that home. One that
+        matches none -> the note keeps its home, the file goes back, and the
+        app says so (a directory is never turned into a scope). Returns True
+        when the move was accepted.
+        """
+        repo = self._get_notes_repo()
+        note_id = row["id"]
+        old_fp = row.get("file_path") or ""
+        parts = Path(new_fp).parts
+        new_dir = parts[0] if len(parts) > 1 else None
+        homes = await self.get_homes()
+        target = homes.home_for_dir(new_dir)
+        current_scope = row.get("home_scope_id")
+        keep_dir = row.get("home_dir") or DEFAULT_HOME_DIR
+
+        async def put_back(kind: str, message: str) -> bool:
+            restored = self.fm.move_note_to_dir(new_fp, keep_dir)
+            await repo.update_fields(
+                note_id, {"file_path": restored}, user_id=actor_user_id
+            )
+            self._note_notice(
+                {
+                    "kind": kind,
+                    "note_id": note_id,
+                    "label": row.get("label") or Path(new_fp).stem,
+                    "directory": new_dir,
+                    "home": keep_dir,
+                    "message": message,
+                }
+            )
+            return False
+
+        if target is None:
+            if homes.empty and not current_scope:
+                # Homes unknown (offline, never synced): a plain local move.
+                await repo.update_fields(
+                    note_id,
+                    {"file_path": new_fp, "home_dir": new_dir or DEFAULT_HOME_DIR},
+                    user_id=actor_user_id,
+                )
+                return True
+            return await put_back(
+                "home_unmatched",
+                f'"{new_dir}" is not one of your homes, so the note stays in "{keep_dir}".',
+            )
+        if target.id != current_scope:
+            try:
+                if not self.sb.available:
+                    raise RuntimeError("offline")
+                await self.sb.set_home(note_id, target.id)
+            except Exception as exc:
+                logger.warning(
+                    "set_home failed for note %s (%s)", note_id, type(exc).__name__
+                )
+                return await put_back(
+                    "home_move_failed",
+                    f'Could not move the note to "{target.name}" right now, so it '
+                    f'stays in "{keep_dir}".',
+                )
+        state = self._load_sync_state()
+        hashes = state.setdefault("note_hashes", {})
+        if old_fp in hashes:
+            hashes[new_fp] = hashes.pop(old_fp)
+            self._save_sync_state(state)
+        await repo.update_fields(
+            note_id,
+            {
+                "file_path": new_fp,
+                "home_scope_id": target.id,
+                "home_dir": target.dir,
+                "organization_id": target.organization_id,
+            },
+            user_id=actor_user_id,
+        )
+        if self.sb.available:
+            try:
+                await self.sb.update_note(note_id, {"file_path": new_fp}, self.device_id)
+            except Exception:
+                logger.debug("Could not write moved file_path to cloud for %s", note_id)
+        return True
 
     async def _push_note(
         self,
         note_id: str,
         label: str,
         content: str,
-        folder_name: str = "General",
-        folder_id: str | None = None,
+        home_dir: str = DEFAULT_HOME_DIR,
+        home_scope_id: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         file_path: str | None = None,
@@ -442,7 +617,7 @@ class SyncEngine:
             except Exception:
                 pass
 
-        file_path = self.fm.write_note(folder_name, label, content, file_path)
+        file_path = self.fm.write_note(home_dir, label, content, file_path)
         c_hash = content_hash(content)
 
         # Echo-suppression marker only — safe to set optimistically because it
@@ -454,8 +629,8 @@ class SyncEngine:
             "id": note_id,
             "label": label,
             "content": content,
-            "folder_name": folder_name,
-            "folder_id": folder_id,
+            "home_dir": home_dir,
+            "home_scope_id": home_scope_id,
             "file_path": file_path,
             "tags": tags or [],
             "metadata": metadata or {},
@@ -481,19 +656,11 @@ class SyncEngine:
                     else None
                 )
 
-                # Never push the local uuid5 folder_id verbatim — it is not a
-                # real note_folders row and trips notes_folder_id_fkey (409).
-                remote_folder_id = await self._resolve_remote_folder_id(
-                    folder_id, folder_name
-                )
-
                 upsert_body = dict(
                     note_id=note_id,
                     user_id=actor_user_id,
                     label=label,
                     content=content,
-                    folder_name=folder_name,
-                    folder_id=remote_folder_id,
                     file_path=file_path,
                     tags=tags,
                     metadata=metadata,
@@ -507,8 +674,6 @@ class SyncEngine:
                         {
                             "label": label,
                             "content": content,
-                            "folder_name": folder_name,
-                            "folder_id": remote_folder_id,
                             "file_path": file_path,
                             "tags": tags or [],
                             "metadata": metadata or {},
@@ -550,6 +715,15 @@ class SyncEngine:
                         # soft-delete being revived by this edit.
 
                 if pushed_row is None:
+                    # A note the cloud does not have yet carries the active
+                    # organization and NO home (the database puts it in that
+                    # organization's General). An existing note never gets
+                    # organization_id again: the database refuses a change.
+                    if await self.sb.get_note(note_id) is None:
+                        upsert_body["organization_id"] = (
+                            (local_row or {}).get("organization_id")
+                            or await self.active_organization_id()
+                        )
                     # DD-131 (B-44): the sync loop's own push, not a person's.
                     pushed_row = await self.sb.upsert_note(
                         **upsert_body, actor_tier="system"
@@ -570,6 +744,39 @@ class SyncEngine:
                 await repo.set_sync_status(
                     note_id, "synced", remote_hash=c_hash, user_id=actor_user_id
                 )
+
+                # Adopt the home the cloud holds (a new note lands in its
+                # organization's General) and put the file in that directory.
+                home_scope_id = pushed_row.get("home_scope_id") or home_scope_id
+                adopt_fields: dict[str, Any] = {}
+                if pushed_row.get("home_scope_id"):
+                    adopt_fields["home_scope_id"] = pushed_row["home_scope_id"]
+                if pushed_row.get("organization_id"):
+                    adopt_fields["organization_id"] = pushed_row["organization_id"]
+                cloud_dir = (await self.get_homes()).dir_for(
+                    pushed_row.get("home_scope_id")
+                )
+                if cloud_dir:
+                    adopt_fields["home_dir"] = cloud_dir
+                    moved_fp = await self._relocate_local_file(
+                        {"file_path": file_path}, cloud_dir
+                    )
+                    if moved_fp and moved_fp != file_path:
+                        file_path = moved_fp
+                        adopt_fields["file_path"] = moved_fp
+                        result["file_path"] = moved_fp
+                        try:
+                            await self.sb.update_note(
+                                note_id, {"file_path": moved_fp}, self.device_id
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Could not write relocated file_path for %s", note_id
+                            )
+                if adopt_fields:
+                    await repo.update_fields(
+                        note_id, adopt_fields, user_id=actor_user_id
+                    )
 
             except Exception as exc:
                 # Expected, actionable cloud rejections (HTTP 4xx: auth,
@@ -606,7 +813,7 @@ class SyncEngine:
                         exc_info=True,
                     )
 
-        await self._sync_mappings(file_path, folder_id)
+        await self._sync_mappings(file_path, home_scope_id)
         return result
 
     # ── Pull: Supabase → local ───────────────────────────────────────────────
@@ -768,9 +975,16 @@ class SyncEngine:
         # defaults don't cover that and None crashes the path builder.
         content = note.get("content") or ""
         label = note.get("label") or "Untitled"
-        folder_name = note.get("folder_name") or "General"
         file_path = note.get("file_path")
         write_snapshot: Any | None = None
+        # The home decides the directory: its name, or "name · organization"
+        # when two visible homes share a name. Offline / unknown homes keep
+        # the directory the note already lives in.
+        home_dir = (
+            (await self.get_homes()).dir_for(note.get("home_scope_id"))
+            or (local_row or {}).get("home_dir")
+            or DEFAULT_HOME_DIR
+        )
 
         # Local tombstone guard: this device deleted the note; don't let a pull
         # of the (not-yet-tombstoned) remote row resurrect it unless the remote
@@ -782,6 +996,28 @@ class SyncEngine:
             if note.get("content_hash") == local_row.get("remote_content_hash"):
                 return {**note, "_skipped_local_tombstone": True}
 
+        # The note's home changed (moved on the web / another device) or its
+        # directory is named differently now: MOVE the local file instead of
+        # writing a second copy.
+        if (await self.get_homes()).dir_for(note.get("home_scope_id")):
+            current_fp = (local_row or {}).get("file_path") or file_path
+            current_parts = Path(current_fp).parts if current_fp else ()
+            if current_fp and (len(current_parts) < 2 or current_parts[0] != home_dir):
+                if (
+                    local_row
+                    and local_row.get("file_path")
+                    and local_row.get("sync_status") in {"synced", "never_synced"}
+                    and self.fm.note_path_from_file_path(local_row["file_path"]).is_file()
+                ):
+                    new_fp = await self._relocate_local_file(local_row, home_dir)
+                    if new_fp and new_fp != current_fp:
+                        local_row = {**local_row, "file_path": new_fp}
+                        note["_reroute_from"] = note.get("file_path") or current_fp
+                        file_path = new_fp
+                elif not local_row:
+                    note["_reroute_from"] = file_path
+                    file_path = None
+
         if not file_path:
             # Cloud notes created by other clients (web) carry no file_path.
             # NEVER derive <folder>/<label>.md directly — that silently
@@ -790,7 +1026,7 @@ class SyncEngine:
             if local_row and local_row.get("file_path"):
                 file_path = local_row["file_path"]
             else:
-                file_path = self.fm.unique_file_path(folder_name, label)
+                file_path = self.fm.unique_file_path(home_dir, label)
                 note["_allocated_path"] = True
         else:
             resolution = await self._resolve_path_collision_owner(
@@ -935,7 +1171,7 @@ class SyncEngine:
             )
             return {**note, "_deferred_revision": True}
 
-        file_path = self.fm.write_note(folder_name, label, content, file_path)
+        file_path = self.fm.write_note(home_dir, label, content, file_path)
         c_hash = content_hash(content)
 
         self._last_push_hashes[file_path] = c_hash
@@ -1019,13 +1255,14 @@ class SyncEngine:
         await repo.upsert({
             "id": note_id,
             "user_id": actor_user_id,
-            "folder_id": note.get("folder_id"),
+            "home_scope_id": note.get("home_scope_id"),
+            "organization_id": note.get("organization_id"),
             "title": label,
             "label": label,
             "content": content,
             "content_hash": c_hash,
             "file_path": file_path,
-            "folder_name": folder_name,
+            "home_dir": home_dir,
             "tags": note.get("tags", []),
             "metadata": note.get("metadata", {}),
             "sync_status": "synced",
@@ -1035,7 +1272,7 @@ class SyncEngine:
             "sync_version": sv,
         })
 
-        await self._sync_mappings(file_path, note.get("folder_id"))
+        await self._sync_mappings(file_path, note.get("home_scope_id"))
         return note
 
     async def pull_changes(self) -> dict[str, Any]:
@@ -1253,8 +1490,8 @@ class SyncEngine:
                         note_id=note["id"],
                         label=note.get("label", note.get("title", "")),
                         content=content,
-                        folder_name=note.get("folder_name", "General"),
-                        folder_id=note.get("folder_id"),
+                        home_dir=note.get("home_dir", "General"),
+                        home_scope_id=note.get("home_scope_id"),
                         tags=note.get("tags", []),
                         metadata=note.get("metadata", {}),
                         file_path=fp,
@@ -1383,6 +1620,43 @@ class SyncEngine:
 
             local_files = await offload_read_only(self.fm.scan_all)
             local_by_path: dict[str, dict] = {f["file_path"]: f for f in local_files}
+
+            # Files moved between home directories while the app was closed:
+            # carry the move to the cloud (set_home) BEFORE reconciling, so a
+            # moved file is never mistaken for "deleted here + new file".
+            for r in list(remote_notes):
+                old_fp = r.get("file_path")
+                if not old_fp or old_fp in local_by_path:
+                    continue
+                row = await self._get_notes_repo().get(r["id"])
+                if (
+                    row is None
+                    or row.get("is_deleted")
+                    or row.get("file_path") != old_fp
+                    or not self._is_owned_by(row, self._user_id)
+                ):
+                    continue
+                moved_to = await self._find_moved_file(
+                    row, old_fp, local_files=local_files
+                )
+                if not moved_to:
+                    continue
+                if await self._apply_local_move(row, moved_to, self._user_id):
+                    after = await self._get_notes_repo().get(r["id"])
+                    group = remote_path_groups.get(old_fp, [])
+                    remote_path_groups[old_fp] = [g for g in group if g["id"] != r["id"]]
+                    if not remote_path_groups[old_fp]:
+                        del remote_path_groups[old_fp]
+                    r["file_path"] = moved_to
+                    r["home_scope_id"] = (after or {}).get("home_scope_id")
+                    remote_path_groups.setdefault(moved_to, []).append(r)
+                    stats["moved"] = stats.get("moved", 0) + 1
+                else:
+                    # Put back to its home's directory; refresh the scan.
+                    local_files = await offload_read_only(self.fm.scan_all)
+                    local_by_path = {f["file_path"]: f for f in local_files}
+            if self.home_notices:
+                stats["home_notices"] = list(self.home_notices)
 
             state = self._load_sync_state()
             known_hashes = state.get("note_hashes", {})
@@ -1575,8 +1849,8 @@ class SyncEngine:
                             note_id=remote["id"],
                             label=remote.get("label", local["label"]),
                             content=content,
-                            folder_name=remote.get("folder_name", "General"),
-                            folder_id=remote.get("folder_id"),
+                            home_dir=_dir_of(fp),
+                            home_scope_id=remote.get("home_scope_id"),
                             file_path=fp,
                         )
                         record_push_result(result)
@@ -1592,8 +1866,8 @@ class SyncEngine:
                             note_id=remote["id"],
                             label=remote.get("label", local["label"]),
                             content=content,
-                            folder_name=remote.get("folder_name", "General"),
-                            folder_id=remote.get("folder_id"),
+                            home_dir=_dir_of(fp),
+                            home_scope_id=remote.get("home_scope_id"),
                             file_path=fp,
                         )
                         record_push_result(result)
@@ -1662,13 +1936,14 @@ class SyncEngine:
                             await repo.upsert({
                                 "id": twin["id"],
                                 "user_id": self._user_id or "",
-                                "folder_id": twin.get("folder_id"),
+                                "home_scope_id": twin.get("home_scope_id"),
                                 "title": local["label"],
                                 "label": twin.get("label") or local["label"],
                                 "content": content,
                                 "content_hash": local["content_hash"],
                                 "file_path": fp,
-                                "folder_name": twin.get("folder_name") or folder,
+                                "home_dir": folder,
+                                "organization_id": twin.get("organization_id"),
                                 "sync_status": "synced",
                                 "last_synced_at": _now(),
                                 "sync_enabled": True,
@@ -1748,8 +2023,8 @@ class SyncEngine:
                         note_id=push_id,
                         label=local["label"],
                         content=content,
-                        folder_name=(local_note or {}).get("folder_name") or folder,
-                        folder_id=(local_note or {}).get("folder_id"),
+                        home_dir=(local_note or {}).get("home_dir") or folder,
+                        home_scope_id=(local_note or {}).get("home_scope_id"),
                         file_path=fp,
                     )
                     record_push_result(result)
@@ -1846,13 +2121,13 @@ class SyncEngine:
 
     # ── Directory mapping sync ───────────────────────────────────────────────
 
-    async def _sync_mappings(self, file_path: str, folder_id: str | None) -> None:
-        if not folder_id:
+    async def _sync_mappings(self, file_path: str, home_scope_id: str | None) -> None:
+        if not home_scope_id:
             return
         local_mappings = self.fm.load_local_mappings()
-        mapped_paths = local_mappings.get(folder_id, [])
+        mapped_paths = local_mappings.get(home_scope_id, [])
         if mapped_paths:
-            self.fm.sync_to_mapped_dirs(file_path, mapped_paths, folder_id=folder_id)
+            self.fm.sync_to_mapped_dirs(file_path, mapped_paths, home_scope_id=home_scope_id)
 
     # ── Device identity ──────────────────────────────────────────────────────
 
@@ -2136,6 +2411,32 @@ class SyncEngine:
         self.configure(row["user_id"], row["access_token"])
         return row["user_id"]
 
+    async def _find_moved_file(
+        self, row: dict[str, Any], gone_fp: str, *, local_files: list[dict[str, str]] | None = None
+    ) -> str | None:
+        """The new path of a note whose file left ``gone_fp`` for another
+        directory: same filename, same bytes, claimed by no live note."""
+        known = self._load_sync_state().get("note_hashes", {}).get(gone_fp)
+        wanted = {h for h in (known, row.get("content_hash")) if h}
+        if not wanted:
+            return None
+        files = local_files
+        if files is None:
+            files = await offload_read_only(self.fm.scan_all)
+        repo = self._get_notes_repo()
+        name = Path(gone_fp).name
+        found: list[str] = []
+        for f in files:
+            fp = f["file_path"]
+            if fp == gone_fp or Path(fp).name != name:
+                continue
+            if f["content_hash"] not in wanted:
+                continue
+            if await repo.get_by_file_path(fp) is not None:
+                continue
+            found.append(fp)
+        return found[0] if len(found) == 1 else None
+
     async def _handle_external_delete(self, file_path: str) -> None:
         """Handle an externally deleted .md file.
 
@@ -2165,6 +2466,13 @@ class SyncEngine:
             if row is None:
                 return
             if not self._is_owned_by(row, actor_user_id):
+                return
+            # A file that vanished from one home's directory while the same
+            # bytes (same filename) appeared in another is a MOVE, not a
+            # delete: never tombstone it.
+            moved_to = await self._find_moved_file(row, file_path)
+            if moved_to:
+                await self._apply_local_move(row, moved_to, actor_user_id)
                 return
             try:
                 await repo.soft_delete(row["id"], user_id=actor_user_id)
@@ -2272,7 +2580,7 @@ class SyncEngine:
                 "content": content,
                 "content_hash": c_hash,
                 "file_path": file_path,
-                "folder_name": (existing.get("folder_name") if existing else None) or folder,
+                "home_dir": (existing.get("home_dir") if existing else None) or folder,
                 "sync_status": "pending_push" if (existing and existing.get("sync_status") == "synced") else (existing.get("sync_status", "never_synced") if existing else "never_synced"),
                 "sync_enabled": existing.get("sync_enabled", True) if existing else True,
                 "last_synced_at": existing.get("last_synced_at") if existing else None,
@@ -2290,8 +2598,8 @@ class SyncEngine:
                             note_id=note_id,
                             label=remote.get("label", Path(file_path).stem),
                             content=content,
-                            folder_name=remote.get("folder_name", "General"),
-                            folder_id=remote.get("folder_id"),
+                            home_dir=_dir_of(file_path),
+                            home_scope_id=remote.get("home_scope_id"),
                             file_path=file_path,
                         )
                     else:
@@ -2318,7 +2626,7 @@ class SyncEngine:
                             note_id=note_id,
                             label=Path(file_path).stem,
                             content=content,
-                            folder_name=folder,
+                            home_dir=folder,
                             file_path=file_path,
                         )
                 except Exception:
@@ -2390,10 +2698,10 @@ class SyncEngine:
         if not actor_user_id or not self._is_owned_by(sqlite_note, actor_user_id):
             return {"id": note_id, "_deferred_account": True}
         label = (sqlite_note.get("label") or sqlite_note.get("title", "Untitled")) if sqlite_note else "Untitled"
-        folder_name = (sqlite_note.get("folder_name") or "General") if sqlite_note else "General"
-        folder_id = sqlite_note.get("folder_id") if sqlite_note else None
+        home_dir = (sqlite_note.get("home_dir") or "General") if sqlite_note else "General"
+        home_scope_id = sqlite_note.get("home_scope_id") if sqlite_note else None
         note_path = sqlite_note.get("file_path") if sqlite_note else None
-        target_path = note_path or self.fm.unique_file_path(folder_name, label)
+        target_path = note_path or self.fm.unique_file_path(home_dir, label)
         target_snapshot = await self._read_note_snapshot(target_path)
         if (
             (note_path is not None and target_snapshot.state != "present")
@@ -2421,15 +2729,15 @@ class SyncEngine:
             )
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, label, keep, target_path)
+            self.fm.write_note(home_dir, label, keep, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=keep,
-                        folder_name=folder_name,
-                        folder_id=folder_id,
+                        home_dir=home_dir,
+                        home_scope_id=home_scope_id,
                         file_path=note_path,
                         force=True,
                     )
@@ -2441,7 +2749,7 @@ class SyncEngine:
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
             written_path = self.fm.write_note(
-                folder_name, label, remote_content, target_path
+                home_dir, label, remote_content, target_path
             )
             await repo.set_sync_status(
                 note_id, "synced", remote_hash=content_hash(remote_content), user_id=actor_user_id
@@ -2458,15 +2766,15 @@ class SyncEngine:
                 return None
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, label, merged_content, target_path)
+            self.fm.write_note(home_dir, label, merged_content, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=merged_content,
-                        folder_name=folder_name,
-                        folder_id=folder_id,
+                        home_dir=home_dir,
+                        home_scope_id=home_scope_id,
                         file_path=note_path,
                         force=True,
                     )
@@ -2480,15 +2788,15 @@ class SyncEngine:
             combined = local_content.rstrip() + separator + remote_content.lstrip()
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, label, combined, target_path)
+            self.fm.write_note(home_dir, label, combined, target_path)
             if self.is_configured and self._user_id:
                 try:
                     await self._push_note(
                         note_id=note_id,
                         label=label,
                         content=combined,
-                        folder_name=folder_name,
-                        folder_id=folder_id,
+                        home_dir=home_dir,
+                        home_scope_id=home_scope_id,
                         file_path=note_path,
                         force=True,
                     )
@@ -2499,16 +2807,16 @@ class SyncEngine:
         elif resolution == "split":
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, label, local_content, target_path)
+            self.fm.write_note(home_dir, label, local_content, target_path)
             new_label = f"{label} (cloud copy)"
-            new_path = self.fm.unique_file_path(folder_name, new_label)
+            new_path = self.fm.unique_file_path(home_dir, new_label)
             new_snapshot = await self._read_note_snapshot(new_path)
             if (
                 new_snapshot.state != "missing"
                 or not self._snapshot_is_current(new_path, new_snapshot)
             ):
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, new_label, remote_content, new_path)
+            self.fm.write_note(home_dir, new_label, remote_content, new_path)
             if self.is_configured and self._user_id:
                 try:
                     new_id = str(uuid.uuid4())
@@ -2516,8 +2824,8 @@ class SyncEngine:
                         note_id=new_id,
                         label=new_label,
                         content=remote_content,
-                        folder_name=folder_name,
-                        folder_id=folder_id,
+                        home_dir=home_dir,
+                        home_scope_id=home_scope_id,
                     )
                 except Exception:
                     pass
@@ -2527,7 +2835,7 @@ class SyncEngine:
         elif resolution == "exclude":
             if not snapshots_are_current():
                 return {"id": note_id, "_deferred_revision": True}
-            self.fm.write_note(folder_name, label, local_content, target_path)
+            self.fm.write_note(home_dir, label, local_content, target_path)
             await repo.set_excluded(note_id, True)
             result["content"] = local_content
 
@@ -2719,6 +3027,7 @@ class SyncEngine:
             "notes_access_reason": notes_health.get("message") if degraded else None,
             "notes_access_kind": notes_health.get("kind"),
             "delete_breaker": self.fm.load_sync_state().get("delete_breaker"),
+            "home_notices": list(self.home_notices),
         }
 
 

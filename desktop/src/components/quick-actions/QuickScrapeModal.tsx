@@ -90,7 +90,7 @@ export function QuickScrapeModal({
         // The markdown extraction keeps headings, tables and lists intact —
         // a note made from the flat text blob loses all of that structure.
         content: result.extraction?.markdown ?? result.text_data,
-        folder_name: "Scraped Pages",
+        tags: ["Scraped Pages"],
       });
       setSavedNote(true);
       setTimeout(() => setSavedNote(false), 3000);

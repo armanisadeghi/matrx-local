@@ -303,8 +303,8 @@ export function ConflictResolver({ conflicts, onResolve, onClose }: ConflictReso
         {/* Note info */}
         <div className="border-b px-6 py-2 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">{conflict.label ?? "Untitled Note"}</span>
-          {conflict.folder_name && (
-            <span className="ml-2">in {conflict.folder_name}</span>
+          {conflict.home_dir && (
+            <span className="ml-2">in {conflict.home_dir}</span>
           )}
         </div>
 

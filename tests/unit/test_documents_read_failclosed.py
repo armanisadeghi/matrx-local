@@ -101,8 +101,6 @@ def test_conditional_push_does_not_upsert_when_the_followup_read_fails(monkeypat
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.method)
-        if request.url.path.endswith("/note_folders"):
-            return httpx.Response(200, json=[], request=request)
         if request.method == "PATCH":
             # Conditional update missed; the engine must inspect the remote row.
             return httpx.Response(200, json=[], request=request)
@@ -127,5 +125,5 @@ def test_conditional_push_does_not_upsert_when_the_followup_read_fails(monkeypat
     )
 
     assert result["_synced_to_cloud"] is False
-    assert calls == ["GET", "PATCH", "GET"]
+    assert calls == ["PATCH", "GET"]
     assert repo.statuses == [("note-1", "failed")]

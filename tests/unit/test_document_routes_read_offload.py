@@ -57,12 +57,13 @@ def test_tree_counts_actual_paths_without_scanning_bodies(tmp_path, monkeypatch)
     monkeypatch.setattr(document_routes, "file_manager", fm)
     monkeypatch.setattr(document_routes, "_configure_sync", lambda _request: None)
 
-    result = asyncio.run(document_routes.get_folder_tree(_request()))
+    result = asyncio.run(document_routes.get_homes_tree(_request()))
 
     assert result["total_notes"] == 3
     assert result["unfiled_notes"] == 1
-    assert result["folders"][0]["name"] == "Alpha"
-    assert result["folders"][0]["note_count"] == 2
+    alpha = next(home for home in result["homes"] if home["name"] == "Alpha")
+    assert alpha["note_count"] == 2
+    assert alpha["unmatched"] is True
     assert fm.scan_calls == 0
     assert fm.read_calls == 0
 
@@ -93,7 +94,7 @@ def test_tree_read_offload_keeps_event_loop_and_context_responsive(tmp_path, mon
     async def run() -> None:
         token = account.set("account-a")
         try:
-            tree_task = asyncio.create_task(document_routes.get_folder_tree(_request()))
+            tree_task = asyncio.create_task(document_routes.get_homes_tree(_request()))
             await asyncio.to_thread(started.wait)
             heartbeat = False
             await asyncio.sleep(0)
@@ -113,7 +114,11 @@ def test_every_async_route_scan_is_offloaded_and_legacy_lookup_uses_paths() -> N
     source = inspect.getsource(document_routes)
     assert "file_manager.scan_all()" not in source
     assert source.count("await offload_read_only(file_manager.scan_all)") == 2
-    assert source.count("await offload_read_only(file_manager.list_note_paths)") >= 5
+    tree_source = inspect.getsource(document_routes.get_homes_tree)
+    assert "await offload_read_only(_local_homes_tree)" in tree_source
+    assert "file_manager.list_note_paths()" in inspect.getsource(
+        document_routes._local_homes_tree
+    )
     for route_name in ("get_note", "update_note", "delete_note"):
         route_source = inspect.getsource(getattr(document_routes, route_name))
         assert "list_note_paths" in route_source

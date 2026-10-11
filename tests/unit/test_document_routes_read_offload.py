@@ -121,7 +121,7 @@ def test_every_async_route_scan_is_offloaded_and_legacy_lookup_uses_paths() -> N
     )
     for route_name in ("get_note", "update_note", "delete_note"):
         route_source = inspect.getsource(getattr(document_routes, route_name))
-        assert "list_note_paths" in route_source
+        assert "await offload_read_only(file_manager.list_note_paths)" in route_source
 
 
 def test_conflict_route_reads_snapshots_through_offload() -> None:

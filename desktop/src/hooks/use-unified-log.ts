@@ -842,7 +842,7 @@ async function startAccessStream(
         const data = (await getAccessLogs(
           engineApiAt(engineUrl, token),
           { query: { n: 200 } },
-        )) as { entries?: AccessEntry[] };
+        )) as unknown as { entries?: AccessEntry[] };
         if (Array.isArray(data?.entries)) {
           const entries = data.entries.slice(-200);
           entries.forEach((entry) => {

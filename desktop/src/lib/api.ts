@@ -14,12 +14,50 @@ import {
   TotalTimeoutError,
   createApi,
   type Api as ApiClient,
+  type ApiStream,
+  type SseEvent,
   type CallOptions,
   type HttpMethod,
   type OperationArgs,
   type OperationDescriptor,
 } from "@ai-matrx/api";
 import { formatDurationMs } from "@ai-matrx/kit/format";
+import {
+  downloadModelWithProgress,
+  downloadOwwModel,
+} from "@ai-matrx/api/audio";
+import {
+  getWakeWordSettings as getWakeWordSettingsOp,
+  getHuggingfaceTokenValue,
+  installTranscription,
+  runInstall,
+  saveWakeWordSettings as saveWakeWordSettingsOp,
+  streamLogs as streamSetupLogs,
+} from "@ai-matrx/api/apps";
+import {
+  listToolSchemasByCategory,
+  localLlmConnect,
+  localLlmDisconnect,
+  localLlmStatus,
+} from "@ai-matrx/api/chat";
+import { getPermissions } from "@ai-matrx/api/computer";
+import { updateInstanceName as updateInstanceNameOp } from "@ai-matrx/api/files";
+import { invokeTool as invokeToolOp } from "@ai-matrx/api/agents";
+import {
+  installBrowserRuntime as installBrowserRuntimeOp,
+  queuePollerStats as queuePollerStatsOp,
+  remoteResearchStream,
+  remoteScrape,
+  remoteScrapeStream,
+  remoteSearchAndScrape as remoteSearchAndScrapeOp,
+  remoteSearchAndScrapeStream,
+} from "@ai-matrx/api/web";
+import {
+  EngineHttpError,
+  EngineNotFoundError,
+  EngineUnreachableError,
+  toEngineError,
+} from "@/lib/engine-errors";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
 import { enginePortList } from "@/lib/engine-ports";
@@ -1601,6 +1639,16 @@ export interface SystemInfo {
   home_dir: string;
 }
 
+export interface LocalLlmStatus {
+  registered: boolean;
+  available: boolean;
+  port: number | null;
+  model_name: string | null;
+  canonical_model_name: string | null;
+  matrx_ai_support: boolean;
+  instructions: string | null;
+}
+
 class EngineAPI {
   private baseUrl: string | null = null;
   private wsUrl: string | null = null;
@@ -1956,19 +2004,8 @@ class EngineAPI {
     // Heal the engine URL here instead of dropping the one event that joins
     // the desktop model process to the Python agent runtime.
     if (!this.baseUrl) await this.rediscover();
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/chat/local-llm/connect`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await this.authHeaders()),
-      },
-      body: JSON.stringify({ port, model_name: modelName }),
-    });
-    if (!resp.ok)
-      throw new Error(
-        `Failed to connect local LLM: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
-      );
+    if (!this.baseUrl) throw new EngineUnreachableError();
+    await localLlmConnect(this.api, { body: { port, model_name: modelName } });
   }
 
   /**
@@ -1978,39 +2015,14 @@ class EngineAPI {
    */
   async disconnectLocalLlm(): Promise<void> {
     if (!this.baseUrl) return;
-    const resp = await fetch(`${this.baseUrl}/chat/local-llm/disconnect`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await this.authHeaders()),
-      },
-    });
-    if (!resp.ok)
-      throw new Error(
-        `Failed to disconnect local LLM: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
-      );
+    await localLlmDisconnect(this.api);
   }
 
   /** Get the current local LLM registration status from the engine. */
-  async getLocalLlmStatus(): Promise<{
-    registered: boolean;
-    available: boolean;
-    port: number | null;
-    model_name: string | null;
-    canonical_model_name: string | null;
-    matrx_ai_support: boolean;
-    instructions: string | null;
-  }> {
+  async getLocalLlmStatus(): Promise<LocalLlmStatus> {
     if (!this.baseUrl) await this.rediscover();
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/chat/local-llm/status`, {
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok)
-      throw new Error(
-        `Failed to get local LLM status: ${resp.status} ${await resp.text().catch(() => resp.statusText)}`,
-      );
-    return resp.json();
+    if (!this.baseUrl) throw new EngineUnreachableError();
+    return (await localLlmStatus(this.api)) as unknown as LocalLlmStatus;
   }
 
   // ── Wake word settings (SQLite-persisted) ──────────────────────────────
@@ -2019,12 +2031,13 @@ class EngineAPI {
   async getWakeWordSettings(): Promise<
     import("./transcription/types").WakeWordSettings
   > {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/settings/wake-word`, { headers });
-    if (!resp.ok)
-      throw new Error(`Failed to get wake word settings: ${resp.status}`);
-    const raw = await resp.json();
+    if (!this.baseUrl) throw new EngineUnreachableError();
+    const raw = (await getWakeWordSettingsOp(this.api)) as unknown as {
+      engine: import("./transcription/types").WakeWordSettings["engine"];
+      oww_model: string;
+      oww_threshold: number;
+      custom_keyword: string;
+    };
     // Convert snake_case → camelCase
     return {
       engine: raw.engine,
@@ -2038,25 +2051,16 @@ class EngineAPI {
   async saveWakeWordSettings(
     settings: import("./transcription/types").WakeWordSettings,
   ): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
+    if (!this.baseUrl) throw new EngineUnreachableError();
     // Convert camelCase → snake_case for the Python API
-    const body = {
-      engine: settings.engine,
-      oww_model: settings.owwModel,
-      oww_threshold: settings.owwThreshold,
-      custom_keyword: settings.customKeyword,
-    };
-    const resp = await fetch(`${this.baseUrl}/settings/wake-word`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify(body),
+    await saveWakeWordSettingsOp(this.api, {
+      body: {
+        engine: settings.engine,
+        oww_model: settings.owwModel,
+        oww_threshold: settings.owwThreshold,
+        custom_keyword: settings.customKeyword,
+      } as never,
     });
-    if (!resp.ok)
-      throw new Error(`Failed to save wake word settings: ${resp.status}`);
   }
 
   // ── openWakeWord engine control ──────────────────────────────────────────
@@ -2133,21 +2137,10 @@ class EngineAPI {
   async owwDownloadModel(
     name: string,
   ): Promise<import("./transcription/types").OwwModelInfo> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/wake-word/models/download`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model_name: name }),
-    });
-    if (!resp.ok)
-      throw new Error(
-        `OWW download failed: ${resp.status} ${await resp.text()}`,
-      );
-    return resp.json();
+    if (!this.baseUrl) throw new EngineUnreachableError();
+    return (await downloadOwwModel(this.api, {
+      body: { model_name: name },
+    })) as unknown as import("./transcription/types").OwwModelInfo;
   }
 
   /**
@@ -2175,60 +2168,27 @@ class EngineAPI {
       signal?: AbortSignal;
     },
   ): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    (headers as Record<string, string>)["Content-Type"] = "application/json";
-    const resp = await fetch(
-      `${this.baseUrl}/wake-word/models/download-stream`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ model_name: name }),
-        signal: callbacks.signal ?? null,
-      },
-    );
-    if (!resp.ok) {
-      callbacks.onError(
-        `OWW download failed: ${resp.status} ${await resp.text()}`,
-      );
-      return;
-    }
-    const reader = resp.body?.getReader();
-    if (!reader) {
-      callbacks.onError("No response body");
-      return;
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let eventType = "";
     let receivedTerminal = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") {
-              callbacks.onProgress?.(data);
-            } else if (eventType === "complete") {
-              receivedTerminal = true;
-              callbacks.onComplete(data);
-            } else if (eventType === "error") {
-              receivedTerminal = true;
-              callbacks.onError(typeof data === "string" ? data : String(data));
-            }
-          } catch {
-            /* skip malformed */
-          }
-          eventType = "";
+    if (
+      !(await this.runSse(
+      (options) =>
+        downloadModelWithProgress(this.api, { body: { model_name: name } }, options),
+      callbacks.signal,
+      (e) => callbacks.onError(`OWW download failed: ${e.status} ${e.message}`),
+      (event, data) => {
+        if (event === "progress") {
+          callbacks.onProgress?.(data);
+        } else if (event === "complete") {
+          receivedTerminal = true;
+          callbacks.onComplete(data);
+        } else if (event === "error") {
+          receivedTerminal = true;
+          callbacks.onError(typeof data === "string" ? data : String(data));
         }
-      }
+      },
+    ))
+    ) {
+      return;
     }
     if (!receivedTerminal) {
       callbacks.onError("Download stream ended without a completion event");
@@ -2241,7 +2201,7 @@ class EngineAPI {
    * The base URL must be discovered before calling this.
    */
   owwStream(): EventSource {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
+    if (!this.baseUrl) throw new EngineUnreachableError();
     return new EventSource(`${this.baseUrl}/wake-word/stream`);
   }
 
@@ -2255,14 +2215,10 @@ class EngineAPI {
   async getToolSchemasByCategory(): Promise<
     Record<string, EngineToolSchema[]>
   > {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/chat/tools/by-category`, {
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Failed to get tool schemas: ${resp.status}`);
-    const data = await resp.json();
-    return (data.categories ?? {}) as Record<string, EngineToolSchema[]>;
+    const data = (await listToolSchemasByCategory(this.api)) as {
+      categories?: Record<string, EngineToolSchema[]>;
+    };
+    return data.categories ?? {};
   }
 
   /** Get all tool schemas as a flat list (from /chat/tools). */
@@ -2299,73 +2255,28 @@ class EngineAPI {
       timestamp: new Date().toISOString(),
     });
 
-    const headers = { "Content-Type": "application/json", ...authHdrs };
     const TIMEOUT_MS = 120_000;
 
-    let resp: Response;
+    let result: ToolResult;
     try {
-      resp = await fetch(`${this.baseUrl}/tools/invoke`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ tool, input }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (fetchErr) {
-      const elapsed = Date.now() - startTs;
-      const isTimeout =
-        (fetchErr as Error).name === "TimeoutError" ||
-        (fetchErr as Error).name === "AbortError";
-      console.error(`[api/invokeTool] FETCH FAILED — ${tool}`, {
+      result = (await invokeToolOp(
+        this.api,
+        { body: { tool, input } as never },
+        { totalTimeoutMs: TIMEOUT_MS },
+      )) as unknown as ToolResult;
+    } catch (err) {
+      console.error(`[api/invokeTool] FAILED — ${tool}`, {
         callId,
         tool,
         baseUrl: this.baseUrl,
-        elapsed_ms: elapsed,
-        isTimeout,
-        error: (fetchErr as Error).message,
-        stack: (fetchErr as Error).stack,
-        hint: isTimeout
-          ? `Request timed out after ${TIMEOUT_MS}ms — engine may be overloaded or hung`
-          : "Network error — engine may have crashed or restarted",
+        elapsed_ms: Date.now() - startTs,
+        status: err instanceof EngineHttpError ? err.status : undefined,
+        error: (err as Error).message,
         timestamp: new Date().toISOString(),
       });
-      throw fetchErr;
+      throw err;
     }
-
     const elapsed = Date.now() - startTs;
-
-    if (!resp.ok) {
-      let body = "";
-      try {
-        body = await resp.text();
-      } catch {
-        /* ignore */
-      }
-      console.error(`[api/invokeTool] HTTP ERROR — ${tool}`, {
-        callId,
-        tool,
-        baseUrl: this.baseUrl,
-        status: resp.status,
-        statusText: resp.statusText,
-        elapsed_ms: elapsed,
-        responseBody: body.slice(0, 1000),
-        hint:
-          resp.status === 401
-            ? "401 Unauthorized — JWT not attached or expired; check auth setup"
-            : resp.status === 404
-              ? `404 Not Found — is the tool name correct? Tool="${tool}"`
-              : resp.status === 422
-                ? "422 Unprocessable Entity — check input shape matches the tool's schema"
-                : resp.status >= 500
-                  ? "5xx Server Error — check Python engine logs for the exception"
-                  : "Unexpected HTTP error",
-        timestamp: new Date().toISOString(),
-      });
-      throw new Error(
-        `Tool invocation failed: ${resp.status} ${resp.statusText} — ${body.slice(0, 200)}`,
-      );
-    }
-
-    const result: ToolResult = await resp.json();
     const { reconcileToolActionNeeded } =
       await import("@/features/action-needed/store");
     reconcileToolActionNeeded(
@@ -2654,50 +2565,28 @@ class EngineAPI {
     urls: string[],
     options?: Record<string, unknown>,
   ): Promise<ScrapeBatchResponse> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
+    if (!this.baseUrl) throw new EngineUnreachableError();
     console.info(`[api/scrapeRemotely] → ${urls.length} URL(s)`, {
       urls,
       options,
     });
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    let resp: Response;
+    let result;
     try {
-      resp = await fetch(`${this.baseUrl}/remote-scraper/scrape`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ urls, options: options ?? {} }),
-        signal: AbortSignal.timeout(120_000),
-      });
+      result = (await remoteScrape(
+        this.api,
+        { body: { urls, options: options ?? {} } as never },
+        { totalTimeoutMs: 120_000 },
+      )) as unknown as ScrapeBatchResponse & { execution_time_ms?: number };
     } catch (err) {
-      console.error(`[api/scrapeRemotely] FETCH FAILED`, {
+      console.error(`[api/scrapeRemotely] FAILED`, {
         urls,
         options,
+        status: err instanceof EngineHttpError ? err.status : undefined,
         error: (err as Error).message,
-        stack: (err as Error).stack,
         timestamp: new Date().toISOString(),
       });
       throw err;
     }
-    if (!resp.ok) {
-      let body = "";
-      try {
-        body = await resp.text();
-      } catch {
-        /* ignore */
-      }
-      console.error(`[api/scrapeRemotely] HTTP ${resp.status}`, {
-        urls,
-        status: resp.status,
-        body: body.slice(0, 500),
-      });
-      throw new Error(
-        `Remote scrape failed: ${resp.status} — ${body.slice(0, 200)}`,
-      );
-    }
-    const result = await resp.json();
     console.info(`[api/scrapeRemotely] ✓`, {
       resultCount: result.results?.length,
       execution_time_ms: result.execution_time_ms,
@@ -2713,67 +2602,30 @@ class EngineAPI {
    * Returns an AbortController the caller can use to cancel the stream.
    */
   async streamSSE(
-    path: string,
-    payload: Record<string, unknown>,
+    open: (options: CallOptions) => Promise<ApiStream<SseEvent>>,
     onEvent: (event: string, data: unknown) => void,
     onDone?: () => void,
     onError?: (err: Error) => void,
   ): Promise<AbortController> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
+    if (!this.baseUrl) throw new EngineUnreachableError();
     const controller = new AbortController();
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-
-    const run = async () => {
+    void (async () => {
       try {
-        const resp = await fetch(`${this.baseUrl}${path}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-        if (!resp.ok) throw new Error(`SSE stream failed: ${resp.status}`);
-        const reader = resp.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let currentEvent = "message";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (line.startsWith("event:")) {
-              currentEvent = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              const raw = line.slice(5).trim();
-              try {
-                const parsed = JSON.parse(raw);
-                onEvent(currentEvent, parsed);
-              } catch {
-                onEvent(currentEvent, raw);
-              }
-              currentEvent = "message";
-            }
-            // Ignore empty lines and comments
-          }
-        }
+        await this.runSse(
+          open,
+          controller.signal,
+          (e) => {
+            throw new Error(`SSE stream failed: ${e.status}`);
+          },
+          (event, data, raw) => onEvent(event, data === undefined ? raw : data),
+          { keepUnparsed: true },
+        );
         onDone?.();
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         onError?.(err instanceof Error ? err : new Error(String(err)));
       }
-    };
-
-    run();
+    })();
     return controller;
   }
 
@@ -2786,8 +2638,7 @@ class EngineAPI {
     onError?: (err: Error) => void,
   ): Promise<AbortController> {
     return this.streamSSE(
-      "/remote-scraper/scrape/stream",
-      { urls, options: options ?? {} },
+      (o) => remoteScrapeStream(this.api, { body: { urls, options: options ?? {} } as never }, o),
       onEvent,
       onDone,
       onError,
@@ -2811,26 +2662,13 @@ class EngineAPI {
     totalResultsPerKeyword = 10,
     options?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(
-      `${this.baseUrl}/remote-scraper/search-and-scrape`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          keywords,
-          total_results_per_keyword: totalResultsPerKeyword,
-          options: options ?? {},
-        }),
-      },
-    );
-    if (!resp.ok)
-      throw new Error(`Remote search-and-scrape failed: ${resp.status}`);
-    return resp.json();
+    return (await remoteSearchAndScrapeOp(this.api, {
+      body: {
+        keywords,
+        total_results_per_keyword: totalResultsPerKeyword,
+        options: options ?? {},
+      } as never,
+    })) as Record<string, unknown>;
   }
 
   /** Stream search + scrape results via SSE. */
@@ -2843,12 +2681,18 @@ class EngineAPI {
     onError?: (err: Error) => void,
   ): Promise<AbortController> {
     return this.streamSSE(
-      "/remote-scraper/search-and-scrape/stream",
-      {
-        keywords,
-        total_results_per_keyword: totalResultsPerKeyword,
-        options: options ?? {},
-      },
+      (o) =>
+        remoteSearchAndScrapeStream(
+          this.api,
+          {
+            body: {
+              keywords,
+              total_results_per_keyword: totalResultsPerKeyword,
+              options: options ?? {},
+            } as never,
+          },
+          o,
+        ),
       onEvent,
       onDone,
       onError,
@@ -2874,8 +2718,7 @@ class EngineAPI {
     onError?: (err: Error) => void,
   ): Promise<AbortController> {
     return this.streamSSE(
-      "/remote-scraper/research/stream",
-      { query, effort, country },
+      (o) => remoteResearchStream(this.api, { body: { query, effort, country } as never }, o),
       onEvent,
       onDone,
       onError,
@@ -2951,14 +2794,7 @@ class EngineAPI {
     running: boolean;
     client_id: string;
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(
-      `${this.baseUrl}/remote-scraper/queue/poller-stats`,
-      { headers },
-    );
-    if (!resp.ok) throw new Error(`Queue poller stats failed: ${resp.status}`);
-    return resp.json();
+    return (await queuePollerStatsOp(this.api)) as never;
   }
 
   /** Subscribe to engine events. */
@@ -3571,6 +3407,51 @@ class EngineAPI {
     );
   }
 
+  // ---- SSE (the one reader for every engine event stream) ----
+
+  /**
+   * Open a generated SSE operation and hand each frame's event name and parsed
+   * JSON to `onFrame` until the stream ends. A frame whose data is not JSON is
+   * skipped (or, with `keepUnparsed`, delivered with `data` undefined and the
+   * raw text). `onRawLine` sees every frame as `event:` / `data:` lines. A
+   * refusal before the stream opens goes to `onRefused` and resolves false. The stream carries no
+   * default timeout — only the caller's `signal` ends it.
+   */
+  private async runSse(
+    open: (options: CallOptions) => Promise<ApiStream<SseEvent>>,
+    signal: AbortSignal | undefined,
+    onRefused: (error: EngineHttpError) => void,
+    onFrame: (event: string, data: any, raw: string) => void,
+    onRawLine?: ((line: string) => void) | { keepUnparsed: true },
+  ): Promise<boolean> {
+    const keepUnparsed = typeof onRawLine === "object" && onRawLine !== null;
+    const rawLine = typeof onRawLine === "function" ? onRawLine : undefined;
+    let stream: ApiStream<SseEvent>;
+    try {
+      stream = await open({ ...(signal ? { signal } : {}), totalTimeoutMs: null });
+    } catch (e) {
+      if (e instanceof EngineHttpError) {
+        onRefused(e);
+        return false;
+      }
+      throw e;
+    }
+    for await (const frame of stream) {
+      if (frame.data === null) continue;
+      rawLine?.(`event: ${frame.event}`);
+      rawLine?.(`data: ${frame.data}`);
+      let data: unknown;
+      try {
+        data = JSON.parse(frame.data);
+      } catch {
+        if (keepUnparsed) onFrame(frame.event, undefined, frame.data.trim());
+        continue;
+      }
+      onFrame(frame.event, data, frame.data);
+    }
+    return true;
+  }
+
   // ---- Generic HTTP helpers ----
 
   /**
@@ -3632,7 +3513,7 @@ class EngineAPI {
     requestId: string;
     controller: AbortController;
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
+    if (!this.baseUrl) throw new EngineUnreachableError();
     const fullUrl = this.inner.url(op, args);
     const path = fullUrl.slice(this.baseUrl.length);
     let authHdrs = await this.authHeaders();
@@ -3686,26 +3567,8 @@ class EngineAPI {
         if (e.status === 401 && !authHdrs.Authorization) {
           fenceForSignedOut(op.m, path);
         }
-        const payload: unknown = e.serverDetail;
-        await reportActionNeededErrorPayload(payload, operationKey);
-        const errorBody =
-          payload && typeof payload === "object"
-            ? (payload as Record<string, unknown>)
-            : null;
-        const message = stringifyErrorDetail(
-          errorBody?.message ?? errorBody?.detail,
-          `HTTP ${e.status}`,
-        );
-        const hint = typeof errorBody?.hint === "string" ? errorBody.hint : "";
-        const reference =
-          typeof errorBody?.failure_id === "string"
-            ? `Diagnostic reference: ${errorBody.failure_id}.`
-            : "";
-        throw new Error(
-          [`${op.m} ${path} failed: ${message}`, hint, reference]
-            .filter(Boolean)
-            .join(" "),
-        );
+        await reportActionNeededErrorPayload(e.serverDetail, operationKey);
+        throw toEngineError(e, op.m, path, stringifyErrorDetail);
       }
       // A default-timeout abort becomes an actionable message. A caller-signal
       // abort is re-thrown untouched so the caller can tell its own cancel.
@@ -3717,7 +3580,7 @@ class EngineAPI {
           `Engine request timed out after ${formatDurationMs(timeoutMs ?? 0, { style: "long" })}: ${path}`,
         );
       }
-      throw e;
+      throw toEngineError(e, op.m, path, stringifyErrorDetail);
     }
   }
 
@@ -3824,26 +3687,16 @@ class EngineAPI {
       return null;
     }
     try {
-      const authHdrs = await this.authHeaders();
-      const resp = await fetch(
-        `${this.baseUrl}/settings/api-keys/huggingface/value`,
-        {
-          headers: authHdrs,
-        },
-      );
-      if (resp.status === 404) return null;
-      if (!resp.ok) {
-        if (requireEngine) {
-          throw new Error(
-            `Could not read the Hugging Face key store (HTTP ${resp.status})`,
-          );
-        }
-        return null;
-      }
-      const data = (await resp.json()) as { key: string };
+      const data = await getHuggingfaceTokenValue(this.api);
       const k = data.key?.trim();
       return k || null;
     } catch (error) {
+      if (error instanceof EngineNotFoundError) return null;
+      if (error instanceof EngineHttpError && requireEngine) {
+        throw new Error(
+          `Could not read the Hugging Face key store (HTTP ${error.status})`,
+        );
+      }
       if (requireEngine) throw error;
       return null;
     }
@@ -3877,14 +3730,9 @@ class EngineAPI {
   /** Update instance display name. */
   async updateInstanceName(name: string): Promise<void> {
     if (!this.baseUrl) return;
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    await fetch(`${this.baseUrl}/cloud/instance/name`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ name }),
+    // A refusal was never surfaced here; only an unreachable engine throws.
+    await updateInstanceNameOp(this.api, { body: { name } }).catch((e: unknown) => {
+      if (!(e instanceof EngineHttpError)) throw e;
     });
   }
 
@@ -3948,7 +3796,7 @@ class EngineAPI {
     userId?: string,
     timeoutMs = 15_000,
   ): Promise<T> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
+    if (!this.baseUrl) throw new EngineUnreachableError();
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(await this.authHeaders()),
@@ -3958,32 +3806,29 @@ class EngineAPI {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    let resp: Response;
     try {
-      resp = await fetch(`${this.baseUrl}/notes${path}`, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : null,
-        signal: controller.signal,
-      });
+      return await this.request<T>(
+        `/notes${path}`,
+        {
+          method,
+          headers,
+          ...(body ? { body: JSON.stringify(body) } : {}),
+          signal: controller.signal,
+        },
+      );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         throw new Error(
           `Documents API timed out after ${formatDurationMs(timeoutMs, { style: "long" })}`,
         );
       }
+      if (err instanceof EngineHttpError) {
+        throw new Error(`Documents API error (${err.status}): ${err.detail}`);
+      }
       throw err;
     } finally {
       clearTimeout(timer);
     }
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Documents API error (${resp.status}): ${text}`);
-    }
-    // DELETE responses return JSON but guard against 204 No Content.
-    if (resp.status === 204) return undefined as T;
-    return resp.json();
   }
 
   /** The homes (one local directory each) with how many notes each holds. */
@@ -4257,16 +4102,11 @@ class EngineAPI {
   async getDevicePermissions(
     forceRefresh: boolean = false,
   ): Promise<DevicePermissionsResponse> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const url = new URL(`${this.baseUrl}/devices/permissions`);
-    if (forceRefresh) url.searchParams.set("force_refresh", "true");
-    const resp = await fetch(url.toString(), {
-      headers,
-      signal: AbortSignal.timeout(35000),
-    });
-    if (!resp.ok) throw new Error(`Permissions check failed: ${resp.status}`);
-    return resp.json();
+    return (await getPermissions(
+      this.api,
+      forceRefresh ? { query: { force_refresh: true } } : undefined,
+      { totalTimeoutMs: 35_000 },
+    )) as unknown as DevicePermissionsResponse;
   }
 
   /** Get a single permission status. */
@@ -4593,52 +4433,23 @@ class EngineAPI {
     onError: (error: string) => void;
     signal?: AbortSignal;
   }): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/browser-runtime/install`, {
-      method: "POST",
-      headers,
-      signal: callbacks.signal ?? null,
-    });
-    if (!resp.ok) {
-      callbacks.onError(`Browser install failed: HTTP ${resp.status}`);
-      return;
-    }
-    const reader = resp.body?.getReader();
-    if (!reader) {
-      callbacks.onError("No response body");
-      return;
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
     let receivedComplete = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      let eventType = "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") {
-              callbacks.onProgress(data as SetupProgressEvent);
-            } else if (eventType === "complete") {
-              receivedComplete = true;
-              callbacks.onComplete(
-                data as { message: string; installed?: boolean },
-              );
-            }
-          } catch {
-            /* skip malformed */
-          }
-          eventType = "";
+    if (
+      !(await this.runSse(
+      (options) => installBrowserRuntimeOp(this.api, undefined, options),
+      callbacks.signal,
+      (e) => callbacks.onError(`Browser install failed: HTTP ${e.status}`),
+      (event, data) => {
+        if (event === "progress") {
+          callbacks.onProgress(data as SetupProgressEvent);
+        } else if (event === "complete") {
+          receivedComplete = true;
+          callbacks.onComplete(data as { message: string; installed?: boolean });
         }
-      }
+      },
+    ))
+    ) {
+      return;
     }
     if (!receivedComplete) {
       callbacks.onError("Browser install stream ended before it finished");
@@ -4666,67 +4477,38 @@ class EngineAPI {
     signal?: AbortSignal;
     mode?: "standard" | "first_run";
   }): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
     const mode = callbacks.mode ?? "standard";
-    const resp = await fetch(`${this.baseUrl}/setup/install?mode=${mode}`, {
-      method: "POST",
-      headers,
-      signal: callbacks.signal ?? null,
-    });
-    if (!resp.ok) {
-      callbacks.onError(`Setup install failed: ${resp.status}`);
-      return;
-    }
-    const reader = resp.body?.getReader();
-    if (!reader) {
-      callbacks.onError("No response body");
-      return;
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
     let receivedComplete = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      let eventType = "";
-      for (const line of lines) {
-        callbacks.onRawLine?.(line);
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") callbacks.onProgress(data);
-            else if (eventType === "total_progress") {
-              if (typeof data.total_percent === "number") {
-                callbacks.onTotalProgress?.(
-                  data.total_percent as number,
-                  (data.message as string) ?? "",
-                );
-              }
-            } else if (eventType === "complete") {
-              receivedComplete = true;
-              callbacks.onComplete(data as SetupCompleteEvent);
-            } else if (eventType === "cancelled") {
-              receivedComplete = true;
-              callbacks.onError("Setup cancelled");
-            } else if (eventType === "started")
-              callbacks.onProgress({
-                component: "_system",
-                status: "installing",
-                message: data.message,
-                percent: 0,
-              });
-          } catch {
-            /* skip malformed */
+    if (
+      !(await this.runSse(
+      (options) => runInstall(this.api, { query: { mode } }, options),
+      callbacks.signal,
+      (e) => callbacks.onError(`Setup install failed: ${e.status}`),
+      (event, data) => {
+        const d = data as Record<string, any>;
+        if (event === "progress") callbacks.onProgress(data as SetupProgressEvent);
+        else if (event === "total_progress") {
+          if (typeof d.total_percent === "number") {
+            callbacks.onTotalProgress?.(d.total_percent, (d.message as string) ?? "");
           }
-          eventType = "";
-        }
-      }
+        } else if (event === "complete") {
+          receivedComplete = true;
+          callbacks.onComplete(data as SetupCompleteEvent);
+        } else if (event === "cancelled") {
+          receivedComplete = true;
+          callbacks.onError("Setup cancelled");
+        } else if (event === "started")
+          callbacks.onProgress({
+            component: "_system",
+            status: "installing",
+            message: d.message,
+            percent: 0,
+          });
+      },
+      callbacks.onRawLine,
+    ))
+    ) {
+      return;
     }
     if (!receivedComplete) {
       callbacks.onError(
@@ -4752,55 +4534,26 @@ class EngineAPI {
       signal?: AbortSignal;
     },
   ): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    (headers as Record<string, string>)["Content-Type"] = "application/json";
-    const resp = await fetch(`${this.baseUrl}/setup/install-transcription`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model }),
-      signal: callbacks.signal ?? null,
-    });
-    if (!resp.ok) {
-      callbacks.onError(`Transcription install failed: ${resp.status}`);
-      return;
-    }
-    const reader = resp.body?.getReader();
-    if (!reader) {
-      callbacks.onError("No response body");
-      return;
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
     let receivedComplete = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      let eventType = "";
-      for (const line of lines) {
-        callbacks.onRawLine?.(line);
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") callbacks.onProgress(data);
-            else if (eventType === "complete") {
-              receivedComplete = true;
-              callbacks.onComplete(data);
-            } else if (eventType === "cancelled") {
-              receivedComplete = true;
-              callbacks.onError("Install cancelled");
-            }
-          } catch {
-            /* skip malformed */
-          }
-          eventType = "";
+    if (
+      !(await this.runSse(
+      (options) => installTranscription(this.api, { body: { model } as never }, options),
+      callbacks.signal,
+      (e) => callbacks.onError(`Transcription install failed: ${e.status}`),
+      (event, data) => {
+        if (event === "progress") callbacks.onProgress(data as SetupProgressEvent);
+        else if (event === "complete") {
+          receivedComplete = true;
+          callbacks.onComplete(data as never);
+        } else if (event === "cancelled") {
+          receivedComplete = true;
+          callbacks.onError("Install cancelled");
         }
-      }
+      },
+      callbacks.onRawLine,
+    ))
+    ) {
+      return;
     }
     if (!receivedComplete) {
       callbacks.onError(
@@ -4829,53 +4582,27 @@ class EngineAPI {
       callbacks.onError?.("Engine not discovered");
       return () => {};
     }
-    const url = `${this.baseUrl}/setup/logs?lines=${callbacks.lines ?? 200}`;
     let active = true;
 
     const run = async () => {
       try {
-        const resp = await fetch(url, { signal: callbacks.signal ?? null });
-        if (!resp.ok) {
-          callbacks.onError?.(`Log stream failed: ${resp.status}`);
-          return;
-        }
-        const reader = resp.body?.getReader();
-        if (!reader) {
-          callbacks.onError?.("No response body");
-          return;
-        }
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let eventType = "";
-
-        while (active) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              eventType = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (eventType === "log") {
-                  callbacks.onLine(
-                    data as { line: string; level: string; timestamp: number },
-                  );
-                } else if (eventType === "history_end") {
-                  callbacks.onHistoryEnd?.(data.lines_sent ?? 0);
-                } else if (eventType === "connected") {
-                  callbacks.onConnected?.(data.log_path ?? "");
-                }
-              } catch {
-                /* skip malformed */
-              }
-              eventType = "";
+        await this.runSse(
+          (options) =>
+            streamSetupLogs(this.api, { query: { lines: callbacks.lines ?? 200 } }, options),
+          callbacks.signal,
+          (e) => callbacks.onError?.(`Log stream failed: ${e.status}`),
+          (event, data) => {
+            if (!active) return;
+            const d = data as Record<string, any>;
+            if (event === "log") {
+              callbacks.onLine(data as { line: string; level: string; timestamp: number });
+            } else if (event === "history_end") {
+              callbacks.onHistoryEnd?.(d.lines_sent ?? 0);
+            } else if (event === "connected") {
+              callbacks.onConnected?.(d.log_path ?? "");
             }
-          }
-        }
+          },
+        );
       } catch (err) {
         if (active) {
           callbacks.onError?.(err instanceof Error ? err.message : String(err));
@@ -4883,7 +4610,7 @@ class EngineAPI {
       }
     };
 
-    run();
+    void run();
     return () => {
       active = false;
     };
@@ -5059,7 +4786,7 @@ class EngineAPI {
     onClose?: () => void,
   ): () => void {
     if (!this.baseUrl || !this.wsUrl) {
-      throw new Error("Engine not discovered");
+      throw new EngineUnreachableError();
     }
     let closed = false;
     let socket: WebSocket | null = null;

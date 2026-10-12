@@ -84,6 +84,7 @@ ALLOWED_ORIGIN_REGEX = (
     r"|https://.*\.vercel\.app"  # covers preview deployments
     r"|https://.*\.trycloudflare\.com"  # Cloudflare quick tunnels (remote access dev/testing)
     r"|chrome-extension://.*"  # Chrome extensions
+    r"|http://[a-z0-9-]+\.localhost:3001"  # Isolated managed frontend preview sessions
 )
 
 # ---------------------------------------------------------------------------

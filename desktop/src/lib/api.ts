@@ -2247,12 +2247,8 @@ class EngineAPI {
 
   /** Get the list of available tools from the engine. */
   async listTools(): Promise<string[]> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/tools/list`, { headers });
-    if (!resp.ok) throw new Error(`Failed to list tools: ${resp.status}`);
-    const data = await resp.json();
-    return data.tools ?? data;
+    const data = await this.request<{ tools?: string[] } | string[]>(`/tools/list`);
+    return Array.isArray(data) ? data : (data.tools ?? []);
   }
 
   /** Get tool schemas grouped by category (from /chat/tools/by-category). */
@@ -2271,12 +2267,8 @@ class EngineAPI {
 
   /** Get all tool schemas as a flat list (from /chat/tools). */
   async getAllToolSchemas(): Promise<EngineToolSchema[]> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/chat/tools`, { headers });
-    if (!resp.ok) throw new Error(`Failed to get tool schemas: ${resp.status}`);
-    const data = await resp.json();
-    return (data.tools ?? []) as EngineToolSchema[];
+    const data = await this.request<{ tools?: EngineToolSchema[] }>(`/chat/tools`);
+    return data.tools ?? [];
   }
 
   /** Invoke a tool via REST (stateless, one-shot). */
@@ -2940,14 +2932,9 @@ class EngineAPI {
       attempt_count: number;
     }>;
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(
-      `${this.baseUrl}/remote-scraper/queue/pending?tier=${tier}&limit=${limit}`,
-      { headers },
+    return this.request(
+      `/remote-scraper/queue/pending?tier=${tier}&limit=${limit}`,
     );
-    if (!resp.ok) throw new Error(`Queue pending failed: ${resp.status}`);
-    return resp.json();
   }
 
   /** Retry queue statistics from the remote server. */

@@ -110,3 +110,14 @@ class PersonalMessagePage(BaseModel):
 
 class PersonalMessageLookup(BaseModel):
     message: PersonalMessage | None
+
+
+class PersonalLiveFrame(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["ready", "heartbeat", "changed", "reconnect_required", "access_lost"]
+    chat_id: str
+    seq: int | None = Field(default=None, ge=0)
+    ids: list[str] = Field(default_factory=list, max_length=100)
+    change: Literal["upsert", "deleted", "chat_deleted", "reconcile"] | None = None
+    reconcile: bool = False
+    reason: Literal["provider_unavailable", "access_changed", "actor_unverified"] | None = None

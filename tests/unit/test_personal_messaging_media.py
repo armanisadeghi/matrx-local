@@ -207,10 +207,10 @@ def test_download_never_blocks_retirement_and_never_returns_stale_bytes(
         else:
             edited = True
         release.set()
-        with pytest.raises((GrantConflict, GrantUnavailable)):
+        with pytest.raises((GrantConflict, GrantUnavailable, beeper.BeeperFailure)):
             await read
         assert (await service.status())["status"] == (
-            "retired" if change == "disconnect" else "needs_attention"
+            "retired" if change == "disconnect" else "active"
         )
 
     asyncio.run(scenario(tmp_path, monkeypatch, run))
@@ -246,3 +246,9 @@ def test_client_disconnect_cancels_download_task_before_bytes_escape():
         assert error.value.status_code == 499 and cancelled.is_set()
 
     asyncio.run(run())
+
+@pytest.mark.parametrize("declared,expected", [("image/png", "image/png"), ("text/html", "application/octet-stream"), ({"invalid": "shape"}, "application/octet-stream")])
+def test_generic_asset_mime_uses_only_selected_passive_attachment_type(monkeypatch, declared, expected):
+    native_client(monkeypatch, lambda r: httpx.Response(200, content=b"sandbox-asset", headers={"content-type": "application/octet-stream"}))
+    asset = asyncio.run(media.read_attachment(beeper.DesktopApi(), grant(), message(attachments=[{"id": "mxc://sandbox.test/media", "mimeType": declared}]), 0))
+    assert asset.mime_type == expected

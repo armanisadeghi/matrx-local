@@ -230,6 +230,15 @@ async def read_attachment(
                     )
                 ):
                     mime = "application/octet-stream"
+                # Beeper's asset proxy can use a generic transport MIME. The
+                # exact selected attachment supplies its provider-declared type.
+                declared = value.get("mimeType")
+                if mime == "application/octet-stream" and isinstance(declared, str) and declared in {
+                    "image/png", "image/jpeg", "image/webp", "image/gif", "image/avif",
+                    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm",
+                    "video/mp4", "video/webm", "video/quicktime",
+                }:
+                    mime = declared
                 name = value.get("fileName")
                 return NativeAttachment(
                     bytes(data),

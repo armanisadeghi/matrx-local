@@ -9,7 +9,13 @@ from ipaddress import ip_address
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.api.remote_auth import (
@@ -21,6 +27,7 @@ from app.services.cloud_sync.instance_manager import get_instance_manager
 from .beeper import BeeperFailure
 from .coordinator import PersonalMessagingCoordinator
 from .models import GrantConflict, GrantUnavailable
+from .live import LiveActorUnverified, live_frames
 from .public import (
     PublicGrantStatus,
     PersonalConsentStart,
@@ -29,6 +36,7 @@ from .public import (
     PersonalChatPage,
     PersonalMessagePage,
     PersonalMessageLookup,
+    PersonalLiveFrame,
 )
 from app.services.sync_client import get_sync_client
 
@@ -284,6 +292,69 @@ async def messages(
 ):
     return await _response(
         service.messages(chat_id, cursor=cursor), PersonalMessagePage
+    )
+
+
+class PersonalNDJSONResponse(StreamingResponse):
+    media_type = "application/x-ndjson"
+
+
+@router.get(
+    "/events",
+    response_model=PersonalLiveFrame,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {
+                "application/x-ndjson": {
+                    "schema": {"$ref": "#/components/schemas/PersonalLiveFrame"}
+                }
+            }
+        }
+    },
+)
+async def events(
+    request: Request,
+    chat_id: str,
+    service: PersonalMessagingCoordinator = Depends(owner_service),
+):
+    original = SecretStr(request.headers.get("authorization", "")[7:].strip())
+
+    async def authorize():
+        result = await verify_supabase_token_result(original.get_secret_value())
+        if result.status != "verified" or result.user is None:
+            raise LiveActorUnverified("The caller token needs renewal.")
+        if result.user.is_anon or result.user.user_id != str(service.actor_id):
+            raise GrantUnavailable("The signed-in account changed. Reconnect.")
+        await service.fence()
+
+    # Admit active selected consent before headers; recheck throughout the stream.
+    try:
+        async with asyncio.timeout(4):
+            await authorize()
+            async with service.lock:
+                grant = await service._ready()
+                if chat_id not in grant.selected_chat_ids:
+                    raise GrantUnavailable("Select this WhatsApp conversation first.")
+                await service.fence()
+    except (BeeperFailure, GrantUnavailable, GrantConflict) as error:
+        return await _response(_raise_operation(error), PublicGrantStatus)
+    except LiveActorUnverified:
+        return JSONResponse(
+            {"message": "The signed-in account could not be verified. Retry."},
+            status_code=503,
+            headers=_PRIVATE,
+        )
+    except TimeoutError:
+        return JSONResponse(
+            {"message": "WhatsApp updates are unavailable. Retry."},
+            status_code=503,
+            headers=_PRIVATE,
+        )
+    # Retain/reverify the original bearer; the native provider token stays sealed.
+    return PersonalNDJSONResponse(
+        live_frames(service, chat_id, authorize, initial_snapshot=grant),
+        headers=_PRIVATE,
     )
 
 

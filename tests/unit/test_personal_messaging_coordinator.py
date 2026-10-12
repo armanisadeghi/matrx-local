@@ -638,7 +638,7 @@ def test_mid_read_loss_refuses_private_payload_and_demotes_current_grant(tmp_pat
         async def changed(grant, chat_id, **kwargs):
             value = await native_read(grant, chat_id, **kwargs)
             if loss == "provider":
-                raise beeper.BeeperFailure("reauthorize", "Native access ended during read")
+                raise beeper.BeeperFailure("reauthorization_required", "Native access ended during read")
             if loss == "account":
                 remote.swap_user = True
             elif loss == "cloud":
@@ -652,4 +652,32 @@ def test_mid_read_loss_refuses_private_payload_and_demotes_current_grant(tmp_pat
             await service.messages("sandbox")
         persisted = (await repo.list(actor_id=service.actor_id, app_instance_id=service.app_instance_id))[0]
         assert persisted.status == "needs_attention" and remote.messages_read == 1
+    asyncio.run(scenario(tmp_path, monkeypatch, run))
+
+@pytest.mark.parametrize("code", ["device_timeout", "device_offline", "provider_refused", "invalid_response", "message_mismatch"])
+def test_transient_read_failure_preserves_active_consent(tmp_path, monkeypatch, code):
+    async def run(service, repo, remote):
+        await connect_selected(service)
+        original = service.native.messages
+        async def unavailable(*args, **kwargs):
+            raise beeper.BeeperFailure(code, "Temporary read failed")
+        monkeypatch.setattr(service.native, "messages", unavailable)
+        with pytest.raises(beeper.BeeperFailure):
+            await service.messages("sandbox")
+        assert (await service.status())["status"] == "active"
+        monkeypatch.setattr(service.native, "messages", original)
+        assert (await service.messages("sandbox"))["items"]
+    asyncio.run(scenario(tmp_path, monkeypatch, run))
+
+@pytest.mark.parametrize("code,expected", [("device_timeout", "active"), ("device_offline", "active"), ("provider_refused", "active"), ("invalid_response", "active"), ("reauthorization_required", "needs_attention")])
+def test_introspection_failure_classifies_actual_consent_loss(tmp_path, monkeypatch, code, expected):
+    async def run(service, repo, remote):
+        await connect_selected(service)
+        async def unavailable(*args, **kwargs):
+            raise beeper.BeeperFailure(code, "Consent check unavailable")
+        monkeypatch.setattr(service.native, "introspect", unavailable)
+        with pytest.raises(beeper.BeeperFailure):
+            await service.messages("sandbox")
+        persisted = (await repo.list(actor_id=service.actor_id, app_instance_id=service.app_instance_id))[0]
+        assert persisted.status == expected
     asyncio.run(scenario(tmp_path, monkeypatch, run))

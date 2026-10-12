@@ -23,6 +23,10 @@ class BeeperFailure(RuntimeError):
         self.code = code
         super().__init__(message)
 
+    @property
+    def access_lost(self) -> bool:
+        return self.code in {"reauthorization_required", "permission_required", "account_disconnected", "chat_mismatch", "grant_mismatch", "native_not_found"}
+
 
 class IssuedCredentials(BaseModel):
     access_token: SecretStr = Field(repr=False)

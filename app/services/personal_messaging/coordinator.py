@@ -265,8 +265,8 @@ class PersonalMessagingCoordinator:
     async def _verify_consent(self, grant: DeviceGrant) -> DeviceGrant:
         try:
             info = await self.native.introspect(self._token(grant))
-        except BeeperFailure:
-            if grant.status in ("active", "pending_credential"):
+        except BeeperFailure as error:
+            if error.access_lost and grant.status in ("active", "pending_credential"):
                 await self._save(grant, status="needs_attention")
             raise
         if info["expires_at"] > datetime.now(UTC) + timedelta(days=1):
@@ -424,7 +424,11 @@ class PersonalMessagingCoordinator:
             await self.cloud.verify_resources(grant, current)
             await self.fence()
             return grant
-        except (BeeperFailure, GrantUnavailable, GrantConflict):
+        except BeeperFailure as error:
+            if error.access_lost:
+                await self._mark_attention(grant)
+            raise
+        except (GrantUnavailable, GrantConflict):
             await self._mark_attention(grant)
             raise
 
@@ -455,7 +459,11 @@ class PersonalMessagingCoordinator:
             if current is None:
                 raise GrantUnavailable("Native consent metadata is missing. Reconcile.")
             await self.cloud.verify_resources(fresh, current)
-        except (BeeperFailure, GrantUnavailable, GrantConflict):
+        except BeeperFailure as error:
+            if error.access_lost:
+                await self._mark_attention(grant)
+            raise
+        except (GrantUnavailable, GrantConflict):
             await self._mark_attention(grant)
             raise
 
@@ -576,8 +584,8 @@ class PersonalMessagingCoordinator:
                 or not 0 <= index < len(message.attachments)
                 or attachment_revision(message, index) != revision
             ):
-                raise GrantConflict(
-                    "This attachment changed. Refresh the conversation."
+                raise BeeperFailure(
+                    "attachment_changed", "This attachment changed. Refresh the conversation."
                 )
         # Never hold the owner lock while downloading: Disconnect must win.
         asset = await read_attachment(self.native, grant, message, index)
@@ -591,8 +599,8 @@ class PersonalMessagingCoordinator:
                     or not 0 <= index < len(current.attachments)
                     or attachment_revision(current, index) != revision
                 ):
-                    raise GrantConflict(
-                        "This attachment changed. Refresh the conversation."
+                    raise BeeperFailure(
+                        "attachment_changed", "This attachment changed. Refresh the conversation."
                     )
                 await self.fence()
         return asset

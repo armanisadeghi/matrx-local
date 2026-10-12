@@ -42,7 +42,9 @@ class DeviceGrant(BaseModel):
     account_ref: str | None = None
     native_user_ref: str | None = None
     selected_chat_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["read"]] = Field(default_factory=list)
+    request_profile: Literal["read", "read_write"] = "read"
+    max_duration_seconds: Literal[86400, 2592000] = 86400
+    scopes: list[Literal["read", "write"]] = Field(default_factory=list)
     expires_at: datetime | None = None
     connection_id: UUID | None = None
     provider_revoke_pending: bool = False
@@ -60,6 +62,10 @@ class DeviceGrant(BaseModel):
     oauth_verifier: SecretStr | None = Field(default=None, repr=False)
     oauth_expires_at: datetime | None = None
     oauth_claimed: bool = False
+
+    @property
+    def requested_scopes(self) -> list[Literal["read", "write"]]:
+        return ["read"] if self.request_profile == "read" else ["read", "write"]
 
     @model_validator(mode="after")
     def valid_active_grant(self):
@@ -97,14 +103,14 @@ class DeviceGrant(BaseModel):
             or not self.native_user_ref
             or not self.connection_id
             or not self.expires_at
-            or self.scopes != ["read"]
+            or self.scopes != self.requested_scopes
             or self.cleanup_credentials
         ):
             raise ValueError(
                 "Active device grant requires verified custody and registration"
             )
-        if self.scopes and self.scopes != ["read"]:
-            raise ValueError("This personal messaging connection is read-only")
+        if self.scopes and self.scopes != self.requested_scopes:
+            raise ValueError("Issued scope must match the sealed customer request")
         if (
             self.status == "retired"
             and any(
@@ -128,6 +134,8 @@ class DeviceGrant(BaseModel):
         expired = self.expires_at is not None and self.expires_at <= datetime.now(UTC)
         return {
             "id": str(self.id),
+            "request_profile": self.request_profile,
+            "max_duration_seconds": self.max_duration_seconds,
             "generation": self.generation,
             "revision": self.revision,
             "status": "needs_attention"

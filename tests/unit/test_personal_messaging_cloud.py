@@ -92,7 +92,7 @@ def test_post_uses_real_authenticated_column_contract_no_native_credentials(
         )
         p = json.loads(r.content)
         assert set(p) == {"p_operation", "p_binding", "p_previous"}
-        assert p["p_operation"] == "create" and p["p_previous"] is None
+        assert p["p_operation"] == "create" and p["p_previous"] == {"scopes": ["read"]}
         row = receipt(g, c)
         row["metadata"] = p["p_binding"]
         return httpx.Response(200, json=[row])
@@ -126,6 +126,7 @@ def test_patch_requires_both_revision_and_timestamp_and_owner(monkeypatch):
             "revision": 1,
             "updated_at": current.updated_at.isoformat(),
             "status": "connected",
+            "scopes": ["read"],
         }
         assert "owner_user_id" not in p
         row = current.model_dump(mode="json")

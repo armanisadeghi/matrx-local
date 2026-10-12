@@ -51,7 +51,7 @@ class CloudReceipt(BaseModel):
     organization_id: None
     provider: Literal["beeper_whatsapp"]
     provider_subject: str
-    scopes: list[Literal["read"]]
+    scopes: list[Literal["read", "write"]]
     status: Literal["connected", "needs_attention", "disconnected", "revoked"]
     updated_at: datetime
     deleted_at: None
@@ -60,7 +60,7 @@ class CloudReceipt(BaseModel):
     @model_validator(mode="after")
     def exact_scope_and_subject(self):
         if (
-            self.scopes != ["read"]
+            self.scopes not in (["read"], ["read", "write"])
             or self.provider_subject != self.metadata.native_user_subject
         ):
             raise ValueError("Native connection receipt has inconsistent consent")
@@ -86,7 +86,7 @@ class CloudResourceReceipt(BaseModel):
     resource_type: Literal["beeper_whatsapp_account", "beeper_whatsapp_chat"]
     resource_ref: str
     display_name: str
-    permission_level: Literal["read"]
+    permission_level: Literal["read", "read_write"]
     metadata: NativeResourceMetadata
 
 
@@ -149,6 +149,8 @@ class NativeConnectionClient:
                     "status": body["status"],
                 }
             )
+            if method in ("POST", "PATCH"):
+                previous = {**(previous or {}), "scopes": body["scopes"]}
             body = {
                 "p_operation": "resource"
                 if method == "RESOURCE"
@@ -220,6 +222,7 @@ class NativeConnectionClient:
             or row.metadata.native_grant_id != grant.id
             or row.metadata.account_ref != grant.account_ref
             or (grant.connection_id and row.id != grant.connection_id)
+            or (row.metadata.native_grant_generation == grant.generation and bool(grant.scopes) and row.scopes != grant.scopes)
         ):
             raise GrantConflict("Personal messaging connection binding changed")
 
@@ -267,7 +270,7 @@ class NativeConnectionClient:
     async def register_pending(self, grant: DeviceGrant) -> CloudReceipt:
         if (
             grant.status != "pending_credential"
-            or grant.scopes != ["read"]
+            or grant.scopes != grant.requested_scopes
             or grant.expires_at is None
             or grant.expires_at <= datetime.now(UTC)
         ):
@@ -297,7 +300,7 @@ class NativeConnectionClient:
             "provider": "beeper_whatsapp",
             "provider_subject": self._subject(grant),
             "account_name": "WhatsApp",
-            "scopes": ["read"],
+            "scopes": grant.scopes,
             "status": "needs_attention",
             "metadata": self._metadata(grant, 1).model_dump(mode="json"),
         }
@@ -360,6 +363,7 @@ class NativeConnectionClient:
             },
             body={
                 "status": status,
+                "scopes": grant.scopes or current.scopes,
                 "updated_at": stamp.isoformat(),
                 "metadata": self._metadata(grant, revision).model_dump(mode="json"),
             },
@@ -397,6 +401,8 @@ class NativeConnectionClient:
                 raise GrantConflict("Saved personal connection could not be found")
             return None
         if current.metadata.native_grant_generation != grant.generation:
+            if current.metadata.native_grant_generation + 1 == grant.generation and current.status in ("disconnected", "revoked"):
+                return current  # No cloud receipt was created for this rejected new consent.
             raise GrantConflict("A different consent generation owns this connection")
         return (
             current
@@ -468,6 +474,7 @@ class NativeConnectionClient:
             ) from None
         if (
             row.connection_id != current.id
+            or row.permission_level != ("read_write" if grant.scopes == ["read", "write"] else "read")
             or row.resource_type != resource_type
             or row.resource_ref != resource_ref
             or row.metadata
@@ -521,6 +528,7 @@ class NativeConnectionClient:
                 seen_ids.add(resource.id)
                 if (
                     resource.connection_id != current.id
+                    or resource.permission_level != ("read_write" if grant.scopes == ["read", "write"] else "read")
                     or resource.metadata
                     != NativeResourceMetadata(
                         app_instance_id=self.app_instance_id,

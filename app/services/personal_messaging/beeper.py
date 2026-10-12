@@ -28,6 +28,21 @@ class BeeperFailure(RuntimeError):
         return self.code in {"reauthorization_required", "permission_required", "account_disconnected", "chat_mismatch", "grant_mismatch", "native_not_found"}
 
 
+class DefiniteSendRefusal(BeeperFailure):
+    """A received native 4xx rejected this POST before acceptance."""
+
+
+def approved_scope_set(expected_scopes: tuple[str, ...]) -> set[str]:
+    value = set(expected_scopes)
+    if value not in ({"read"}, {"read", "write"}):
+        raise BeeperFailure("invalid_scope", "Choose read or read and send access.")
+    return value
+
+
+def returned_scope_matches(value: object, expected_scopes: tuple[str, ...]) -> bool:
+    return isinstance(value, str) and set(value.split()) == approved_scope_set(expected_scopes)
+
+
 class IssuedCredentials(BaseModel):
     access_token: SecretStr = Field(repr=False)
     other_credentials: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
@@ -88,7 +103,30 @@ class NativeAccount(BaseModel):
     user: NativeUser
 
 
+class NativeChatCapabilities(BaseModel):
+    maxTextLength: int | None = None
+    edit: int | None = None
+    editMaxAge: int | None = None
+    editMaxCount: int | None = None
+    attachments: dict[str, dict] = Field(default_factory=dict)
+
+
+class NativeSendStatus(BaseModel):
+    status: Literal["SUCCESS", "PENDING", "FAIL_RETRIABLE", "FAIL_PERMANENT"]
+    timestamp: datetime
+    deliveredToUsers: list[str] | None = None
+
+
+class NativeSendReceipt(BaseModel):
+    chatID: str = Field(min_length=1, max_length=1024)
+    pendingMessageID: str = Field(min_length=1, max_length=1024)
+
+
 class NativeChat(BaseModel):
+    type: Literal["single", "group"] | None = None
+    isReadOnly: bool | None = None
+    merge: dict | None = None
+    capabilities: NativeChatCapabilities | None = None
     id: str = Field(min_length=1, max_length=1024)
     accountID: str = Field(min_length=1, max_length=1024)
     title: str
@@ -102,6 +140,8 @@ class NativeChatPage(BaseModel):
 
 
 class NativeMessage(BaseModel):
+    sendStatus: NativeSendStatus | None = None
+    seen: bool | datetime | dict[str, bool | datetime] | None = None
     id: str = Field(min_length=1, max_length=1024)
     accountID: str
     chatID: str
@@ -139,6 +179,7 @@ class DesktopApi:
         form: dict[str, str] | None = None,
         payload: dict[str, Any] | None = None,
         empty_ok: bool = False,
+        sending: bool = False,
     ) -> Any:
         try:
             async with httpx.AsyncClient(
@@ -156,6 +197,9 @@ class DesktopApi:
                     if token
                     else None,
                 ) as response:
+                    if sending and 400 <= response.status_code < 500:
+                        code = {401: "reauthorization_required", 403: "permission_required", 404: "native_not_found"}.get(response.status_code, "send_rejected")
+                        raise DefiniteSendRefusal(code, "Beeper rejected this send. Check access before trying again.")
                     if response.status_code == 401:
                         raise BeeperFailure(
                             "reauthorization_required",
@@ -202,7 +246,7 @@ class DesktopApi:
                 "invalid_response", "Beeper returned an unreadable response."
             ) from None
 
-    async def metadata(self) -> dict:
+    async def metadata(self, expected_scopes: tuple[str, ...] = ("read",)) -> dict:
         result = await self._call("GET", "/.well-known/oauth-authorization-server")
         required = {
             "issuer": ORIGIN,
@@ -216,7 +260,7 @@ class DesktopApi:
             or any(result.get(k) != v for k, v in required.items())
             or (
                 "S256" not in result.get("code_challenge_methods_supported", [])
-                or "read" not in result.get("scopes_supported", [])
+                or not approved_scope_set(expected_scopes).issubset(result.get("scopes_supported", []))
                 or result.get("grant_types_supported") != ["authorization_code"]
                 or result.get("token_endpoint_auth_methods_supported") != ["none"]
             )
@@ -233,6 +277,7 @@ class DesktopApi:
         *,
         engine_port: int,
         client_label: str = "AI Matrx personal messaging",
+        expected_scopes: tuple[str, ...] = ("read",),
     ) -> OAuthClient:
         if (
             not 1 <= engine_port <= 65535
@@ -245,7 +290,7 @@ class DesktopApi:
             )
         if not client_label.startswith("AI Matrx") or not 1 <= len(client_label) <= 100:
             raise BeeperFailure("invalid_client", "Native client label is invalid.")
-        await self.metadata()
+        await self.metadata(expected_scopes)
         result = await self._call(
             "POST",
             "/oauth/register",
@@ -255,7 +300,7 @@ class DesktopApi:
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
                 "response_types": ["code"],
-                "scope": "read",
+                "scope": " ".join(expected_scopes),
                 "token_endpoint_auth_method": "none",
             },
         )
@@ -265,12 +310,12 @@ class DesktopApi:
             or not result["client_id"]
             or result.get("client_name") != client_label
             or result.get("redirect_uris") != [redirect_uri]
-            or result.get("scope") != "read"
+            or not returned_scope_matches(result.get("scope"), expected_scopes)
             or result.get("token_endpoint_auth_method") != "none"
         ):
             raise BeeperFailure(
                 "registration_mismatch",
-                "Beeper did not register the approved read-only client.",
+                "Beeper did not register the requested native client.",
             )
         try:
             return OAuthClient(
@@ -287,7 +332,7 @@ class DesktopApi:
             ) from None
 
     async def exchange(
-        self, *, client: OAuthClient, code: SecretStr, verifier: SecretStr
+        self, *, client: OAuthClient, code: SecretStr, verifier: SecretStr, expected_scopes: tuple[str, ...] = ("read",)
     ) -> SecretStr:
         result = await self._call(
             "POST",
@@ -306,7 +351,7 @@ class DesktopApi:
             or not result["access_token"]
         ):
             raise BeeperFailure(
-                "grant_mismatch", "Beeper did not return the approved read-only token."
+                "grant_mismatch", "Beeper did not return the requested native token."
             )
         token = SecretStr(result["access_token"])
         extras = {
@@ -318,7 +363,7 @@ class DesktopApi:
             and v
         }
         if (
-            result.get("scope") != "read"
+            not returned_scope_matches(result.get("scope"), expected_scopes)
             or str(result.get("token_type", "")).lower() != "bearer"
             or extras
         ):
@@ -328,7 +373,7 @@ class DesktopApi:
         # The callback seals pending custody before subsequent native probes.
         return token
 
-    async def introspect(self, token: SecretStr) -> dict:
+    async def introspect(self, token: SecretStr, expected_scopes: tuple[str, ...] = ("read",)) -> dict:
         result = await self._call(
             "POST",
             "/oauth/introspect",
@@ -346,12 +391,12 @@ class DesktopApi:
             or isinstance(exp, bool)
             or exp <= datetime.now(UTC).timestamp()
             or not isinstance(scopes, str)
-            or set(scopes.split()) != {"read"}
+            or not returned_scope_matches(scopes, expected_scopes)
         ):
             raise BeeperFailure(
-                "grant_mismatch", "Beeper did not return the approved read-only grant."
+                "grant_mismatch", "Beeper did not return the requested native grant."
             )
-        return {"expires_at": datetime.fromtimestamp(exp, UTC), "scopes": ["read"]}
+        return {"expires_at": datetime.fromtimestamp(exp, UTC), "scopes": ["read"] if approved_scope_set(expected_scopes) == {"read"} else ["read", "write"]}
 
     async def accounts(self, token: SecretStr) -> list[NativeAccount]:
         result = await self._call("GET", "/v1/accounts", token=token)
@@ -372,13 +417,13 @@ class DesktopApi:
         return accounts
 
     @staticmethod
-    def active(grant: DeviceGrant) -> SecretStr:
+    def active(grant: DeviceGrant, *, require_write: bool = False) -> SecretStr:
         if (
             grant.status != "active"
             or not grant.access_token
             or not grant.expires_at
             or grant.expires_at <= datetime.now(UTC)
-            or grant.scopes != ["read"]
+            or grant.scopes != grant.requested_scopes
             or grant.resources_generation != grant.generation
             or grant.registration_pending
             or grant.exchange_pending
@@ -388,6 +433,8 @@ class DesktopApi:
             raise BeeperFailure(
                 "reauthorization_required", "Reconnect your personal WhatsApp account."
             )
+        if require_write and grant.scopes != ["read", "write"]:
+            raise BeeperFailure("write_consent_required", "Enable sending for this WhatsApp connection.")
         return grant.access_token
 
     async def account(self, grant: DeviceGrant) -> NativeAccount:
@@ -571,3 +618,46 @@ class DesktopApi:
                 if name == "refresh_token"
                 else "access_token",
             )
+
+
+    async def writable_chat(self, grant: DeviceGrant, chat_id: str, text: str) -> NativeChat:
+        token = self.active(grant, require_write=True)
+        if chat_id not in grant.selected_chat_ids:
+            raise BeeperFailure("chat_not_selected", "Select this WhatsApp conversation first.")
+        chat = await self.verify_chat(token, str(grant.account_ref), chat_id)
+        if chat.type not in ("single", "group") or chat.isReadOnly is not False or chat.merge is not None:
+            raise BeeperFailure("chat_not_writable", "Choose a writable WhatsApp conversation, not a merged conversation.")
+        maximum = chat.capabilities.maxTextLength if chat.capabilities else None
+        if maximum is not None and (isinstance(maximum, bool) or maximum < 1):
+            raise BeeperFailure("text_not_supported", "This conversation does not support text messages.")
+        if not text.strip() or len(text) > min(maximum if maximum is not None else 65536, 65536):
+            raise BeeperFailure("invalid_text", "Shorten the WhatsApp message before sending.")
+        return chat
+
+    async def send_text(self, grant: DeviceGrant, chat_id: str, text: str) -> NativeSendReceipt:
+        # Caller has durably recorded dispatching. Never retry this POST.
+        result = await self._call("POST", "/v1/chats/"+quote(chat_id,safe="")+"/messages", token=self.active(grant, require_write=True), payload={"text":text}, sending=True)
+        try:
+            receipt = NativeSendReceipt.model_validate(result)
+        except ValueError:
+            raise BeeperFailure("send_unconfirmed", "The message may have been sent. Check its status.") from None
+        if receipt.chatID != chat_id:
+            raise BeeperFailure("send_target_changed", "The message target changed. Check its status before sending again.")
+        return receipt
+
+    async def resolve_sent(self, grant: DeviceGrant, chat_id: str, pending_id: str) -> NativeMessage | None:
+        # Only stored server-issued aliases enter here, never a user-selected pending ID.
+        await self.chat(grant, chat_id)
+        try:
+            result = await self._call("GET", "/v1/chats/"+quote(chat_id,safe="")+"/messages/"+quote(pending_id,safe=""), token=self.active(grant))
+        except BeeperFailure as failure:
+            if failure.code == "native_not_found":
+                return None
+            raise
+        try:
+            message = NativeMessage.model_validate(result)
+        except ValueError:
+            raise BeeperFailure("invalid_response", "The message status could not be verified.") from None
+        if message.accountID != grant.account_ref or message.chatID != chat_id or message.isSender is not True:
+            raise BeeperFailure("message_mismatch", "The message status belongs to a different sender or conversation.")
+        return message

@@ -28,9 +28,13 @@ from .beeper import BeeperFailure
 from .coordinator import PersonalMessagingCoordinator
 from .models import GrantConflict, GrantUnavailable
 from .live import LiveActorUnverified, live_frames
+from .outbox import OutboxEntry
 from .public import (
     PublicGrantStatus,
     PersonalConsentStart,
+    PersonalConsentRequest,
+    PersonalSendRequest,
+    PersonalSendBinding,
     PersonalActivation,
     PersonalAccountSummary,
     PersonalChatPage,
@@ -191,8 +195,8 @@ async def status(service: PersonalMessagingCoordinator = Depends(owner_service))
 
 
 @router.post("/start", response_model=PersonalConsentStart)
-async def start(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.start(), PersonalConsentStart)
+async def start(body: PersonalConsentRequest, service: PersonalMessagingCoordinator = Depends(owner_service)):
+    return await _response(service.start(request_profile=body.request_profile, max_duration_seconds=body.max_duration_seconds), PersonalConsentStart)
 
 
 @router.get("/callback", include_in_schema=False)
@@ -449,3 +453,18 @@ async def confirm_native_cleanup(
         ),
         PublicGrantStatus,
     )
+
+
+@router.post("/send", response_model=OutboxEntry)
+async def send(body: PersonalSendRequest, service: PersonalMessagingCoordinator = Depends(owner_service)):
+    return await _response(service.send(body.chat_id, body.client_id, body.text, body.grant_id, body.generation), OutboxEntry)
+
+
+@router.get("/outbox", response_model=list[OutboxEntry])
+async def outbox(chat_id: str, service: PersonalMessagingCoordinator = Depends(owner_service)):
+    return await _response(service.outbox_status(chat_id), OutboxEntry, many=True)
+
+
+@router.post("/cancel-unsubmitted", response_model=OutboxEntry)
+async def cancel_unsubmitted(body: PersonalSendBinding, service: PersonalMessagingCoordinator = Depends(owner_service)):
+    return await _response(service.cancel_unsubmitted(body.chat_id, body.client_id, body.grant_id, body.generation), OutboxEntry)

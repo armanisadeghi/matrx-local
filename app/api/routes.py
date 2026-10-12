@@ -137,6 +137,7 @@ async def health():
 
     execution_capabilities = [
         "personal_messaging_v1",
+        "personal_messaging_write_v1",
         "chat_execution_v1",
         "conversation_execution_v1",
         "chat_execution_v2",

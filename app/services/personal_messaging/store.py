@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID
 from pydantic import SecretStr
-from app.services.local_db.database import LocalDatabase
+from app.services.local_db.database import LocalDatabase, get_db
 from app.services.local_db.repositories import AppSettingsRepo, _APP_SETTINGS_WRITE_LOCK
 from app.services.local_db.secret_store import protect, unprotect
 from .models import DeviceGrant, GrantConflict, GrantUnavailable
@@ -15,7 +15,8 @@ _PRIVATE_KEY = "personal_messaging_grants_v1"
 
 class PersonalMessagingGrantRepo:
     def __init__(self, db: LocalDatabase | None = None):
-        self.settings = AppSettingsRepo(db)
+        self.db = db or get_db()
+        self.settings = AppSettingsRepo(self.db)
 
     @staticmethod
     def _key(actor_id: UUID, app_instance_id: UUID, grant_id: UUID) -> str:
@@ -191,13 +192,15 @@ class PersonalMessagingGrantRepo:
                             or current.exchange_pending
                             or not current.expires_at
                             or current.expires_at <= datetime.now(UTC)
-                            or current.scopes != ["read"]
+                            or current.scopes != current.requested_scopes
                         )
                     ):
                         raise GrantConflict(
                             "Only unexpired sealed consent can reconcile metadata"
                         )
                     for name in (
+                        "request_profile",
+                        "max_duration_seconds",
                         "client_label",
                         "oauth_state_hash",
                         "oauth_verifier",
@@ -371,6 +374,11 @@ class PersonalMessagingGrantRepo:
                     and grant.generation == current.generation + 1
                     and not current.provider_revoke_pending
                     and not current.cloud_retirement_pending
+                    and (
+                        (grant.client_id == current.client_id and not grant.registration_pending)
+                        if grant.request_profile == current.request_profile and grant.redirect_uri == current.redirect_uri
+                        else (not grant.client_id and grant.registration_pending)
+                    )
                     and grant.account_ref == current.account_ref
                     and grant.native_user_ref == current.native_user_ref
                     and grant.connection_id == current.connection_id

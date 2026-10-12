@@ -24,7 +24,9 @@ class PublicGrantStatus(BaseModel):
     ]
     account_ref: str | None = None
     selected_chat_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["read"]] = Field(default_factory=list)
+    request_profile: Literal["read", "read_write"] = "read"
+    max_duration_seconds: Literal[86400, 2592000] = 86400
+    scopes: list[Literal["read", "write"]] = Field(default_factory=list)
     expires_at: datetime | None = None
     connection_id: UUID | None = None
     bridge_provider: Literal["cloud", "local"] | None = None
@@ -39,10 +41,16 @@ class PublicGrantStatus(BaseModel):
     cloud_retirement_pending: bool = False
 
 
+class PersonalConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_profile: Literal["read", "read_write"] = "read"
+    max_duration_seconds: Literal[86400, 2592000] = 86400
+
+
 class PersonalConsentStart(BaseModel):
     authorization_url: str
     grant: PublicGrantStatus
-    required_duration: Literal["one_day"]
+    required_duration: Literal["one_day", "thirty_days"]
 
 
 class PersonalActivation(BaseModel):
@@ -121,3 +129,15 @@ class PersonalLiveFrame(BaseModel):
     change: Literal["upsert", "deleted", "chat_deleted", "reconcile"] | None = None
     reconcile: bool = False
     reason: Literal["provider_unavailable", "access_changed", "actor_unverified"] | None = None
+
+
+class PersonalSendBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(min_length=1, max_length=1024)
+    client_id: UUID
+    grant_id: UUID
+    generation: int = Field(ge=1)
+
+
+class PersonalSendRequest(PersonalSendBinding):
+    text: str = Field(min_length=1, max_length=65536, repr=False)

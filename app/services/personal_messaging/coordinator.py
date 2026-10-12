@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
+from typing import Literal
 
 from pydantic import SecretStr
 
@@ -34,6 +35,7 @@ from .media import (
 )
 from .models import DeviceGrant, GrantConflict, GrantUnavailable
 from .store import PersonalMessagingGrantRepo
+from .outbox import NativeOutboxRepo
 
 
 class PersonalMessagingCoordinator:
@@ -55,6 +57,7 @@ class PersonalMessagingCoordinator:
         self.engine_port = engine_port
         self.fence = fence
         self.repo = repo or PersonalMessagingGrantRepo()
+        self.outbox = NativeOutboxRepo(self.repo.db)
         self.native = native or DesktopApi()
         self.cloud = cloud or NativeConnectionClient(actor_id, app_instance_id)
         self.lock = self._locks.setdefault((actor_id, app_instance_id), asyncio.Lock())
@@ -103,7 +106,7 @@ class PersonalMessagingCoordinator:
                 }
             )
 
-    async def start(self) -> dict:
+    async def start(self, *, request_profile: Literal["read", "read_write"] = "read", max_duration_seconds: Literal[86400, 2592000] = 86400) -> dict:
         async with self.lock:
             previous = await self._load()
             if previous and previous.status != "retired":
@@ -123,18 +126,23 @@ class PersonalMessagingCoordinator:
                 previous is not None
                 and previous.redirect_uri == redirect
                 and bool(previous.client_id)
+                and previous.request_profile == request_profile
             )
+            if not reuse:
+                await self.native.metadata(("read",) if request_profile == "read" else ("read", "write"))
             grant = DeviceGrant(
                 id=grant_id,
                 actor_id=self.actor_id,
                 app_instance_id=self.app_instance_id,
                 generation=previous.generation + 1 if previous else 1,
                 status="pending_local",
+                request_profile=request_profile,
+                max_duration_seconds=max_duration_seconds,
                 client_id=previous.client_id if reuse and previous else "",
                 redirect_uri=redirect,
                 client_label=previous.client_label
                 if reuse and previous
-                else "AI Matrx WhatsApp " + str(grant_id),
+                else "AI Matrx WhatsApp " + str(grant_id) + (" send " + str(previous.generation + 1) if request_profile == "read_write" and previous else ""),
                 registration_pending=not reuse,
                 oauth_state_hash=hashlib.sha256(state.encode()).hexdigest(),
                 oauth_verifier=SecretStr(verifier),
@@ -160,6 +168,7 @@ class PersonalMessagingCoordinator:
                     redirect,
                     engine_port=self.engine_port,
                     client_label=grant.client_label,
+                    expected_scopes=tuple(grant.requested_scopes),
                 )
                 grant = await self._save(
                     grant,
@@ -186,14 +195,14 @@ class PersonalMessagingCoordinator:
                         "response_type": "code",
                         "client_id": grant.client_id,
                         "redirect_uri": redirect,
-                        "scope": "read",
+                        "scope": " ".join(grant.requested_scopes),
                         "state": state,
                         "code_challenge": challenge,
                         "code_challenge_method": "S256",
                     }
                 ),
                 "grant": grant.public_status(),
-                "required_duration": "one_day",
+                "required_duration": "one_day" if grant.max_duration_seconds == 86400 else "thirty_days",
             }
 
     async def callback(self, *, state: SecretStr, code: SecretStr) -> None:
@@ -232,7 +241,7 @@ class PersonalMessagingCoordinator:
             extras: dict[str, SecretStr] = {}
             try:
                 token = await self.native.exchange(
-                    client=client, code=code, verifier=verifier
+                    client=client, code=code, verifier=verifier, expected_scopes=tuple(grant.requested_scopes)
                 )
             except UnverifiedTokenIssued as issued:
                 token = issued.credentials.access_token
@@ -264,14 +273,14 @@ class PersonalMessagingCoordinator:
 
     async def _verify_consent(self, grant: DeviceGrant) -> DeviceGrant:
         try:
-            info = await self.native.introspect(self._token(grant))
+            info = await self.native.introspect(self._token(grant), expected_scopes=tuple(grant.requested_scopes))
         except BeeperFailure as error:
             if error.access_lost and grant.status in ("active", "pending_credential"):
                 await self._save(grant, status="needs_attention")
             raise
-        if info["expires_at"] > datetime.now(UTC) + timedelta(days=1):
+        if info["expires_at"] > datetime.now(UTC) + timedelta(seconds=grant.max_duration_seconds):
             await self._save(grant, status="needs_attention")
-            raise GrantUnavailable("Approve a one-day read-only grant, then reconnect.")
+            raise GrantUnavailable("Approve a one-day maximum grant, then reconnect." if grant.max_duration_seconds == 86400 else "Approve a thirty-day maximum grant, then reconnect.")
         if grant.expires_at and (
             grant.expires_at != info["expires_at"] or grant.scopes != info["scopes"]
         ):
@@ -721,6 +730,7 @@ class PersonalMessagingCoordinator:
                 await self.cloud.retire(grant)
                 grant = await self._save(grant, cloud_retirement_pending=False)
             await self.fence()
+            await self.outbox.retire(grant)
             grant = await self._save(
                 grant,
                 status="retired",
@@ -731,3 +741,93 @@ class PersonalMessagingCoordinator:
                 oauth_expires_at=None,
             )
             return grant.public_status()
+
+
+    async def send(self, chat_id: str, client_id: UUID, text: str, grant_id: UUID, generation: int) -> dict:
+        async with self.lock:
+            grant = await self._ready()
+            if (grant.id, grant.generation) != (grant_id, generation):
+                raise GrantConflict("This send belongs to an earlier WhatsApp connection.")
+            self.native.active(grant, require_write=True)
+            # This admission occurs before irreversible POST or dispatch marker.
+            async with self._read_boundary(grant):
+                await self.native.writable_chat(grant, chat_id, text)
+                await self.fence()
+            entry, created = await self.outbox.reserve(grant, chat_id, client_id, text)
+            if not created:
+                await self.fence()
+                return entry.model_dump(mode="json")
+            await self.outbox.transition(grant, chat_id, client_id, expected=("pending",), state="dispatching")
+            try:
+                # The owner lock is the retirement linearization point. There are no retries.
+                receipt = await self.native.send_text(grant, chat_id, text)
+                entry = await self.outbox.transition(grant, chat_id, client_id, expected=("dispatching", "unknown"), state="accepted", pending_message_id=receipt.pendingMessageID)
+            except BeeperFailure as error:
+                from .beeper import DefiniteSendRefusal
+                await self.outbox.transition(grant, chat_id, client_id, expected=("dispatching",),
+                    state="failed" if isinstance(error, DefiniteSendRefusal) else "unknown", error_code=error.code)
+                if error.access_lost:
+                    await self._mark_attention(grant)
+                raise
+            except BaseException:
+                # Response loss/cancellation after dispatch is ambiguous, not failure.
+                async def seal_unknown():
+                    try:
+                        await self.outbox.transition(grant, chat_id, client_id, expected=("dispatching",), state="unknown", error_code="send_unconfirmed")
+                    except GrantConflict:
+                        pass  # A known receipt may already have won the same CAS.
+                await asyncio.shield(seal_unknown())
+                raise
+            await self.fence()
+            return entry.model_dump(mode="json")
+
+    async def outbox_status(self, chat_id: str) -> list[dict]:
+        async with self.lock:
+            grant = await self._ready()
+            if chat_id not in grant.selected_chat_ids:
+                raise BeeperFailure("chat_not_selected", "Select this WhatsApp conversation first.")
+            entries = await self.outbox.recent(grant, chat_id)
+            result = []
+            for entry in entries:
+                if entry.pending_message_id and entry.state in ("accepted", "unknown"):
+                    async with self._read_boundary(grant):
+                        message = await self.native.resolve_sent(grant, chat_id, entry.pending_message_id)
+                    if message:
+                        if entry.final_message_id and entry.final_message_id != message.id:
+                            raise BeeperFailure("message_mismatch", "The message receipt changed unexpectedly.")
+                        status = message.sendStatus
+                        if status and entry.network_timestamp and status.timestamp < entry.network_timestamp:
+                            result.append(entry.model_dump(mode="json"))
+                            continue
+                        seen = message.seen
+                        seen_reported = (any(bool(v) for v in seen.values()) if isinstance(seen, dict) else bool(seen)) if seen is not None else None
+                        entry = await self.outbox.transition(grant, chat_id, entry.client_id, expected=("accepted", "unknown"),
+                            state="failed" if status and status.status == "FAIL_PERMANENT" else "accepted",
+                            final_message_id=message.id, network_status=status.status if status else None, network_timestamp=status.timestamp if status else None,
+                            delivered=bool(status.deliveredToUsers) if status and status.deliveredToUsers is not None else None,
+                            seen=seen_reported)
+                result.append(entry.model_dump(mode="json"))
+            await self.fence()
+            return result
+
+
+    async def cancel_unsubmitted(self, chat_id: str, client_id: UUID, grant_id: UUID, generation: int) -> dict:
+        async with self.lock:
+            grant = await self._ready()
+            if (grant.id, grant.generation) != (grant_id, generation):
+                raise GrantConflict("This attempt belongs to an earlier WhatsApp connection.")
+            self.native.active(grant, require_write=True)
+            if chat_id not in grant.selected_chat_ids:
+                raise BeeperFailure("chat_not_selected", "Select this WhatsApp conversation first.")
+            await self.fence()
+            entry = await self.outbox.get(grant, chat_id, client_id)
+            if entry is None:
+                # Persist a tombstone before releasing the owner lock. A delayed POST
+                # cannot reuse this UUID with its original payload and dispatch later.
+                entry, _ = await self.outbox.reserve(grant, chat_id, client_id, "Unsubmitted attempt cancelled")
+            if entry.state == "pending":
+                entry = await self.outbox.transition(grant, chat_id, client_id, expected=("pending",), state="cancelled", error_code="unsubmitted_cancelled")
+            elif entry.state == "dispatching":
+                entry = await self.outbox.transition(grant, chat_id, client_id, expected=("dispatching",), state="unknown", error_code="send_interrupted")
+            await self.fence()
+            return entry.model_dump(mode="json")

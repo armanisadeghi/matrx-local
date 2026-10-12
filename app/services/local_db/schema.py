@@ -1541,6 +1541,30 @@ CREATE INDEX IF NOT EXISTS idx_notes_home ON notes(home_scope_id);
 DROP TABLE IF EXISTS note_folders;
 """
 
+_V40_PERSONAL_MESSAGE_OUTBOX = """
+CREATE TABLE personal_message_outbox (
+ actor_id TEXT NOT NULL, app_instance_id TEXT NOT NULL, client_id TEXT NOT NULL,
+ grant_id TEXT NOT NULL, grant_generation INTEGER NOT NULL CHECK(grant_generation>=1),
+ native_subject_hash TEXT NOT NULL, account_ref TEXT NOT NULL, chat_id TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(operation IN ('send','edit','delete')),
+ state TEXT NOT NULL CHECK(state IN ('pending','dispatching','accepted','unknown','failed','cancelled')),
+ payload_cipher TEXT NOT NULL CHECK(payload_cipher LIKE 'enc:v1:%'),
+ pending_message_id TEXT, final_message_id TEXT,
+ network_status TEXT CHECK(network_status IS NULL OR network_status IN ('SUCCESS','PENDING','FAIL_RETRIABLE','FAIL_PERMANENT')),
+ network_timestamp TEXT,
+ delivered INTEGER CHECK(delivered IS NULL OR delivered IN (0,1)),
+ seen INTEGER CHECK(seen IS NULL OR seen IN (0,1)),
+ error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(actor_id,app_instance_id,client_id)
+);
+CREATE INDEX personal_message_outbox_chat ON personal_message_outbox
+ (actor_id,app_instance_id,native_subject_hash,account_ref,chat_id,created_at);
+CREATE UNIQUE INDEX personal_message_outbox_unresolved ON personal_message_outbox
+ (actor_id,app_instance_id,native_subject_hash,account_ref,chat_id)
+ WHERE state IN ('pending','dispatching','unknown');
+"""
+
+
 MIGRATIONS: list[tuple[int, str]] = [
     (1, _V1_CORE),
     (2, _V2_EXTENDED),
@@ -1581,4 +1605,5 @@ MIGRATIONS: list[tuple[int, str]] = [
     (37, _V37_CUSTOM_RECORD_MIRROR),
     (38, _V38_MANDATE_RESOLUTIONS),
     (39, _V39_NOTE_HOMES),
+    (40, _V40_PERSONAL_MESSAGE_OUTBOX),
 ]

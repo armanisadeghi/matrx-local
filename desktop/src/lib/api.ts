@@ -1817,12 +1817,7 @@ class EngineAPI {
    * only answers reachability.
    */
   async getHealth(): Promise<EngineHealth> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!resp.ok) throw new Error(`Health check failed: ${resp.status}`);
-    return resp.json();
+    return this.request<EngineHealth>(`/health`, undefined, 3000);
   }
 
   /** Get the engine version string from the root endpoint. */
@@ -1844,11 +1839,7 @@ class EngineAPI {
 
   /** Get engine runtime settings. */
   async getSettings(): Promise<EngineSettings> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/settings`, { headers });
-    if (!resp.ok) throw new Error(`Failed to get settings: ${resp.status}`);
-    return resp.json();
+    return this.request<EngineSettings>(`/settings`);
   }
 
   /**
@@ -1877,18 +1868,7 @@ class EngineAPI {
 
   /** Update engine runtime settings. */
   async updateSettings(settings: EngineSettings): Promise<EngineSettings> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/settings`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify(settings),
-    });
-    if (!resp.ok) throw new Error(`Failed to update settings: ${resp.status}`);
-    return resp.json();
+    return this.request<EngineSettings>(`/settings`, { method: "PUT", body: JSON.stringify(settings) });
   }
 
   // ── Storage path management ────────────────────────────────────────────
@@ -1900,33 +1880,12 @@ class EngineAPI {
 
   /** Set a custom path for a named storage location. */
   async setStoragePath(name: string, path: string): Promise<StoragePath> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/settings/paths/${name}`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ path }),
-    });
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Failed to set path: ${text}`);
-    }
-    return resp.json();
+    return this.request<StoragePath>(`/settings/paths/${name}`, { method: "PUT", body: JSON.stringify({ path }) });
   }
 
   /** Reset a storage path to its compiled default. */
   async resetStoragePath(name: string): Promise<StoragePath> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/settings/paths/${name}`, {
-      method: "DELETE",
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Failed to reset path: ${resp.status}`);
-    return resp.json();
+    return this.request<StoragePath>(`/settings/paths/${name}`, { method: "DELETE" });
   }
 
   /** Get file count and total size for a named storage path. */
@@ -1955,10 +1914,24 @@ class EngineAPI {
       instructions: string | null;
     };
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/chat/ai-status`);
-    if (!resp.ok) throw new Error(`Failed to get AI status: ${resp.status}`);
-    return resp.json();
+    return this.request<{
+    providers: {
+      available: string[];
+      missing: string[];
+      any_available: boolean;
+    };
+    jwt_validation: { configured: boolean; warning: string | null };
+    engine: { initialized: boolean; client_mode: boolean };
+    local_llm: {
+      registered: boolean;
+      available: boolean;
+      port: number | null;
+      model_name: string | null;
+      canonical_model_name: string | null;
+      matrx_ai_support: boolean;
+      instructions: string | null;
+    };
+  }>(`/chat/ai-status`);
   }
 
   // ── Local LLM (llama-server) bridge ────────────────────────────────────
@@ -2080,11 +2053,7 @@ class EngineAPI {
 
   /** Get OWW engine runtime status. */
   async owwStatus(): Promise<import("./transcription/types").OwwStatus> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/wake-word/status`, { headers });
-    if (!resp.ok) throw new Error(`OWW status failed: ${resp.status}`);
-    return resp.json();
+    return this.request<import("./transcription/types").OwwStatus>(`/wake-word/status`);
   }
 
   /** Start the OWW detection loop. */
@@ -2186,11 +2155,9 @@ class EngineAPI {
   async owwListModels(): Promise<
     import("./transcription/types").OwwModelsResponse
   > {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/wake-word/models`, { headers });
-    if (!resp.ok) throw new Error(`OWW list models failed: ${resp.status}`);
-    return resp.json();
+    return this.request<
+    import("./transcription/types").OwwModelsResponse
+  >(`/wake-word/models`);
   }
 
   /**
@@ -2719,15 +2686,11 @@ class EngineAPI {
     reason?: string;
     status?: string;
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/remote-scraper/status`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok)
-      throw new Error(`Remote scraper status failed: ${resp.status}`);
-    return resp.json();
+    return this.request<{
+    available: boolean;
+    reason?: string;
+    status?: string;
+  }>(`/remote-scraper/status`, undefined, 10000);
   }
 
   /** Scrape URLs via the remote scraper server. */
@@ -2883,18 +2846,7 @@ class EngineAPI {
     count = 20,
     country = "US",
   ): Promise<Record<string, unknown>> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/remote-scraper/search`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ keywords, count, country }),
-    });
-    if (!resp.ok) throw new Error(`Remote search failed: ${resp.status}`);
-    return resp.json();
+    return this.request<Record<string, unknown>>(`/remote-scraper/search`, { method: "POST", body: JSON.stringify({ keywords, count, country }) });
   }
 
   /** Search then scrape top results. Results are stored server-side immediately. */
@@ -2953,18 +2905,7 @@ class EngineAPI {
     effort = "extreme",
     country = "US",
   ): Promise<Record<string, unknown>> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/remote-scraper/research`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query, effort, country }),
-    });
-    if (!resp.ok) throw new Error(`Remote research failed: ${resp.status}`);
-    return resp.json();
+    return this.request<Record<string, unknown>>(`/remote-scraper/research`, { method: "POST", body: JSON.stringify({ query, effort, country }) });
   }
 
   /** Stream deep research results via SSE. */
@@ -3005,24 +2946,19 @@ class EngineAPI {
     domain: string;
     char_count: number;
   }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/remote-scraper/content/save`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    return this.request<{
+    status: string;
+    page_name: string;
+    url: string;
+    domain: string;
+    char_count: number;
+  }>(`/remote-scraper/content/save`, { method: "POST", body: JSON.stringify({
         url,
         content,
         content_type: contentType,
         char_count: charCount,
         ttl_days: ttlDays,
-      }),
-    });
-    if (!resp.ok) throw new Error(`Content save failed: ${resp.status}`);
-    return resp.json();
+      }) });
   }
 
   // ---- Retry queue ----
@@ -3052,13 +2988,7 @@ class EngineAPI {
 
   /** Retry queue statistics from the remote server. */
   async queueStats(): Promise<Record<string, unknown>> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/remote-scraper/queue/stats`, {
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Queue stats failed: ${resp.status}`);
-    return resp.json();
+    return this.request<Record<string, unknown>>(`/remote-scraper/queue/stats`);
   }
 
   /** Local retry queue poller statistics (this engine's activity). */
@@ -3165,12 +3095,7 @@ class EngineAPI {
 
   /** What the home connection is doing right now. */
   async egressStatus(): Promise<EgressStatus> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/egress/status`, { headers });
-    if (!resp.ok)
-      throw new Error(`Home connection status failed: ${resp.status}`);
-    return resp.json();
+    return this.request<EgressStatus>(`/egress/status`);
   }
 
   /** Lend this computer's connection when AI Matrx gets blocked. */
@@ -3240,93 +3165,39 @@ class EngineAPI {
 
   /** Get cloud-synced settings. */
   async getCloudSettings(): Promise<CloudSettingsResponse> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/cloud/settings`, { headers });
-    if (!resp.ok) throw new Error(`Cloud settings failed: ${resp.status}`);
-    return resp.json();
+    return this.request<CloudSettingsResponse>(`/cloud/settings`);
   }
 
   /** Update cloud-synced settings. */
   async updateCloudSettings(
     settings: Record<string, unknown>,
   ): Promise<CloudSettingsResponse> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/cloud/settings`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ settings }),
-    });
-    if (!resp.ok)
-      throw new Error(`Cloud settings update failed: ${resp.status}`);
-    return resp.json();
+    return this.request<CloudSettingsResponse>(`/cloud/settings`, { method: "PUT", body: JSON.stringify({ settings }) });
   }
 
   /** Trigger a bidirectional sync. */
   async triggerCloudSync(): Promise<CloudSyncResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/cloud/sync`, {
-      method: "POST",
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Cloud sync failed: ${resp.status}`);
-    return resp.json();
+    return this.request<CloudSyncResult>(`/cloud/sync`, { method: "POST" });
   }
 
   /** Force push local settings to cloud. */
   async pushCloudSettings(): Promise<CloudSyncResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/cloud/sync/push`, {
-      method: "POST",
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Cloud push failed: ${resp.status}`);
-    return resp.json();
+    return this.request<CloudSyncResult>(`/cloud/sync/push`, { method: "POST" });
   }
 
   /** Force pull cloud settings to local. */
   async pullCloudSettings(): Promise<CloudSyncResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/cloud/sync/pull`, {
-      method: "POST",
-      headers,
-    });
-    if (!resp.ok) throw new Error(`Cloud pull failed: ${resp.status}`);
-    return resp.json();
+    return this.request<CloudSyncResult>(`/cloud/sync/pull`, { method: "POST" });
   }
 
   /** Get this instance's info. */
   async getInstanceInfo(): Promise<InstanceInfo> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/cloud/instance`, { headers });
-    if (!resp.ok) throw new Error(`Instance info failed: ${resp.status}`);
-    return resp.json();
+    return this.request<InstanceInfo>(`/cloud/instance`);
   }
 
   /** List all registered instances for the current user. */
   async listInstances(): Promise<{ instances: InstanceInfo[] }> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/cloud/instances`, { headers });
-    if (!resp.ok) throw new Error(`List instances failed: ${resp.status}`);
-    return resp.json();
+    return this.request<{ instances: InstanceInfo[] }>(`/cloud/instances`);
   }
 
   async reviewClaudeHistory(limit = 100): Promise<ClaudeHistoryReview> {
@@ -3928,7 +3799,13 @@ class EngineAPI {
       o: "exempt",
       n: "engine.path",
     };
-    const headers = init?.headers as Record<string, string> | undefined;
+    const headers: Record<string, string> | undefined =
+      typeof init?.body === "string"
+        ? {
+            "Content-Type": "application/json",
+            ...(init.headers as Record<string, string> | undefined),
+          }
+        : (init?.headers as Record<string, string> | undefined);
     return this.api.call<T>(
       op,
       init?.body != null ? { body: init.body } : undefined,
@@ -4453,14 +4330,7 @@ class EngineAPI {
 
   /** Get a single permission status. */
   async getDevicePermission(name: string): Promise<PermissionInfo> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/permissions/${name}`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) throw new Error(`Permission check failed: ${resp.status}`);
-    return resp.json();
+    return this.request<PermissionInfo>(`/devices/permissions/${name}`, undefined, 10000);
   }
 
   /** List audio input/output devices. */
@@ -5238,12 +5108,7 @@ class EngineAPI {
 
   /** Fetch the full diagnostic snapshot from /setup/debug (no auth required). */
   async getDebugState(): Promise<Record<string, unknown>> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/setup/debug`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!resp.ok) throw new Error(`Debug state failed: ${resp.status}`);
-    return resp.json();
+    return this.request<Record<string, unknown>>(`/setup/debug`, undefined, 15000);
   }
 
   // ── matrx-extend bridge — Bridge Test page helpers ──────────────────────

@@ -2,44 +2,44 @@
   "about": "CI cost manifest (ci-spend law, 2026-10-11). One entry per workflow, one leg per runner OS. scripts/check_workflow_runner_cost.py fails a workflow or OS leg without an entry, an entry without a benefit, triggers/crons/jobs that differ from the workflow file, $ that do not add up, a repo total over repo_share_usd, and (locally, with sibling repos beside it) a sum over the weekly ceiling.",
   "repo": "matrx-local",
   "weekly_ceiling_usd": 100.0,
-  "repo_share_usd": 3,
+  "repo_share_usd": 0,
   "prices_usd_per_minute": {
     "linux": 0.006,
     "windows": 0.01,
     "macos": 0.062
   },
   "prices_source": "GitHub billing API pricePerUnit (Actions Linux / Windows / macOS 3-core), read 2026-10-11",
-  "total_usd_per_week": 34.36,
+  "total_usd_per_week": 12.25,
   "workflows": {
     "ci.yml": {
       "triggers": [
-        "pull_request",
-        "push"
+        "workflow_dispatch"
       ],
       "crons": [],
       "benefit": "Matrx Local checks (Python, frontend, Rust; Windows Rust).",
       "owner_reason": "Matrx Local proof before a release.",
-      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 225 push runs/week x 13.2 Linux + 2 Windows min (HEAD triggers; going manual-only)",
-      "usd_per_week": 22.32,
+      "basis": "Owner forecast, not a measured cadence: 2 deliberate manual proof runs/week, matching the existing release forecast. Automatic CI retired 2026-10-11; observed pre-retirement aggregate was 13.2 Linux + 2 Windows minutes/run; add 1 Linux minute for mandatory dispatch-attribution preflight. Gross runner value; standard public-repo runners bill $0.",
+      "usd_per_week": 0.21,
       "legs": {
         "linux": {
           "jobs": [
+            "attribution",
             "frontend",
             "native-vault-core",
             "python",
             "rust-workspace"
           ],
-          "runs_per_week": 225,
-          "minutes_per_run": 13.2,
-          "usd_per_week": 17.82
+          "runs_per_week": 2,
+          "minutes_per_run": 14.2,
+          "usd_per_week": 0.17
         },
         "windows": {
           "jobs": [
             "rust-workspace-windows"
           ],
-          "runs_per_week": 225,
+          "runs_per_week": 2,
           "minutes_per_run": 2,
-          "usd_per_week": 4.5
+          "usd_per_week": 0.04
         }
       }
     },
@@ -142,5 +142,6 @@
         }
       }
     }
-  }
+  },
+  "visibility": "public"
 }

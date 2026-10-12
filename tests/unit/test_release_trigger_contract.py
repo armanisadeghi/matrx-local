@@ -52,8 +52,60 @@ def test_nothing_builds_automatically() -> None:
     # (October 2026: CI on every push plus ~20 releases a day).
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
         triggers = _triggers(workflow.read_text(encoding="utf-8"))
-        assert set(triggers) <= {"workflow_dispatch", "push", "workflow_call"}, (workflow.name, set(triggers))
+        assert set(triggers) <= {"workflow_dispatch", "push", "workflow_call"}, (
+            workflow.name,
+            set(triggers),
+        )
         if "push" in triggers:
             body = triggers["push"]
-            assert "tags:" in body and "branches" not in body and "paths" not in body, (workflow.name, body)
-    assert set(_triggers(CI_WORKFLOW.read_text(encoding="utf-8"))) == {"workflow_dispatch"}
+            assert "tags:" in body and "branches" not in body and "paths" not in body, (
+                workflow.name,
+                body,
+            )
+    assert set(_triggers(CI_WORKFLOW.read_text(encoding="utf-8"))) == {
+        "workflow_dispatch"
+    }
+
+
+def test_ci_dispatch_attribution_stops_before_downstream_checks() -> None:
+    import json
+    import os
+    import subprocess
+    import sys
+
+    guard = REPO_ROOT / "scripts" / "check_ci_dispatch_attribution.py"
+    for requester in (None, "", "   ", "agent-ci-spend-repair"):
+        env = {k: v for k, v in os.environ.items() if k != "REQUESTED_BY"}
+        if requester is not None:
+            env["REQUESTED_BY"] = requester
+        result = subprocess.run(
+            [sys.executable, str(guard)], env=env, capture_output=True, text=True
+        )
+        assert result.returncode == (0 if requester and requester.strip() else 1), (
+            result.stdout
+        )
+
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert re.search(
+        r"requested_by:\n(?:        .*\n)*?        required: true", workflow
+    )
+    assert "run: python3 scripts/check_ci_dispatch_attribution.py" in workflow
+    assert "REQUESTED_BY: ${{ inputs.requested_by }}" in workflow
+    jobs = re.findall(
+        r"(?m)^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)",
+        workflow.split("jobs:\n", 1)[1],
+        re.S | re.M,
+    )
+    assert {name for name, _ in jobs} == {
+        "attribution",
+        "python",
+        "frontend",
+        "native-vault-core",
+        "rust-workspace",
+        "rust-workspace-windows",
+    }
+    for name, body in jobs:
+        if name != "attribution":
+            assert re.search(r"(?m)^    needs: attribution$", body), name
+    manifest = json.loads((REPO_ROOT / ".github" / "ci-cost.json").read_text())
+    assert "attribution" in manifest["workflows"]["ci.yml"]["legs"]["linux"]["jobs"]

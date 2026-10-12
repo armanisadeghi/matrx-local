@@ -1,4 +1,5 @@
 name: CI
+run-name: ${{ format('{0} (by {1})', github.workflow, inputs.requested_by) }}
 
 # Manual only (Arman, 2026-10-11: Matrx Local is being retired; it builds only on a deliberate
 # release). Never on push, pull request or a schedule: run it with `gh workflow run ci.yml` when a
@@ -6,13 +7,29 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      requested_by:
+        description: "Agent session or lane that asked for this run (ci-spend attribution)"
+        required: true
+        type: string
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  attribution:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require dispatch attribution
+        env:
+          REQUESTED_BY: ${{ inputs.requested_by }}
+        run: python3 scripts/check_ci_dispatch_attribution.py
+
   python:
+    needs: attribution
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -65,6 +82,7 @@ jobs:
           MATRX_CI_HEADLESS: "1"
 
   frontend:
+    needs: attribution
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     defaults:
@@ -151,6 +169,7 @@ jobs:
           VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: test-publishable-key
 
   native-vault-core:
+    needs: attribution
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -194,6 +213,7 @@ jobs:
   # --locked so a Cargo.lock that does not match the manifests fails here
   # rather than in a release.
   rust-workspace:
+    needs: attribution
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -238,6 +258,7 @@ jobs:
   # builds bundled sqlite3.c with `cc`, which needs real MSVC headers — a
   # cross `--target x86_64-pc-windows-msvc` cannot get past the build script.
   rust-workspace-windows:
+    needs: attribution
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

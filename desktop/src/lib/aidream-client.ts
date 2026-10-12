@@ -18,7 +18,8 @@ import { applyOrganizationContextHeader } from "@ai-matrx/api";
 
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { mandateResolutionPath } from "@/lib/api/routes/ai";
-import type { components } from "@/types/python-generated/api-types";
+import type { ExecutionAgentDefinition } from "@ai-matrx/api/agents";
+import type { MandateResolutionResponse } from "@ai-matrx/api/intelligence";
 
 // ---------------------------------------------------------------------------
 // Request helpers
@@ -242,7 +243,7 @@ export async function fetchAIDreamToolsForApp(
 // Mandates
 // ---------------------------------------------------------------------------
 
-export type MandateResolution = components["schemas"]["MandateResolutionResponse"];
+export type MandateResolution = MandateResolutionResponse;
 
 /**
  * Corresponds to GET /api/mandates/{mandate_key}/resolution (auth required).
@@ -263,8 +264,7 @@ export async function fetchMandateResolution(
   });
 }
 
-export type AgentExecutionDefinition =
-  components["schemas"]["ExecutionAgentDefinition"];
+export type AgentExecutionDefinition = ExecutionAgentDefinition;
 
 // The Holder's execution definition for a LOCAL-model run is read by the
 // engine (GET {engine}/local-mandates/{key} → LocalExecutionAgentSource), which

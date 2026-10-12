@@ -1873,7 +1873,10 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
               session.access_token,
               await requireActiveOrganizationId(),
             );
-            requestOptions = { ...options, agentId: resolution.agent_id };
+            requestOptions = {
+              ...options,
+              ...(resolution.agent_id ? { agentId: resolution.agent_id } : {}),
+            };
           } catch (err) {
             const message = `Could not resolve the default agent (${localMandateKey}): ${
               err instanceof Error ? err.message : String(err)

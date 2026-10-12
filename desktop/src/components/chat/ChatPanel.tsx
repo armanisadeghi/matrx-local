@@ -260,7 +260,7 @@ export function ChatPanel({
             session.access_token,
             await requireActiveOrganizationId(),
           );
-          agentId = resolution.agent_id;
+          agentId = resolution.agent_id ?? null;
         } catch (err) {
           setAgentSendError(
             `Could not resolve the default agent (${mandateKey}): ${

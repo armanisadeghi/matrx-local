@@ -17,15 +17,17 @@
 
 import { applyOrganizationContextHeader } from "@ai-matrx/api";
 
-import type { components } from "@/types/python-generated/api-types";
+import type {
+  KindCatalogResponse,
+  KindComponentDescriptor,
+  KindDescriptor,
+} from "@ai-matrx/api/workflows";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { getActiveOrganizationId } from "@/lib/org/active-org";
 import { getAuthedSession } from "@/lib/custodian";
 
 /** Generated wire types are the source of truth — never hand-mirrored. */
-export type KindDescriptor = components["schemas"]["KindDescriptor"];
-export type KindComponentDescriptor = components["schemas"]["KindComponentDescriptor"];
-export type KindCatalogResponse = components["schemas"]["KindCatalogResponse"];
+export type { KindCatalogResponse, KindComponentDescriptor, KindDescriptor };
 
 export interface CatalogFetch {
   /** Null when the server answered 304 — the caller's cache is current. */

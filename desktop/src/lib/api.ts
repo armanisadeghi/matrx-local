@@ -1678,19 +1678,29 @@ class EngineAPI {
     return this.resolveAccessToken();
   }
 
-  private async parseDeviceProbeResponse(
-    response: Response,
-    operationKey: string,
-    errorLabel: string,
+  /**
+   * One device probe through the engine transport. A probe answer can carry an
+   * `action_needed` even on success (a permission the person must grant), so
+   * the payload is reported or resolved here, not only on error.
+   */
+  private async deviceProbe(
+    method: "GET" | "POST",
+    path: string,
+    timeoutMs: number,
+    body?: object,
   ): Promise<DeviceProbeResult> {
-    const payload: unknown = await response.json().catch(() => null);
-    const reported = await reportActionNeededErrorPayload(
-      payload,
-      operationKey,
+    const payload = await this.request<unknown>(
+      path,
+      method === "GET" ? undefined : { method, body: JSON.stringify(body ?? {}) },
+      timeoutMs,
     );
-    if (!reported) await resolveHttpActionNeeded(operationKey);
-    if (!response.ok) {
-      throw new Error(`${errorLabel}: ${response.status}`);
+    const operationKey = httpOperationKey(
+      method,
+      path,
+      body === undefined ? undefined : JSON.stringify(body),
+    );
+    if (!(await reportActionNeededErrorPayload(payload, operationKey))) {
+      await resolveHttpActionNeeded(operationKey);
     }
     return payload as DeviceProbeResult;
   }
@@ -4279,77 +4289,27 @@ class EngineAPI {
 
   /** List audio input/output devices. */
   async getAudioDevices(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/audio`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/audio"),
-      "Audio device check failed",
-    );
+    return this.deviceProbe("GET", `/devices/audio`, 10000);
   }
 
   /** List Bluetooth devices. */
   async getBluetoothDevices(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/bluetooth`, {
-      headers,
-      signal: AbortSignal.timeout(15000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/bluetooth"),
-      "Bluetooth check failed",
-    );
+    return this.deviceProbe("GET", `/devices/bluetooth`, 15000);
   }
 
   /** List WiFi networks. */
   async getWifiNetworks(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/wifi`, {
-      headers,
-      signal: AbortSignal.timeout(15000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/wifi"),
-      "WiFi scan failed",
-    );
+    return this.deviceProbe("GET", `/devices/wifi`, 15000);
   }
 
   /** Get network interface info. */
   async getNetworkInfo(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/network`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/network"),
-      "Network info failed",
-    );
+    return this.deviceProbe("GET", `/devices/network`, 10000);
   }
 
   /** List connected peripherals (USB, Bluetooth, etc.). */
   async getConnectedDevices(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/connected`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/connected"),
-      "Connected devices check failed",
-    );
+    return this.deviceProbe("GET", `/devices/connected`, 10000);
   }
 
   /**
@@ -4553,85 +4513,29 @@ class EngineAPI {
   }
 
   async getSystemResources(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/system`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/system"),
-      "System resources check failed",
-    );
+    return this.deviceProbe("GET", `/devices/system`, 10000);
   }
 
   /** List cameras. */
   async getCameraDevices(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/camera`, {
-      headers,
-      signal: AbortSignal.timeout(15000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/camera"),
-      "Camera probe failed",
-    );
+    return this.deviceProbe("GET", `/devices/camera`, 15000);
   }
 
   /** List all connected screens/monitors. */
   async getScreens(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/screens`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/screens"),
-      "Screens probe failed",
-    );
+    return this.deviceProbe("GET", `/devices/screens`, 10000);
   }
 
   /** Take a screenshot (optionally for a specific monitor index or "all"/"primary"). */
   async takeScreenshot(
     monitor: string | number = "all",
   ): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(
-      `${this.baseUrl}/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`,
-      {
-        headers,
-        signal: AbortSignal.timeout(15000),
-      },
-    );
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey(
-        "GET",
-        `/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`,
-      ),
-      "Screenshot failed",
-    );
+    return this.deviceProbe("GET", `/devices/screenshot?monitor=${encodeURIComponent(String(monitor))}`, 15000);
   }
 
   /** Get device location (lat/lon if permission granted). */
   async getLocation(): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const resp = await fetch(`${this.baseUrl}/devices/location`, {
-      headers,
-      signal: AbortSignal.timeout(20000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("GET", "/devices/location"),
-      "Location probe failed",
-    );
+    return this.deviceProbe("GET", `/devices/location`, 20000);
   }
 
   /** Record audio from microphone and return base64 WAV. */
@@ -4639,40 +4543,14 @@ class EngineAPI {
     device_index?: number;
     duration_seconds?: number;
   }): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const body = JSON.stringify(opts);
-    const resp = await fetch(`${this.baseUrl}/devices/record-audio`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("POST", "/devices/record-audio", body),
-      "Audio recording failed",
-    );
+    return this.deviceProbe("POST", `/devices/record-audio`, (opts.duration_seconds ?? 5) * 1000 + 10000, opts);
   }
 
   /** Capture a photo from webcam and return base64 JPEG. */
   async capturePhoto(opts: {
     device_index?: number;
   }): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const body = JSON.stringify(opts);
-    const resp = await fetch(`${this.baseUrl}/devices/capture-photo`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout(15000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("POST", "/devices/capture-photo", body),
-      "Photo capture failed",
-    );
+    return this.deviceProbe("POST", `/devices/capture-photo`, 15000, opts);
   }
 
   /** Record a short video from webcam and return base64 MP4. */
@@ -4680,20 +4558,7 @@ class EngineAPI {
     device_index?: number;
     duration_seconds?: number;
   }): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const body = JSON.stringify(opts);
-    const resp = await fetch(`${this.baseUrl}/devices/record-video`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 10000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("POST", "/devices/record-video", body),
-      "Video recording failed",
-    );
+    return this.deviceProbe("POST", `/devices/record-video`, (opts.duration_seconds ?? 5) * 1000 + 10000, opts);
   }
 
   /** Record screen video and return base64 MP4. */
@@ -4701,20 +4566,7 @@ class EngineAPI {
     screen_index?: number;
     duration_seconds?: number;
   }): Promise<DeviceProbeResult> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = await this.authHeaders();
-    const body = JSON.stringify(opts);
-    const resp = await fetch(`${this.baseUrl}/devices/record-screen`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout((opts.duration_seconds ?? 5) * 1000 + 30000),
-    });
-    return this.parseDeviceProbeResponse(
-      resp,
-      httpOperationKey("POST", "/devices/record-screen", body),
-      "Screen recording failed",
-    );
+    return this.deviceProbe("POST", `/devices/record-screen`, (opts.duration_seconds ?? 5) * 1000 + 30000, opts);
   }
 
   // ── Platform context ───────────────────────────────────────────────────

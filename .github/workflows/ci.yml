@@ -1,22 +1,11 @@
 name: CI
 
-# Fast, deterministic gate for code pushes and PRs. release.sh marks its commit
-# [skip actions] and explicitly dispatches one Release workflow, even when the
-# same push contains earlier local commits. The paths below are a second guard
-# for version-only bumps made outside the script. Keep this list in sync with
-# VERSION_FILES in release.sh.
+# Manual only (Arman, 2026-10-11: Matrx Local is being retired; it builds only on a deliberate
+# release). Never on push, pull request or a schedule: run it with `gh workflow run ci.yml` when a
+# change needs proof. tests/unit/test_release_trigger_contract.py fails any automatic trigger.
 
 on:
-  push:
-    branches: ["**"]
-    paths-ignore:
-      - pyproject.toml
-      - desktop/src-tauri/tauri.conf.json
-      - desktop/src-tauri/Cargo.toml
-      - Cargo.lock
-      - desktop/package.json
-      - uv.lock
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

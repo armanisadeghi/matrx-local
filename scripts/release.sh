@@ -31,9 +31,8 @@ set -euo pipefail
 
 VERSION_MUTATION_STARTED=false
 RELEASE_COMMITTED=false
-# Keep this list in sync with the push.paths-ignore release-only list in
-# .github/workflows/ci.yml. The Release workflow verifies these
-# commits, so starting the separate CI workflow would duplicate that work.
+# The files a version bump touches. (ci.yml is manual-only since 2026-10-11, so a
+# release commit never starts it; the Release workflow runs its own verify job.)
 VERSION_FILES=(
     pyproject.toml
     desktop/src-tauri/tauri.conf.json

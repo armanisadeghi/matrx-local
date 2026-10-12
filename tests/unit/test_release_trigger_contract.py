@@ -27,27 +27,33 @@ def test_release_script_skips_push_runs_then_dispatches_one_release() -> None:
     assert re.search(r"(?m)^    needs: verify$", workflow)
 
 
-def test_ci_ignores_every_release_only_version_file() -> None:
-    script = RELEASE_SCRIPT.read_text(encoding="utf-8")
-    ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
-    version_files_match = re.search(
-        r"(?ms)^VERSION_FILES=\(\n(?P<body>.*?)^\)", script
-    )
-    assert version_files_match is not None
-    version_files = {
-        line.strip()
-        for line in version_files_match.group("body").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
 
-    ignored_paths_match = re.search(
-        r"(?m)^    paths-ignore:\n(?P<body>(?:      - .+\n)+)", ci_workflow
-    )
-    assert ignored_paths_match is not None
-    ignored_paths = {
-        line.removeprefix("      - ").strip()
-        for line in ignored_paths_match.group("body").splitlines()
-    }
+def _triggers(text: str) -> dict[str, str]:
+    """Top-level `on:` keys of a workflow and their nested text."""
+    block = re.search(r"(?m)^on:\n(?P<body>(?:(?:  .*)?\n)+)", text)
+    assert block is not None, "workflow has an on: block"
+    keys: dict[str, str] = {}
+    current = None
+    for line in block.group("body").splitlines():
+        m = re.match(r"^  ([a-z_]+):", line)
+        if m:
+            current = m.group(1)
+            keys[current] = ""
+        elif current:
+            keys[current] += line + "\n"
+    return keys
 
-    assert version_files <= ignored_paths
+
+def test_nothing_builds_automatically() -> None:
+    # Release cadence (Arman, 2026-10-11): Matrx Local builds only on a deliberate release — a
+    # workflow_dispatch or a manually pushed tag. Never a branch push, pull request or schedule
+    # (October 2026: CI on every push plus ~20 releases a day).
+    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        triggers = _triggers(workflow.read_text(encoding="utf-8"))
+        assert set(triggers) <= {"workflow_dispatch", "push", "workflow_call"}, (workflow.name, set(triggers))
+        if "push" in triggers:
+            body = triggers["push"]
+            assert "tags:" in body and "branches" not in body and "paths" not in body, (workflow.name, body)
+    assert set(_triggers(CI_WORKFLOW.read_text(encoding="utf-8"))) == {"workflow_dispatch"}

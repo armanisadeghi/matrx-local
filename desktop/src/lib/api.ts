@@ -3063,18 +3063,7 @@ class EngineAPI {
   }
 
   private async egressSet(action: "enable" | "disable"): Promise<EgressStatus> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/egress/${action}`, {
-      method: "POST",
-      headers,
-    });
-    if (!resp.ok)
-      throw new Error(`Home connection ${action} failed: ${resp.status}`);
-    return resp.json();
+    return this.request<EgressStatus>(`/egress/${action}`, { method: "POST" });
   }
 
   // ---- Cloud Sync API ----

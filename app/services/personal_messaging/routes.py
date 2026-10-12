@@ -19,6 +19,14 @@ from app.services.cloud_sync.instance_manager import get_instance_manager
 from .beeper import BeeperFailure
 from .coordinator import PersonalMessagingCoordinator
 from .models import GrantConflict, GrantUnavailable
+from .public import (
+    PublicGrantStatus,
+    PersonalConsentStart,
+    PersonalActivation,
+    PersonalAccountSummary,
+    PersonalChatPage,
+    PersonalMessagePage,
+)
 from app.services.sync_client import get_sync_client
 
 router = APIRouter(prefix="/personal-messaging/beeper", tags=["personal-messaging"])
@@ -121,9 +129,18 @@ async def owner_service(request: Request) -> PersonalMessagingCoordinator:
     return await _device_service(request, UUID(result.user.user_id))
 
 
-async def _response(operation: Awaitable) -> JSONResponse:
+async def _response(
+    operation: Awaitable, schema: type[BaseModel], *, many: bool = False
+) -> JSONResponse:
     try:
-        return JSONResponse(await operation, headers=_PRIVATE)
+        value = await operation
+        if many:
+            if not isinstance(value, list):
+                raise ValueError("Expected a list response")
+            body = [schema.model_validate(row).model_dump(mode="json") for row in value]
+        else:
+            body = schema.model_validate(value).model_dump(mode="json")
+        return JSONResponse(body, headers=_PRIVATE)
     except BeeperFailure as failure:
         return JSONResponse(
             {"error": failure.code, "message": str(failure)},
@@ -157,14 +174,14 @@ async def _response(operation: Awaitable) -> JSONResponse:
         )
 
 
-@router.get("/status")
+@router.get("/status", response_model=PublicGrantStatus)
 async def status(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.status())
+    return await _response(service.status(), PublicGrantStatus)
 
 
-@router.post("/start")
+@router.post("/start", response_model=PersonalConsentStart)
 async def start(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.start())
+    return await _response(service.start(), PersonalConsentStart)
 
 
 @router.get("/callback", include_in_schema=False)
@@ -222,62 +239,67 @@ async def finish(request: Request):
     )
 
 
-@router.get("/accounts")
+@router.get("/accounts", response_model=list[PersonalAccountSummary])
 async def accounts(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.accounts())
+    return await _response(service.accounts(), PersonalAccountSummary, many=True)
 
 
-@router.post("/select-account")
+@router.post("/select-account", response_model=PersonalActivation)
 async def select_account(
     selection: AccountSelection,
     service: PersonalMessagingCoordinator = Depends(owner_service),
 ):
-    return await _response(service.select_account(selection.account_ref))
+    return await _response(
+        service.select_account(selection.account_ref), PersonalActivation
+    )
 
 
-@router.get("/chats")
+@router.get("/chats", response_model=PersonalChatPage)
 async def chats(
     cursor: str | None = None,
     service: PersonalMessagingCoordinator = Depends(owner_service),
 ):
-    return await _response(service.chats(cursor=cursor))
+    return await _response(service.chats(cursor=cursor), PersonalChatPage)
 
 
-@router.post("/select-chat")
+@router.post("/select-chat", response_model=PublicGrantStatus)
 async def select_chat(
     selection: ChatSelection,
     service: PersonalMessagingCoordinator = Depends(owner_service),
 ):
     return await _response(
-        service.select_chat(selection.chat_id, selected=selection.selected)
+        service.select_chat(selection.chat_id, selected=selection.selected),
+        PublicGrantStatus,
     )
 
 
-@router.get("/messages")
+@router.get("/messages", response_model=PersonalMessagePage)
 async def messages(
     chat_id: str,
     cursor: str | None = None,
     service: PersonalMessagingCoordinator = Depends(owner_service),
 ):
-    return await _response(service.messages(chat_id, cursor=cursor))
+    return await _response(
+        service.messages(chat_id, cursor=cursor), PersonalMessagePage
+    )
 
 
-@router.post("/reconcile")
+@router.post("/reconcile", response_model=PersonalActivation)
 async def reconcile(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.reconcile())
+    return await _response(service.reconcile(), PersonalActivation)
 
 
-@router.post("/refresh")
+@router.post("/refresh", response_model=PublicGrantStatus)
 async def refresh(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.refresh())
+    return await _response(service.refresh(), PublicGrantStatus)
 
 
-@router.post("/disconnect")
+@router.post("/disconnect", response_model=PublicGrantStatus)
 async def disconnect(service: PersonalMessagingCoordinator = Depends(owner_service)):
-    return await _response(service.disconnect())
+    return await _response(service.disconnect(), PublicGrantStatus)
 
 
-@router.post("/confirm-native-cleanup")
+@router.post("/confirm-native-cleanup", response_model=PublicGrantStatus)
 async def confirm_native_cleanup(
     confirmation: NativeCleanupConfirmation,
     service: PersonalMessagingCoordinator = Depends(owner_service),
@@ -290,5 +312,6 @@ async def confirm_native_cleanup(
         service.confirm_native_cleanup(
             expected_revision=confirmation.expected_revision,
             client_label=confirmation.client_label,
-        )
+        ),
+        PublicGrantStatus,
     )

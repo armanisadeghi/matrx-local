@@ -627,3 +627,29 @@ def test_extra_current_generation_selection_refuses_native_read(tmp_path, monkey
         assert remote.messages_read == 0
 
     asyncio.run(scenario(tmp_path, monkeypatch, run))
+
+
+@pytest.mark.parametrize("loss", ["provider", "account", "cloud", "revision"])
+def test_mid_read_loss_refuses_private_payload_and_demotes_current_grant(tmp_path, monkeypatch, loss):
+    async def run(service, repo, remote):
+        await connect_selected(service)
+        native_read = service.native.messages
+
+        async def changed(grant, chat_id, **kwargs):
+            value = await native_read(grant, chat_id, **kwargs)
+            if loss == "provider":
+                raise beeper.BeeperFailure("reauthorize", "Native access ended during read")
+            if loss == "account":
+                remote.swap_user = True
+            elif loss == "cloud":
+                remote.fail_cloud = True
+            elif loss == "revision":
+                await service._save(grant, selected_chat_ids=[])
+            return value
+
+        monkeypatch.setattr(service.native, "messages", changed)
+        with pytest.raises((beeper.BeeperFailure, GrantUnavailable, GrantConflict)):
+            await service.messages("sandbox")
+        persisted = (await repo.list(actor_id=service.actor_id, app_instance_id=service.app_instance_id))[0]
+        assert persisted.status == "needs_attention" and remote.messages_read == 1
+    asyncio.run(scenario(tmp_path, monkeypatch, run))

@@ -7,7 +7,8 @@ import base64
 import hashlib
 import hmac
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -417,36 +418,67 @@ class PersonalMessagingCoordinator:
             await self.fence()
             return grant
         except (BeeperFailure, GrantUnavailable, GrantConflict):
+            await self._mark_attention(grant)
+            raise
+
+    async def _mark_attention(self, grant: DeviceGrant) -> None:
+        fresh = await self._load()
+        if (
+            fresh
+            and fresh.id == grant.id
+            and fresh.generation == grant.generation
+            and fresh.status == "active"
+        ):
+            await self._save(fresh, status="needs_attention")
+
+    @asynccontextmanager
+    async def _read_boundary(self, grant: DeviceGrant) -> AsyncIterator[None]:
+        try:
+            yield
             fresh = await self._load()
-            if fresh and fresh.status == "active":
-                await self._save(fresh, status="needs_attention")
+            if not fresh or (fresh.id, fresh.generation, fresh.revision) != (
+                grant.id,
+                grant.generation,
+                grant.revision,
+            ):
+                raise GrantConflict("Native consent changed during the read. Retry.")
+            self.native.active(fresh)
+            await self._bound_account(fresh)
+            current = await self.cloud.find(fresh)
+            if current is None:
+                raise GrantUnavailable("Native consent metadata is missing. Reconcile.")
+            await self.cloud.verify_resources(fresh, current)
+        except (BeeperFailure, GrantUnavailable, GrantConflict):
+            await self._mark_attention(grant)
             raise
 
     async def chats(self, *, cursor: str | None = None) -> dict:
         async with self.lock:
             grant = await self._ready()
-            page = await self.native.chats(grant, cursor=cursor)
-            await self.fence()
-            return {
-                "items": [
-                    {
-                        "id": c.id,
-                        "title": c.title,
-                        "selected": c.id in grant.selected_chat_ids,
-                    }
-                    for c in page.items
-                ],
-                "has_more": page.hasMore,
-                "oldest_cursor": page.oldestCursor,
-                "newest_cursor": page.newestCursor,
-            }
+            async with self._read_boundary(grant):
+                page = await self.native.chats(grant, cursor=cursor)
+                await self.fence()
+                return {
+                    "items": [
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "selected": c.id in grant.selected_chat_ids,
+                        }
+                        for c in page.items
+                    ],
+                    "has_more": page.hasMore,
+                    "oldest_cursor": page.oldestCursor,
+                    "newest_cursor": page.newestCursor,
+                }
 
     async def select_chat(self, chat_id: str, *, selected: bool = True) -> dict:
         async with self.lock:
             grant = await self._ready()
-            chat = await self.native.verify_chat(
-                self.native.active(grant), str(grant.account_ref), chat_id
-            )
+            async with self._read_boundary(grant):
+                chat = await self.native.verify_chat(
+                    self.native.active(grant), str(grant.account_ref), chat_id
+                )
             ids = list(grant.selected_chat_ids)
             if selected and chat_id not in ids:
                 ids.append(chat_id)
@@ -507,9 +539,10 @@ class PersonalMessagingCoordinator:
     async def messages(self, chat_id: str, *, cursor: str | None = None) -> dict:
         async with self.lock:
             grant = await self._ready()
-            result = await self.native.messages(grant, chat_id, cursor=cursor)
-            await self.fence()
-            return result
+            async with self._read_boundary(grant):
+                result = await self.native.messages(grant, chat_id, cursor=cursor)
+                await self.fence()
+                return result
 
     async def refresh(self) -> dict:
         async with self.lock:

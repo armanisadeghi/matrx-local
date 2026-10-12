@@ -13,7 +13,9 @@ import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 from app.services.scraper.remote_client import (
     RESEARCH_CAPABILITY_NOTICE,
     get_remote_scraper,
@@ -67,7 +69,21 @@ class ContentSaveRequest(BaseModel):
     ttl_days: int = 30
 
 
-@router.get("/status")
+class RemoteScraperStatus(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    available: bool
+    reason: str | None = None
+
+
+class RemoteScrapeResponse(BaseModel):
+    results: list[dict[str, Any]]
+    total: int
+    success_count: int
+    elapsed_ms: int
+
+
+@router.get("/status", response_model=RemoteScraperStatus, response_model_exclude_unset=True)
 async def remote_scraper_status():
     """Check if the remote scraper server is reachable."""
     client = get_remote_scraper()
@@ -81,7 +97,7 @@ async def remote_scraper_status():
 # ── Scrape ────────────────────────────────────────────────────────────────────
 
 
-@router.post("/scrape")
+@router.post("/scrape", response_model=RemoteScrapeResponse)
 async def remote_scrape(req: ScrapeRequest, request: Request):
     """Scrape URLs via the remote server. Results are stored server-side.
 
@@ -245,7 +261,7 @@ async def remote_scrape_stream(req: ScrapeRequest, request: Request):
 # ── Search ────────────────────────────────────────────────────────────────────
 
 
-@router.post("/search")
+@router.post("/search", response_model=dict[str, Any])
 async def remote_search(req: SearchRequest, request: Request):
     """Search via Brave Search API on the remote server."""
     client = _get_client_or_raise()
@@ -264,7 +280,7 @@ async def remote_search(req: SearchRequest, request: Request):
 # ── Search + Scrape ───────────────────────────────────────────────────────────
 
 
-@router.post("/search-and-scrape")
+@router.post("/search-and-scrape", response_model=dict[str, Any])
 async def remote_search_and_scrape(req: SearchAndScrapeRequest, request: Request):
     """Search then scrape top results. Results stored server-side."""
     client = _get_client_or_raise()
@@ -302,7 +318,7 @@ async def remote_search_and_scrape_stream(
 # ── Research ──────────────────────────────────────────────────────────────────
 
 
-@router.post("/research")
+@router.post("/research", response_model=dict[str, Any])
 async def remote_research(req: ResearchRequest, request: Request):
     """Search-and-scrape fallback for the legacy research route."""
     client = _get_client_or_raise()
@@ -351,7 +367,7 @@ async def _research_sse(req: ResearchRequest, auth_token: str | None):
 # ── Content save-back ─────────────────────────────────────────────────────────
 
 
-@router.post("/content/save")
+@router.post("/content/save", response_model=dict[str, Any])
 async def save_content(req: ContentSaveRequest, request: Request):
     """Save locally-scraped content to the server database immediately.
 
@@ -377,7 +393,7 @@ async def save_content(req: ContentSaveRequest, request: Request):
 # ── Retry queue ───────────────────────────────────────────────────────────────
 
 
-@router.get("/queue/pending")
+@router.get("/queue/pending", response_model=dict[str, Any])
 async def queue_pending(request: Request, tier: str = "desktop", limit: int = 10):
     """Get URLs the server failed to scrape that need local retry."""
     client = _get_client_or_raise()
@@ -389,7 +405,7 @@ async def queue_pending(request: Request, tier: str = "desktop", limit: int = 10
         raise HTTPException(502, f"Remote scraper error: {e}")
 
 
-@router.get("/queue/stats")
+@router.get("/queue/stats", response_model=dict[str, Any])
 async def queue_stats(request: Request):
     """Retry queue statistics from the remote server."""
     client = _get_client_or_raise()
@@ -399,7 +415,7 @@ async def queue_stats(request: Request):
         raise HTTPException(502, f"Remote scraper error: {e}")
 
 
-@router.get("/queue/poller-stats")
+@router.get("/queue/poller-stats", response_model=dict[str, Any])
 async def queue_poller_stats():
     """Local retry queue poller statistics (this engine's activity)."""
     from app.services.scraper.retry_queue import get_stats

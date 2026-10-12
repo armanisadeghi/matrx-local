@@ -69,7 +69,7 @@ _ENGINE_BOOT_ID = str(uuid.uuid4())
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import StreamingResponse
 
 from app.api.browser_events import handle_browser_event
@@ -105,7 +105,32 @@ async def root():
 # ── Public discovery / health endpoints ─────────────────────────────────
 
 
-@router.get("/health")
+class HealthResponse(BaseModel):
+    """`GET /health` — liveness literal plus managed-service detail.
+
+    Extra keys (failed, degraded, app_config, catalogs, ...) pass through.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    health: str
+    service: str
+    version: str
+    instance_id: str | None = None
+    boot_id: str
+    capabilities: list[str] = Field(default_factory=list)
+    failed: list[str] | None = None
+    degraded: list[str] | None = None
+    app_config: dict | None = None
+    catalogs: dict | None = None
+
+
+class AccessLogsResponse(BaseModel):
+    entries: list[dict]
+
+
+@router.get("/health", response_model=HealthResponse, response_model_exclude_unset=True)
 async def health():
     """Health check that tells the truth about managed services.
 
@@ -383,7 +408,7 @@ async def get_logs(n: int = Query(default=100, ge=1, le=2000)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/logs/access")
+@router.get("/logs/access", response_model=AccessLogsResponse)
 async def get_access_logs(n: int = Query(default=100, ge=1, le=500)):
     """Return the last *n* structured access-log entries as JSON."""
     return {"entries": access_log.recent(n)}

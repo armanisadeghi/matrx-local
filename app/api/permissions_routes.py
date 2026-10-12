@@ -280,7 +280,14 @@ async def _resolve_permissions_from_probe(
     )
 
 
-@router.get("/permissions")
+class PermissionsResponse(BaseModel):
+    permissions: list[dict[str, Any]]
+    platform: str
+    cached: bool
+    age_seconds: float
+
+
+@router.get("/permissions", response_model=PermissionsResponse)
 async def get_permissions(force_refresh: bool = False):
     """Get all device/OS permission statuses.
 

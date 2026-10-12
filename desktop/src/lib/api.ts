@@ -18,6 +18,7 @@ import {
   type SseEvent,
   type CallOptions,
   type HttpMethod,
+  isNetError,
   type OperationArgs,
   type OperationDescriptor,
 } from "@ai-matrx/api";
@@ -28,6 +29,8 @@ import {
 } from "@ai-matrx/api/audio";
 import {
   getWakeWordSettings as getWakeWordSettingsOp,
+  health as healthOp,
+  root,
   getHuggingfaceTokenValue,
   installTranscription,
   runInstall,
@@ -41,7 +44,12 @@ import {
   localLlmStatus,
 } from "@ai-matrx/api/chat";
 import { getPermissions } from "@ai-matrx/api/computer";
-import { updateInstanceName as updateInstanceNameOp } from "@ai-matrx/api/files";
+import {
+  configureSync,
+  heartbeat as cloudHeartbeatOp,
+  reconfigureSync,
+  updateInstanceName as updateInstanceNameOp,
+} from "@ai-matrx/api/files";
 import { invokeTool as invokeToolOp } from "@ai-matrx/api/agents";
 import {
   installBrowserRuntime as installBrowserRuntimeOp,
@@ -1856,10 +1864,8 @@ class EngineAPI {
   async isHealthy(): Promise<boolean> {
     if (this.baseUrl) {
       try {
-        const resp = await fetch(`${this.baseUrl}/health`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        if (resp.ok) return true;
+        await healthOp(this.api, undefined, { signal: AbortSignal.timeout(2000) });
+        return true;
       } catch {
         // Current URL is null/stale — fall through to self-healing discovery.
       }
@@ -1882,13 +1888,8 @@ class EngineAPI {
   async getVersion(): Promise<string> {
     if (!this.baseUrl) return "";
     try {
-      const resp = await fetch(`${this.baseUrl}/`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        return data.version ?? "";
-      }
+      const data = (await root(this.api, undefined, { signal: AbortSignal.timeout(2000) })) as { version?: string };
+      return data.version ?? "";
     } catch {
       /* non-critical */
     }
@@ -2908,16 +2909,15 @@ class EngineAPI {
     if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     // FS-C5b: no engine-side credential fence to read — the engine holds no credential. The
     // context's own binding to this origin, checked either side of every await, is the fence.
-    const headers = { "Content-Type": "application/json", ...(await this.authHeaders()) };
+    // The daemon token is resolved BEFORE the send, and authority is re-read
+    // after it: a context that went stale while the token was in flight sends
+    // nothing. `origin === this.baseUrl` is asserted either side, so the engine
+    // transport (which resolves to this.baseUrl) is the pinned origin.
+    await this.authHeaders();
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const resp = await fetch(`${origin}/cloud/configure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ user_id: userId }),
-    });
-    if (!resp.ok) throw new Error(`Cloud configure failed: ${resp.status}`);
+    const result = (await configureSync(this.api, { body: { user_id: userId } as never })) as unknown as CloudConfigResult;
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    return resp.json();
+    return result;
   }
 
   /** Reconcile cloud sync against the daemon-owned session. */
@@ -2925,17 +2925,9 @@ class EngineAPI {
     const origin = context.engineOrigin ?? this.baseUrl;
     if (!origin || context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
+    await this.authHeaders();
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    const response = await fetch(`${origin}/cloud/reconfigure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ user_id: userId }),
-    });
-    if (!response.ok) throw new Error(`Cloud reconfigure failed: ${response.status}`);
+    await reconfigureSync(this.api, { body: { user_id: userId } as never });
     if (context.nextSubject !== userId || !context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
   }
 
@@ -3741,14 +3733,11 @@ class EngineAPI {
     if (!this.baseUrl) return;
     const origin = this.baseUrl;
     if (!context.isCurrent()) throw new Error("Engine transition is no longer current.");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
+    await this.authHeaders();
     if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
-    await fetch(`${origin}/cloud/heartbeat`, {
-      method: "POST",
-      headers,
+    // A refusal was never surfaced here; only an unreachable engine throws.
+    await cloudHeartbeatOp(this.api).catch((e: unknown) => {
+      if (!(e instanceof EngineHttpError)) throw e;
     });
     if (!context.isCurrent() || origin !== this.baseUrl) throw new Error("Engine transition is no longer current.");
   }
@@ -3773,9 +3762,13 @@ class EngineAPI {
     if (!context.isCurrent()) return { status: "superseded" };
     // The process generation survives token rotation but changes even when a
     // restarted engine reuses its port. /health is intentionally unauthenticated.
-    const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(5_000) });
-    if (!response.ok) return { status: "unavailable" };
-    const health = await response.json() as { boot_id?: string };
+    let health: { boot_id?: string };
+    try {
+      health = (await healthOp(this.api, undefined, { signal: AbortSignal.timeout(5_000) })) as { boot_id?: string };
+    } catch (e) {
+      if (e instanceof EngineHttpError) return { status: "unavailable" };
+      throw e;
+    }
     if (!context.isCurrent() || origin !== this.baseUrl) return { status: "superseded" };
     if (!health.boot_id) throw new Error("The local engine did not identify its running instance.");
     return {
@@ -6035,6 +6028,67 @@ export function __fencedWhileSignedOut(): string[] {
   return [...signedOutPaths].sort();
 }
 
+/**
+ * One request to the engine from a media helper: rides the engine transport
+ * (signed-out fence, re-ask, action-needed) and hands back the `Response`.
+ * A refusal comes back as a Response with the engine's own status and body,
+ * so each helper keeps mapping status to its own error class; a transport
+ * failure is rethrown as the browser error it was (TypeError, timeout/abort
+ * DOMException) because the media hooks recognise those by type.
+ */
+export async function engineRaw(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const target = new URL(url);
+  const method = (init.method ?? "GET").toUpperCase() as HttpMethod;
+  const headers = init.headers
+    ? Object.fromEntries(new Headers(init.headers))
+    : undefined;
+  try {
+    const { response } = await engine.api.send(
+      {
+        m: method,
+        p: `${target.pathname}${target.search}`,
+        d: "matrx-local",
+        a: "loopback_token",
+        o: "exempt",
+        n: "engine.path",
+      },
+      init.body != null ? { body: init.body as never } : undefined,
+      {
+        ...(init.signal ? { signal: init.signal } : {}),
+        ...(headers ? { headers } : {}),
+        // The caller's own signal bounds the call; a model load or a long
+        // generation answers its headers only when it is done.
+        connectTimeoutMs: 6 * 60 * 60_000,
+        totalTimeoutMs: null,
+      },
+    );
+    return response;
+  } catch (e) {
+    if (e instanceof EngineHttpError) {
+      const detail = e.serverDetail;
+      return new Response(
+        detail === undefined
+          ? ""
+          : typeof detail === "string"
+            ? detail
+            : JSON.stringify(detail),
+        { status: e.status },
+      );
+    }
+    const cause = (e as { cause?: unknown } | null)?.cause;
+    if (
+      (e instanceof EngineUnreachableError || isNetError(e)) &&
+      (cause instanceof TypeError || cause instanceof DOMException)
+    ) {
+      throw cause;
+    }
+    throw e;
+  }
+}
+
 async function imageGenFetch<T>(
   url: string,
   options?: RequestInit,
@@ -6059,7 +6113,7 @@ async function imageGenFetch<T>(
   const operationKey = httpOperationKey(method, url, options?.body);
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await engineRaw(url, {
       signal: mediaGenTimeoutSignal(timeoutMs) ?? null,
       ...options,
       headers: mergedHeaders,
@@ -6151,7 +6205,7 @@ async function mediaGenLoad(
   const auth = await engine.getEngineAuthHeaders();
   let resp: Response;
   try {
-    resp = await fetch(`${baseUrl}${prefix}/load`, {
+    resp = await engineRaw(`${baseUrl}${prefix}/load`, {
       method: "POST",
       headers: new Headers({ "Content-Type": "application/json", ...auth }),
       body: JSON.stringify({ model_id }),
@@ -7125,7 +7179,7 @@ async function videoGenFetch<T>(
   const operationKey = httpOperationKey(method, url, options?.body);
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await engineRaw(url, {
       signal: mediaGenTimeoutSignal(timeoutMs) ?? null,
       ...options,
       headers: mergedHeaders,
@@ -7276,7 +7330,7 @@ export async function fetchVideoGenResult(
   const auth = await engine.getEngineAuthHeaders();
   let resp: Response;
   try {
-    resp = await fetch(
+    resp = await engineRaw(
       videoGenUrl(baseUrl, `/jobs/${encodeURIComponent(jobId)}/result`),
       {
         headers: new Headers({ ...auth }),
@@ -7366,7 +7420,7 @@ async function mediaLibraryFetch<T>(
   // signal to override.
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await engineRaw(url, {
       signal: AbortSignal.timeout(MEDIA_GEN_TIMEOUT_MS),
       ...options,
       headers: mergedHeaders,
@@ -7471,7 +7525,7 @@ export async function fetchMediaLibraryFile(
   itemId: string,
 ): Promise<string> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(
+  const resp = await engineRaw(
     mediaLibraryUrl(baseUrl, `/file/${encodeURIComponent(itemId)}`),
     { headers: new Headers({ ...auth }) },
   );
@@ -7502,7 +7556,7 @@ export async function fetchMediaLibraryThumb(
   itemId: string,
 ): Promise<string> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(
+  const resp = await engineRaw(
     mediaLibraryUrl(baseUrl, `/thumb/${encodeURIComponent(itemId)}`),
     {
       headers: new Headers({ ...auth }),
@@ -7536,7 +7590,7 @@ export async function fetchMediaInitImage(
   itemId: string,
 ): Promise<Blob> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(
+  const resp = await engineRaw(
     mediaLibraryUrl(baseUrl, `/items/${encodeURIComponent(itemId)}/init-image`),
     { headers: new Headers({ ...auth }) },
   );
@@ -7620,7 +7674,7 @@ async function mediaVaultFetch<T>(
     extra.forEach((value, key) => mergedHeaders.set(key, value));
   }
   const method = options?.method ?? "GET";
-  const resp = await fetch(url, { ...options, headers: mergedHeaders });
+  const resp = await engineRaw(url, { ...options, headers: mergedHeaders });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = body;
@@ -7721,7 +7775,7 @@ export async function fetchMediaVaultFile(
   itemId: string,
 ): Promise<string> {
   const auth = await engine.getEngineAuthHeaders();
-  const resp = await fetch(
+  const resp = await engineRaw(
     mediaVaultUrl(baseUrl, `/file/${encodeURIComponent(itemId)}`),
     { headers: new Headers({ ...auth }) },
   );

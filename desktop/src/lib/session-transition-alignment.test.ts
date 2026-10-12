@@ -26,7 +26,7 @@ it("a same-subject daemon transition aligns to the running engine process", asyn
   });
   expect(f).toHaveBeenCalledOnce();
   expect(String(f.mock.calls[0]?.[0])).toBe("http://engine-a/health");
-  expect((f.mock.calls[0]?.[1] as RequestInit).method).toBeUndefined();
+  expect((f.mock.calls[0]?.[1] as RequestInit).method).toBe("GET");
 });
 
 it("an anonymous daemon transition aligns but never deletes an engine credential", async () => {

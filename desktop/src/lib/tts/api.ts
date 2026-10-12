@@ -1,7 +1,7 @@
 // THE package duration formatter (`@ai-matrx/kit/format`, duplication census
 // H1). `long` is the prose voice this stream-timeout sentence is written in.
 import { formatDurationMs } from "@ai-matrx/kit/format";
-import { engine } from "@/lib/api";
+import { engine, engineRaw } from "@/lib/api";
 import { getAuthedSession } from "@/lib/custodian";
 import {
   STREAM_TAG_CHUNK,
@@ -89,7 +89,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 async function ttsJson<T>(url: string, init?: RequestInit): Promise<T> {
   const auth = await authHeaders();
-  const resp = await fetch(url, {
+  const resp = await engineRaw(url, {
     ...init,
     headers: {
       ...auth,
@@ -136,7 +136,7 @@ export async function synthesize(
   if (!base) throw new Error("Engine not discovered");
 
   const auth = await authHeaders();
-  const resp = await fetch(ttsUrl(base, "/synthesize"), {
+  const resp = await engineRaw(ttsUrl(base, "/synthesize"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify(req),
@@ -166,7 +166,7 @@ export async function previewVoice(
   if (!base) throw new Error("Engine not discovered");
 
   const auth = await authHeaders();
-  const resp = await fetch(ttsUrl(base, "/preview-voice"), {
+  const resp = await engineRaw(ttsUrl(base, "/preview-voice"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ voice_id: voiceId }),
@@ -209,7 +209,7 @@ export async function* synthesizeStream(
   if (!base) throw new Error("Engine not discovered");
 
   const auth = await authHeaders();
-  const resp = await fetch(ttsUrl(base, "/synthesize-stream"), {
+  const resp = await engineRaw(ttsUrl(base, "/synthesize-stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify(req),
@@ -413,7 +413,7 @@ export async function blendPreview(
   if (!base) throw new Error("Engine not discovered");
 
   const auth = await authHeaders();
-  const resp = await fetch(ttsUrl(base, "/blend/preview"), {
+  const resp = await engineRaw(ttsUrl(base, "/blend/preview"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify({ components, speed, lang }),
@@ -513,7 +513,7 @@ export async function importVoiceFile(params: {
   form.append("gender", params.gender ?? "female");
   form.append("lang_code", params.lang_code ?? "a");
 
-  const resp = await fetch(ttsUrl(base, "/custom-voices/import"), {
+  const resp = await engineRaw(ttsUrl(base, "/custom-voices/import"), {
     method: "POST",
     headers: auth,
     body: form,

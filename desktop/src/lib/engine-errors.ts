@@ -12,8 +12,9 @@ export const ENGINE_NOT_DISCOVERED = "Engine not discovered";
 
 /** The engine has no address yet (never discovered, or lost). */
 export class EngineUnreachableError extends Error {
-  constructor(message: string = ENGINE_NOT_DISCOVERED) {
+  constructor(message: string = ENGINE_NOT_DISCOVERED, options?: { cause?: unknown }) {
     super(message);
+    if (options?.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
     this.name = "EngineUnreachableError";
   }
 }
@@ -80,6 +81,9 @@ interface LegacyLabel {
  */
 const LEGACY_LABELS: ReadonlyArray<readonly [string, LegacyLabel]> = [
   ["GET /health", { label: "Health check failed" }],
+  ["POST /cloud/configure", { label: "Cloud configure failed" }],
+  ["POST /cloud/reconfigure", { label: "Cloud reconfigure failed" }],
+  ["POST /tools/invoke", { label: "Tool invocation failed", withBody: true }],
   ["GET /settings", { label: "Failed to get settings" }],
   ["PUT /settings", { label: "Failed to update settings" }],
   ["PUT /settings/paths/{name}", { label: "Failed to set path", bodyOnly: true }],
@@ -172,7 +176,9 @@ export function toEngineError(
   renderDetail: DetailRenderer,
 ): unknown {
   // A refused connection keeps the transport's own words ("Failed to fetch").
-  if (error instanceof NetworkError) return new EngineUnreachableError(error.message);
+  if (error instanceof NetworkError) return new EngineUnreachableError(error.message, {
+      cause: (error as { cause?: unknown }).cause,
+    });
   if (!(error instanceof MatrxApiError)) return error;
   const init = {
     status: error.status,

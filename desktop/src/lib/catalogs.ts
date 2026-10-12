@@ -16,6 +16,8 @@
  */
 
 import { engine } from "@/lib/api";
+import { getCatalogKind } from "@ai-matrx/api/apps";
+import { EngineHttpError } from "@/lib/engine-errors";
 
 export type CatalogKind =
   | "llm_model"
@@ -69,11 +71,17 @@ export async function fetchCatalog<P = Record<string, unknown>>(
   if (!base) throw new Error("engine not connected");
   // 5s cap: a hung engine must read as "unreachable" (throw → compiled
   // fallback), never stall SetupWizard or a selector behind a dead socket.
-  const resp = await fetch(`${base}/catalogs/${kind}`, {
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!resp.ok) throw new Error(`GET /catalogs/${kind} → ${resp.status}`);
-  const body = (await resp.json()) as CatalogResponse<P>;
+  let body: CatalogResponse<P>;
+  try {
+    body = (await getCatalogKind(
+      engine.api,
+      { path: { kind } },
+      { signal: AbortSignal.timeout(5000) },
+    )) as unknown as CatalogResponse<P>;
+  } catch (e) {
+    if (e instanceof EngineHttpError) throw new Error(`GET /catalogs/${kind} → ${e.status}`);
+    throw e;
+  }
   if (!Array.isArray(body.entries)) {
     throw new Error(`GET /catalogs/${kind}: malformed response (no entries)`);
   }

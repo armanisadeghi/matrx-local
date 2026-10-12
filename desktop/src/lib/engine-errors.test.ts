@@ -87,3 +87,35 @@ it("a method that always had its own sentence still shows it", async () => {
   const wake = await api.owwStop().catch((e: unknown) => e);
   expect((wake as Error).message).toBe("OWW stop failed: 500");
 });
+
+import {
+  MediaGenHttpError,
+  VaultLockedError,
+  fetchMediaLibraryFile,
+  fetchMediaVaultFile,
+  getImageGenStatus,
+  MediaFileError,
+} from "./api";
+
+it("media helpers: a refusal keeps their own error class and words", async () => {
+  vi.mocked(fetch).mockResolvedValue(json({ detail: "No GPU" }, 503));
+  const image = await getImageGenStatus("http://engine.test").catch((e: unknown) => e);
+  expect(image).toBeInstanceOf(MediaGenHttpError);
+  expect((image as Error).message).toBe("No GPU");
+  expect((image as MediaGenHttpError).status).toBe(503);
+
+  vi.mocked(fetch).mockResolvedValue(json({ detail: "gone" }, 404));
+  const file = await fetchMediaLibraryFile("http://engine.test", "i1").catch((e: unknown) => e);
+  expect(file).toBeInstanceOf(MediaFileError);
+  expect((file as MediaFileError).status).toBe(404);
+
+  vi.mocked(fetch).mockResolvedValue(json({ detail: "locked" }, 423));
+  await expect(fetchMediaVaultFile("http://engine.test", "i1")).rejects.toBeInstanceOf(VaultLockedError);
+});
+
+it("media helpers: a dead engine is still the browser's TypeError", async () => {
+  vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+  const error = await getImageGenStatus("http://engine.test").catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toBe("Failed to fetch");
+});

@@ -1,0 +1,146 @@
+{
+  "about": "CI cost manifest (ci-spend law, 2026-10-11). One entry per workflow, one leg per runner OS. scripts/check_workflow_runner_cost.py fails a workflow or OS leg without an entry, an entry without a benefit, triggers/crons/jobs that differ from the workflow file, $ that do not add up, a repo total over repo_share_usd, and (locally, with sibling repos beside it) a sum over the weekly ceiling.",
+  "repo": "matrx-local",
+  "weekly_ceiling_usd": 100.0,
+  "repo_share_usd": 3,
+  "prices_usd_per_minute": {
+    "linux": 0.006,
+    "windows": 0.01,
+    "macos": 0.062
+  },
+  "prices_source": "GitHub billing API pricePerUnit (Actions Linux / Windows / macOS 3-core), read 2026-10-11",
+  "total_usd_per_week": 34.36,
+  "workflows": {
+    "ci.yml": {
+      "triggers": [
+        "pull_request",
+        "push"
+      ],
+      "crons": [],
+      "benefit": "Matrx Local checks (Python, frontend, Rust; Windows Rust).",
+      "owner_reason": "Matrx Local proof before a release.",
+      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 225 push runs/week x 13.2 Linux + 2 Windows min (HEAD triggers; going manual-only)",
+      "usd_per_week": 22.32,
+      "legs": {
+        "linux": {
+          "jobs": [
+            "frontend",
+            "native-vault-core",
+            "python",
+            "rust-workspace"
+          ],
+          "runs_per_week": 225,
+          "minutes_per_run": 13.2,
+          "usd_per_week": 17.82
+        },
+        "windows": {
+          "jobs": [
+            "rust-workspace-windows"
+          ],
+          "runs_per_week": 225,
+          "minutes_per_run": 2,
+          "usd_per_week": 4.5
+        }
+      }
+    },
+    "egress-helper.yml": {
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "crons": [],
+      "benefit": "Builds/packages the Home Connection helper on every OS.",
+      "owner_reason": "The helper ships as a sidecar and standalone.",
+      "basis": "no runs observed; ~1/week estimate",
+      "usd_per_week": 0.78,
+      "legs": {
+        "linux": {
+          "jobs": [
+            "linux",
+            "publish",
+            "verify"
+          ],
+          "runs_per_week": 1,
+          "minutes_per_run": 10,
+          "usd_per_week": 0.06
+        },
+        "macos": {
+          "jobs": [
+            "macos"
+          ],
+          "runs_per_week": 1,
+          "minutes_per_run": 10,
+          "usd_per_week": 0.62
+        },
+        "windows": {
+          "jobs": [
+            "windows"
+          ],
+          "runs_per_week": 1,
+          "minutes_per_run": 10,
+          "usd_per_week": 0.1
+        }
+      }
+    },
+    "off-host-release.yml": {
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "crons": [],
+      "benefit": "Serialized hosted version bump that starts a release.",
+      "owner_reason": "Matrx Local release path (manual).",
+      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 188/week (pre-retirement); forward 2/week x 4.8 min",
+      "usd_per_week": 0.06,
+      "legs": {
+        "linux": {
+          "jobs": [
+            "release"
+          ],
+          "runs_per_week": 2,
+          "minutes_per_run": 4.8,
+          "usd_per_week": 0.06
+        }
+      }
+    },
+    "release.yml": {
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "crons": [],
+      "benefit": "Builds and publishes the Matrx Local desktop installers (mac/win/linux).",
+      "owner_reason": "Matrx Local release path (manual only; being retired).",
+      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 170/week pre-retirement; forward 2/week (mac 81, win 40, linux 30 min)",
+      "usd_per_week": 11.2,
+      "legs": {
+        "linux": {
+          "jobs": [
+            "prepare-release",
+            "release",
+            "rename-assets",
+            "verify"
+          ],
+          "runs_per_week": 2,
+          "minutes_per_run": 30,
+          "usd_per_week": 0.36
+        },
+        "macos": {
+          "jobs": [
+            "release"
+          ],
+          "runs_per_week": 2,
+          "minutes_per_run": 81,
+          "usd_per_week": 10.04
+        },
+        "windows": {
+          "jobs": [
+            "release"
+          ],
+          "runs_per_week": 2,
+          "minutes_per_run": 40,
+          "usd_per_week": 0.8
+        }
+      }
+    }
+  }
+}

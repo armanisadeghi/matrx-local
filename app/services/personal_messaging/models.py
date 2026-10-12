@@ -48,9 +48,46 @@ class DeviceGrant(BaseModel):
     provider_revoke_pending: bool = False
     cloud_retirement_pending: bool = False
     bridge_provider: Literal["cloud", "local"] | None = None
+    resources_generation: int | None = Field(default=None, ge=1)
+    client_label: str = ""
+    cleanup_confirmation: Literal["owner_attested"] | None = None
+    cleanup_confirmation_generation: int | None = Field(default=None, ge=1)
+    registration_pending: bool = False
+    exchange_pending: bool = False
+    oauth_state_hash: str | None = Field(
+        default=None, repr=False, pattern=r"^[0-9a-f]{64}$"
+    )
+    oauth_verifier: SecretStr | None = Field(default=None, repr=False)
+    oauth_expires_at: datetime | None = None
+    oauth_claimed: bool = False
 
     @model_validator(mode="after")
     def valid_active_grant(self):
+        if (self.cleanup_confirmation is None) != (
+            self.cleanup_confirmation_generation is None
+        ) or (
+            self.cleanup_confirmation_generation is not None
+            and self.cleanup_confirmation_generation > self.generation
+        ):
+            raise ValueError(
+                "Native cleanup provenance must identify its consent generation"
+            )
+        if (
+            self.status == "active"
+            and self.cleanup_confirmation_generation == self.generation
+        ):
+            raise ValueError("Attested cleanup requires new consent before activation")
+        if self.oauth_expires_at is not None and self.oauth_expires_at.tzinfo is None:
+            raise ValueError("OAuth callback deadline requires a timezone")
+        if self.status == "active" and (
+            self.registration_pending
+            or self.exchange_pending
+            or self.oauth_verifier is not None
+            or self.resources_generation != self.generation
+        ):
+            raise ValueError(
+                "Active access requires complete native issuance and current resource receipts"
+            )
         if self.expires_at is not None and self.expires_at.tzinfo is None:
             raise ValueError("Grant expiry requires a timezone")
         if self.status == "active" and (
@@ -76,6 +113,7 @@ class DeviceGrant(BaseModel):
                     self.access_token,
                     self.client_secret,
                     self.registration_access_token,
+                    self.oauth_verifier,
                 )
             )
             or (self.status == "retired" and self.cleanup_credentials)
@@ -101,6 +139,19 @@ class DeviceGrant(BaseModel):
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "connection_id": str(self.connection_id) if self.connection_id else None,
             "bridge_provider": self.bridge_provider,
+            "resources_generation": self.resources_generation,
+            "recovery_required": self.registration_pending
+            or self.exchange_pending
+            or self.client_secret is not None
+            or self.registration_access_token is not None,
+            "cleanup_client_label": self.client_label
+            if self.registration_pending
+            or self.exchange_pending
+            or self.client_secret
+            or self.registration_access_token
+            else None,
+            "cleanup_confirmation": self.cleanup_confirmation,
+            "cleanup_confirmation_generation": self.cleanup_confirmation_generation,
             "refresh_supported": False,
             "renewal": "reauthorization",
             "provider_revoke_pending": self.provider_revoke_pending,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 from pydantic import SecretStr
 from app.services.local_db.database import LocalDatabase
@@ -78,7 +78,11 @@ class PersonalMessagingGrantRepo:
         return grant
 
     async def save(
-        self, grant: DeviceGrant, *, expected_revision: int | None
+        self,
+        grant: DeviceGrant,
+        *,
+        expected_revision: int | None,
+        cleanup_client_label: str | None = None,
     ) -> DeviceGrant:
         async with _APP_SETTINGS_WRITE_LOCK:
             settings = await self.settings.get_all()
@@ -94,10 +98,51 @@ class PersonalMessagingGrantRepo:
                 raise GrantConflict(
                     "Messaging connection changed; reload before continuing"
                 )
+            attested_cleanup = cleanup_client_label is not None
+            if attested_cleanup and (
+                current is None
+                or current.status != "revoking"
+                or grant.status != "revoking"
+                or cleanup_client_label != current.client_label
+                or not cleanup_client_label
+                or not (
+                    current.registration_pending
+                    or current.exchange_pending
+                    or current.client_secret
+                    or current.registration_access_token
+                )
+                or grant.generation != current.generation
+                or grant.cleanup_confirmation != "owner_attested"
+                or grant.cleanup_confirmation_generation != current.generation
+                or grant.registration_pending
+                or grant.exchange_pending
+                or grant.provider_revoke_pending
+                or grant.access_token
+                or grant.client_secret
+                or grant.registration_access_token
+                or grant.cleanup_credentials
+                or grant.oauth_verifier
+                or grant.oauth_state_hash
+                or grant.oauth_expires_at
+            ):
+                raise GrantConflict(
+                    "Cleanup attestation must match the exact quarantined native client"
+                )
+            if (
+                current
+                and not attested_cleanup
+                and (
+                    grant.cleanup_confirmation != current.cleanup_confirmation
+                    or grant.cleanup_confirmation_generation
+                    != current.cleanup_confirmation_generation
+                )
+            ):
+                raise GrantConflict("Native cleanup provenance cannot be rewritten")
             if current is None and (
                 grant.status != "pending_local"
                 or grant.generation != 1
                 or grant.access_token is not None
+                or grant.cleanup_confirmation is not None
             ):
                 raise GrantConflict(
                     "New messaging access must begin with pending consent"
@@ -123,7 +168,11 @@ class PersonalMessagingGrantRepo:
                         "revoking",
                     },
                     "active": {"active", "needs_attention", "revoking"},
-                    "needs_attention": {"needs_attention", "revoking"},
+                    "needs_attention": {
+                        "needs_attention",
+                        "pending_credential",
+                        "revoking",
+                    },
                     "revoking": {"revoking", "retired"},
                     "retired": {"retired"},
                 }
@@ -131,6 +180,112 @@ class PersonalMessagingGrantRepo:
                     if grant.status not in transitions[current.status]:
                         raise GrantConflict(
                             "Retired messaging access requires new consent"
+                        )
+                    if (
+                        current.status == "needs_attention"
+                        and grant.status == "pending_credential"
+                        and (
+                            not current.access_token
+                            or current.cleanup_credentials
+                            or current.registration_pending
+                            or current.exchange_pending
+                            or not current.expires_at
+                            or current.expires_at <= datetime.now(UTC)
+                            or current.scopes != ["read"]
+                        )
+                    ):
+                        raise GrantConflict(
+                            "Only unexpired sealed consent can reconcile metadata"
+                        )
+                    for name in (
+                        "client_label",
+                        "oauth_state_hash",
+                        "oauth_verifier",
+                        "oauth_expires_at",
+                    ):
+                        before, after = getattr(current, name), getattr(grant, name)
+                        clearing_oauth = (
+                            name != "client_label"
+                            and after is None
+                            and (
+                                attested_cleanup
+                                or (
+                                    current.status == "pending_local"
+                                    and grant.status == "pending_credential"
+                                )
+                                or (
+                                    current.status == "revoking"
+                                    and grant.status == "retired"
+                                )
+                            )
+                        )
+                        if before != after and not clearing_oauth:
+                            raise GrantConflict(
+                                "OAuth state is immutable within a consent generation"
+                            )
+                    if current.oauth_claimed and not grant.oauth_claimed:
+                        raise GrantConflict(
+                            "Claimed callback cannot become available again"
+                        )
+                    if current.oauth_claimed != grant.oauth_claimed and not (
+                        current.status == grant.status == "pending_local"
+                        and grant.oauth_claimed
+                    ):
+                        raise GrantConflict(
+                            "Only a pending consent callback can be claimed"
+                        )
+                    if not current.registration_pending and grant.registration_pending:
+                        raise GrantConflict(
+                            "Registration begins only with a new consent generation"
+                        )
+                    if (
+                        current.registration_pending
+                        and not grant.registration_pending
+                        and not (
+                            attested_cleanup
+                            or current.status == grant.status == "pending_local"
+                            and not current.client_id
+                            and grant.client_id
+                        )
+                    ):
+                        raise GrantConflict(
+                            "Interrupted registration needs observed provider cleanup"
+                        )
+                    if (
+                        not current.exchange_pending
+                        and grant.exchange_pending
+                        and not (
+                            current.status == grant.status == "pending_local"
+                            and not current.oauth_claimed
+                            and grant.oauth_claimed
+                        )
+                    ):
+                        raise GrantConflict(
+                            "Native issuance requires an atomic callback claim"
+                        )
+                    if (
+                        current.exchange_pending
+                        and not grant.exchange_pending
+                        and not (
+                            attested_cleanup
+                            or current.status == "pending_local"
+                            and grant.status == "pending_credential"
+                            and grant.access_token
+                        )
+                    ):
+                        raise GrantConflict(
+                            "Interrupted issuance cannot be declared recovered"
+                        )
+                    if (
+                        current.resources_generation != grant.resources_generation
+                        and not (
+                            current.status == "pending_credential"
+                            and grant.status in ("pending_credential", "active")
+                            and grant.resources_generation == grant.generation
+                        )
+                    ):
+                        raise GrantConflict(
+                            "Current resource receipts are required before activation"
                         )
                     initializing_client = (
                         current.status == "pending_local"
@@ -151,7 +306,8 @@ class PersonalMessagingGrantRepo:
                     )
                     for name in ("client_secret", "registration_access_token"):
                         if getattr(grant, name) != getattr(current, name) and not (
-                            initializing_client
+                            attested_cleanup
+                            or initializing_client
                             or (retiring and getattr(grant, name) is None)
                         ):
                             raise GrantConflict(
@@ -166,6 +322,7 @@ class PersonalMessagingGrantRepo:
                                 and not current.cleanup_credentials
                                 and current.access_token is None
                             )
+                            or attested_cleanup
                             or (retiring and not grant.cleanup_credentials)
                         )
                     ):
@@ -191,7 +348,8 @@ class PersonalMessagingGrantRepo:
                                 "Native account and consent binding cannot change within a grant"
                             )
                     if current.access_token != grant.access_token and not (
-                        (
+                        attested_cleanup
+                        or (
                             current.status == "pending_local"
                             and grant.status == "pending_credential"
                             and current.access_token is None
@@ -220,6 +378,14 @@ class PersonalMessagingGrantRepo:
                     and grant.scopes == []
                     and grant.bridge_provider is None
                     and grant.access_token is None
+                    and grant.resources_generation is None
+                    and not grant.oauth_claimed
+                    and not grant.exchange_pending
+                    and not current.registration_pending
+                    and not current.exchange_pending
+                    and grant.cleanup_confirmation == current.cleanup_confirmation
+                    and grant.cleanup_confirmation_generation
+                    == current.cleanup_confirmation_generation
                 ):
                     raise GrantConflict(
                         "Finish retiring the previous grant before reconnecting"
@@ -234,3 +400,20 @@ class PersonalMessagingGrantRepo:
             settings[_PRIVATE_KEY] = values
             await self.settings.save_all(settings)
             return saved
+
+    async def list(self, *, actor_id: UUID, app_instance_id: UUID) -> list[DeviceGrant]:
+        values = await self.settings.get(_PRIVATE_KEY, {})
+        if not isinstance(values, dict):
+            raise GrantUnavailable("Device grant storage is invalid")
+        prefix = f"{actor_id}:{app_instance_id}:"
+        grants = []
+        for key, value in values.items():
+            if isinstance(key, str) and key.startswith(prefix):
+                grant = self._decode(value)
+                if key != self._key(actor_id, app_instance_id, grant.id) or (
+                    grant.actor_id,
+                    grant.app_instance_id,
+                ) != (actor_id, app_instance_id):
+                    raise GrantUnavailable("Device grant owner binding is invalid")
+                grants.append(grant)
+        return grants

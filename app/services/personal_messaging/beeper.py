@@ -54,6 +54,8 @@ class Bridge(BaseModel):
 
 class NativeUser(BaseModel):
     id: str = Field(min_length=1, max_length=1024)
+    displayText: str | None = None
+    phoneNumber: str | None = None
 
 
 class OAuthClient(BaseModel):
@@ -86,6 +88,13 @@ class NativeChat(BaseModel):
     id: str = Field(min_length=1, max_length=1024)
     accountID: str = Field(min_length=1, max_length=1024)
     title: str
+
+
+class NativeChatPage(BaseModel):
+    items: list[NativeChat]
+    hasMore: bool
+    oldestCursor: str
+    newestCursor: str
 
 
 class NativeMessage(BaseModel):
@@ -146,6 +155,11 @@ class DesktopApi:
                         raise BeeperFailure(
                             "reauthorization_required",
                             "Beeper access expired or was revoked. Reconnect.",
+                        )
+                    if response.status_code == 404:
+                        raise BeeperFailure(
+                            "native_not_found",
+                            "This native account or conversation is no longer available.",
                         )
                     if response.status_code == 403:
                         raise BeeperFailure(
@@ -209,7 +223,11 @@ class DesktopApi:
         return {**required, "refresh_supported": False, "renewal": "reauthorization"}
 
     async def register_client(
-        self, redirect_uri: str, *, engine_port: int
+        self,
+        redirect_uri: str,
+        *,
+        engine_port: int,
+        client_label: str = "AI Matrx personal messaging",
     ) -> OAuthClient:
         if (
             not 1 <= engine_port <= 65535
@@ -220,12 +238,14 @@ class DesktopApi:
                 "invalid_callback",
                 "Messaging callback must belong to this local engine.",
             )
+        if not client_label.startswith("AI Matrx") or not 1 <= len(client_label) <= 100:
+            raise BeeperFailure("invalid_client", "Native client label is invalid.")
         await self.metadata()
         result = await self._call(
             "POST",
             "/oauth/register",
             payload={
-                "client_name": "AI Matrx personal messaging",
+                "client_name": client_label,
                 "client_uri": "https://www.aimatrx.com",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
@@ -238,6 +258,7 @@ class DesktopApi:
             not isinstance(result, dict)
             or not isinstance(result.get("client_id"), str)
             or not result["client_id"]
+            or result.get("client_name") != client_label
             or result.get("redirect_uris") != [redirect_uri]
             or result.get("scope") != "read"
             or result.get("token_endpoint_auth_method") != "none"
@@ -352,7 +373,12 @@ class DesktopApi:
             or not grant.access_token
             or not grant.expires_at
             or grant.expires_at <= datetime.now(UTC)
-            or "read" not in grant.scopes
+            or grant.scopes != ["read"]
+            or grant.resources_generation != grant.generation
+            or grant.registration_pending
+            or grant.exchange_pending
+            or grant.cleanup_credentials
+            or grant.cleanup_confirmation_generation == grant.generation
         ):
             raise BeeperFailure(
                 "reauthorization_required", "Reconnect your personal WhatsApp account."
@@ -374,12 +400,69 @@ class DesktopApi:
             account is None
             or account.status != "connected"
             or account.user.id != grant.native_user_ref
+            or account.bridge.provider != grant.bridge_provider
         ):
             raise BeeperFailure(
                 "account_disconnected",
                 "The selected WhatsApp account is disconnected in Beeper.",
             )
         return account
+
+    async def verify_chat(
+        self, token: SecretStr, account_ref: str, chat_id: str
+    ) -> NativeChat:
+        if not chat_id or len(chat_id) > 1024:
+            raise BeeperFailure("invalid_chat", "Conversation selection is invalid.")
+        result = await self._call(
+            "GET", "/v1/chats/" + quote(chat_id, safe=""), token=token
+        )
+        try:
+            chat = NativeChat.model_validate(result)
+        except ValueError:
+            raise BeeperFailure(
+                "invalid_response", "Beeper returned an invalid conversation."
+            ) from None
+        if chat.accountID != account_ref or chat.id != chat_id:
+            raise BeeperFailure(
+                "chat_mismatch", "Beeper returned a different WhatsApp conversation."
+            )
+        return chat
+
+    async def chats(
+        self,
+        grant: DeviceGrant,
+        *,
+        cursor: str | None = None,
+        direction: Literal["before", "after"] = "before",
+        limit: int = 25,
+    ) -> NativeChatPage:
+        await self.account(grant)
+        if not 1 <= limit <= 200:
+            raise BeeperFailure("invalid_limit", "Conversation page size is invalid.")
+        params = {
+            "accountIDs": str(grant.account_ref),
+            "direction": direction,
+            "limit": str(limit),
+        }
+        if cursor is not None:
+            if not cursor or len(cursor) > 8192:
+                raise BeeperFailure("invalid_cursor", "Conversation cursor is invalid.")
+            params["cursor"] = cursor
+        result = await self._call(
+            "GET", "/v1/chats", token=self.active(grant), params=params
+        )
+        try:
+            page = NativeChatPage.model_validate(result)
+        except ValueError:
+            raise BeeperFailure(
+                "invalid_response", "Beeper returned an invalid conversation page."
+            ) from None
+        if any(chat.accountID != grant.account_ref for chat in page.items):
+            raise BeeperFailure(
+                "chat_mismatch",
+                "Beeper returned conversations from a different account.",
+            )
+        return page
 
     async def chat(self, grant: DeviceGrant, chat_id: str) -> NativeChat:
         await self.account(grant)
@@ -388,20 +471,9 @@ class DesktopApi:
                 "chat_not_selected",
                 "Select this WhatsApp conversation before opening it.",
             )
-        result = await self._call(
-            "GET", "/v1/chats/" + quote(chat_id, safe=""), token=self.active(grant)
+        return await self.verify_chat(
+            self.active(grant), str(grant.account_ref), chat_id
         )
-        try:
-            chat = NativeChat.model_validate(result)
-        except ValueError:
-            raise BeeperFailure(
-                "invalid_response", "Beeper returned an invalid conversation."
-            ) from None
-        if chat.accountID != grant.account_ref or chat.id != chat_id:
-            raise BeeperFailure(
-                "chat_mismatch", "Beeper returned a different WhatsApp conversation."
-            )
-        return chat
 
     async def messages(
         self,
@@ -507,6 +579,14 @@ class DesktopApi:
             },
             empty_ok=True,
         )
+        await self.verify_inactive(token, token_type_hint=token_type_hint)
+
+    async def verify_inactive(
+        self,
+        token: SecretStr,
+        *,
+        token_type_hint: Literal["access_token", "refresh_token"] = "access_token",
+    ) -> None:
         # Introspection is a fresh provider proof, rather than inferring from 200.
         result = await self._call(
             "POST",

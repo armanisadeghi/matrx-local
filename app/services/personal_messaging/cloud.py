@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY
 from app.services.sync_client import get_sync_client
-from app.services.personal_messaging.models import (
+from .models import (
     DeviceGrant,
     GrantConflict,
     GrantUnavailable,
@@ -120,7 +120,14 @@ class NativeConnectionClient:
         self, method: str, *, params: dict[str, str], body: dict | None = None
     ) -> tuple[int, list]:
         path = "/rest/v1/integration_connections"
-        if method == "GET":
+        if method == "RESOURCES":
+            path = "/rest/v1/integration_resources"
+            method = "GET"
+            params = {
+                **params,
+                "select": "id,connection_id,resource_type,resource_ref,display_name,permission_level,metadata",
+            }
+        elif method == "GET":
             params = {
                 **params,
                 "select": "id,owner_type,owner_user_id,organization_id,provider,provider_subject,scopes,status,updated_at,deleted_at,metadata",
@@ -429,7 +436,8 @@ class NativeConnectionClient:
         ):
             raise GrantUnavailable("Native account selection does not match this grant")
         if resource_type == "beeper_whatsapp_chat" and (
-            grant.status != "active" or resource_ref not in grant.selected_chat_ids
+            grant.status not in ("pending_credential", "active")
+            or selected != (resource_ref in grant.selected_chat_ids)
         ):
             raise GrantUnavailable(
                 "Select and verify this native chat on the device first"
@@ -474,3 +482,94 @@ class NativeConnectionClient:
         ):
             raise GrantConflict("Native chat selection returned a different binding")
         return row
+
+    async def selected_resources(
+        self, grant: DeviceGrant, current: CloudReceipt
+    ) -> list[CloudResourceReceipt]:
+        self._binding(current, grant)
+        if current.metadata != self._metadata(
+            grant, current.metadata.native_grant_revision
+        ):
+            raise GrantConflict("Personal messaging consent changed. Reconcile.")
+        resources = []
+        seen_ids = set()
+        offset = 0
+        while True:
+            _, rows = await self._request(
+                "RESOURCES",
+                params={
+                    "connection_id": "eq." + str(current.id),
+                    "deleted_at": "is.null",
+                    "metadata->>selected": "eq.true",
+                    "metadata->>native_grant_generation": "eq." + str(grant.generation),
+                    "limit": "50",
+                    "offset": str(offset),
+                    "order": "id.asc",
+                },
+            )
+            try:
+                page = [CloudResourceReceipt.model_validate(row) for row in rows]
+            except ValueError:
+                raise GrantUnavailable(
+                    "Native resource receipts are invalid."
+                ) from None
+            for resource in page:
+                if resource.id in seen_ids:
+                    raise GrantConflict(
+                        "Native resource pagination repeated a receipt."
+                    )
+                seen_ids.add(resource.id)
+                if (
+                    resource.connection_id != current.id
+                    or resource.metadata
+                    != NativeResourceMetadata(
+                        app_instance_id=self.app_instance_id,
+                        native_grant_id=grant.id,
+                        native_grant_generation=grant.generation,
+                        native_user_subject=self._subject(grant),
+                        account_ref=str(grant.account_ref),
+                        selected=True,
+                    )
+                ):
+                    raise GrantConflict("Native resource binding changed.")
+            resources.extend(page)
+            if len(page) < 50:
+                break
+            offset += len(page)
+        if len({(r.resource_type, r.resource_ref) for r in resources}) != len(
+            resources
+        ):
+            raise GrantConflict("Native selection has duplicate resource receipts.")
+        return resources
+
+    async def clear_unselected_resources(
+        self, grant: DeviceGrant, current: CloudReceipt
+    ) -> None:
+        expected = {
+            ("beeper_whatsapp_account", grant.account_ref),
+            *(("beeper_whatsapp_chat", chat_id) for chat_id in grant.selected_chat_ids),
+        }
+        for resource in await self.selected_resources(grant, current):
+            if (resource.resource_type, resource.resource_ref) not in expected:
+                await self.select_resource(
+                    grant,
+                    current,
+                    resource_type=resource.resource_type,
+                    resource_ref=resource.resource_ref,
+                    display_name=resource.display_name,
+                    selected=False,
+                )
+
+    async def verify_resources(self, grant: DeviceGrant, current: CloudReceipt) -> None:
+        if current.status != "connected":
+            raise GrantConflict("Personal messaging consent changed. Reconcile.")
+        resources = await self.selected_resources(grant, current)
+        expected = {
+            ("beeper_whatsapp_account", grant.account_ref),
+            *(("beeper_whatsapp_chat", chat_id) for chat_id in grant.selected_chat_ids),
+        }
+        seen = {(r.resource_type, r.resource_ref) for r in resources}
+        if seen != expected:
+            raise GrantUnavailable(
+                "Current native selection receipts are missing or inconsistent. Reconcile."
+            )

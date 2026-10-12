@@ -18,6 +18,8 @@ def grant():
         app_instance_id=uuid4(),
         generation=1,
         status="active",
+        resources_generation=1,
+        bridge_provider="cloud",
         client_id="public",
         redirect_uri="http://127.0.0.1:22140/personal-messaging/beeper/callback",
         access_token=SecretStr("fixture-token"),
@@ -276,6 +278,7 @@ def test_dcr_exact_local_callback_and_public_read_client(monkeypatch):
             200,
             json={
                 "client_id": "public-native-client",
+                "client_name": "AI Matrx personal messaging",
                 "redirect_uris": [callback],
                 "scope": "read",
                 "token_endpoint_auth_method": "none",

@@ -87,7 +87,11 @@ def test_encrypted_custody_restart_cas_and_unrelated_settings(tmp_path, monkeypa
         )
         assert wrong_actor is None
         active = sealed.model_copy(
-            update={"status": "active", "connection_id": uuid4()}
+            update={
+                "status": "active",
+                "resources_generation": 1,
+                "connection_id": uuid4(),
+            }
         )
         a, b = await asyncio.gather(
             repo.save(active, expected_revision=sealed.revision),
@@ -160,6 +164,7 @@ def test_expiry_and_keychain_failure_never_claim_connected(tmp_path, monkeypatch
         grant = pending().model_copy(
             update={
                 "status": "active",
+                "resources_generation": 1,
                 "access_token": SecretStr("private"),
                 "account_ref": "whatsapp",
                 "native_user_ref": "native-owner",
@@ -217,6 +222,7 @@ def test_active_consent_fields_are_immutable(tmp_path, monkeypatch, field, value
             row.model_copy(
                 update={
                     "status": "active",
+                    "resources_generation": 1,
                     "native_user_ref": "native-owner",
                     "account_ref": "whatsapp",
                     "scopes": ["read"],

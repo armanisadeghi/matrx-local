@@ -12,7 +12,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, Field, SecretStr, ConfigDict, model_validator
-from matrx_ai.db.message_parts import TextPart
+from .media import project_message
 from .models import DeviceGrant
 
 ORIGIN = "http://127.0.0.1:23373"
@@ -104,6 +104,7 @@ class NativeMessage(BaseModel):
     timestamp: datetime
     senderID: str
     senderName: str | None = None
+    editedTimestamp: datetime | None = None
     isSender: bool | None = None
     text: str | None = None
     type: str | None = None
@@ -503,57 +504,9 @@ class DesktopApi:
             ) from None
         messages = []
         for message in page.items:
-            if (
-                message.accountID != grant.account_ref
-                or message.chatID != chat_id
-                or message.timestamp.tzinfo is None
-            ):
-                raise BeeperFailure(
-                    "message_mismatch",
-                    "Beeper returned messages outside the selected conversation.",
-                )
-            if message.isHidden:
-                continue
-            parts = []
-            if message.isDeleted:
-                parts.append(
-                    TextPart(
-                        id=message.id + ":deleted", text="Message deleted"
-                    ).model_dump(mode="json")
-                )
-            else:
-                if message.text:
-                    parts.append(
-                        TextPart(id=message.id + ":text", text=message.text).model_dump(
-                            mode="json"
-                        )
-                    )
-                if message.attachments:
-                    parts.append(
-                        TextPart(
-                            id=message.id + ":attachments",
-                            text="Attachment available in Beeper",
-                        ).model_dump(mode="json")
-                    )
-            messages.append(
-                {
-                    "id": message.id,
-                    "account_id": message.accountID,
-                    "chat_id": message.chatID,
-                    "sender_id": message.senderID,
-                    "sender_name": message.senderName,
-                    "direction": "outbound"
-                    if message.isSender is True
-                    else "inbound"
-                    if message.isSender is False
-                    else "unknown",
-                    "created_at": message.timestamp.isoformat(),
-                    "content": {"parts": parts},
-                    "deleted": message.isDeleted,
-                    "attachment_count": len(message.attachments),
-                    "attachment_access": "beeper_only" if message.attachments else None,
-                }
-            )
+            projected = project_message(message, grant, chat_id)
+            if projected is not None:
+                messages.append(projected)
         return {
             "items": messages,
             "has_more": page.hasMore,

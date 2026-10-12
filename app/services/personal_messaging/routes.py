@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+from urllib.parse import quote
 from collections.abc import Awaitable
 from ipaddress import ip_address
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.api.remote_auth import (
@@ -26,6 +28,7 @@ from .public import (
     PersonalAccountSummary,
     PersonalChatPage,
     PersonalMessagePage,
+    PersonalMessageLookup,
 )
 from app.services.sync_client import get_sync_client
 
@@ -282,6 +285,66 @@ async def messages(
     return await _response(
         service.messages(chat_id, cursor=cursor), PersonalMessagePage
     )
+
+
+@router.get("/message", response_model=PersonalMessageLookup)
+async def message(
+    chat_id: str,
+    message_id: str,
+    service: PersonalMessagingCoordinator = Depends(owner_service),
+):
+    return await _response(service.message(chat_id, message_id), PersonalMessageLookup)
+
+
+async def _raise_operation(error: Exception):
+    raise error
+
+
+@router.get(
+    "/attachment",
+    response_class=Response,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+async def attachment(
+    request: Request,
+    chat_id: str,
+    message_id: str,
+    attachment_index: int = Query(ge=0, le=100),
+    revision: str = Query(pattern=r"^[0-9a-f]{64}$"),
+    service: PersonalMessagingCoordinator = Depends(owner_service),
+):
+    async def wait_disconnected():
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.25)
+
+    operation = asyncio.create_task(
+        service.attachment(chat_id, message_id, attachment_index, revision)
+    )
+    disconnected = asyncio.create_task(wait_disconnected())
+    try:
+        done, _ = await asyncio.wait(
+            {operation, disconnected}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if disconnected in done:
+            raise HTTPException(499, "Attachment request was cancelled.")
+        asset = await operation
+        return Response(
+            asset.data,
+            media_type=asset.mime_type,
+            headers={
+                **_PRIVATE,
+                "Content-Disposition": "attachment; filename*=UTF-8''"
+                + quote(asset.name, safe=""),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except (BeeperFailure, GrantUnavailable, GrantConflict) as error:
+        return await _response(_raise_operation(error), PublicGrantStatus)
+    finally:
+        for task in (operation, disconnected):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(operation, disconnected, return_exceptions=True)
 
 
 @router.post("/reconcile", response_model=PersonalActivation)

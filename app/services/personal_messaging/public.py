@@ -70,6 +70,15 @@ class PersonalChatPage(BaseModel):
     newest_cursor: str
 
 
+class PersonalAttachmentSummary(BaseModel):
+    index: int = Field(ge=0)
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    name: str
+    size_bytes: int | None = Field(default=None, ge=0)
+    mime_type: str | None = None
+    available: bool
+
+
 class PersonalMessageContent(BaseModel):
     parts: list[TextPart]
 
@@ -85,7 +94,8 @@ class PersonalMessage(BaseModel):
     content: PersonalMessageContent
     deleted: bool
     attachment_count: int = Field(ge=0)
-    attachment_access: Literal["beeper_only"] | None
+    attachment_access: Literal["beeper_only", "local_device"] | None
+    attachments: list[PersonalAttachmentSummary] = Field(default_factory=list)
 
 
 class PersonalMessagePage(BaseModel):
@@ -96,3 +106,7 @@ class PersonalMessagePage(BaseModel):
     history_coverage: Literal["available_in_beeper"]
     refresh_supported: Literal[False] = False
     renewal: Literal["reauthorization"] = "reauthorization"
+
+
+class PersonalMessageLookup(BaseModel):
+    message: PersonalMessage | None

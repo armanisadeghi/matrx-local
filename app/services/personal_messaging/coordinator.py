@@ -25,6 +25,13 @@ from .beeper import (
     UnverifiedTokenIssued,
 )
 from .cloud import NativeConnectionClient
+from .media import (
+    NativeAttachment,
+    attachment_revision,
+    read_attachment,
+    retrieve_message,
+    project_message,
+)
 from .models import DeviceGrant, GrantConflict, GrantUnavailable
 from .store import PersonalMessagingGrantRepo
 
@@ -543,6 +550,52 @@ class PersonalMessagingCoordinator:
                 result = await self.native.messages(grant, chat_id, cursor=cursor)
                 await self.fence()
                 return result
+
+    async def message(self, chat_id: str, message_id: str) -> dict:
+        async with self.lock:
+            grant = await self._ready()
+            async with self._read_boundary(grant):
+                message = await retrieve_message(
+                    self.native, grant, chat_id, message_id
+                )
+                await self.fence()
+                return {
+                    "message": project_message(message, grant, chat_id)
+                    if message
+                    else None
+                }
+
+    async def attachment(
+        self, chat_id: str, message_id: str, index: int, revision: str
+    ) -> NativeAttachment:
+        async with self.lock:
+            grant = await self._ready()
+            message = await retrieve_message(self.native, grant, chat_id, message_id)
+            if (
+                message is None
+                or not 0 <= index < len(message.attachments)
+                or attachment_revision(message, index) != revision
+            ):
+                raise GrantConflict(
+                    "This attachment changed. Refresh the conversation."
+                )
+        # Never hold the owner lock while downloading: Disconnect must win.
+        asset = await read_attachment(self.native, grant, message, index)
+        async with self.lock:
+            async with self._read_boundary(grant):
+                current = await retrieve_message(
+                    self.native, grant, chat_id, message_id
+                )
+                if (
+                    current is None
+                    or not 0 <= index < len(current.attachments)
+                    or attachment_revision(current, index) != revision
+                ):
+                    raise GrantConflict(
+                        "This attachment changed. Refresh the conversation."
+                    )
+                await self.fence()
+        return asset
 
     async def refresh(self) -> dict:
         async with self.lock:

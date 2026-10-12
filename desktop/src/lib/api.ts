@@ -8,6 +8,17 @@
 // THE package duration formatter (`@ai-matrx/kit/format`, duplication census
 // H1). `long` is the prose voice these timeout sentences are written in —
 // "timed out after 30 seconds", never a bare "30s" mid-sentence.
+import {
+  ConnectTimeoutError,
+  MatrxApiError,
+  TotalTimeoutError,
+  createApi,
+  type Api as ApiClient,
+  type CallOptions,
+  type HttpMethod,
+  type OperationArgs,
+  type OperationDescriptor,
+} from "@ai-matrx/api";
 import { formatDurationMs } from "@ai-matrx/kit/format";
 import { emitClientLog } from "@/hooks/use-client-log";
 import { getOwnedEngineUrl, discoverEnginePort } from "@/lib/sidecar";
@@ -3773,6 +3784,131 @@ class EngineAPI {
    */
   private static readonly CLAUDE_OVERVIEW_TIMEOUT_MS = 120_000;
 
+  /**
+   * THE engine transport: `@ai-matrx/api`'s client (URL, headers, timeouts,
+   * retry-on-transport-failure for reads, `MatrxApiError`) wrapped in the three
+   * things only the desktop knows — the discovered loopback origin, the
+   * signed-out fence (SR-05) with its one mount-time re-ask, and the
+   * action-needed report. Generated operations (`@ai-matrx/api/<domain>`) take
+   * this as their `api`, so `getSettings(engine.api)` is the whole call.
+   */
+  private readonly inner: ApiClient = createApi({
+    environment: "localhost",
+    resolveBaseUrl: () => this.baseUrl ?? undefined,
+  });
+
+  readonly api: ApiClient = {
+    url: (op, args) => this.inner.url(op, args),
+    send: (op, args, options) => this.sendOperation(op, args, options),
+    call: async <T,>(
+      op: OperationDescriptor,
+      args?: OperationArgs,
+      options?: CallOptions,
+    ): Promise<T> => {
+      const { response } = await this.sendOperation(op, args, options);
+      if (response.status === 204 || op.m === "HEAD") return undefined as T;
+      return (await response.json()) as T;
+    },
+  };
+
+  private async sendOperation(
+    op: OperationDescriptor,
+    args?: OperationArgs,
+    options?: CallOptions,
+  ): Promise<{
+    response: Response;
+    requestId: string;
+    controller: AbortController;
+  }> {
+    if (!this.baseUrl) throw new Error("Engine not discovered");
+    const fullUrl = this.inner.url(op, args);
+    const path = fullUrl.slice(this.baseUrl.length);
+    let authHdrs = await this.authHeaders();
+    // The signed-out fence: a path the engine already refused for "no
+    // credential" is not asked again until a token exists (SR-05).
+    assertNotFencedWhileSignedOut(
+      op.m,
+      path,
+      authHdrs.Authorization ? "present" : null,
+    );
+    const timeoutMs =
+      options?.totalTimeoutMs === undefined
+        ? EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS
+        : options.totalTimeoutMs;
+    const send = (headers: Record<string, string>) =>
+      this.inner.send(op, args, {
+        ...options,
+        connectTimeoutMs: options?.connectTimeoutMs ?? timeoutMs ?? 60_000,
+        totalTimeoutMs: options?.signal ? null : timeoutMs,
+        headers: { ...headers, ...options?.headers },
+      });
+    const body = typeof args?.body === "string" ? args.body : undefined;
+    const operationKey = httpOperationKey(op.m, path, body);
+    try {
+      let result;
+      try {
+        result = await send(authHdrs);
+      } catch (e) {
+        if (!(e instanceof MatrxApiError) || e.status !== 401 || authHdrs.Authorization) {
+          throw e;
+        }
+        // THE MOUNT-TIME RE-ASK — a 401 we caused by sending no credential is
+        // never the person's answer until we have asked for one again.
+        //
+        // Measured 2026-09-15 on installed 1.4.115: a page mounting during app
+        // start sent five reads before the session daemon had answered, every
+        // one came back 401, and the screen told a signed-in person "Couldn't
+        // read your conversations" until they clicked Refresh by hand. This is
+        // the seam's own guarantee, so ANY token provider that answers null
+        // too early costs one retry and not an error — and the signed-out
+        // fence is armed only when the second ask also comes back empty.
+        const retryHdrs = await this.authHeaders();
+        if (!retryHdrs.Authorization) throw e;
+        authHdrs = retryHdrs;
+        result = await send(authHdrs);
+      }
+      await resolveHttpActionNeeded(operationKey);
+      return result;
+    } catch (e) {
+      if (e instanceof MatrxApiError) {
+        if (e.status === 401 && !authHdrs.Authorization) {
+          fenceForSignedOut(op.m, path);
+        }
+        const payload: unknown = e.serverDetail;
+        await reportActionNeededErrorPayload(payload, operationKey);
+        const errorBody =
+          payload && typeof payload === "object"
+            ? (payload as Record<string, unknown>)
+            : null;
+        const message = stringifyErrorDetail(
+          errorBody?.message ?? errorBody?.detail,
+          `HTTP ${e.status}`,
+        );
+        const hint = typeof errorBody?.hint === "string" ? errorBody.hint : "";
+        const reference =
+          typeof errorBody?.failure_id === "string"
+            ? `Diagnostic reference: ${errorBody.failure_id}.`
+            : "";
+        throw new Error(
+          [`${op.m} ${path} failed: ${message}`, hint, reference]
+            .filter(Boolean)
+            .join(" "),
+        );
+      }
+      // A default-timeout abort becomes an actionable message. A caller-signal
+      // abort is re-thrown untouched so the caller can tell its own cancel.
+      if (
+        !options?.signal &&
+        (e instanceof ConnectTimeoutError || e instanceof TotalTimeoutError)
+      ) {
+        throw new Error(
+          `Engine request timed out after ${formatDurationMs(timeoutMs ?? 0, { style: "long" })}: ${path}`,
+        );
+      }
+      throw e;
+    }
+  }
+
   private async request<T>(
     path: string,
     init?: RequestInit,
@@ -3783,100 +3919,25 @@ class EngineAPI {
      */
     overrideTimeoutMs?: number,
   ): Promise<T> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    let authHdrs = await this.authHeaders();
-    // The signed-out fence: a path the engine already refused for "no
-    // credential" is not asked again until a token exists (SR-05).
-    assertNotFencedWhileSignedOut(
-      init?.method ?? "GET",
-      path,
-      authHdrs.Authorization ? "present" : null,
-    );
-    // A caller-supplied signal takes over timeout responsibility entirely;
-    // otherwise apply the default timeout ceiling.
-    const timeoutMs = overrideTimeoutMs ?? EngineAPI.DEFAULT_REQUEST_TIMEOUT_MS;
-    const send = async (headers: Record<string, string>): Promise<Response> => {
-      // One fresh timeout per attempt: an AbortSignal.timeout() is spent once
-      // it has been handed to a fetch.
-      const signal =
-        init?.signal ??
-        (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
-          ? AbortSignal.timeout(timeoutMs)
-          : undefined);
-      try {
-        return await fetch(`${this.baseUrl}${path}`, {
-          ...init,
-          signal: signal ?? null,
-          headers: {
-            ...headers,
-            ...(init?.headers as Record<string, string> | undefined),
-          },
-        });
-      } catch (e) {
-        // A default-timeout abort surfaces as a TimeoutError; turn it into an
-        // actionable message. A caller-signal abort is re-thrown untouched so
-        // the caller can distinguish its own cancellation.
-        if (
-          !init?.signal &&
-          e instanceof DOMException &&
-          (e.name === "TimeoutError" || e.name === "AbortError")
-        ) {
-          throw new Error(
-            `Engine request timed out after ${formatDurationMs(timeoutMs, { style: "long" })}: ${path}`,
-          );
-        }
-        throw e;
-      }
+    const method = (init?.method ?? "GET").toUpperCase() as HttpMethod;
+    const op: OperationDescriptor = {
+      m: method,
+      p: path,
+      d: "matrx-local",
+      a: "loopback_token",
+      o: "exempt",
+      n: "engine.path",
     };
-    let resp = await send(authHdrs);
-    if (resp.status === 401 && !authHdrs.Authorization) {
-      // THE MOUNT-TIME RE-ASK — a 401 we caused by sending no credential is
-      // never the person's answer until we have asked for one again.
-      //
-      // Measured 2026-09-15 on installed 1.4.115: a page mounting during app
-      // start sent five reads before the session daemon had answered, every
-      // one came back 401, and the screen told a signed-in person "Couldn't
-      // read your conversations" until they clicked Refresh by hand. The
-      // readiness gate in `resolveNativeVaultEngineAccessToken` closes that
-      // window at the source; this is the seam's own guarantee, so ANY token
-      // provider that answers null too early costs one retry and not an
-      // error — and the signed-out fence is armed only when the second ask
-      // also comes back empty, which is the one thing only signing in changes.
-      const retryHdrs = await this.authHeaders();
-      if (retryHdrs.Authorization) {
-        authHdrs = retryHdrs;
-        resp = await send(authHdrs);
-      }
-    }
-    const operationKey = httpOperationKey(
-      init?.method ?? "GET",
-      path,
-      init?.body,
+    const headers = init?.headers as Record<string, string> | undefined;
+    return this.api.call<T>(
+      op,
+      init?.body != null ? { body: init.body } : undefined,
+      {
+        ...(init?.signal ? { signal: init.signal } : {}),
+        ...(headers ? { headers } : {}),
+        ...(overrideTimeoutMs !== undefined ? { totalTimeoutMs: overrideTimeoutMs } : {}),
+      },
     );
-    if (!resp.ok) {
-      if (resp.status === 401 && !authHdrs.Authorization) {
-        fenceForSignedOut(init?.method ?? "GET", path);
-      }
-      const payload = await resp.json().catch(() => null);
-      await reportActionNeededErrorPayload(payload, operationKey);
-      const errorBody =
-        payload && typeof payload === "object"
-          ? (payload as Record<string, unknown>)
-          : null;
-      const message = stringifyErrorDetail(
-        errorBody?.message ?? errorBody?.detail,
-        `HTTP ${resp.status}`,
-      );
-      const hint = typeof errorBody?.hint === "string" ? errorBody.hint : "";
-      const reference = typeof errorBody?.failure_id === "string"
-        ? `Diagnostic reference: ${errorBody.failure_id}.` : "";
-      throw new Error(
-        [`${init?.method ?? "GET"} ${path} failed: ${message}`, hint, reference]
-          .filter(Boolean).join(" "),
-      );
-    }
-    await resolveHttpActionNeeded(operationKey);
-    return resp.json();
   }
 
   async get(

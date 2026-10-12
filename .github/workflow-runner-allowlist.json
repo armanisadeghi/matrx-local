@@ -1,0 +1,5 @@
+{
+  "release.yml::release": "push trigger is tags-only (v*): the macOS/Windows installers build only when a release tag is pushed (or by manual dispatch), never per commit",
+  "egress-helper.yml::macos": "push trigger is tags-only (egress-v*): the helper's macOS build runs only when its release tag is pushed",
+  "egress-helper.yml::windows": "push trigger is tags-only (egress-v*): the helper's Windows build runs only when its release tag is pushed"
+}

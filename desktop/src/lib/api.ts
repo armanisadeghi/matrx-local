@@ -2062,72 +2062,36 @@ class EngineAPI {
     threshold?: number;
     deviceName?: string;
   }): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/wake-word/start`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    await this.request<unknown>(`/wake-word/start`, { method: "POST", body: JSON.stringify({
         model_name: opts?.modelName ?? null,
         threshold: opts?.threshold ?? null,
         device_name: opts?.deviceName ?? null,
-      }),
-    });
-    if (!resp.ok)
-      throw new Error(`OWW start failed: ${resp.status} ${await resp.text()}`);
+      }) });
   }
 
   /** Stop the OWW detection loop entirely. */
   async owwStop(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/wake-word/stop`, {
-      method: "POST",
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok) throw new Error(`OWW stop failed: ${resp.status}`);
+    await this.request<unknown>(`/wake-word/stop`, { method: "POST" });
   }
 
   /** Mute OWW (keeps thread alive). */
   async owwMute(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/wake-word/mute`, {
-      method: "POST",
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok) throw new Error(`OWW mute failed: ${resp.status}`);
+    await this.request<unknown>(`/wake-word/mute`, { method: "POST" });
   }
 
   /** Unmute OWW. */
   async owwUnmute(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/wake-word/unmute`, {
-      method: "POST",
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok) throw new Error(`OWW unmute failed: ${resp.status}`);
+    await this.request<unknown>(`/wake-word/unmute`, { method: "POST" });
   }
 
   /** Dismiss OWW (10-second false-trigger cooldown). */
   async owwDismiss(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/wake-word/dismiss`, {
-      method: "POST",
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok) throw new Error(`OWW dismiss failed: ${resp.status}`);
+    await this.request<unknown>(`/wake-word/dismiss`, { method: "POST" });
   }
 
   /** Manually fire a wake-word-detected event (for testing). */
   async owwTrigger(): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const resp = await fetch(`${this.baseUrl}/wake-word/trigger`, {
-      method: "POST",
-      headers: await this.authHeaders(),
-    });
-    if (!resp.ok) throw new Error(`OWW trigger failed: ${resp.status}`);
+    await this.request<unknown>(`/wake-word/trigger`, { method: "POST" });
   }
 
   /** Configure OWW model / threshold at runtime. */
@@ -2135,20 +2099,10 @@ class EngineAPI {
     modelName?: string;
     threshold?: number;
   }): Promise<void> {
-    if (!this.baseUrl) throw new Error("Engine not discovered");
-    const headers = {
-      "Content-Type": "application/json",
-      ...(await this.authHeaders()),
-    };
-    const resp = await fetch(`${this.baseUrl}/wake-word/configure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    await this.request<unknown>(`/wake-word/configure`, { method: "POST", body: JSON.stringify({
         model_name: opts.modelName ?? null,
         threshold: opts.threshold ?? null,
-      }),
-    });
-    if (!resp.ok) throw new Error(`OWW configure failed: ${resp.status}`);
+      }) });
   }
 
   /** List all available OWW models (pre-trained + custom). */
@@ -3678,7 +3632,8 @@ class EngineAPI {
     ): Promise<T> => {
       const { response } = await this.sendOperation(op, args, options);
       if (response.status === 204 || op.m === "HEAD") return undefined as T;
-      return (await response.json()) as T;
+      const text = await response.text();
+      return (text ? JSON.parse(text) : undefined) as T;
     },
   };
 

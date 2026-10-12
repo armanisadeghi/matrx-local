@@ -180,7 +180,7 @@ class Remote:
             return httpx.Response(503)
         if path == "/rest/v1/integration_connections":
             return httpx.Response(200, json=[self.row] if self.row else [])
-        if path == "/rest/v1/integration_resources":
+        if path == "/rest/v1/integration_connection_resources":
             generation = int(
                 request.url.params["metadata->>native_grant_generation"].removeprefix(
                     "eq."

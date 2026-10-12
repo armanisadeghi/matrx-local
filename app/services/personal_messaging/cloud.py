@@ -121,7 +121,7 @@ class NativeConnectionClient:
     ) -> tuple[int, list]:
         path = "/rest/v1/integration_connections"
         if method == "RESOURCES":
-            path = "/rest/v1/integration_resources"
+            path = "/rest/v1/integration_connection_resources"
             method = "GET"
             params = {
                 **params,

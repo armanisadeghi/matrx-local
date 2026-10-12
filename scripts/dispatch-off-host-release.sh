@@ -80,7 +80,8 @@ done
 
 REQUEST_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 args=(--repo "$REPO" --ref main -f "bump=$BUMP" -f "message=$MESSAGE" \
-    -f "refresh_matrx_packages=true" -f "request_id=$REQUEST_ID")
+    -f "refresh_matrx_packages=true" -f "request_id=$REQUEST_ID" \
+    -f "requested_by=${CLAUDE_SESSION_ID:-${MATRX_LANE:-manual}}")
 if [[ -n "$VERSION" ]]; then
     args+=(-f "version=$VERSION")
 fi

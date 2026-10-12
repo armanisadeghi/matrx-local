@@ -1272,7 +1272,8 @@ DISPATCH_ERROR=""
 for attempt in $(seq 1 12); do
     if DISPATCH_ERROR=$(gh workflow run release.yml \
         --repo "$GITHUB_REPO" \
-        --ref "$NEW_TAG" 2>&1); then
+        --ref "$NEW_TAG" \
+        -f "requested_by=${CLAUDE_SESSION_ID:-${MATRX_LANE:-manual}}" 2>&1); then
         DISPATCHED=true
         break
     fi

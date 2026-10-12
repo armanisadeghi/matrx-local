@@ -4,7 +4,10 @@
  * revision; this side only serializes the latest observable selection so an
  * older picker/network completion cannot overwrite a newer choice.
  */
+import { MatrxApiError } from "@ai-matrx/api";
+import { getContext, setContext } from "@ai-matrx/api/web";
 import { getAuthedSession, subscribeSession } from "@/lib/custodian";
+import { engineApiAt } from "@/lib/engine-client";
 import {
   ACTIVE_ORGANIZATION_CHANGE_EVENT,
   getActiveOrganizationId,
@@ -31,30 +34,22 @@ async function request(
   url: string,
   token: string,
   signal: AbortSignal,
-  init?: RequestInit,
+  write?: object,
 ): Promise<ContextResponse | null> {
   const timeout = new AbortController();
   const timer = globalThis.setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
   const relay = () => timeout.abort();
   signal.addEventListener("abort", relay, { once: true });
   try {
-    const response = await fetch(`${url}/local-browser/context`, {
-      ...init,
-      signal: timeout.signal,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-    const text = await response.text();
-    let context: Context | null = null;
-    if (text) {
-      try { context = JSON.parse(text) as Context; } catch { /* status still decides */ }
-    }
-    return { status: response.status, context };
-  } catch {
-    return null;
+    const api = engineApiAt(url, token);
+    const options = { signal: timeout.signal };
+    const context = write
+      ? await setContext(api, { body: write as never }, options)
+      : await getContext(api, undefined, options);
+    return { status: 200, context: context as unknown as Context };
+  } catch (error) {
+    // A refusal still carries its status — a 409 is the conflict the caller retries.
+    return error instanceof MatrxApiError ? { status: error.status, context: null } : null;
   } finally {
     globalThis.clearTimeout(timer);
     signal.removeEventListener("abort", relay);
@@ -94,12 +89,9 @@ async function synchronize(ticket: number): Promise<void> {
     ) return;
     if (context.organization_id === latestOrganizationId) return;
     const write = await request(url, latestSession.access_token, transport.signal, {
-      method: "POST",
-      body: JSON.stringify({
-        engine_boot_id: context.engine_boot_id,
-        expected_revision: context.revision,
-        organization_id: latestOrganizationId,
-      }),
+      engine_boot_id: context.engine_boot_id,
+      expected_revision: context.revision,
+      organization_id: latestOrganizationId,
     });
     if (!write || (write.status >= 200 && write.status < 300) || write.status !== 409) return;
   }

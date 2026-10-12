@@ -12,6 +12,8 @@ import { GuidedVariableInputs } from "@/components/chat/GuidedVariableInputs";
 import { SandboxPicker } from "@/features/compute/SandboxPicker";
 import { useServiceStatus } from "@/hooks/use-service-status";
 import { cn } from "@/lib/utils";
+import { listToolSchemas } from "@ai-matrx/api/chat";
+import { engineApiAt } from "@/lib/engine-client";
 import { engine as engineAPI } from "@/lib/api";
 import { fetchMandateResolution } from "@/lib/aidream-client";
 import {
@@ -110,11 +112,10 @@ export function ChatPanel({
     if (engineStatus !== "connected" || !engineUrl) return;
     const loadSchemas = async () => {
       try {
-        const resp = await fetch(`${engineUrl}/chat/tools`);
-        if (resp.ok) {
-          const data = await resp.json();
-          setToolSchemas(data.tools ?? []);
-        }
+        const data = (await listToolSchemas(engineApiAt(engineUrl))) as {
+          tools?: Parameters<typeof setToolSchemas>[0];
+        };
+        setToolSchemas(data.tools ?? []);
       } catch {
         /* optional */
       }

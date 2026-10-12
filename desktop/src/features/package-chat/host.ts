@@ -27,6 +27,8 @@ import {
 } from "@/lib/org/active-org";
 import supabase from "@/lib/supabase";
 import { engine } from "@/lib/api";
+import { health } from "@ai-matrx/api/apps";
+import { engineApiAt } from "@/lib/engine-client";
 
 const ADDRESS_KEY = "matrx-local.package-chat.address";
 
@@ -92,7 +94,7 @@ function createLocalEngine(): () => ChatLocalEngine | null {
   const refresh = async (url: string) => {
     checkedAt = Date.now();
     try {
-      const body = (await fetch(`${url}/health`).then((r) => r.json())) as { capabilities?: unknown };
+      const body = (await health(engineApiAt(url))) as { capabilities?: unknown };
       const capabilities = Array.isArray(body.capabilities)
         ? body.capabilities.filter((c): c is string => typeof c === "string")
         : [];

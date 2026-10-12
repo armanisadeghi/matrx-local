@@ -29,6 +29,9 @@ import { Button, Progress } from "@ai-matrx/design-system";
 import { cn } from "@/lib/utils";
 import { getAuthedSession } from "@/lib/custodian";
 import { AppVersion } from "@/lib/app-version";
+import { MatrxApiError } from "@ai-matrx/api";
+import { runInstall as runSetupInstallOp } from "@ai-matrx/api/apps";
+import { engineApiAt } from "@/lib/engine-client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,33 +160,25 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    const url = `${engineUrl}/setup/install?mode=first_run`;
-
     try {
       // We use fetch + ReadableStream rather than EventSource so we can POST
       // and pass auth headers. The existing SetupWizard uses EventSource with
       // GET semantics — here we do a POST with proper auth.
       const session = await getAuthedSession();
       const token = session?.access_token ?? null;
-      const requestHeaders: Record<string, string> = {
-        Accept: "text/event-stream",
-        "Cache-Control": "no-cache",
-      };
-      if (token) requestHeaders["Authorization"] = `Bearer ${token}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: requestHeaders,
-        signal: ctrl.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Setup endpoint returned ${response.status}`);
+      let stream;
+      try {
+        stream = await runSetupInstallOp(
+          engineApiAt(engineUrl, token),
+          { query: { mode: "first_run" } },
+          { signal: ctrl.signal },
+        );
+      } catch (e) {
+        if (e instanceof MatrxApiError) {
+          throw new Error(`Setup endpoint returned ${e.status}`);
+        }
+        throw e;
       }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       // Set when the stream delivers a terminal event (`complete` or
       // `cancelled`). If the stream ends without one, the engine connection
       // was lost mid-install and we must surface an error instead of leaving
@@ -266,15 +261,8 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
         }
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          if (block.trim()) parseEvent(block);
-        }
+      for await (const frame of stream) {
+        if (frame.data !== null) parseEvent(`event: ${frame.event}\ndata: ${frame.data}`);
       }
 
       if (!sawTerminalEvent && !ctrl.signal.aborted) {

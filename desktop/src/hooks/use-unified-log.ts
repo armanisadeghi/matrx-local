@@ -22,6 +22,10 @@
 import { useEffect, useRef, useState } from "react";
 import { formatConsoleArguments } from "@/lib/log-serialization";
 import { enqueueDurableClientError } from "@/lib/error-outbox";
+import { MatrxApiError } from "@ai-matrx/api";
+import { streamLogs as streamSetupLogs } from "@ai-matrx/api/apps";
+import { getAccessLogs } from "@ai-matrx/api/computer";
+import { engineApiAt } from "@/lib/engine-client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -654,55 +658,47 @@ function startSetupLogsStream(engineUrl: string): () => void {
       currentAbort = abortCtrl;
 
       try {
-        const url = `${engineUrl}/setup/logs?lines=300`;
-        const resp = await fetch(url, { signal: abortCtrl.signal });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        let stream;
+        try {
+          stream = await streamSetupLogs(
+            engineApiAt(engineUrl),
+            { query: { lines: 300 } },
+            { signal: abortCtrl.signal },
+          );
+        } catch (e) {
+          if (e instanceof MatrxApiError) throw new Error(`HTTP ${e.status}`);
+          throw e;
+        }
 
         backoff.reset();
-        const reader = resp.body?.getReader();
-        if (!reader) throw new Error("No response body");
 
-        const decoder = new TextDecoder();
-        let buf = "";
-        let eventType = "";
-
-        while (active) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const raw of lines) {
-            if (raw.startsWith("event: ")) {
-              eventType = raw.slice(7).trim();
-            } else if (raw.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(raw.slice(6));
-                if (eventType === "log") {
-                  const d = data as { line: string; level: string };
-                  emitEngineLog(
-                    "server",
-                    d.line,
-                    SETUP_LOG_LEVEL_MAP[d.level] ?? "info",
-                  );
-                } else if (eventType === "history_end") {
-                  emitClientLog(
-                    "info",
-                    `── History (${data.lines_sent ?? 0} lines) ──────────────────────────`,
-                    "server",
-                  );
-                } else if (eventType === "connected") {
-                  emitClientLog(
-                    "info",
-                    `Connected — streaming from ${data.log_path ?? ""}`,
-                    "server",
-                  );
-                }
-              } catch {
-                /* skip malformed */
-              }
-              eventType = "";
+        for await (const frame of stream) {
+          if (!active) break;
+          if (frame.data === null) continue;
+          try {
+            const data = JSON.parse(frame.data);
+            if (frame.event === "log") {
+              const d = data as { line: string; level: string };
+              emitEngineLog(
+                "server",
+                d.line,
+                SETUP_LOG_LEVEL_MAP[d.level] ?? "info",
+              );
+            } else if (frame.event === "history_end") {
+              emitClientLog(
+                "info",
+                `── History (${data.lines_sent ?? 0} lines) ──────────────────────────`,
+                "server",
+              );
+            } else if (frame.event === "connected") {
+              emitClientLog(
+                "info",
+                `Connected — streaming from ${data.log_path ?? ""}`,
+                "server",
+              );
             }
+          } catch {
+            /* skip malformed */
           }
         }
       } catch (err) {
@@ -842,11 +838,11 @@ async function startAccessStream(
   const token = await getToken();
   if (token && active) {
     try {
-      const resp = await fetch(`${engineUrl}/logs/access?n=200`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (resp.ok) {
-        const data = (await resp.json()) as { entries?: AccessEntry[] };
+      {
+        const data = (await getAccessLogs(
+          engineApiAt(engineUrl, token),
+          { query: { n: 200 } },
+        )) as { entries?: AccessEntry[] };
         if (Array.isArray(data?.entries)) {
           const entries = data.entries.slice(-200);
           entries.forEach((entry) => {

@@ -1,4 +1,12 @@
+import {
+  listLocalTools,
+  setLocalToolExposure as setLocalToolExposureOp,
+} from "@ai-matrx/api/chat";
 import { engine } from "@/lib/api";
+import { engineApiAt } from "@/lib/engine-client";
+
+const bearer = async () =>
+  ((await engine.getEngineAuthHeaders()).Authorization ?? "").replace(/^Bearer /, "");
 
 export interface LocalToolItem {
   name: string;
@@ -13,29 +21,13 @@ export interface LocalToolsResponse {
   tools?: Array<Partial<LocalToolItem> & { name: string }>;
 }
 
-async function localToolsRequest(
-  engineUrl: string,
-  path: string,
-  init: RequestInit,
-): Promise<Response> {
-  return fetch(`${engineUrl}${path}`, {
-    ...init,
-    headers: {
-      ...(await engine.getEngineAuthHeaders()),
-      ...(init.headers as Record<string, string> | undefined),
-    },
-  });
-}
-
 export async function fetchLocalTools(
   engineUrl: string,
   signal = AbortSignal.timeout(6000),
 ): Promise<LocalToolsResponse> {
-  const response = await localToolsRequest(engineUrl, "/chat/local-tools", {
+  return (await listLocalTools(engineApiAt(engineUrl, await bearer()), undefined, {
     signal,
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return (await response.json()) as LocalToolsResponse;
+  })) as LocalToolsResponse;
 }
 
 export async function setLocalToolExposure(
@@ -43,15 +35,9 @@ export async function setLocalToolExposure(
   disabledTools: string[],
   signal = AbortSignal.timeout(6000),
 ): Promise<void> {
-  const response = await localToolsRequest(
-    engineUrl,
-    "/chat/local-tools/exposure",
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ disabled_tools: disabledTools }),
-      signal,
-    },
+  await setLocalToolExposureOp(
+    engineApiAt(engineUrl, await bearer()),
+    { body: { disabled_tools: disabledTools } },
+    { signal },
   );
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }

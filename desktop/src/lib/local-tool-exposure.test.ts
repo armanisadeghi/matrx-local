@@ -17,38 +17,46 @@ describe("local tool exposure engine requests", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
 
+  const sent = () => {
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return { url, init, headers: new Headers(init.headers) };
+  };
+
   it("authorizes the protected local tool catalog request", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ tools: [] }) });
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ tools: [] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
 
     await expect(fetchLocalTools("http://127.0.0.1:22140")).resolves.toEqual({
       tools: [],
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:22140/chat/local-tools",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer test-token" },
-      }),
-    );
+    const { url, headers } = sent();
+    expect(url).toBe("http://127.0.0.1:22140/chat/local-tools");
+    expect(headers.get("authorization")).toBe("Bearer test-token");
   });
 
   it("authorizes the exposure mutation while preserving its JSON request", async () => {
-    fetchMock.mockResolvedValue({ ok: true });
+    fetchMock.mockResolvedValue(
+      new Response("{}", { headers: { "content-type": "application/json" } }),
+    );
 
     await expect(
       setLocalToolExposure("http://127.0.0.1:22140", ["local_shell"]),
     ).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:22140/chat/local-tools/exposure",
-      expect.objectContaining({
-        method: "PUT",
-        headers: {
-          Authorization: "Bearer test-token",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ disabled_tools: ["local_shell"] }),
-      }),
-    );
+    const { url, init, headers } = sent();
+    expect(url).toBe("http://127.0.0.1:22140/chat/local-tools/exposure");
+    expect(init.method).toBe("PUT");
+    expect(headers.get("authorization")).toBe("Bearer test-token");
+    expect(headers.get("content-type")).toContain("application/json");
+    expect(init.body).toBe(JSON.stringify({ disabled_tools: ["local_shell"] }));
+  });
+
+  it("a refusal rejects", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 500 }));
+    await expect(fetchLocalTools("http://127.0.0.1:22140")).rejects.toThrow();
   });
 });

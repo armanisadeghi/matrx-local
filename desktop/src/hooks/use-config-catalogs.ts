@@ -10,6 +10,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { isTauri } from "@/lib/sidecar";
+import { listModels as listChatModels } from "@ai-matrx/api/chat";
+import { engineApiAt } from "@/lib/engine-client";
 import { engine } from "@/lib/api";
 import { overlayLlmCatalog } from "@/lib/llm/catalog";
 import { overlayWhisperCatalog } from "@/lib/transcription/catalog";
@@ -122,9 +124,9 @@ export function useConfigCatalogs(): ConfigCatalogs {
     if (!engine.engineUrl) return;
     setChatModelsLoading(true);
     try {
-      const resp = await fetch(`${engine.engineUrl}/chat/models`);
-      if (resp.ok) {
-        const data = await resp.json();
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = (await listChatModels(engineApiAt(engine.engineUrl))) as any;
         if (
           data.models &&
           Array.isArray(data.models) &&

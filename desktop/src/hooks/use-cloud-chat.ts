@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MatrxApiError } from "@ai-matrx/api";
+import { localLlmStatus } from "@ai-matrx/api/chat";
+import { engineApiAt } from "@/lib/engine-client";
 import { fetchAIDreamModels, fetchMandateResolution } from "@/lib/aidream-client";
 import {
   isOrganizationNotSelectedError,
@@ -991,14 +994,14 @@ async function fetchLocalLlmStatus(
   accessToken?: string,
 ): Promise<LocalLlmStatus | null> {
   if (!engineUrl) return null;
-  const init: RequestInit = accessToken
-    ? { headers: { Authorization: `Bearer ${accessToken}` } }
-    : {};
-  const response = await fetch(`${engineUrl}/chat/local-llm/status`, init);
-  if (!response.ok) {
-    throw new Error(`Failed to get local LLM status (${response.status})`);
+  try {
+    return (await localLlmStatus(engineApiAt(engineUrl, accessToken))) as unknown as LocalLlmStatus;
+  } catch (e) {
+    if (e instanceof MatrxApiError) {
+      throw new Error(`Failed to get local LLM status (${e.status})`);
+    }
+    throw e;
   }
-  return (await response.json()) as LocalLlmStatus;
 }
 
 export function useCloudChat(options: UseCloudChatOptions = {}) {

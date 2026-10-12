@@ -1,4 +1,10 @@
+import {
+  delegationConversationState,
+  delegationUiClaim,
+  delegationUiRelease,
+} from "@ai-matrx/api/chat";
 import { conversationPendingCallsPath } from "@/lib/api/routes/ai";
+import { engineApiAt } from "@/lib/engine-client";
 import type { StreamBlockBuilder } from "@/lib/chat-blocks";
 import {
   reduceLiveToolEvent,
@@ -132,30 +138,22 @@ async function resolveAccessToken(source: DelegationAccessToken): Promise<string
   return typeof source === "function" ? source() : source;
 }
 
-function authenticatedHeaders(accessToken: string): HeadersInit {
-  return {
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-  };
-}
-
 export async function claimDelegationUi(
   engineUrl: string,
   conversationId: string,
   accessToken: string,
 ): Promise<EngineDelegationState | null> {
   try {
-    const response = await fetch(`${engineUrl}/chat/delegation/ui-claim`, {
-      method: "POST",
-      headers: authenticatedHeaders(accessToken),
-      body: JSON.stringify({
-        conversation_id: conversationId,
-        ttl_seconds: DELEGATION_CLAIM_TTL_SECONDS,
-      }),
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as EngineDelegationState;
+    return (await delegationUiClaim(
+      engineApiAt(engineUrl, accessToken),
+      {
+        body: {
+          conversation_id: conversationId,
+          ttl_seconds: DELEGATION_CLAIM_TTL_SECONDS,
+        } as never,
+      },
+      { signal: AbortSignal.timeout(4000) },
+    )) as unknown as EngineDelegationState;
   } catch {
     return null;
   }
@@ -172,15 +170,11 @@ export async function readDelegationState(
   accessToken: string,
 ): Promise<EngineDelegationState | null> {
   try {
-    const response = await fetch(
-      `${engineUrl}/chat/delegation/conversation/${encodeURIComponent(conversationId)}`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        signal: AbortSignal.timeout(4000),
-      },
-    );
-    if (!response.ok) return null;
-    return (await response.json()) as EngineDelegationState;
+    return (await delegationConversationState(
+      engineApiAt(engineUrl, accessToken),
+      { path: { conversation_id: conversationId } },
+      { signal: AbortSignal.timeout(4000) },
+    )) as unknown as EngineDelegationState;
   } catch {
     return null;
   }
@@ -192,12 +186,11 @@ export async function releaseDelegationUi(
   accessToken: string,
 ): Promise<void> {
   try {
-    await fetch(`${engineUrl}/chat/delegation/ui-release`, {
-      method: "POST",
-      headers: authenticatedHeaders(accessToken),
-      body: JSON.stringify({ conversation_id: conversationId }),
-      signal: AbortSignal.timeout(4000),
-    });
+    await delegationUiRelease(
+      engineApiAt(engineUrl, accessToken),
+      { body: { conversation_id: conversationId } as never },
+      { signal: AbortSignal.timeout(4000) },
+    );
   } catch {
     // Claim TTL expiry makes the engine self-heal; release is best-effort.
   }

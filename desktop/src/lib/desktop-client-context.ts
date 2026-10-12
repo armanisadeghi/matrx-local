@@ -11,6 +11,10 @@
  * in sync.
  */
 
+import { MatrxApiError } from "@ai-matrx/api";
+import { health } from "@ai-matrx/api/apps";
+import { engineApiAt } from "@/lib/engine-client";
+
 export const DESKTOP_SURFACE = "matrx-local/desktop";
 export const DESKTOP_CAPABILITY = "desktop-native";
 
@@ -38,16 +42,17 @@ function browserPlatform(): string {
 }
 
 async function fetchEngineIdentity(engineUrl: string): Promise<EngineIdentity> {
-  const response = await fetch(`${engineUrl}/health`, {
-    signal: AbortSignal.timeout(4000),
-  });
-  if (!response.ok) {
-    throw new Error(`engine /health returned ${response.status}`);
+  let payload: { instance_id?: string | null; version?: string | null };
+  try {
+    payload = (await health(engineApiAt(engineUrl), undefined, {
+      signal: AbortSignal.timeout(4000),
+    })) as typeof payload;
+  } catch (error) {
+    if (error instanceof MatrxApiError) {
+      throw new Error(`engine /health returned ${error.status}`);
+    }
+    throw error;
   }
-  const payload = (await response.json()) as {
-    instance_id?: string | null;
-    version?: string | null;
-  };
   return {
     instanceId: payload.instance_id ?? "",
     engineVersion: payload.version ?? "",

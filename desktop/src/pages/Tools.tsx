@@ -18,6 +18,8 @@ import {
   categoryColorMap,
   getCategoryMeta,
 } from "@/lib/tool-registry";
+import { listToolSchemas } from "@ai-matrx/api/chat";
+import { engineApiAt } from "@/lib/engine-client";
 import type { EngineStatus } from "@/hooks/use-engine";
 import type { ToolUISchema } from "@/types/tool-schema";
 import { cn } from "@/lib/utils";
@@ -111,9 +113,9 @@ export function Tools({ engineStatus, engineUrl, tools }: ToolsProps) {
     if (engineStatus !== "connected" || !engineUrl) return;
     const load = async () => {
       try {
-        const resp = await fetch(`${engineUrl}/chat/tools`);
-        if (!resp.ok) return;
-        const data = await resp.json();
+        const data = (await listToolSchemas(engineApiAt(engineUrl))) as {
+          tools?: EngineToolSchema[];
+        };
         const schemas = ((data.tools ?? []) as EngineToolSchema[]).map(
           fromEngineSchema,
         );

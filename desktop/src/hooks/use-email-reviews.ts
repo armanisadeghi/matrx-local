@@ -12,7 +12,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MatrxApiError } from "@ai-matrx/api";
+import { delegationPendingReviews, delegationReviewDecision } from "@ai-matrx/api/chat";
 import { getAuthedSession } from "@/lib/custodian";
+import { engineApiAt } from "@/lib/engine-client";
 
 const REVIEW_POLL_MS = 1500;
 
@@ -51,6 +54,11 @@ interface RawReview {
  * The engine's delegation routes are behind the same auth gate as
  * `/chat/delegation/ui-claim` — loopback is not a credential here.
  */
+/** The bearer token inside the headers `authHeaders()` built. */
+function bearer(headers: Record<string, string>): string {
+  return (headers.Authorization ?? "").replace(/^Bearer /, "");
+}
+
 async function authHeaders(): Promise<Record<string, string> | null> {
   const session = await getAuthedSession();
   if (!session?.access_token) return null;
@@ -105,12 +113,11 @@ export function useEmailReviews(
     try {
       const headers = await authHeaders();
       if (!headers) return;
-      const response = await fetch(`${engineUrl}/chat/delegation/reviews`, {
-        headers,
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!response.ok) return;
-      const payload = (await response.json()) as { reviews?: RawReview[] };
+      const payload = (await delegationPendingReviews(
+        engineApiAt(engineUrl, bearer(headers)),
+        undefined,
+        { signal: AbortSignal.timeout(4000) },
+      )) as { reviews?: RawReview[] };
       const parsed = (payload.reviews ?? [])
         .map(parseReview)
         .filter((review): review is PendingEmailReview => review !== null)
@@ -134,12 +141,10 @@ export function useEmailReviews(
       }
       resolvedRef.current.add(callId);
       setReviews((prev) => prev.filter((review) => review.callId !== callId));
-      const response = await fetch(
-        `${engineUrl}/chat/delegation/review-decision`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
+      let failedStatus: number | null = null;
+      try {
+        await delegationReviewDecision(engineApiAt(engineUrl, bearer(headers)), {
+          body: {
             call_id: callId,
             outcome: decision.outcome,
             message_id: decision.messageId ?? null,
@@ -149,16 +154,19 @@ export function useEmailReviews(
             from_email: decision.fromEmail ?? null,
             edited: decision.edited ?? false,
             error: decision.error ?? null,
-          }),
-        },
-      );
-      if (!response.ok && response.status !== 404) {
+          } as never,
+        });
+      } catch (e) {
+        if (!(e instanceof MatrxApiError)) throw e;
+        failedStatus = e.status;
+      }
+      if (failedStatus !== null && failedStatus !== 404) {
         // Delivery of the DECISION failed (not the send). Let the card come
         // back on the next poll so the user is never told it was handled.
         resolvedRef.current.delete(callId);
         await refresh();
         throw new Error(
-          `The app could not record your decision (HTTP ${response.status}).`,
+          `The app could not record your decision (HTTP ${failedStatus}).`,
         );
       }
     },

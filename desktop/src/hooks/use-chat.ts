@@ -21,6 +21,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ContextReceipt, ContextReceiptMismatch } from "@ai-matrx/agents/context";
 import { streamErrorText } from "@ai-matrx/api";
+import { listModels as listChatModels } from "@ai-matrx/api/chat";
+import { engineApiAt } from "@/lib/engine-client";
 import { isTauri } from "@/lib/sidecar";
 import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";
@@ -344,9 +346,7 @@ export function useChat({ engineUrl }: UseChatOptions) {
 
     const load = async () => {
       try {
-        const resp = await fetch(`${engineUrl}/chat/models`);
-        if (!resp.ok) return;
-        const data = await resp.json() as { models: Array<{
+        const data = await listChatModels(engineApiAt(engineUrl)) as unknown as { models: Array<{
           name: string; common_name: string; provider: string;
           is_primary: boolean; is_premium: boolean;
           capabilities: string[]; context_window: number;

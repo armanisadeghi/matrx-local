@@ -33,6 +33,7 @@ from app.api.data_routes import router as data_router
 from app.api.permissions_routes import router as permissions_router
 from app.api.capabilities_routes import router as capabilities_router
 from app.api.auth import AuthMiddleware
+from app.services.personal_messaging.routes import router as personal_messaging_router
 from app.services.local_browser_transport import (
     install_transport_subscriptions,
     protected_private_path,
@@ -2144,6 +2145,7 @@ async def _access_denied_error_handler(_request: Request, exc: _AccessDeniedErro
 app.include_router(admin_router)
 app.include_router(catalog_router)
 app.include_router(api_router)
+app.include_router(personal_messaging_router)
 app.include_router(tool_router, prefix="/tools", tags=["tools"])
 app.include_router(action_needed_router)
 app.include_router(organization_router)
@@ -2229,7 +2231,7 @@ async def _log_requests_dispatch(request: Request, call_next):
 
     # This grant envelope is opaque private authority. Do not read, format,
     # sanitize, record, or diagnose any part of the request or response.
-    if protected_private_path(request.url.path):
+    if protected_private_path(request.url.path) or request.url.path.startswith("/personal-messaging/"):
         try:
             response = await call_next(request)
         except Exception:

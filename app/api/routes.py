@@ -136,6 +136,8 @@ async def health():
     from app.services.ai.engine import supports_agent_execution
 
     execution_capabilities = [
+        "personal_messaging_v1",
+        "personal_messaging_write_v1",
         "chat_execution_v1",
         "conversation_execution_v1",
         "chat_execution_v2",

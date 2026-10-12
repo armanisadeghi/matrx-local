@@ -26,6 +26,7 @@ from app.api.remote_auth import (
 from app.services.pairing import matches_pair_token
 from app.services.catalogs.models import KNOWN_KINDS as _CATALOG_KINDS
 from app.services.local_browser_transport import private_path, protected_private_path
+from app.services.personal_messaging.routes import direct_callback_path
 
 logger = get_logger()
 
@@ -171,7 +172,9 @@ def _auth_error_response(
             )
         except Exception:  # logging must never break the auth decision
             logger.debug("[auth] could not record rejection", exc_info=True)
-    headers = {"Cache-Control": "no-store"} if path.startswith("/local-browser/") else None
+    headers = (
+        {"Cache-Control": "no-store"} if path.startswith("/local-browser/") else None
+    )
     if path == "/v1" or path.startswith("/v1/"):
         return JSONResponse(
             status_code=status_code,
@@ -185,7 +188,9 @@ def _auth_error_response(
                 }
             },
         )
-    return JSONResponse(status_code=status_code, content={"detail": message}, headers=headers)
+    return JSONResponse(
+        status_code=status_code, content={"detail": message}, headers=headers
+    )
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -196,7 +201,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if protected_private_path(raw_path) and not private_path(raw_path):
             return JSONResponse(
                 status_code=404,
-                content={"status": "refused", "operation": "unknown", "reason": "invalid_request"},
+                content={
+                    "status": "refused",
+                    "operation": "unknown",
+                    "reason": "invalid_request",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        if direct_callback_path(
+            raw_path.rstrip("/"), "GET"
+        ) and raw_path != raw_path.rstrip("/"):
+            return JSONResponse(
+                {"error": "invalid_callback_path"},
+                status_code=404,
                 headers={"Cache-Control": "no-store"},
             )
         path = raw_path.rstrip("/") or "/"
@@ -214,6 +231,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         via_tunnel = headers_indicate_tunnel(request.headers)
         request.state.via_tunnel = via_tunnel
+
+        # These exact native callback routes enforce loopback/state themselves.
+        if direct_callback_path(raw_path, request.method):
+            return await call_next(request)
 
         # Always-public routes (health/discovery/read-only) — allowed on any path.
         if path in _PUBLIC_PATHS:

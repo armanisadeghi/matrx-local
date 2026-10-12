@@ -24,7 +24,7 @@ import type {
   ErrorPayload,
 } from "@/types/python-generated/stream-events";
 import { sanitizeRenderBlock } from "@/features/content-ir/runtime/inbound";
-import { streamErrorText } from "@ai-matrx/agents/matrx";
+import { streamErrorText } from "@ai-matrx/api";
 
 export type ToolBlockPhase =
   | "pending"

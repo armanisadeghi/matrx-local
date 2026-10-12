@@ -20,7 +20,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ContextReceipt, ContextReceiptMismatch } from "@ai-matrx/agents/context";
-import { streamErrorText } from "@ai-matrx/agents/matrx";
+import { streamErrorText } from "@ai-matrx/api";
 import { isTauri } from "@/lib/sidecar";
 import { getAuthedSession } from "@/lib/custodian";
 import { streamCompletion } from "@/lib/llm/api";

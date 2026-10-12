@@ -18,7 +18,7 @@
 import {
   applyOrganizationContextHeader,
   fetchWithMatrxProtocolFallback,
-} from "@ai-matrx/agents/matrx";
+} from "@ai-matrx/api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {

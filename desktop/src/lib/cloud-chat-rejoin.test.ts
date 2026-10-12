@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readLiveRunRejoin, readLiveStreamUnavailable } from "@ai-matrx/agents/matrx";
+import { readLiveRunRejoin, readLiveStreamUnavailable } from "@ai-matrx/api";
 import { settleCloudRejoinWithoutJournal } from "./cloud-chat-rejoin";
 
 /**

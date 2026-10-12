@@ -47,7 +47,7 @@
 
 import {
   applyOrganizationContextHeader,
-} from "@ai-matrx/agents/matrx";
+} from "@ai-matrx/api";
 import {
   createAgentCatalog,
   type AgentCatalog,

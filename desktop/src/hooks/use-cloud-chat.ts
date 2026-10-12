@@ -23,7 +23,7 @@ import {
   readLiveStreamUnavailable,
   streamErrorText,
   type MatrxLiveRunRejoin,
-} from "@ai-matrx/agents/matrx";
+} from "@ai-matrx/api";
 import { settleCloudRejoinWithoutJournal } from "@/lib/cloud-chat-rejoin";
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import {

@@ -2,7 +2,7 @@ import {
   readMatrxNdjsonStream,
   type MatrxNdjsonIssue,
   type MatrxStreamEnvelope,
-} from "@ai-matrx/agents/stream/ndjson";
+} from "@ai-matrx/api/stream";
 
 import type { TypedStreamEvent } from "@/types/python-generated/stream-events";
 

@@ -15,7 +15,7 @@
  * never decides visibility.
  */
 
-import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+import { applyOrganizationContextHeader } from "@ai-matrx/api";
 
 import type { components } from "@/types/python-generated/api-types";
 import { getAIDreamServerUrl } from "@/lib/app-config";

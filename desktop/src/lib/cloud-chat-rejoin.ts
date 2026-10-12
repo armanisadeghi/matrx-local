@@ -16,7 +16,7 @@ import {
   type MatrxLiveStreamUnavailable,
   type MatrxRunPickupSettlement,
   type MatrxTransport,
-} from "@ai-matrx/agents/matrx";
+} from "@ai-matrx/api";
 
 export interface SettleCloudRejoinArgs {
   /** The cloud server root; requests go to `${cloudServerUrl}/api${path}`. */

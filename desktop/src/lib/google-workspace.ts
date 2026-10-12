@@ -13,7 +13,7 @@
  * reading anywhere in the platform.
  */
 
-import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+import { applyOrganizationContextHeader } from "@ai-matrx/api";
 
 import supabase from "@/lib/supabase";
 import { getAuthedSession } from "@/lib/custodian";

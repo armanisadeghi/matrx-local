@@ -14,7 +14,7 @@
  *     the organization aidream verifies. Callers skip the fetch when logged out.
  */
 
-import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+import { applyOrganizationContextHeader } from "@ai-matrx/api";
 
 import { getAIDreamServerUrl } from "@/lib/app-config";
 import { mandateResolutionPath } from "@/lib/api/routes/ai";

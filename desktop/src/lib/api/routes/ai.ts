@@ -16,7 +16,7 @@
  * hardcode a `/v2` segment at a call site or anywhere in this file.
  */
 
-import { MATRX_AI_API_VERSION_DEFAULT, applyAiApiVersion } from "@ai-matrx/agents/matrx";
+import { MATRX_AI_API_VERSION_DEFAULT, applyAiApiVersion } from "@ai-matrx/api";
 
 import { type AnyMandateKey, mandateKeyFromAgentRef } from "@/lib/mandates";
 

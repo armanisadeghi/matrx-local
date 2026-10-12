@@ -12,7 +12,7 @@
  * `routing` keeps the Confidential pin per conversation on this device.
  */
 
-import { applyOrganizationContextHeader } from "@ai-matrx/agents/matrx";
+import { applyOrganizationContextHeader } from "@ai-matrx/api";
 import type { ChatHost, ChatLocalEngine, ChatOrgPort, ChatOrganization, ChatRoutingPort } from "@ai-matrx/chat/host";
 import { createMemoryNavigation } from "@ai-matrx/chat/host";
 import { getAIDreamServerUrl } from "@/lib/app-config";

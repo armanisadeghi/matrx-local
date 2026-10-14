@@ -13,7 +13,8 @@ import json
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -242,8 +243,8 @@ def _depth(value: Any, current: int = 0) -> int:
 class _Bucket:
     capacity: float
     refill_per_second: float
+    seen: float
     tokens: float | None = None
-    seen: float = field(default_factory=time.monotonic)
 
     def __post_init__(self) -> None:
         if self.tokens is None:
@@ -264,13 +265,15 @@ class _Bucket:
 class CallbackLimits:
     """Bounded callback admission; queues are never accumulated."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock or time.monotonic
+        now = self._clock()
         self.global_gate = asyncio.Semaphore(4)
         self._per_address: dict[str, asyncio.Semaphore] = {}
         self._cleanup_per_address: dict[str, asyncio.Semaphore] = {}
-        self._global_bucket = _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 1.0)
+        self._global_bucket = _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 1.0, now)
         self._buckets: dict[str, _Bucket] = {
-            "unknown": _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
+            "unknown": _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5, now)
         }
 
     def _address_gate(
@@ -295,14 +298,14 @@ class CallbackLimits:
         self, address: str, operation: str | None = None
     ) -> "CapacityLease":
         key = address if address and len(address) <= 128 else "unknown"
+        now = self._clock()
         bucket = (
             self._buckets.setdefault(
-                key, _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5)
+                key, _Bucket(_CANONICAL_CREDENTIAL_CALLBACK_BURST, 0.5, now)
             )
             if len(self._buckets) < 65 or key == "unknown"
             else self._buckets["unknown"]
         )
-        now = time.monotonic()
         if not self._global_bucket.take(now):
             _lifecycle_diagnostic("rate_global_bucket")
             raise TransportRefusal("rate_limited", 429)

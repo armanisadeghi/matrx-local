@@ -1160,9 +1160,8 @@ async def test_callback_limits_admit_complete_credential_burst_then_refill(monke
     """A complete inspect, two-page password, MFA, and cleanup stays bounded."""
     diagnostics: list[str] = []
     monkeypatch.setattr(transport, "_lifecycle_diagnostic", diagnostics.append)
-    now = transport.time.monotonic() + 1.0
-    monkeypatch.setattr(transport.time, "monotonic", lambda: now)
-    limits = transport.CallbackLimits()
+    now = transport.time.monotonic()
+    limits = transport.CallbackLimits(clock=lambda: now)
     address = "127.0.0.1"
     canonical_callbacks = (
         "discover",

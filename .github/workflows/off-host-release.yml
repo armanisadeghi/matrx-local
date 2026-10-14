@@ -37,11 +37,11 @@ on:
         default: ""
         type: string
 
-# Serialize version-bump requests with each other. release.yml owns its own
-# build/publish lane; the guards below reject a stale or competing dispatch
-# before this workflow performs any release mutation.
+# Serialize the version bump with release.yml's build/publish lane. The guards
+# below still reject stale requests before this workflow mutates a release.
 concurrency:
-  group: matrx-local-version-bump
+  group: matrx-local-release
+  queue: max
   cancel-in-progress: false
 
 permissions:

@@ -28,6 +28,7 @@ on:
 
 concurrency:
   group: matrx-local-release
+  queue: max
   cancel-in-progress: false
 
 jobs:

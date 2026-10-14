@@ -22,6 +22,7 @@ import {
   readConversationOrganizationId as readRunConversationOrganizationId,
   readLiveRunRejoin,
   readLiveStreamUnavailable,
+  resilientFetch,
   streamErrorText,
   type MatrxLiveRunRejoin,
 } from "@ai-matrx/api";
@@ -2700,14 +2701,26 @@ export function useCloudChat(options: UseCloudChatOptions = {}) {
                 Authorization: `Bearer ${segmentToken}`,
               };
 
-          // `signal` ends the stream on Stop; no total timeout (streams are
-          // uncapped); a non-2xx response is read below, not thrown.
-          const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: segmentHeaders,
-            body: JSON.stringify(requestBody),
-            signal: abort.signal,
-          });
+          // The three options are PARITY, not taste, and none may be dropped:
+          //   - `signal` goes in the OPTIONS bag, not `init` — resilientFetch
+          //     drives its own AbortController and overwrites `init.signal`,
+          //     so a signal passed the old way is ignored and Stop breaks;
+          //   - `totalTimeoutMs: null` — streams are uncapped (default 120s);
+          //   - `throwOnHttpError: false` — the non-2xx branch below reads the
+          //     body, so the transport must hand the response back.
+          const { response } = await resilientFetch(
+            requestUrl,
+            {
+              method: "POST",
+              headers: segmentHeaders,
+              body: JSON.stringify(requestBody),
+            },
+            {
+              signal: abort.signal,
+              totalTimeoutMs: null,
+              throwOnHttpError: false,
+            },
+          );
 
           if (!response.ok || !response.body) {
             const rawErrorText = await response.text().catch(() => `HTTP ${response.status}`);

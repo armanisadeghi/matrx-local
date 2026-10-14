@@ -222,8 +222,19 @@ jobs:
             echo "Apple did not accept the installer for notarization" >&2
             exit 1
           }
-          xcrun stapler staple "$PKG"
-          xcrun stapler validate "$PKG"
+          # Apple's ticket lookup drops connections (NSURLError -1005, exit 68)
+          # on a notarized package; retry staple+validate before failing.
+          for ATTEMPT in 1 2 3 4 5; do
+            if xcrun stapler staple "$PKG" && xcrun stapler validate "$PKG"; then
+              break
+            fi
+            if [[ "$ATTEMPT" == 5 ]]; then
+              echo "stapler staple/validate failed 5 times" >&2
+              exit 1
+            fi
+            echo "stapler attempt $ATTEMPT failed; retrying in $((ATTEMPT * 15))s" >&2
+            sleep $((ATTEMPT * 15))
+          done
 
       - uses: actions/upload-artifact@v4
         with:

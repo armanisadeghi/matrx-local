@@ -267,6 +267,20 @@ spctl --assess --type execute -vv "$APP_PATH"
 
 # 8. Notarization ticket stapled to the artifact users download.
 echo "--- [8/8] stapler validate"
-xcrun stapler validate "$APP_PATH"
+# Apple's ticket lookup is a network call and drops connections (NSURLError
+# -1005, exit 68) on a correctly stapled app; retry before calling it a failure.
+STAPLER_OK=0
+for ATTEMPT in 1 2 3 4 5; do
+    if xcrun stapler validate "$APP_PATH"; then
+        STAPLER_OK=1
+        break
+    fi
+    echo "    stapler validate attempt $ATTEMPT failed; retrying in $((ATTEMPT * 15))s" >&2
+    sleep $((ATTEMPT * 15))
+done
+[[ "$STAPLER_OK" == 1 ]] || {
+    echo "ERROR: stapler validate failed 5 times." >&2
+    exit 1
+}
 
 echo "=== ✅ artifact verification passed"

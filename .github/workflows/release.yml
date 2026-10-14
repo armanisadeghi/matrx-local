@@ -715,7 +715,16 @@ jobs:
             exit 1
           }
           xcrun stapler staple "$DMG"
-          xcrun stapler validate "$DMG"
+          for ATTEMPT in 1 2 3 4 5; do
+            if xcrun stapler validate "$DMG"; then
+              break
+            fi
+            if [[ "$ATTEMPT" == 5 ]]; then
+              echo "stapler validate failed 5 times" >&2
+              exit 1
+            fi
+            sleep $((ATTEMPT * 15))
+          done
           spctl -a -vv -t open --context context:primary-signature "$DMG"
 
           TAG="v$(jq -r .version desktop/src-tauri/tauri.conf.json)"

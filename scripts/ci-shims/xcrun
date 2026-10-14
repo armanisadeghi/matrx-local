@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# xcrun shim for macOS release builds — put first on PATH before tauri-action.
+#
+# Why: tauri-macos-sign runs `xcrun stapler staple -v <App>.app` right after
+# notarization and IGNORES its exit status (Command::output() with no status
+# check). Apple's ticket lookup (api.apple-cloudkit.com) drops connections or
+# has not propagated the ticket yet, so a transient failure silently ships an
+# UNSTAPLED .app — and the DMG and updater .app.tar.gz are then built from it.
+# v1.4.472 failed verify-macos-artifact [8/8] "does not have a ticket stapled"
+# on both macOS legs for exactly this reason.
+#
+# This shim retries `stapler staple` until `stapler validate` confirms a ticket.
+# Every other xcrun invocation passes straight through. The verify gate after
+# the build is unchanged: if every retry fails, the release still fails loudly.
+set -uo pipefail
+REAL_XCRUN="${MATRX_REAL_XCRUN:-/usr/bin/xcrun}"
+
+if [[ "${1:-}" == "stapler" && "${2:-}" == "staple" ]]; then
+    target="${!#}"
+    attempts="${MATRX_STAPLE_ATTEMPTS:-6}"
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if "$REAL_XCRUN" "$@" && "$REAL_XCRUN" stapler validate "$target"; then
+            exit 0
+        fi
+        if ((attempt == attempts)); then
+            echo "xcrun-shim: stapler staple failed $attempts times for $target" >&2
+            exit 1
+        fi
+        delay=$((attempt * ${MATRX_STAPLE_BACKOFF_SECONDS:-15}))
+        echo "xcrun-shim: staple attempt $attempt for $target failed; retrying in ${delay}s" >&2
+        sleep "$delay"
+    done
+fi
+
+exec "$REAL_XCRUN" "$@"

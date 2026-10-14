@@ -606,6 +606,20 @@ jobs:
             --require-all \
             --sign "$APPLE_SIGNING_IDENTITY"
 
+      # tauri-macos-sign staples the notarized .app but ignores stapler's exit
+      # status, so one dropped Apple ticket lookup ships an UNSTAPLED app inside
+      # the DMG and updater archive (v1.4.472, both macOS legs). The shim
+      # retries the staple until validate confirms a ticket; the verify step
+      # below still fails the release if every retry fails.
+      - name: Install xcrun staple-retry shim
+        if: matrix.platform == 'macos-15'
+        run: |
+          set -euo pipefail
+          SHIM_DIR="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$SHIM_DIR"
+          install -m 0755 scripts/ci-shims/xcrun "$SHIM_DIR/xcrun"
+          echo "$SHIM_DIR" >> "$GITHUB_PATH"
+
       - name: Build and release
         uses: tauri-apps/tauri-action@action-v1.0.0
         env:
@@ -714,18 +728,19 @@ jobs:
             echo "Apple did not accept the DMG for notarization" >&2
             exit 1
           }
-          # Both `stapler staple` and `stapler validate` fetch the ticket from
-          # Apple's CloudKit and drop connections (NSURLError -1005, exit 68)
-          # on a notarized DMG; v1.4.471 died in `staple` itself. Retry the pair.
+          # `xcrun` here is scripts/ci-shims/xcrun (installed before the build):
+          # it retries `stapler staple` until `stapler validate` confirms the
+          # ticket — Apple's CloudKit lookup drops connections (NSURLError
+          # -1005, exit 68), which is how v1.4.471 died in this exact call.
+          xcrun stapler staple "$DMG"
           for ATTEMPT in 1 2 3 4 5; do
-            if xcrun stapler staple "$DMG" && xcrun stapler validate "$DMG"; then
+            if xcrun stapler validate "$DMG"; then
               break
             fi
             if [[ "$ATTEMPT" == 5 ]]; then
-              echo "stapler staple/validate failed 5 times" >&2
+              echo "stapler validate failed 5 times" >&2
               exit 1
             fi
-            echo "stapler attempt $ATTEMPT failed; retrying in $((ATTEMPT * 15))s" >&2
             sleep $((ATTEMPT * 15))
           done
           spctl -a -vv -t open --context context:primary-signature "$DMG"

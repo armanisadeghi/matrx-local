@@ -667,6 +667,112 @@ jobs:
           # host-only config is retained for local smoke work only.
           args: ${{ matrix.args }}${{ matrix.platform == 'macos-15' && ' --config src-tauri/tauri.release.macos.conf.json' || '' }}
 
+      # ---- Make sure the notarization ticket is stapled to the app ----
+      # Tauri notarizes, then staples, but a failed staple is only logged:
+      # v1.4.472 said "Notarizing Finished with status Accepted", "Stapling
+      # app...", then shipped an app with no ticket (Apple's ticket service
+      # drops connections intermittently). The xcrun shim retries Tauri's
+      # staple; this step is the backstop when every shim retry failed, and
+      # calls /usr/bin/xcrun directly so its retries do not nest inside the
+      # shim's. Stapling writes the ticket to
+      # Contents/CodeResources, so its presence is an offline check. When it
+      # is absent, staple here with retries. The updater .app.tar.gz was made
+      # from the same app, so when the tarball's app has no ticket it is
+      # rebuilt from the stapled app, re-signed with the updater key (bound
+      # to this version, as `tauri build` does) and replaces the draft's
+      # .app.tar.gz and .sig. latest.json still carries tauri-action's old
+      # signature; rename-assets re-syncs every manifest signature from the
+      # .sig assets before anything publishes.
+      - name: Staple macOS app and refresh updater archive
+        if: matrix.platform == 'macos-15'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
+            TRIPLE="aarch64-apple-darwin"; ARCH="aarch64"
+          else
+            TRIPLE="x86_64-apple-darwin"; ARCH="x64"
+          fi
+          BUNDLE_DIR="desktop/src-tauri/target/$TRIPLE/release/bundle/macos"
+          APP="$(find "$BUNDLE_DIR" -maxdepth 1 -name "*.app" -type d | head -1)"
+          [[ -n "$APP" ]] || { echo "No .app found in $BUNDLE_DIR" >&2; exit 1; }
+          APP_NAME="$(basename "$APP")"
+
+          if [[ -f "$APP/Contents/CodeResources" ]]; then
+            echo "$APP_NAME already carries a stapled ticket"
+          else
+            echo "::warning::$APP_NAME has no stapled ticket (Tauri's staple failed); stapling now"
+            for ATTEMPT in 1 2 3 4 5; do
+              if /usr/bin/xcrun stapler staple "$APP" && /usr/bin/xcrun stapler validate "$APP"; then
+                break
+              fi
+              if [[ "$ATTEMPT" == 5 ]]; then
+                echo "::error::stapler staple/validate of $APP_NAME failed 5 times" >&2
+                exit 1
+              fi
+              echo "stapler attempt $ATTEMPT failed; retrying in $((ATTEMPT * 15))s" >&2
+              sleep $((ATTEMPT * 15))
+            done
+            [[ -f "$APP/Contents/CodeResources" ]] || {
+              echo "::error::stapler reported success but $APP_NAME has no Contents/CodeResources" >&2
+              exit 1
+            }
+          fi
+
+          UPDATER_TAR="$BUNDLE_DIR/$APP_NAME.tar.gz"
+          [[ -f "$UPDATER_TAR" ]] || { echo "No updater archive at $UPDATER_TAR" >&2; exit 1; }
+          if tar -tzf "$UPDATER_TAR" | grep -Fx "$APP_NAME/Contents/CodeResources" >/dev/null; then
+            echo "Updater archive already carries the stapled app"
+            exit 0
+          fi
+
+          echo "::warning::Updater archive holds the unstapled app; rebuilding and re-signing it"
+          VERSION="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          TAG="v$VERSION"
+          rm -f "$UPDATER_TAR" "$UPDATER_TAR.sig"
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -C "$BUNDLE_DIR" -czf "$UPDATER_TAR" "$APP_NAME"
+          tar -tzf "$UPDATER_TAR" | grep -Fx "$APP_NAME/Contents/CodeResources" >/dev/null || {
+            echo "::error::Rebuilt updater archive is missing the stapled ticket" >&2
+            exit 1
+          }
+          # Same signer and key tauri-action used; output is "$UPDATER_TAR.sig".
+          (cd desktop && pnpm tauri signer sign --app-version "$VERSION" "../$UPDATER_TAR")
+          [[ -s "$UPDATER_TAR.sig" ]] || { echo "::error::Signer wrote no .sig" >&2; exit 1; }
+
+          # tauri-action uploaded these as "<productName>_<version>_<arch>.app.tar.gz";
+          # GitHub turns the space into a dot. Upload under that exact name.
+          ASSET_BASE="$(tr ' ' '.' <<< "${APP_NAME%.app}")_${VERSION}_${ARCH}.app.tar.gz"
+          STAGE="$RUNNER_TEMP/updater-upload"
+          rm -rf "$STAGE"; mkdir -p "$STAGE"
+          cp "$UPDATER_TAR" "$STAGE/$ASSET_BASE"
+          cp "$UPDATER_TAR.sig" "$STAGE/$ASSET_BASE.sig"
+          for ATTEMPT in 1 2 3; do
+            if gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+                "$STAGE/$ASSET_BASE" "$STAGE/$ASSET_BASE.sig"; then
+              break
+            fi
+            if [[ "$ATTEMPT" -eq 3 ]]; then
+              echo "::error::Could not upload rebuilt updater archive after three attempts" >&2
+              exit 1
+            fi
+            sleep "$((ATTEMPT * 10))"
+          done
+          for FILE in "$ASSET_BASE" "$ASSET_BASE.sig"; do
+            EXPECTED="sha256:$(shasum -a 256 "$STAGE/$FILE" | awk '{print $1}')"
+            ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+              --jq '.[] | select(.name == "'"$FILE"'") | .digest')"
+            [[ "$ACTUAL" == "$EXPECTED" ]] || {
+              echo "::error::Uploaded $FILE checksum differs from the rebuilt file" >&2
+              exit 1
+            }
+          done
+          echo "Replaced $ASSET_BASE and its .sig on the $TAG draft"
+
       # ---- Verify the FINAL macOS artifact (signing/identity/notarization) ----
       # The build scripts sign; this step PROVES the shipped artifact honors
       # the contract. It inspects both the bundle .app and the .app inside the
@@ -1092,37 +1198,41 @@ jobs:
 
           import base64, pathlib
 
+          platform_assets = {
+              "darwin-aarch64":      f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+              "darwin-aarch64-app":  f"ai-matrx-mac-silicon-{version}.app.tar.gz",
+              "darwin-x86_64":       f"ai-matrx-mac-intel-{version}.app.tar.gz",
+              "darwin-x86_64-app":   f"ai-matrx-mac-intel-{version}.app.tar.gz",
+              "linux-x86_64":        f"ai-matrx-linux-{version}.deb",
+              "linux-x86_64-deb":    f"ai-matrx-linux-{version}.deb",
+              "windows-x86_64":      f"ai-matrx-windows-{version}.msi",
+              "windows-x86_64-msi":  f"ai-matrx-windows-{version}.msi",
+              "windows-x86_64-nsis": f"ai-matrx-windows-installer-{version}.exe",
+          }
+          sig_dir = pathlib.Path("/tmp/fill/current-signatures")
+          sig_dir.mkdir(parents=True, exist_ok=True)
+          downloaded = set()
+
+          def current_signature(asset_name):
+              # latest.json carries the .sig file's text verbatim (it is
+              # already base64 minisign) — exactly what tauri-action writes.
+              sig_name = f"{asset_name}.sig"
+              if sig_name not in downloaded:
+                  subprocess.run(
+                      ["gh", "release", "download", tag, "--repo", repo,
+                       "--pattern", sig_name, "--dir", str(sig_dir), "--clobber"],
+                      check=True,
+                  )
+                  downloaded.add(sig_name)
+              return (sig_dir / sig_name).read_text()
+
           missing = EXPECTED_PLATFORMS - set(current["platforms"].keys())
           if not missing:
               print(f"✅ All {len(EXPECTED_PLATFORMS)} platforms present — nothing to reconstruct.")
           else:
-              platform_assets = {
-                  "darwin-aarch64":      f"ai-matrx-mac-silicon-{version}.app.tar.gz",
-                  "darwin-aarch64-app":  f"ai-matrx-mac-silicon-{version}.app.tar.gz",
-                  "darwin-x86_64":       f"ai-matrx-mac-intel-{version}.app.tar.gz",
-                  "darwin-x86_64-app":   f"ai-matrx-mac-intel-{version}.app.tar.gz",
-                  "linux-x86_64":        f"ai-matrx-linux-{version}.deb",
-                  "linux-x86_64-deb":    f"ai-matrx-linux-{version}.deb",
-                  "windows-x86_64":      f"ai-matrx-windows-{version}.msi",
-                  "windows-x86_64-msi":  f"ai-matrx-windows-{version}.msi",
-                  "windows-x86_64-nsis": f"ai-matrx-windows-installer-{version}.exe",
-              }
-              sig_dir = pathlib.Path("/tmp/fill/current-signatures")
-              sig_dir.mkdir(parents=True, exist_ok=True)
-              downloaded = set()
               for key in sorted(missing):
                   asset_name = platform_assets[key]
-                  sig_name = f"{asset_name}.sig"
-                  if sig_name not in downloaded:
-                      subprocess.run(
-                          ["gh", "release", "download", tag, "--repo", repo,
-                           "--pattern", sig_name, "--dir", str(sig_dir), "--clobber"],
-                          check=True,
-                      )
-                      downloaded.add(sig_name)
-                  signature = base64.b64encode(
-                      (sig_dir / sig_name).read_bytes()
-                  ).decode()
+                  signature = current_signature(asset_name)
                   current["platforms"][key] = {
                       "signature": signature,
                       "url": f"https://github.com/{repo}/releases/download/{tag}/{asset_name}",
@@ -1144,6 +1254,20 @@ jobs:
               sys.exit(1)
           else:
               print("✅ All missing platforms backfilled.")
+
+          # The .sig asset is the signature of the archive users download. A
+          # macOS leg that re-stapled its app rebuilt and re-signed the
+          # .app.tar.gz AFTER tauri-action wrote latest.json, so the manifest
+          # signature must follow the .sig asset or every update is rejected.
+          for key in sorted(EXPECTED_PLATFORMS):
+              asset_name = platform_assets[key]
+              entry = current["platforms"][key]
+              if not str(entry.get("url") or "").endswith(f"/{tag}/{asset_name}"):
+                  continue
+              signature = current_signature(asset_name)
+              if entry.get("signature") != signature:
+                  print(f"  🔏 {key}: manifest signature re-synced from {asset_name}.sig")
+                  entry["signature"] = signature
 
           # Keys alone are insufficient: an unexpected Tauri filename can
           # leave a syntactically complete manifest whose URLs all return 404.

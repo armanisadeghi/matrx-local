@@ -900,7 +900,7 @@ def test_tool_call_decimal_values_persist(local_db):
 def test_ai_surface_mounted_on_engine(http: httpx.Client):
     """The /ai surface is live on the real engine at all compatibility mounts — the 503
     ai_surface_migration_pending stub is gone — and errors are enveloped."""
-    for base in ("/ai", "/v2/ai", "/chat/ai"):
+    for base in ("/ai", "/chat/ai"):
         r = http.get(f"{base}/status")
         assert r.status_code == 200, f"{base}/status → {r.status_code}: {r.text[:200]}"
         body = r.json()

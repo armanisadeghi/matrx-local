@@ -789,10 +789,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _registry.failed("ai_engine", exc)
 
     # Phase 1b: Mount the host-owned AI surface (app/api/ai_routes.py) now
-    # that matrx-ai's client-host seams are configured. ONE app, THREE mounts:
+    # that matrx-ai's client-host seams are configured. ONE app, TWO mounts:
     # /ai is the aidream-compatible canonical surface (what matrx-frontend's
-    # local-runtime mode targets); /v2/ai is the current frontend spine using
-    # the same request/stream contract; /chat/ai is the desktop UI's historical
+    # local-runtime mode targets); /chat/ai is the desktop UI's historical
     # path. Must run after initialize_matrx_ai() — the prep path reads the seam
     # registry (conversation store / model catalog / key resolver).
     logger.info("[app/main.py] Phase 1b: Mounting host-owned /ai surface...")
@@ -801,11 +800,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         _ai_surface = build_ai_app()
         app.mount("/ai", _ai_surface)
-        app.mount("/v2/ai", _ai_surface)
         app.mount("/chat/ai", _ai_surface)
         logger.info(
-            "[app/main.py] Phase 1b: /ai surface mounted at /ai, /v2/ai, "
-            "and /chat/ai ✓"
+            "[app/main.py] Phase 1b: /ai surface mounted at /ai and /chat/ai ✓"
         )
     except Exception:
         logger.error(

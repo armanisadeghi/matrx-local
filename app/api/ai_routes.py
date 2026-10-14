@@ -25,8 +25,8 @@ process-stream.ts):
     not_resumable.
 
 Mounting: ``build_ai_app()`` is mounted at ``/ai`` (the canonical
-aidream-compatible surface), ``/v2/ai`` (the current frontend spine), and
-``/chat/ai`` (the desktop UI's historical path) — one app, three mounts, zero
+aidream-compatible surface) and ``/chat/ai`` (the desktop UI's historical
+path) — one app, two mounts, zero
 drift. See app/main.py Phase 1b.
 
 Auth model:
@@ -477,11 +477,9 @@ async def ai_surface_status() -> dict[str, Any]:
     capabilities = [
         "chat_execution_v1",
         "conversation_execution_v1",
-        "chat_execution_v2",
-        "conversation_execution_v2",
     ]
     if supports_agent_execution():
-        capabilities.extend(["agent_execution_v1", "agent_execution_v2"])
+        capabilities.extend(["agent_execution_v1"])
 
     return {
         "surface": "local-ai",

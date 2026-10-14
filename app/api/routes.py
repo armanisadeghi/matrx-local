@@ -165,11 +165,9 @@ async def health():
         "personal_messaging_write_v1",
         "chat_execution_v1",
         "conversation_execution_v1",
-        "chat_execution_v2",
-        "conversation_execution_v2",
     ]
     if supports_agent_execution():
-        execution_capabilities.extend(["agent_execution_v1", "agent_execution_v2"])
+        execution_capabilities.extend(["agent_execution_v1"])
 
     # Stable machine identity — lets a browser that discovered this engine on
     # localhost correlate it with its `app_instances` row in Supabase, so

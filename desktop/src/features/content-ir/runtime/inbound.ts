@@ -8,7 +8,7 @@
  * A kind identity is never invented.
  *
  * TWO CHANNELS, ONE BOUNDARY (`@ai-matrx/content-ir` 0.11.0 /
- * `@ai-matrx/content-ir-react` 0.11.1). A producer that SHADOWS its text
+ * `@ai-matrx/content-ir/react` 0.11.1). A producer that SHADOWS its text
  * channel — a workflow node — never hands this client a verified `__ir`. The
  * only identity such a block carries is a `superseded` terminal on
  * `metadata.__ir_partial`, and its own closed JSON. That channel is validated

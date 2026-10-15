@@ -23,6 +23,7 @@
  *   - Clear scoped to tab's sources
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   Activity as ActivityIcon,
@@ -714,9 +715,9 @@ function LogTab({
       second: "2-digit",
       hour12: false,
     });
-    await navigator.clipboard.writeText(
+    if (!(await copyText(
       `=== Log (All) — ${now} ===\n${body}\n=== END ===`,
-    );
+    ))) return;
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   }, [logs]);
@@ -739,15 +740,15 @@ function LogTab({
       second: "2-digit",
       hour12: false,
     });
-    await navigator.clipboard.writeText(
+    if (!(await copyText(
       `=== Log (View) — ${now} ===\n${body}\n=== END ===`,
-    );
+    ))) return;
     setCopiedView(true);
     setTimeout(() => setCopiedView(false), 2000);
   }, [filtered, groupedRows]);
 
   const handleCopyReport = useCallback(async () => {
-    await navigator.clipboard.writeText(buildIssueReport(activeLogs));
+    if (!(await copyText(buildIssueReport(activeLogs)))) return;
     setCopiedReport(true);
     setTimeout(() => setCopiedReport(false), 2000);
   }, [activeLogs]);
@@ -1010,9 +1011,9 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
       second: "2-digit",
       hour12: false,
     });
-    await navigator.clipboard.writeText(
+    if (!(await copyText(
       `=== HTTP Access Log (All) — ${now} ===\n${body}\n=== END ===`,
-    );
+    ))) return;
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   }, [logs]);
@@ -1028,9 +1029,9 @@ function HttpTab({ logs }: { logs: ClientLogLine[] }) {
       second: "2-digit",
       hour12: false,
     });
-    await navigator.clipboard.writeText(
+    if (!(await copyText(
       `=== HTTP Access Log (View) — ${now} ===\n${body}\n=== END ===`,
-    );
+    ))) return;
     setCopiedView(true);
     setTimeout(() => setCopiedView(false), 2000);
   }, [filtered]);
@@ -1268,7 +1269,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
   );
 
   const handleCopyReport = useCallback(async () => {
-    await navigator.clipboard.writeText(buildIssueReport(logs));
+    if (!(await copyText(buildIssueReport(logs)))) return;
     setCopiedReport(true);
     setTimeout(() => setCopiedReport(false), 2000);
   }, [logs]);

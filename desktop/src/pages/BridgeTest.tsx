@@ -20,6 +20,7 @@
  *   - production-grade only — no stubs / placeholders
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
@@ -1190,7 +1191,7 @@ function PairingSection({ isEngineReady }: { isEngineReady: boolean }) {
 
   const copyToken = useCallback(async () => {
     if (!pairToken) return;
-    await navigator.clipboard.writeText(pairToken);
+    if (!(await copyText(pairToken))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }, [pairToken]);

@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useState } from "react";
 import { Copy } from "lucide-react";
 import { ArchiveFilter, Badge, Button, DEFAULT_ARCHIVE_FILTER } from "@ai-matrx/design-system";
@@ -99,11 +100,10 @@ export function HistoryInventoryTable({ review, selected, onSelectedChange, onPa
     setPageIndex(pageIndex + 1);
   };
   const copyResume = async (sessionId: string) => {
-    try {
-      await navigator.clipboard.writeText(`claude --resume ${sessionId}`);
+    if (await copyText(`claude --resume ${sessionId}`)) {
       setCopyFeedback(`Copied resume command for ${sessionId}`);
-    } catch (reason) {
-      setError(reason instanceof Error ? `Could not copy resume command: ${reason.message}` : "Could not copy resume command.");
+    } else {
+      setError("Could not copy resume command.");
     }
   };
 

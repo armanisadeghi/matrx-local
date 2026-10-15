@@ -1,5 +1,6 @@
 "use client";
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -137,8 +138,8 @@ function PromptEditor({
     setDirty(false);
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
+  const handleCopy = async () => {
+    if (!(await copyText(content))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

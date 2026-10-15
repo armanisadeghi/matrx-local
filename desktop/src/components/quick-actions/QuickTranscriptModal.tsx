@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Dialog,
@@ -175,9 +176,9 @@ export function QuickTranscriptModal({
     [isRecording, transcriptionActions, onOpenChange],
   );
 
-  const handleCopy = useCallback(() => {
+  const handleCopy = useCallback(async () => {
     if (!hasText) return;
-    navigator.clipboard.writeText(fullTranscript.trim()).catch(() => {});
+    if (!(await copyText(fullTranscript.trim()))) return;
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
   }, [hasText, fullTranscript]);

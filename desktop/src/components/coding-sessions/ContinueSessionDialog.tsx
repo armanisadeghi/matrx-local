@@ -20,6 +20,7 @@
  * `claude --resume` this app invented for it.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Copy, ExternalLink, Loader2, Play, Square } from "lucide-react";
 
@@ -221,13 +222,14 @@ export function ContinueSessionDialog({
   }, []);
 
   const copy = useCallback(() => {
-    void navigator.clipboard
-      .writeText(copyCommand)
-      .then(() => {
+    void copyText(copyCommand).then((landed) => {
+      if (landed) {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1500);
-      })
-      .catch((cause: unknown) => setStartError(errorMessage(cause)));
+      } else {
+        setStartError("Could not copy the command to the clipboard.");
+      }
+    });
   }, [copyCommand]);
 
   return (

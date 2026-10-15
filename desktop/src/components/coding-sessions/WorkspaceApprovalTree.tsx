@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
@@ -322,7 +323,10 @@ export function WorkspaceApprovalTree({
   const filteredRoots = useMemo(() => roots.map((root) => filterWorkspaceNode(root, query)).filter((root): root is WorkspaceDiscoveryNode => root !== null), [query, roots]);
 
   const copyPath = (path: string) => {
-    void navigator.clipboard.writeText(path).then(() => setFeedback(`Copied ${path}`)).catch(reportError);
+    void copyText(path).then((landed) => {
+      if (landed) setFeedback(`Copied ${path}`);
+      else reportError(new Error(`Could not copy ${path} to the clipboard`));
+    });
   };
 
   const openPath = async (path: string) => {

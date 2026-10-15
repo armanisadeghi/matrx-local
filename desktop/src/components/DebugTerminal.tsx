@@ -18,6 +18,7 @@
  *   "cmd"     → cyan  (commands being run)
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Check, Trash2, ChevronDown, ChevronUp, Terminal } from "lucide-react";
 import { Badge, Button } from "@ai-matrx/design-system";
@@ -176,7 +177,7 @@ export function DebugTerminal({
       .map((l) => `${l.time} ${LEVEL_LABEL[l.level]} ${l.message}`)
       .join("\n");
     const footer = "=== END ===";
-    await navigator.clipboard.writeText(`${header}\n${body}\n${footer}`);
+    if (!(await copyText(`${header}\n${body}\n${footer}`))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [logs, visibleLogs]);

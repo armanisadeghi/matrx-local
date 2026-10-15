@@ -7,6 +7,7 @@
  * filter which frozen jobs leave the building; they never re-roll the plan.
  */
 
+import { copyText as writeClipboard } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckSquare, Copy, Eye, Layers, Loader2, XSquare } from "lucide-react";
 
@@ -105,7 +106,10 @@ export function BatchPreviewDialog({
           return `${header}\n${r.prompt}${neg}`;
         })
         .join("\n\n---\n\n");
-      await navigator.clipboard.writeText(text);
+      if (!(await writeClipboard(text))) {
+        setCopyOk("Could not copy to the clipboard.");
+        return;
+      }
       setCopyOk(
         which === "selected"
           ? `Copied ${list.length.toLocaleString()} selected run${list.length === 1 ? "" : "s"}.`
@@ -244,8 +248,12 @@ export function BatchPreviewDialog({
                   className="h-7 w-7 shrink-0 text-muted-foreground"
                   aria-label={`Copy run ${run.index + 1}`}
                   onClick={() => {
-                    void navigator.clipboard.writeText(run.prompt).then(() => {
-                      setCopyOk(`Copied run #${run.index + 1}.`);
+                    void writeClipboard(run.prompt).then((landed) => {
+                      setCopyOk(
+                        landed
+                          ? `Copied run #${run.index + 1}.`
+                          : "Could not copy to the clipboard.",
+                      );
                     });
                   }}
                 >

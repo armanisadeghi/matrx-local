@@ -14,6 +14,7 @@
  * After completion → calls onComplete() which transitions to Dashboard.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   CheckCircle2,
@@ -280,7 +281,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
   const copyLogs = useCallback(async () => {
     if (rawLogs.length === 0) return;
     const text = `=== Matrx First-Run Install Log — ${new Date().toLocaleString()} ===\n${rawLogs.join("\n")}\n=== END ===`;
-    await navigator.clipboard.writeText(text);
+    if (!(await copyText(text))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [rawLogs]);

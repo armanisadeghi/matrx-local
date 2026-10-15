@@ -19,6 +19,7 @@
  *     sideways again.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState } from "react";
 import { Check, Copy, Film, Image as ImageIcon } from "lucide-react";
 import { Badge, Button } from "@ai-matrx/design-system";
@@ -56,7 +57,8 @@ export function CopyButton({
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        void navigator.clipboard.writeText(value).then(() => {
+        void copyText(value).then((landed) => {
+          if (!landed) return;
           setCopied(true);
           window.setTimeout(() => setCopied(false), 1500);
         });

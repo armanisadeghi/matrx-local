@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState } from "react";
 import {
   ChevronDown,
@@ -39,8 +40,8 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
+      onClick={async () => {
+        if (!(await copyText(text))) return;
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
       }}

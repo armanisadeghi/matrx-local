@@ -14,6 +14,7 @@
  * by materializing), so nobody is ever surprised by what they queued.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   DndContext,
@@ -860,7 +861,11 @@ function TemplateMenu({
   const copyExport = useCallback(
     async (exportSpec: MatrixSpec, exportName?: string) => {
       const text = serializeMatrixExport(targetId, exportSpec, exportName);
-      await navigator.clipboard.writeText(text);
+      if (!(await copyText(text))) {
+        setImportOk(null);
+        setImportError("Could not copy to the clipboard.");
+        return;
+      }
       setImportOk(
         exportName !== undefined && exportName.trim().length > 0
           ? `Copied "${exportName.trim()}" to clipboard.`

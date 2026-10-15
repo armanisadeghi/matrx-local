@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Settings as SettingsIcon,
@@ -1337,9 +1338,9 @@ export function Settings({
     }
   };
 
-  const handleCopyTunnelUrl = () => {
+  const handleCopyTunnelUrl = async () => {
     if (tunnelStatus?.url) {
-      navigator.clipboard.writeText(tunnelStatus.url);
+      if (!(await copyText(tunnelStatus.url))) return;
       setTunnelCopied(true);
       setTimeout(() => setTunnelCopied(false), 2000);
     }
@@ -3918,9 +3919,7 @@ export function Settings({
                             className="h-7 w-7 p-0 shrink-0"
                             onClick={() => {
                               if (tunnelStatus.ws_url) {
-                                navigator.clipboard.writeText(
-                                  tunnelStatus.ws_url,
-                                );
+                                void copyText(tunnelStatus.ws_url);
                               }
                             }}
                             title="Copy WebSocket URL"
@@ -4054,9 +4053,7 @@ export function Settings({
                                     className="h-5 w-5 p-0 shrink-0"
                                     onClick={() =>
                                       inst.tunnel_url &&
-                                      navigator.clipboard.writeText(
-                                        inst.tunnel_url,
-                                      )
+                                      copyText(inst.tunnel_url)
                                     }
                                     title="Copy REST URL"
                                   >
@@ -4074,9 +4071,7 @@ export function Settings({
                                       className="h-5 w-5 p-0 shrink-0"
                                       onClick={() =>
                                         inst.tunnel_ws_url &&
-                                        navigator.clipboard.writeText(
-                                          inst.tunnel_ws_url!,
-                                        )
+                                        copyText(inst.tunnel_ws_url!)
                                       }
                                       title="Copy WebSocket URL"
                                     >

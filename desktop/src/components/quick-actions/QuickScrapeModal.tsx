@@ -13,6 +13,7 @@
  * viewer.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useState } from "react";
 import {
   Dialog,
@@ -59,13 +60,11 @@ export function QuickScrapeModal({
 
   const handleCopy = useCallback(() => {
     if (!result?.text_data) return;
-    navigator.clipboard
-      .writeText(result.text_data)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      .catch(() => undefined);
+    void copyText(result.text_data).then((landed) => {
+      if (!landed) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }, [result]);
 
   const handleSaveToNote = useCallback(async () => {

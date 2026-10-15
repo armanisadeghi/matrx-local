@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useDownloadManager } from "@/contexts/DownloadManagerContext";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -1166,8 +1167,8 @@ function TranscribeTab({
     [check, request, onContinueSession, sessionsActions],
   );
 
-  const handleCopy = useCallback((text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = useCallback(async (text: string, id: string) => {
+    if (!(await copyText(text))) return;
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   }, []);

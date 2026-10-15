@@ -13,6 +13,7 @@
  *   3. Logs   — live sidecar stdout/stderr
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import {
   Dialog,
@@ -488,14 +489,14 @@ export function EngineMonitor({
     return lines.join("\n");
   };
 
-  const handleCopyDiagnostics = () => {
-    navigator.clipboard.writeText(buildDiagnosticDump());
+  const handleCopyDiagnostics = async () => {
+    if (!(await copyText(buildDiagnosticDump()))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCopyLogs = () => {
-    navigator.clipboard.writeText(logs.join("\n"));
+  const handleCopyLogs = async () => {
+    if (!(await copyText(logs.join("\n")))) return;
     setLogsCopied(true);
     setTimeout(() => setLogsCopied(false), 2000);
   };

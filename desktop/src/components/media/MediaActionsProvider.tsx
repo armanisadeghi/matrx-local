@@ -20,6 +20,7 @@
  * further down the tree than this provider).
  */
 
+import { copyImage as writeImage, copyText } from "@ai-matrx/kit/clipboard";
 import {
   createContext,
   useCallback,
@@ -451,9 +452,9 @@ export function MediaActionsProvider({
           blob.type === "image/png"
             ? blob
             : new Blob([await blob.arrayBuffer()], { type: "image/png" });
-        await navigator.clipboard.write([
-          new ClipboardItem({ "image/png": png }),
-        ]);
+        if (!(await writeImage(png))) {
+          throw new Error("the clipboard refused the image");
+        }
         notify("Image copied to clipboard");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -475,15 +476,8 @@ export function MediaActionsProvider({
         notify("This item has no prompt", "error");
         return;
       }
-      try {
-        await navigator.clipboard.writeText(prompt);
-        notify("Prompt copied");
-      } catch (e) {
-        notify(
-          `Could not copy the prompt: ${e instanceof Error ? e.message : String(e)}`,
-          "error",
-        );
-      }
+      if (await copyText(prompt)) notify("Prompt copied");
+      else notify("Could not copy the prompt to the clipboard", "error");
     },
     [notify],
   );

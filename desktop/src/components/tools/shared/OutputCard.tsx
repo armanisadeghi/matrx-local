@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState } from "react";
 import { MediaThumb } from "@/components/media/MediaThumb";
 import { Copy, Check, Clock } from "lucide-react";
@@ -38,8 +39,8 @@ export function OutputCard({
 }: OutputCardProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
+  const handleCopy = async () => {
+    if (!(await copyText(content))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

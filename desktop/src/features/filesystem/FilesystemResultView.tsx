@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useMemo, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
@@ -457,7 +458,7 @@ export function EnginePlaces({ onReference }: { onReference?: (paths: string[]) 
   const [state, actions] = useFilesystemPlaces();
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
-    else void navigator.clipboard.writeText(paths.join("\n"));
+    else void copyText(paths.join("\n"));
   }, [onReference]);
   if (state.loading) {
     return <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading places…</div>;
@@ -637,7 +638,7 @@ function resultIdentity(result: FilesystemDirectoryPage | FilesystemSearchPage):
 export function FilesystemResultView({ result, layout = "embedded", onReference, onNavigate, onLoadChildren, onLoadMore, loadingMore, pagingError }: FilesystemResultViewProps) {
   const reference = useCallback((paths: string[]) => {
     if (onReference) onReference(paths);
-    else void navigator.clipboard.writeText(paths.join("\n"));
+    else void copyText(paths.join("\n"));
   }, [onReference]);
   switch (result.kind) {
     case "filesystem.places":

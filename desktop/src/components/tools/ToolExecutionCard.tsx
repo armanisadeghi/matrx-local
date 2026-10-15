@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -163,7 +164,7 @@ export function ToolExecutionCard({
                   type="button"
                   className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                   title="Copy output"
-                  onClick={() => void navigator.clipboard.writeText(result.output)}
+                  onClick={() => void copyText(result.output)}
                 >
                   <Clipboard className="h-3.5 w-3.5" />
                 </button>

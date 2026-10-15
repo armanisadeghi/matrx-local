@@ -10,6 +10,7 @@
  * Recording starts automatically when this component mounts.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useRef, useCallback, useState } from "react";
 import {
   Loader2,
@@ -71,7 +72,8 @@ export function CompactRecorderWindow({
 
   const handleCopy = useCallback(() => {
     if (!transcript) return;
-    navigator.clipboard.writeText(transcript).then(() => {
+    void copyText(transcript).then((landed) => {
+      if (!landed) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

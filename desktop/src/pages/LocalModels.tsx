@@ -1,5 +1,6 @@
 "use client";
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import {
   useState,
   useRef,
@@ -187,7 +188,8 @@ function RatingCell({ value, label }: { value: number; label: string }) {
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then((landed) => {
+      if (!landed) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -203,7 +205,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 function MsgCopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(text);
+    if (!(await copyText(text))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

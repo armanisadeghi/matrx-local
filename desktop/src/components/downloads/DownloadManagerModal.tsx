@@ -10,6 +10,7 @@
  * - Text cells always render; show "—" when values are unavailable.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   X,
@@ -448,7 +449,8 @@ function LogPanel() {
     const text = logs
       .map((l) => `[${l.time}] [${l.level.toUpperCase()}] ${l.message}`)
       .join("\n");
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then((landed) => {
+      if (!landed) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });

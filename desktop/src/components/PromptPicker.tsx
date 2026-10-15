@@ -13,6 +13,7 @@
  *   <PromptPicker showManage onSelect={(content) => setSystemPrompt(content)} />
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useState } from "react";
 import {
   systemPrompts,
@@ -75,9 +76,9 @@ function PromptListItem({
 }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = (e: React.MouseEvent) => {
+  const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(content);
+    if (!(await copyText(content))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

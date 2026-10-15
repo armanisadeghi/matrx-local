@@ -14,6 +14,7 @@
  *    PDF scrape shows the text view alone.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -56,13 +57,11 @@ export function SectionNote({ children }: { children: React.ReactNode }) {
 function CopyText({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const copy = useCallback(() => {
-    navigator.clipboard
-      .writeText(value)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1600);
-      })
-      .catch(() => undefined);
+    void copyText(value).then((landed) => {
+      if (!landed) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    });
   }, [value]);
   return (
     <Button

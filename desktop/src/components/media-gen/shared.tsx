@@ -9,6 +9,7 @@
  * defaults, and every control has an obvious way back to the model default.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { formatDurationSeconds } from "@ai-matrx/kit/format";
@@ -1163,7 +1164,8 @@ export function SeedChip({
       <button
         type="button"
         onClick={() => {
-          void navigator.clipboard.writeText(String(seed)).then(() => {
+          void copyText(String(seed)).then((landed) => {
+            if (!landed) return;
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1500);
           });

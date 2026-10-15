@@ -12,6 +12,7 @@
  * that fired before the component mounted.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { isTauri, getSidecarLogs } from "@/lib/sidecar";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -340,9 +341,9 @@ export function StartupScreen({
 
   const copyLogs = useCallback(async () => {
     if (logs.length === 0) return;
-    await navigator.clipboard.writeText(
+    if (!(await copyText(
       `=== Matrx Startup Log — ${new Date().toLocaleString()} ===\n${logs.join("\n")}\n=== END ===`,
-    );
+    ))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [logs]);

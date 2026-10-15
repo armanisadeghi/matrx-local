@@ -1,3 +1,4 @@
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import {
@@ -720,7 +721,7 @@ export function Ports({ engineStatus, engineUrl: _engineUrl }: PortsProps) {
                   : activeTab === "user"
                     ? userItems
                     : filteredPorts;
-              navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+              void copyText(JSON.stringify(data, null, 2));
             }}
             title="Copy Filtered Data (JSON)"
             className="h-9 w-9 bg-background/50 backdrop-blur-md"
@@ -1081,9 +1082,7 @@ function PortTable({
                           className="w-full justify-start text-xs h-8"
                           onClick={(e) => {
                             e.stopPropagation();
-                            navigator.clipboard.writeText(
-                              JSON.stringify(port, null, 2),
-                            );
+                            void copyText(JSON.stringify(port, null, 2));
                           }}
                         >
                           <Copy className="h-3 w-3 mr-2" /> Copy JSON
@@ -1354,7 +1353,7 @@ function TerminalTable({
                             className="h-6 text-xs px-2"
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(tail.output);
+                              void copyText(tail.output);
                             }}
                           >
                             <Copy className="h-3 w-3 mr-1" /> Copy

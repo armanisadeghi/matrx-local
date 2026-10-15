@@ -2,6 +2,7 @@
  * ListLibrarySection — named option lists (compact toolbar, cards or table view).
  */
 
+import { copyText as writeClipboard, readText } from "@ai-matrx/kit/clipboard";
 import {
   useCallback,
   useEffect,
@@ -283,7 +284,11 @@ function ListEditorDialog({
 
   const handleSmartPaste = async () => {
     try {
-      const clip = await navigator.clipboard.readText();
+      const clip = await readText();
+      if (clip === null) {
+        setLocalError("Could not read clipboard — paste into the field with ⌘V.");
+        return;
+      }
       if (!clip.trim()) {
         setLocalError("Clipboard is empty.");
         return;
@@ -540,8 +545,7 @@ export function ListLibraryCore() {
   };
 
   const copyText = async (key: string, text: string) => {
-    await navigator.clipboard.writeText(text);
-    flash(key);
+    if (await writeClipboard(text)) flash(key);
   };
 
   const handleExportAi = (id: string) => {
@@ -853,9 +857,9 @@ export function ListLibraryCore() {
               type="button"
               className="flex max-w-full items-center gap-1 self-start truncate text-[10px] text-muted-foreground hover:text-foreground"
               onClick={() => {
-                void navigator.clipboard
-                  .writeText(state.listsPath ?? "")
-                  .then(() => flash("path"));
+                void writeClipboard(state.listsPath ?? "").then((landed) => {
+                  if (landed) flash("path");
+                });
               }}
             >
               {feedbackKey === "path" ? (

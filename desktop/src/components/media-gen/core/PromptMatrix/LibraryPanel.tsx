@@ -5,6 +5,7 @@
  * Lives IN the matrix panel so nobody has to hunt for a buried presets menu.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useState } from "react";
 import {
   AlertCircle,
@@ -64,7 +65,7 @@ export function LibraryPanel({
                 <button
                   type="button"
                   className="mt-1 flex max-w-full items-center gap-1 truncate text-[10px] text-muted-foreground hover:text-foreground"
-                  onClick={() => void navigator.clipboard.writeText(diskPath)}
+                  onClick={() => void copyText(diskPath)}
                 >
                   <FolderOpen className="h-3 w-3 shrink-0" />
                   <span className="truncate">{diskPath}</span>

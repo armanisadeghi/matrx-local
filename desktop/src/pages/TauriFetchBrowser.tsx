@@ -16,6 +16,7 @@
  * Scraping: The raw bytes returned by proxy_fetch can be parsed directly —
  * no network round-trip, no rate limit, instant.
  */
+import { copyText as writeClipboard } from "@ai-matrx/kit/clipboard";
 import { useState, useRef, useCallback, type KeyboardEvent, useEffect } from "react";
 import {
     ChevronLeft,
@@ -236,7 +237,8 @@ export function TauriFetchBrowser() {
 
     const copyText = () => {
         if (!extractedText) return;
-        navigator.clipboard.writeText(extractedText).then(() => {
+        void writeClipboard(extractedText).then((landed) => {
+            if (!landed) return;
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         });

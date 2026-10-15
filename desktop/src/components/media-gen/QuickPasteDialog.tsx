@@ -2,6 +2,7 @@
  * Quick paste dialog — paste arbitrary content; parser figures out the format.
  */
 
+import { readText } from "@ai-matrx/kit/clipboard";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClipboardPaste, Loader2 } from "lucide-react";
 import { Button, BasicInput as Input, Label } from "@ai-matrx/design-system";
@@ -145,12 +146,12 @@ export function QuickPasteDialog({
   }, [parsed]);
 
   const handlePasteFromClipboard = async () => {
-    try {
-      const clip = await navigator.clipboard.readText();
-      if (clip.trim()) setText(clip);
-    } catch {
+    const clip = await readText();
+    if (clip === null) {
       setLocalError("Could not read clipboard — paste manually with ⌘V.");
+      return;
     }
+    if (clip.trim()) setText(clip);
   };
 
   const handleApply = async () => {

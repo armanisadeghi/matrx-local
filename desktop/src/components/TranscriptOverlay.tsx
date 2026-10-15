@@ -12,6 +12,7 @@
  * index.html which routes here immediately.
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import { useEffect, useState, useCallback } from "react";
 import { X, Copy, Check, GripHorizontal, Mic } from "lucide-react";
 import { Button } from "@ai-matrx/design-system";
@@ -88,9 +89,9 @@ export function TranscriptOverlay() {
     await tauriInvoke("hide_transcript_overlay");
   }, []);
 
-  const handleCopy = useCallback(() => {
+  const handleCopy = useCallback(async () => {
     if (!transcript) return;
-    navigator.clipboard.writeText(transcript).catch(() => {});
+    if (!(await copyText(transcript))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [transcript]);

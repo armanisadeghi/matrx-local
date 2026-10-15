@@ -21,6 +21,7 @@
  *   - Toggle via DOM event from TerminalToggleButton in the status bar
  */
 
+import { copyText } from "@ai-matrx/kit/clipboard";
 import {
   createContext,
   useCallback,
@@ -1030,7 +1031,7 @@ function OverviewTab({ logs }: { logs: ClientLogLine[] }) {
 
   const copyIssueReport = useCallback(async () => {
     const report = buildIssueReport(logs);
-    await navigator.clipboard.writeText(report);
+    if (!(await copyText(report))) return;
     setCopiedReport(true);
     setTimeout(() => setCopiedReport(false), 2000);
   }, [logs]);
@@ -1410,7 +1411,7 @@ export function DevTerminalPanel() {
       hour12: false,
     });
     const header = `=== Matrx Log [${activeTabDef.label}] (View) — ${now} ===`;
-    await navigator.clipboard.writeText(`${header}\n${body}\n=== END ===`);
+    if (!(await copyText(`${header}\n${body}\n=== END ===`))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [activeTabDef]);
@@ -1445,7 +1446,7 @@ export function DevTerminalPanel() {
       hour12: false,
     });
     const header = `=== Matrx Log [${activeTabDef.label}] (All) — ${now} ===`;
-    await navigator.clipboard.writeText(`${header}\n${body}\n=== END ===`);
+    if (!(await copyText(`${header}\n${body}\n=== END ===`))) return;
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
   }, [activeTab, activeTabDef, tabLogs]);

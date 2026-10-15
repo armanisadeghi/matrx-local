@@ -141,6 +141,17 @@ if not _matrx_scraper_mods:
 
 
 
+# ── The server client — matrx_api ─────────────────────────────────────────────
+# app/ ships as DATA, so imports inside it (delegation, matrx_files clients) are
+# invisible to static analysis. Without this the sidecar cannot reach the cloud
+# server at all, failing only on the user's machine. Absence is FATAL.
+_matrx_api_mods = collect_submodules('matrx_api')
+if 'matrx_api.generated.chat' not in _matrx_api_mods or 'matrx_api.generated.files' not in _matrx_api_mods:
+    raise RuntimeError(
+        'matrx_api is absent from the build environment; delegation and '
+        'cloud-files calls would be missing from the sidecar'
+    )
+
 a = Analysis(
     [os.path.join(_ROOT, 'run.py')],
     pathex=[_ROOT],
@@ -151,7 +162,7 @@ a = Analysis(
         (os.path.join(_ROOT, 'config/runtime-manifests'), 'config/runtime-manifests'),
     ] + _espeakng_data + _soundfile_data + _kokoro_data + _lang_tags_data + _pkg_metadata + _office_datas,
     hiddenimports=["app.services.daemon_session_reconciler"] + _matrx_ai_mods + _matrx_coding_history_mods + _protobuf_mods + _shared_runtime_mods + _office_hidden
-    + _matrx_scraper_mods + [
+    + _matrx_scraper_mods + _matrx_api_mods + [
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
         'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

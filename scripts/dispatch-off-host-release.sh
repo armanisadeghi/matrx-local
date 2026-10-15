@@ -4,6 +4,14 @@
 # installs dependencies, or typechecks on the caller's machine.
 set -euo pipefail
 
+# PAUSED (Arman, 2026-10-15: "For now, we don't need to release Matrx Local at all so stop all builds
+# for it."): nothing here releases or dispatches a build until MATRX_LOCAL_RELEASE_RESUMED=1 is set
+# on purpose. A --dry-run still previews.
+if [[ "${MATRX_LOCAL_RELEASE_RESUMED:-}" != "1" && " $* " != *" --dry-run "* ]]; then
+    echo "MATRX LOCAL RELEASES ARE PAUSED (Arman, 2026-10-15). Nothing was released or built. Resume with MATRX_LOCAL_RELEASE_RESUMED=1." >&2
+    exit 0
+fi
+
 REPO="armanisadeghi/matrx-local"
 WORKFLOW="off-host-release.yml"
 BUMP="patch"

@@ -10,18 +10,17 @@
     "macos": 0.062
   },
   "prices_source": "GitHub billing API pricePerUnit (Actions Linux / Windows / macOS 3-core), read 2026-10-11",
-  "total_usd_per_week": 34.36,
+  "total_usd_per_week": 0.0,
   "workflows": {
     "ci.yml": {
       "triggers": [
-        "pull_request",
-        "push"
+        "workflow_dispatch"
       ],
       "crons": [],
       "benefit": "Matrx Local checks (Python, frontend, Rust; Windows Rust).",
-      "owner_reason": "Matrx Local proof before a release.",
-      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 225 push runs/week x 13.2 Linux + 2 Windows min (HEAD triggers; going manual-only)",
-      "usd_per_week": 22.32,
+      "owner_reason": "Arman 2026-10-15: \"For now, we don't need to release Matrx Local at all so stop all builds for it.\"",
+      "basis": "PAUSED 2026-10-15 (Arman): no push, tag or schedule trigger; manual dispatch only, 0 runs/week forecast. ",
+      "usd_per_week": 0.0,
       "legs": {
         "linux": {
           "jobs": [
@@ -30,30 +29,29 @@
             "python",
             "rust-workspace"
           ],
-          "runs_per_week": 225,
+          "runs_per_week": 0,
           "minutes_per_run": 13.2,
-          "usd_per_week": 17.82
+          "usd_per_week": 0.0
         },
         "windows": {
           "jobs": [
             "rust-workspace-windows"
           ],
-          "runs_per_week": 225,
+          "runs_per_week": 0,
           "minutes_per_run": 2,
-          "usd_per_week": 4.5
+          "usd_per_week": 0.0
         }
       }
     },
     "egress-helper.yml": {
       "triggers": [
-        "push",
         "workflow_dispatch"
       ],
       "crons": [],
       "benefit": "Builds/packages the Home Connection helper on every OS.",
-      "owner_reason": "The helper ships as a sidecar and standalone.",
-      "basis": "no runs observed; ~1/week estimate",
-      "usd_per_week": 0.78,
+      "owner_reason": "Arman 2026-10-15: \"For now, we don't need to release Matrx Local at all so stop all builds for it.\"",
+      "basis": "PAUSED 2026-10-15 (Arman): no push, tag or schedule trigger; manual dispatch only, 0 runs/week forecast. ",
+      "usd_per_week": 0.0,
       "legs": {
         "linux": {
           "jobs": [
@@ -61,25 +59,25 @@
             "publish",
             "verify"
           ],
-          "runs_per_week": 1,
+          "runs_per_week": 0,
           "minutes_per_run": 10,
-          "usd_per_week": 0.06
+          "usd_per_week": 0.0
         },
         "macos": {
           "jobs": [
             "macos"
           ],
-          "runs_per_week": 1,
+          "runs_per_week": 0,
           "minutes_per_run": 10,
-          "usd_per_week": 0.62
+          "usd_per_week": 0.0
         },
         "windows": {
           "jobs": [
             "windows"
           ],
-          "runs_per_week": 1,
+          "runs_per_week": 0,
           "minutes_per_run": 10,
-          "usd_per_week": 0.1
+          "usd_per_week": 0.0
         }
       }
     },
@@ -89,30 +87,29 @@
       ],
       "crons": [],
       "benefit": "Serialized hosted version bump that starts a release.",
-      "owner_reason": "Matrx Local release path (manual).",
-      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 188/week (pre-retirement); forward 2/week x 4.8 min",
-      "usd_per_week": 0.06,
+      "owner_reason": "Arman 2026-10-15: \"For now, we don't need to release Matrx Local at all so stop all builds for it.\"",
+      "basis": "PAUSED 2026-10-15 (Arman): no push, tag or schedule trigger; manual dispatch only, 0 runs/week forecast. ",
+      "usd_per_week": 0.0,
       "legs": {
         "linux": {
           "jobs": [
             "release"
           ],
-          "runs_per_week": 2,
+          "runs_per_week": 0,
           "minutes_per_run": 4.8,
-          "usd_per_week": 0.06
+          "usd_per_week": 0.0
         }
       }
     },
     "release.yml": {
       "triggers": [
-        "push",
         "workflow_dispatch"
       ],
       "crons": [],
       "benefit": "Builds and publishes the Matrx Local desktop installers (mac/win/linux).",
-      "owner_reason": "Matrx Local release path (manual only; being retired).",
-      "basis": "observed 2026-10-02..09 (runs list + sampled jobs' billed minutes): 170/week pre-retirement; forward 2/week (mac 81, win 40, linux 30 min)",
-      "usd_per_week": 11.2,
+      "owner_reason": "Arman 2026-10-15: \"For now, we don't need to release Matrx Local at all so stop all builds for it.\"",
+      "basis": "PAUSED 2026-10-15 (Arman): no push, tag or schedule trigger; manual dispatch only, 0 runs/week forecast. ",
+      "usd_per_week": 0.0,
       "legs": {
         "linux": {
           "jobs": [
@@ -121,25 +118,25 @@
             "rename-assets",
             "verify"
           ],
-          "runs_per_week": 2,
+          "runs_per_week": 0,
           "minutes_per_run": 30,
-          "usd_per_week": 0.36
+          "usd_per_week": 0.0
         },
         "macos": {
           "jobs": [
             "release"
           ],
-          "runs_per_week": 2,
+          "runs_per_week": 0,
           "minutes_per_run": 81,
-          "usd_per_week": 10.04
+          "usd_per_week": 0.0
         },
         "windows": {
           "jobs": [
             "release"
           ],
-          "runs_per_week": 2,
+          "runs_per_week": 0,
           "minutes_per_run": 40,
-          "usd_per_week": 0.8
+          "usd_per_week": 0.0
         }
       }
     }

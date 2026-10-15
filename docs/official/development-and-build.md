@@ -41,7 +41,9 @@ Outputs: `.dmg` (macOS), `.msi`/NSIS (Windows), `.deb` (Linux).
 
 ## CI/CD
 
-GitHub Actions: `.github/workflows/release.yml` — push `v*` tag → cross-platform release + Tauri updater `latest.json`.
+**RELEASES PAUSED — Arman, 2026-10-15** ("For now, we don't need to release Matrx Local at all so stop all builds for it"): no workflow has a push, tag or schedule trigger, `scripts/release.sh` and `scripts/dispatch-off-host-release.sh` exit unless `MATRX_LOCAL_RELEASE_RESUMED=1`, and `ship-all` excludes this repo; `.github/ci-cost.json` forecasts $0.
+
+GitHub Actions: `.github/workflows/release.yml` — when resumed, a manual dispatch → cross-platform release + Tauri updater `latest.json` (it formerly ran on a `v*` tag push).
 
 **macOS signing:** `APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`. Sign sidecar dylibs, llama-server, llama.cpp dylibs, app bundle (hardened runtime + notarization).
 

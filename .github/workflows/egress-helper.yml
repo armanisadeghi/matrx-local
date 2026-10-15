@@ -26,9 +26,6 @@ name: Egress helper
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} (by {1})', github.workflow, inputs.requested_by || 'manual') || '' }}
 
 on:
-  push:
-    tags:
-      - "egress-v*"
   workflow_dispatch:
     inputs:
       publish:

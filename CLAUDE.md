@@ -40,11 +40,7 @@ push small batches to `origin/main` continuously; never run tree-wide destructiv
 never request your own branch/worktree/PR. Canonical:
 `/Users/armanisadeghi/code/common-docs/policies/shared-checkout.md`.
 
-**Release: you run it.** (Observed 2026-09-30, Claude: the `ship-all-repos` heartbeat now runs `./ship.sh` here every 90 minutes and cut 139 tags since 09-15, so this repo IS on a release train; scheduled reliability wakes never release — see `.claude/skills/matrx-local-reliability`. Line below is due an update.) This repo is NOT on the twice-hourly release train (only `aidream` and
-`ai-matrx` are). Whoever works here releases their own work: when your change is verified,
-run `scripts/release.sh` from `origin/main` before you finish — do not leave it for "the
-release agent"; there is none for this repo. Expected cadence is about one release a day. A
-daily scheduled sweep only catches what a session forgot; it is a safety net, not the plan.
+**Release: PAUSED (Arman, 2026-10-15).** No build or release runs for Matrx Local; do not run `scripts/release.sh` or dispatch a workflow. Canonical: [development-and-build.md § CI/CD](docs/official/development-and-build.md).
 
 ## What this is
 
@@ -282,7 +278,7 @@ RULE.
 
 Put all work directly on main--no worktrees, local branches or anything else!
 - Commit often (Locally)
-- Commit and push to `origin/main` as you go, then run this repo's release yourself when your work is verified (see § Release: you run it). Only `aidream` and `ai-matrx` have a twice-hourly release agent; this repo does not.
+- Commit and push to `origin/main` as you go; do not release (see § Release: PAUSED).
 - Focus on writing code that is going to do stuff and is going to get us to production! Do not waste time or we will lose the opportunity to go to production forever.
 
 Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/policies/ai-model-and-spend-rules.md — read it before picking a model or running work that spends; system-agent links use `https://manage.aimatrx.com/administration/agents/system-agents/agents/<id>/build`.

@@ -2,9 +2,6 @@ name: Release
 run-name: "release: ${{ inputs.recover_tag || github.ref_name }}${{ inputs.requested_by && format(' (by {0})', inputs.requested_by) || '' }}"
 
 on:
-  push:
-    tags:
-      - "v*"
   # Manual trigger (e.g. from environments that cannot push tags). tauri-action
   # creates/uses the vX.Y.Z tag and release itself from tauri.conf.json, so a
   # dispatch from main is equivalent to pushing the tag — downstream jobs

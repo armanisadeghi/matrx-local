@@ -620,6 +620,7 @@ class ClaudeHistoryImporter:
         sessions_dir: Path | None = None,
         account_reader: Callable[[], Any] = _read_account_snapshot,
         runtime_id_prefix: str = "matrx-local:claude-history:",
+        origin: str = "matrx_local",
     ) -> None:
         configured = os.environ.get("CLAUDE_CONFIG_DIR")
         self._config_dir = config_dir or (
@@ -631,6 +632,8 @@ class ClaudeHistoryImporter:
         self._user = user
         self._sync_meta = sync_meta
         self._runtime_id_prefix = runtime_id_prefix
+        # Which desktop app delivers: Matrx Local keeps "matrx_local"; Matrx 2 passes "matrx_desktop".
+        self._origin = origin
 
     async def read_index(self) -> dict[str, ClaudeSessionIndexEntry]:
         """Claude's own sidebar labels, keyed by CLI session UUID (one read, reusable)."""
@@ -1209,8 +1212,8 @@ class ClaudeHistoryImporter:
             raise ValueError(f"Claude session {source.session_id} has no valid entries")
         return requests, valid_entries, corrupt_lines, transcript_bytes
 
-    @staticmethod
     def _append_request(
+        self,
         source: _SessionSource,
         provider_session_id: str,
         stream_key: str,
@@ -1230,7 +1233,7 @@ class ClaudeHistoryImporter:
                     "is_new": True,
                     "store": True,
                 },
-                "origin": "matrx_local",
+                "origin": self._origin,
                 "stream_key": stream_key,
                 "entries": entries,
                 "source_metadata": metadata,

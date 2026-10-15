@@ -37,6 +37,8 @@ class BridgeOrigin(StrEnum):
     INDEPENDENT_HOOK = "independent_hook"
     MATRX_LOCAL = "matrx_local"
     MATRX_SANDBOX = "matrx_sandbox"
+    #: Matrx 2 (the desktop app) delivering through this same importer.
+    MATRX_DESKTOP = "matrx_desktop"
 
 
 class BridgeConversation(BaseModel):
@@ -188,15 +190,16 @@ class BridgeRequest(BaseModel):
             if self.origin not in {
                 BridgeOrigin.MATRX_LOCAL,
                 BridgeOrigin.MATRX_SANDBOX,
+                BridgeOrigin.MATRX_DESKTOP,
             }:
                 raise ValueError(
-                    "append_native origin must be matrx_local or matrx_sandbox"
+                    "append_native origin must be matrx_local, matrx_desktop or matrx_sandbox"
                 )
             if self.writer_runtime_id is None:
                 raise ValueError("writer_runtime_id is required for append_native")
             if self.source_metadata is not None and (
                 self.provider is not BridgeProvider.CLAUDE_CODE
-                or self.origin is not BridgeOrigin.MATRX_LOCAL
+                or self.origin not in {BridgeOrigin.MATRX_LOCAL, BridgeOrigin.MATRX_DESKTOP}
             ):
                 raise ValueError(
                     "source_metadata is supported only for Matrx Local Claude imports"

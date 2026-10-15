@@ -857,8 +857,8 @@
     },
     {
       "name": "subscribeSchedulerBroadcast",
-      "package": "@ai-matrx/realtime",
-      "why": "NOT a package twin \u2014 a sanctioned MIRROR. src/lib/scheduler-client/ is the hand-vendored copy of matrx-frontend/lib/scheduler-client/ (see its README's mirror policy), and this function is the ref-counted fan-out over the package's own `manager.open({private:true, wire:{mode:'raw'}})`. The channel logic itself is 100% the package's; what is local is the sch_task payload filtering the mirror exists to carry.",
+      "package": "@ai-matrx/data/scheduler",
+      "why": "The scheduler realtime feed (sch_task broadcast fan-out over the realtime manager) is owned by @ai-matrx/data/scheduler since 2026-10-14; the hand-vendored scheduler-client mirrors in matrx-frontend and matrx-extend were deleted. A local body of this name is a re-grown copy \u2014 import it from the package.",
       "allow": []
     },
     {

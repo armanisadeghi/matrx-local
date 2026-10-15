@@ -123,7 +123,7 @@ function readAddress(): string | null {
 
 /** Build the host once the server address is known. */
 export async function createDesktopChatHost(options?: {
-  /** Open this conversation first (`/cloud-chat?chat=package&conversation=<id>`). */
+  /** Open this conversation first (`/cloud-chat?conversation=<id>`). */
   conversationId?: string | null | undefined;
 }): Promise<ChatHost> {
   const baseUrl = await getAIDreamServerUrl();

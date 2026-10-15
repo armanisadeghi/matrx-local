@@ -1,5 +1,5 @@
 /**
- * Real-use proof for Cloud Chat on `@ai-matrx/chat` (L1, opt-in `/cloud-chat?chat=package`), signed
+ * Real-use proof for Cloud Chat on `@ai-matrx/chat` (L1, `/cloud-chat`), signed
  * in as the harness account (admin@admin.com — see e2e/setup/harness-session.mjs), headless: the
  * package chat renders, the composer is ready, history loads, and a past conversation opens by its
  * address. No message is sent (no AI spend). Screenshots: test-results/package-cloud-chat/.
@@ -57,7 +57,7 @@ async function newestAnsweredConversation(): Promise<string | null> {
   return rows[0]?.conversation_id ?? null;
 }
 
-test.describe("Cloud Chat on the chat package (opt-in)", () => {
+test.describe("Cloud Chat on the chat package", () => {
   test("signed in: renders, composer ready, history, a past conversation opens", async ({ page }) => {
     test.setTimeout(240_000);
     test.skip(!(await harnessIdentity()), HARNESS_NOT_SIGNED_IN);
@@ -65,7 +65,7 @@ test.describe("Cloud Chat on the chat package (opt-in)", () => {
     page.on("pageerror", (e) => errors.push(String(e)));
 
     await signInViaHarness(page);
-    await page.goto("/#/cloud-chat?chat=package");
+    await page.goto("/#/cloud-chat");
     await closeEngineMonitor(page);
     const root = page.locator("[data-package-chat]");
     await expect(root).toBeVisible({ timeout: 60_000 });
@@ -84,7 +84,7 @@ test.describe("Cloud Chat on the chat package (opt-in)", () => {
     const pastId = await newestAnsweredConversation();
     expect(pastId, "a past conversation exists for the harness account").toBeTruthy();
     const opened = Date.now();
-    await page.goto(`/#/cloud-chat?chat=package&conversation=${pastId}`);
+    await page.goto(`/#/cloud-chat?conversation=${pastId}`);
     await closeEngineMonitor(page);
     await expect(root).toBeVisible({ timeout: 60_000 });
     // A past answer must paint its content, not sit on the lazy block renderer's placeholder.

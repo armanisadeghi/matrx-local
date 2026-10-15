@@ -1,12 +1,13 @@
 /**
- * Cloud Chat on `@ai-matrx/chat` (L1, opt-in: `/cloud-chat?chat=package`): the package's history,
- * new-chat screen and conversation room over Matrx Local's host (`./host`). The default Cloud Chat
- * stays the desktop's own screen until this one is proven on a live run.
+ * Cloud Chat on `@ai-matrx/chat` (L1, the only Cloud Chat: `/cloud-chat`): the package's history,
+ * new-chat screen and conversation room over Matrx Local's host (`./host`). The desktop has no
+ * Cloud Chat code of its own.
  */
 
 import { ChatConversationRoom } from "@ai-matrx/chat/agents/components/chat/ChatConversationRoom";
 import { ChatHistorySidebar } from "@ai-matrx/chat/agents/components/chat/ChatHistorySidebar";
 import { ChatNewClient } from "@ai-matrx/chat/agents/components/chat/ChatNewClient";
+import { ChatRoomClient } from "@ai-matrx/chat/agents/components/chat/ChatRoomClient";
 import type { ChatHost } from "@ai-matrx/chat/host";
 import { ChatProvider, usePathname, useRouter } from "@ai-matrx/chat/host/react";
 import { Button } from "@ai-matrx/design-system";
@@ -32,6 +33,8 @@ function Screens() {
   const router = useRouter();
   const [historyOpen, setHistoryOpen] = useState(true);
   const conversationId = pathname.match(/^\/chat\/([0-9a-f-]{36})/)?.[1] ?? null;
+  // `/chat/a/<agent>`: the package's agent picker routes here; the agent answers a fresh chat directly.
+  const directAgentId = pathname.match(/^\/chat\/a\/([^/?#]+)/)?.[1] ?? null;
   return (
     <div data-package-chat="" className="flex h-full min-h-0 overflow-hidden">
       {historyOpen && (
@@ -70,6 +73,12 @@ function Screens() {
               conversationId={conversationId}
               agentId={null}
               ownedByMandate={false}
+            />
+          ) : directAgentId ? (
+            <ChatRoomClient
+              key={directAgentId}
+              agentId={decodeURIComponent(directAgentId)}
+              composer={{ initialMode: null }}
             />
           ) : (
             <ChatNewClient agentId={null} composer={{ initialMode: null }} />

@@ -165,10 +165,4 @@ describe("context single door", () => {
     }
     expect(offenders).toEqual([]);
   });
-
-  it("use-cloud-chat sends context only from the branded door value", () => {
-    const text = readFileSync(join(SRC, "hooks", "use-cloud-chat.ts"), "utf8");
-    expect(text).toMatch(/context\?: Pick<RequestContext, "context" \| "withheld">,/);
-    expect(text).not.toMatch(/\bcontext:\s*\{/);
-  });
 });

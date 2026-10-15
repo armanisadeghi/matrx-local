@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
+from matrx_api import CallOptions, MatrxApi, MatrxApiError, UserCredential
+from matrx_api.generated import chat
 
 from app.common.system_logger import get_logger
 
@@ -116,22 +118,41 @@ class DelegationApiClient:
     def base_url(self) -> str:
         return self._base_url
 
-    def _client(
-        self, timeout: httpx.Timeout | float = _REQUEST_TIMEOUT
-    ) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=timeout, transport=self._transport)
+    def _api(
+        self, jwt: str, *, connect_timeout: float = 30.0, total_timeout: float = _REQUEST_TIMEOUT
+    ) -> MatrxApi:
+        """The ``matrx_api`` client for one delegation call, as the signed-in person.
 
-    async def _headers(self, jwt: str) -> dict[str, str]:
-        """Identity for one delegation call — bearer token AND organization.
+        The wire (Bearer JWT, X-Organization-Id) is pinned by
+        ``tests/unit/test_delegation_client_wire_golden.py``.
+        """
+        return MatrxApi(
+            credentials=UserCredential(jwt),
+            base_urls={"aidream": self._base_url},
+            transport=self._transport,
+            connect_timeout=connect_timeout,
+            total_timeout=total_timeout,
+            retry_attempts=1,
+        )
+
+    @staticmethod
+    def _failed(label: str, exc: MatrxApiError) -> Exception:
+        """A transport failure keeps its httpx type; an HTTP answer becomes a DelegationApiError."""
+        if exc.status == 0 and exc.__cause__ is not None:
+            return exc.__cause__
+        text = exc.response.text if exc.response is not None else str(exc.server_detail or exc.message)
+        return DelegationApiError(exc.status, f"[delegation] {label} → HTTP {exc.status}: {text[:300]}")
+
+    async def _organization_id(self, jwt: str) -> str:
+        """The organization one delegation call runs in - resolved per call, never guessed.
 
         aidream's AuthMiddleware refuses an authenticated request that names no
         organization (400 ``organization_required``) before it routes, and
         never picks one for the caller. The organization is therefore a
-        per-request transport fact exactly like the bearer token, and it is
-        attached HERE — the one place this client builds headers — rather than
-        at each of the three call sites. ``GET /ai/user/pending_calls`` was
-        400ing continuously in production on 2026-08-30 for exactly this
-        reason.
+        per-request transport fact exactly like the bearer token, resolved HERE
+        - the one place this client names it - rather than at each of the three
+        call sites. ``GET /ai/user/pending_calls`` was 400ing continuously in
+        production on 2026-08-30 for exactly this reason.
 
         Resolution never guesses (see ``aidream.organization``); an
         unresolvable organization raises rather than sending a request that is
@@ -144,7 +165,7 @@ class DelegationApiClient:
         )
 
         try:
-            organization_id = await resolve_active_organization_id(jwt)
+            return await resolve_active_organization_id(jwt)
         except OrganizationNotResolvedError as exc:
             # A HELD call is waiting on one click, not broken, and it says so
             # in the one sentence every lane shares
@@ -152,12 +173,6 @@ class DelegationApiClient:
             # "Cannot name an organization for this request" — read as a
             # malfunction for a question nobody had been asked yet.
             raise DelegationApiError(400, organization_refusal_text(exc)) from exc
-        return {
-            "Authorization": f"Bearer {jwt}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-Organization-Id": organization_id,
-        }
 
     def _instance_id(self) -> str | None:
         try:
@@ -196,22 +211,17 @@ class DelegationApiClient:
         does not yet filter simply ignores the param. Best-effort — a resolve
         failure omits the param and falls back to today's user-scoped behavior.
         """
-        url = f"{self._base_url}/ai/user/pending_calls"
         params: dict[str, str] = {}
         if claim_for_instance:
             iid = self._instance_id()
             if iid:
                 params["instance_id"] = iid
-        async with self._client() as http:
-            resp = await http.get(
-                url, headers=await self._headers(jwt), params=params or None
-            )
-        if resp.status_code != 200:
-            raise DelegationApiError(
-                resp.status_code,
-                f"[delegation] pending_calls → HTTP {resp.status_code}: {resp.text[:300]}",
-            )
-        data = resp.json()
+        options = CallOptions(organization_id=await self._organization_id(jwt))
+        try:
+            async with self._api(jwt) as api:
+                data = await chat.list_user_pending_calls(api, query=params or None, options=options)
+        except MatrxApiError as exc:
+            raise self._failed("pending_calls", exc) from exc
         if not isinstance(data, list):
             raise DelegationApiError(
                 200,
@@ -234,21 +244,18 @@ class DelegationApiClient:
         Returns the ToolResultsResponse dict — the caller MUST read
         ``continuation_needed`` (anti-pattern #2 in the protocol doc).
         """
-        url = f"{self._base_url}/ai/conversations/{conversation_id}/tool_results"
         instance_id = self._instance_id()
         payload: dict[str, Any] = {"results": results}
         if instance_id:
             payload["instance_id"] = instance_id
-        async with self._client() as http:
-            resp = await http.post(
-                url, headers=await self._headers(jwt), json=payload
-            )
-        if resp.status_code != 200:
-            raise DelegationApiError(
-                resp.status_code,
-                f"[delegation] tool_results → HTTP {resp.status_code}: {resp.text[:300]}",
-            )
-        body = resp.json()
+        options = CallOptions(organization_id=await self._organization_id(jwt))
+        try:
+            async with self._api(jwt) as api:
+                body = await chat.conversations_submit_tool_results_post(
+                    api, path={"conversation_id": conversation_id}, body=payload, options=options
+                )
+        except MatrxApiError as exc:
+            raise self._failed("tool_results", exc) from exc
         if not isinstance(body, dict):
             raise DelegationApiError(
                 200, "[delegation] tool_results returned 200 but body is not an object"
@@ -274,36 +281,32 @@ class DelegationApiClient:
         picked up by the engine's post-resume sweep) but we count
         ``tool_delegated`` sub-events so the caller can log re-entrancy.
         """
-        url = f"{self._base_url}/ai/conversations/{conversation_id}/resume"
-        async with self._client(timeout=_RESUME_TIMEOUT) as http:
-            async with http.stream(
-                "POST", url, headers=await self._headers(jwt), json=body
-            ) as resp:
-                if resp.status_code == 409:
-                    raw = await _read_json_body(resp)
+        options = CallOptions(organization_id=await self._organization_id(jwt))
+        async with self._api(
+            jwt, connect_timeout=_RESUME_TIMEOUT.connect or 15.0, total_timeout=_RESUME_TIMEOUT.read
+        ) as api:
+            try:
+                stream = await chat.conversations_resume_conversation_post(
+                    api, path={"conversation_id": conversation_id}, body=body, options=options
+                )
+            except MatrxApiError as exc:
+                if exc.status == 409:
+                    raw = exc.server_detail if isinstance(exc.server_detail, dict) else {}
                     code = _parse_conflict_code(raw)
                     retryable = bool(raw.get("retryable")) or code == "resume_conflict"
-                    if (
-                        isinstance(raw.get("details"), dict)
-                        and "retryable" in raw["details"]
-                    ):
+                    if isinstance(raw.get("details"), dict) and "retryable" in raw["details"]:
                         retryable = bool(raw["details"]["retryable"])
                     return ResumeOutcome(
                         status="conflict",
-                        conflict=ResumeConflict(
-                            code=code, retryable=retryable, raw=raw
-                        ),
+                        conflict=ResumeConflict(code=code, retryable=retryable, raw=raw),
                     )
-                if resp.status_code != 200:
-                    text = (await resp.aread()).decode("utf-8", errors="replace")
-                    raise DelegationApiError(
-                        resp.status_code,
-                        f"[delegation] resume → HTTP {resp.status_code}: {text[:300]}",
-                    )
+                raise self._failed("resume", exc) from exc
+            async with stream:
                 events = 0
                 delegated = 0
                 ended = False
-                async for evt in _iter_stream_events(resp):
+                # The raw response, not the framed stream: the drain tolerates SSE markers and keep-alives.
+                async for evt in _iter_stream_events(stream.response):
                     events += 1
                     error_message = _stream_error_message(evt)
                     if error_message is not None:
@@ -323,15 +326,6 @@ class DelegationApiClient:
                 return ResumeOutcome(
                     status="streamed", events_seen=events, tool_delegated_seen=delegated
                 )
-
-
-async def _read_json_body(resp: httpx.Response) -> dict[str, Any]:
-    try:
-        raw = await resp.aread()
-        parsed = json.loads(raw.decode("utf-8", errors="replace"))
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
 
 
 async def _iter_stream_events(resp: httpx.Response) -> AsyncIterator[dict[str, Any]]:

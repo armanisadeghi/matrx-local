@@ -118,7 +118,7 @@ async def test_delegation_refusal_says_waiting(monkeypatch):
     monkeypatch.setattr(org_module, "resolve_active_organization_id", _held)
 
     with pytest.raises(DelegationApiError) as excinfo:
-        await DelegationApiClient("https://example.invalid")._headers("jwt-value")
+        await DelegationApiClient("https://example.invalid")._organization_id("jwt-value")
     assert _says_waiting(str(excinfo.value))
 
 

@@ -24,6 +24,8 @@ dependencies = [
     "tqdm>=4.67.3",
     # HTTP client (scraping proxy, file transfer)
     "httpx",
+    # The generated client of every AI Matrx server (identity headers, org rule, errors, streams). From PyPI like every matrx-* here.
+    "matrx-api>=0.1.4",
     # LOCAL Claude Code runtime (app/services/coding_sessions/local_runtime.py):
     # official Claude Agent SDK drives the USER'S OWN installed `claude` CLI +
     # subscription login (cli_path is always set; the SDK's bundled CLI is not

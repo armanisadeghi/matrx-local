@@ -13,15 +13,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
+from matrx_api import CallOptions, MatrxApi, MatrxApiError, Multipart, UserCredential
+from matrx_api.generated import files as files_api
 
 from app.common.system_logger import get_logger
 from app.services.app_config import get_matrx_files_url
 
 logger = get_logger()
-
-_WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
-
 
 class MatrxFilesHTTPError(RuntimeError):
     """A matrx-files call failed; carries enough context for loud reporting."""
@@ -66,36 +64,49 @@ class MatrxFilesClient:
     def available(self) -> bool:
         return bool(self._base and self._jwt)
 
-    async def _request(
+    async def _call(
         self,
         method: str,
-        path: str,
+        label: str,
+        operation: Any,
         *,
-        params: dict[str, Any] | None = None,
-        json_body: Any = None,
-        data: dict[str, Any] | None = None,
-        files: dict[str, Any] | None = None,
+        request_id: str | None = None,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
+        **kwargs: Any,
     ) -> Any:
+        """One matrx-files operation through ``matrx_api`` as the signed-in person in their active organization.
+
+        ``method``/``label`` only label a failure. The wire (Bearer JWT, X-Organization-Id, X-Request-Id) is pinned by
+        ``tests/unit/test_matrx_files_client_wire_golden.py``.
+        """
         if not self._base:
             raise RuntimeError("MATRX_FILES_URL not configured")
         if not self._jwt:
             raise RuntimeError("No JWT set — user must be authenticated")
-        headers = await self._auth_headers()
-        if extra_headers:
-            headers.update(extra_headers)
-        url = f"{self._base}{path}"
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
-            resp = await client.request(
-                method, url, params=params, json=json_body, data=data,
-                files=files, headers=headers,
-            )
-        if resp.status_code >= 400:
-            raise MatrxFilesHTTPError(method.upper(), path, resp.status_code, resp.text)
-        if resp.status_code == 204 or not resp.text:
-            return {}
-        return resp.json()
+        # The typed refusal (OrganizationNotResolvedError) travels AS ITSELF - see _auth_headers.
+        organization_id = (await self._auth_headers())["X-Organization-Id"]
+        api = MatrxApi(
+            credentials=UserCredential(self._jwt),
+            base_urls={"files": self._base},
+            request_id=(lambda: request_id) if request_id else None,
+            connect_timeout=5.0,
+            total_timeout=timeout,
+            retry_attempts=1,
+        )
+        try:
+            async with api:
+                payload = await operation(
+                    api,
+                    options=CallOptions(organization_id=organization_id, headers=extra_headers or None),
+                    **kwargs,
+                )
+        except MatrxApiError as exc:
+            if exc.status == 0 and exc.__cause__ is not None:
+                raise exc.__cause__ from None  # a transport failure keeps its httpx type for callers
+            body = exc.response.text if exc.response is not None else str(exc.server_detail or exc.message)
+            raise MatrxFilesHTTPError(method, label, exc.status, body) from exc
+        return {} if payload is None else payload
 
     # ------------------------------------------------------------------
     # Pull — the device-replica sync feed
@@ -116,11 +127,11 @@ class MatrxFilesClient:
             params["cursor"] = cursor
         elif since:
             params["since"] = since
-        return await self._request("GET", "/files/sync/changes", params=params)
+        return await self._call("GET", "/files/sync/changes", files_api.sync_changes, query=params)
 
     async def sync_folders(self, *, include_deleted: bool = False) -> dict[str, Any]:
-        return await self._request(
-            "GET", "/files/sync/folders", params={"include_deleted": include_deleted}
+        return await self._call(
+            "GET", "/files/sync/folders", files_api.sync_folders, query={"include_deleted": include_deleted}
         )
 
     # ------------------------------------------------------------------
@@ -172,7 +183,7 @@ class MatrxFilesClient:
         return await self._auth_headers()
 
     async def get_record(self, file_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/files/{file_id}")
+        return await self._call("GET", f"/files/{file_id}", files_api.files_get_file, path={"file_id": file_id})
 
     # ------------------------------------------------------------------
     # Push — upload / rename / move / tombstone / restore
@@ -201,28 +212,25 @@ class MatrxFilesClient:
         ``intent="force_new_copy"`` with a ``reason`` and gets its own row,
         linked to the canonical content by ``duplicate_of_file_id``.
         """
-        return await self._request(
+        return await self._call(
             "POST",
             "/files/upload",
-            data={
-                "file_path": file_path,
-                **({"intent": intent} if intent else {}),
-                **({"reason": reason} if reason else {}),
-                **(
-                    {"metadata_json": json.dumps(metadata, separators=(",", ":"))}
-                    if metadata
-                    else {}
-                ),
-            },
-            files={"file": (filename, content, mime_type or "application/octet-stream")},
-            extra_headers={
-                **({"X-Request-Id": request_id} if request_id else {}),
-                **(
-                    {"X-Idempotency-Key": idempotency_key}
-                    if idempotency_key
-                    else {}
-                ),
-            },
+            files_api.upload_file,
+            body=Multipart(
+                data={
+                    "file_path": file_path,
+                    **({"intent": intent} if intent else {}),
+                    **({"reason": reason} if reason else {}),
+                    **(
+                        {"metadata_json": json.dumps(metadata, separators=(",", ":"))}
+                        if metadata
+                        else {}
+                    ),
+                },
+                files={"file": (filename, content, mime_type or "application/octet-stream")},
+            ),
+            request_id=request_id,
+            extra_headers={"X-Idempotency-Key": idempotency_key} if idempotency_key else None,
             timeout=300.0,
         )
 
@@ -238,10 +246,16 @@ class MatrxFilesClient:
             body["name"] = name
         if folder is not None:
             body["folder"] = folder
-        return await self._request("PATCH", f"/files/{file_id}", json_body=body)
+        return await self._call(
+            "PATCH", f"/files/{file_id}", files_api.update_file_metadata, path={"file_id": file_id}, body=body
+        )
 
     async def soft_delete(self, file_id: str) -> dict[str, Any]:
-        return await self._request("DELETE", f"/files/{file_id}")
+        return await self._call(
+            "DELETE", f"/files/{file_id}", files_api.files_delete_file, path={"file_id": file_id}
+        )
 
     async def restore(self, file_id: str) -> dict[str, Any]:
-        return await self._request("POST", f"/files/{file_id}/restore")
+        return await self._call(
+            "POST", f"/files/{file_id}/restore", files_api.restore_file, path={"file_id": file_id}
+        )

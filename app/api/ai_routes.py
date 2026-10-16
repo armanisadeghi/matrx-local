@@ -53,7 +53,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
 from app.common.system_logger import get_logger
@@ -188,6 +188,9 @@ class LocalChatRequest(LocalScopedRequest):
 
     system_instruction: str | dict[str, Any] | None = None
     variables: dict[str, Any] | None = None
+    # How many leading `messages` are the agent's authored template; only those (and the system
+    # instruction) are filled. Omitted = 0 (mirror of aidream ChatRequest.template_message_count).
+    template_message_count: int | None = Field(default=None, ge=0)
     config_overrides: LLMParams | None = None
 
     tools: list[ToolSpec] = []

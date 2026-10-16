@@ -45,6 +45,7 @@ import matrx_ai.orchestrator  # noqa: F401  (import-order fix, see above)
 
 from fastapi import HTTPException, status
 from matrx_ai.config import LLMParams, UnifiedConfig
+from matrx_ai.config.template_substitution import authored_template_messages
 from matrx_ai.orchestrator.requests import CompletedRequest
 from matrx_connect.context.app_context import AppContext, set_app_context
 from matrx_connect.context.events import WarningPayload
@@ -811,6 +812,11 @@ async def prepare_chat(
     if request.metadata:
         config_dict["metadata"] = dict(request.metadata)
     config = UnifiedConfig.from_dict(config_dict)
+    # THE USER-INPUT LAW: only the authored leading messages are a template; the typed turn
+    # and carried history are data. Same shared selection as aidream (matrx-ai).
+    template_messages = authored_template_messages(
+        request.messages, request.template_message_count, config.messages
+    )
 
     ctx = ctx.with_overrides(
         conversation_id=conversation_id,
@@ -832,7 +838,7 @@ async def prepare_chat(
     )
 
     if request.variables:
-        config.replace_variables(request.variables)
+        config.replace_variables(request.variables, template_messages=template_messages)
     if request.config_overrides:
         config.apply_overrides(request.config_overrides)
     bind_active_local_model(config)

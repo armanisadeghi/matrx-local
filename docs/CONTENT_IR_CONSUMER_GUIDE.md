@@ -199,7 +199,7 @@ CSP and permissions impose additional constraints.
 ### What is portable now
 
 **Install immutable registry artifacts.** Matrx Local pins
-`@ai-matrx/content-ir@0.2.0` and `@ai-matrx/content-ir-react@0.1.0` exactly.
+`@ai-matrx/content-ir@0.2.0` and `@ai-matrx/content-ir/react@0.1.0` exactly.
 Both packages ship built ESM/CommonJS and declarations; this repo contains no
 workspace link, copied kernel, or vendored package tarball. The core parser,
 normalization, envelope, schema, fingerprint, session, storage transform, and
@@ -232,7 +232,7 @@ Prerequisites 1–3 below are DONE for this app; 4–5 remain open. What shipped
 
 | Piece | Where |
 |---|---|
-| Shared packages consumed (no local fork) | Exact public `@ai-matrx/content-ir@0.2.0` + `@ai-matrx/content-ir-react@0.1.0` registry artifacts |
+| Shared packages consumed (no local fork) | Exact public `@ai-matrx/content-ir@0.2.0` + `@ai-matrx/content-ir/react@0.1.0` registry artifacts |
 | Catalog client — authenticated, RLS-filtered, ETag'd | `desktop/src/features/content-ir/catalog/client.ts` → `GET /workflow/kinds` + `/{slug}` |
 | Registries (identity + component bindings, ONE fetch) | `desktop/src/features/content-ir/runtime/registry.ts` |
 | Envelope ingestion (preserve valid, strip + report malformed) | `desktop/src/features/content-ir/runtime/inbound.ts` |

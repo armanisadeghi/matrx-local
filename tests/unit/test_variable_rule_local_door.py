@@ -84,6 +84,10 @@ async def _prepare_agent(
     return config
 
 
+def _texts(config: UnifiedConfig) -> list[str]:
+    return ["".join(c.text for c in m.content) for m in config.messages]
+
+
 def _system(config: UnifiedConfig) -> str:
     return config.system_instruction.base_instruction
 
@@ -282,11 +286,17 @@ def test_agent_continuation_uses_the_frozen_system_prompt(
         "model": "m",
         "system_instruction": "City Rome. Keep {{literal}}. STD. {{other}}",
         "system_prompt_frozen": True,
-        "messages": [],
+        "messages": [
+            {"role": "user", "content": "Hi Rome"},
+            {"role": "assistant", "content": "Reply"},
+        ],
     }
     config = asyncio.run(_prepare_agent_continue(monkeypatch, persisted))
     assert _system(config) == "City Rome. Keep {{literal}}. STD. {{other}}"
     assert config.system_prompt_frozen is True
+    # What the model receives on turn 2: stored history (turn 1's FILLED authored opening turn
+    # and the reply), then the new typed message. The definition's raw copy is not sent too.
+    assert _texts(config) == ["Hi Rome", "Reply", "again"]
 
 
 def test_agent_continuation_of_an_unfrozen_conversation_is_filled_not_raw(
@@ -296,3 +306,40 @@ def test_agent_continuation_of_an_unfrozen_conversation_is_filled_not_raw(
         _prepare_agent_continue(monkeypatch, {"model": "m", "messages": []})
     )
     assert _system(config) == "City Paris. Keep {{literal}}. STD. {{other}}"
+
+
+@pytest.mark.anyio
+async def test_the_local_store_freezes_turn_ones_system_prompt_and_hands_it_back(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.ai.conversation_handler import SQLiteConversationStore
+    from app.services.local_db import database
+
+    db = database.LocalDatabase(tmp_path / "matrx.db")
+    await db.connect()
+    monkeypatch.setattr(database, "_instance", db)
+    try:
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(CONV_ID, "user-1")
+        before = await store.get_conversation_config(CONV_ID)
+        assert "system_instruction" not in before and not before.get("system_prompt_frozen")
+
+        completed = {
+            "conversation_id": CONV_ID,
+            "user_request_id": "33333333-3333-4333-8333-333333333333",
+            "messages": [{"role": "user", "content": "Describe Rome."}],
+            "conversation": {"system_instruction": "City Rome."},
+        }
+        await store.create_pending_user_request(
+            completed["user_request_id"], CONV_ID, "user-1"
+        )
+        await store.persist_completed_request(completed, CONV_ID)
+        # Turn 2 re-persists the history with a different (refilled) prompt: the first one wins.
+        completed["conversation"] = {"system_instruction": "City Paris."}
+        await store.persist_completed_request(completed, CONV_ID)
+
+        after = await store.get_conversation_config(CONV_ID)
+        assert after["system_instruction"] == "City Rome."
+        assert after["system_prompt_frozen"] is True
+    finally:
+        await db.close()

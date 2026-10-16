@@ -440,6 +440,7 @@ class SQLiteConversationStore:
         completed: Any,
         conversation_id: str | None,
     ) -> dict[str, Any]:
+        frozen_system_text: str | None = None
         if isinstance(completed, dict):
             conv_id: str = (
                 conversation_id or completed.get("conversation_id") or str(uuid.uuid4())
@@ -454,6 +455,9 @@ class SQLiteConversationStore:
             user_request_storage = dict(completed.get("user_request") or {})
             request_storage_rows = list(completed.get("requests") or [])
             primary_model_name = completed.get("model")
+            frozen_system_text = (completed.get("conversation") or {}).get(
+                "system_instruction"
+            )
         else:
             conv_id = (
                 conversation_id
@@ -477,6 +481,9 @@ class SQLiteConversationStore:
                     ]
                     primary_model_name = (storage.get("conversation") or {}).get(
                         "ai_model"
+                    )
+                    frozen_system_text = (storage.get("conversation") or {}).get(
+                        "system_instruction"
                     )
                 except Exception:
                     logger.warning(
@@ -740,9 +747,19 @@ class SQLiteConversationStore:
             """UPDATE chat.conversation
                    SET message_count = (SELECT COUNT(*) FROM chat.message
                                     WHERE conversation_id = ? AND deleted_at IS NULL),
-                   last_request_id = ?, last_request_status = ?, updated_at = ?
+                   last_request_id = ?, last_request_status = ?, updated_at = ?,
+                   system_instruction = CASE
+                       WHEN system_instruction IS NULL OR system_instruction = ''
+                       THEN ? ELSE system_instruction END
                WHERE id = ?""",
-            (conv_id, user_request_id, request_status, now, conv_id),
+            (
+                conv_id,
+                user_request_id,
+                request_status,
+                now,
+                frozen_system_text if isinstance(frozen_system_text, str) else None,
+                conv_id,
+            ),
         )
         await enqueue_change("chat", "conversation", conv_id, db, commit=False)
         await db.commit()
@@ -1036,7 +1053,7 @@ class SQLiteConversationStore:
             raise KeyError(
                 f"conversation {conversation_id!r} not found in local SQLite"
             )
-        return {
+        config: dict[str, Any] = {
             "id": conv.get("id"),
             "mode": conv.get("mode", "chat"),
             "model": conv.get("model", ""),
@@ -1045,6 +1062,17 @@ class SQLiteConversationStore:
             "agent_version_id": conv.get("agent_version_id"),
             "messages": await self._load_history(conversation_id),
         }
+        # THE VARIABLE RULE: turn 1 froze the exact system prompt it sent (the same column the
+        # server freezes into). Hand it back so a continuation reuses it, never refills it.
+        frozen = await get_db().fetchone(
+            "SELECT system_instruction FROM chat.conversation WHERE id = ?",
+            (conversation_id,),
+        )
+        text = frozen["system_instruction"] if frozen else None
+        if isinstance(text, str) and text:
+            config["system_instruction"] = text
+            config["system_prompt_frozen"] = True
+        return config
 
     async def get_conversation_data(
         self,

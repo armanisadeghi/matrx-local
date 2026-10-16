@@ -762,6 +762,9 @@ async def prepare_conversation_continue(
         if persisted.system_prompt_frozen:
             config.system_instruction = persisted.system_instruction
             config.system_prompt_frozen = True
+            # The stored history already holds turn 1's FILLED authored messages: the
+            # definition's raw copies must not ride along (twice, and unfilled).
+            config.messages.clear()
         else:
             from matrx_ai.agents.variables import compose_variable_values
 

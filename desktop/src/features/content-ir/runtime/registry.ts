@@ -9,7 +9,7 @@
  * (docs/CONTENT_IR_CONSUMER_GUIDE.md § Non-negotiable invariants).
  *
  * The RESOLVER itself is `ComponentResolver` from
- * `@ai-matrx/content-ir-react` — the same tier rules, the same repaint
+ * `@ai-matrx/content-ir/react` — the same tier rules, the same repaint
  * counters, the same loud recovery matrx-frontend uses. Only the loaders are
  * ours.
  */
@@ -18,7 +18,7 @@ import {
   ComponentResolver,
   type KindComponentRow,
   type ComponentRole,
-} from "@ai-matrx/content-ir-react";
+} from "@ai-matrx/content-ir/react";
 import type { KindDefinition } from "@ai-matrx/content-ir/registry";
 import {
   fetchKind,

@@ -229,3 +229,70 @@ def test_chat_continuation_frozen_with_no_system_prompt_stays_empty(
     frozen.system_prompt_frozen = True
     config = asyncio.run(_prepare_chat(monkeypatch, _chat_request(False), frozen))
     assert config.system_instruction is None or not _system(config)
+
+
+# ── agent continuation: turn 2 keeps turn 1's frozen system prompt ───────────────────────────
+
+
+async def _prepare_agent_continue(
+    monkeypatch: pytest.MonkeyPatch, persisted: dict[str, Any]
+) -> UnifiedConfig:
+    import matrx_ai.db.agx_manager as agx_module
+
+    from app.services.ai import conversation_handler
+    from app.services.local_db import repositories
+
+    async def load(_id: str, is_version: bool = False) -> Any:
+        return _agent_config()
+
+    async def exists(_id: str) -> bool:
+        return True
+
+    async def tools(_config: Any, ctx: Any, *_a: Any, **_k: Any) -> Any:
+        return ctx
+
+    class Repo:
+        async def get(self, _id: str) -> dict[str, Any]:
+            return {"agent_id": AGENT_ID}
+
+    class Store:
+        async def get_conversation_config(self, _id: str) -> dict[str, Any]:
+            return persisted
+
+    monkeypatch.setattr(agx_module.agx, "load_for_execution", load)
+    monkeypatch.setattr(local_ai_task, "conversation_exists", exists)
+    monkeypatch.setattr(local_ai_task, "apply_request_tools", tools)
+    monkeypatch.setattr(local_ai_task, "bind_active_local_model", lambda _c: "m")
+    monkeypatch.setattr(local_ai_task, "set_app_context", lambda _c: None)
+    monkeypatch.setattr(repositories, "ConversationsRepo", Repo)
+    monkeypatch.setattr(conversation_handler, "get_conversation_store", lambda: Store())
+    request = SimpleNamespace(
+        user_input="again", retry=False, config_overrides=None, debug=False, stream=True,
+        store=True, tools=[], tools_replace=None, client=None, max_iterations=5,
+        max_retries_per_iteration=1, organization_id=None,
+    )
+    _, config, _, _ = await local_ai_task.prepare_conversation_continue(CONV_ID, request, _ctx())
+    return config
+
+
+def test_agent_continuation_uses_the_frozen_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted = {
+        "model": "m",
+        "system_instruction": "City Rome. Keep {{literal}}. STD. {{other}}",
+        "system_prompt_frozen": True,
+        "messages": [],
+    }
+    config = asyncio.run(_prepare_agent_continue(monkeypatch, persisted))
+    assert _system(config) == "City Rome. Keep {{literal}}. STD. {{other}}"
+    assert config.system_prompt_frozen is True
+
+
+def test_agent_continuation_of_an_unfrozen_conversation_is_filled_not_raw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = asyncio.run(
+        _prepare_agent_continue(monkeypatch, {"model": "m", "messages": []})
+    )
+    assert _system(config) == "City Paris. Keep {{literal}}. STD. {{other}}"

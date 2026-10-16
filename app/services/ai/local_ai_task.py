@@ -755,6 +755,26 @@ async def prepare_conversation_continue(
         )
         if persisted.model:
             config.model = persisted.model
+        # THE VARIABLE RULE: a continuation keeps the system prompt turn 1 froze (same read and
+        # same rule as the server's chat_run). Only a conversation whose first turn never froze
+        # (a failed first turn) is filled now, once, under the one composition, so the raw
+        # template is never sent.
+        if persisted.system_prompt_frozen:
+            config.system_instruction = persisted.system_instruction
+            config.system_prompt_frozen = True
+        else:
+            from matrx_ai.agents.variables import compose_variable_values
+
+            from app.services.ai.prompt_blocks_client import (
+                resolve_declared_prompt_blocks,
+            )
+
+            await resolve_declared_prompt_blocks(config, ctx)
+            config.replace_variables(
+                compose_variable_values(
+                    agent_config.variable_defaults, {}, declared_only=True
+                )
+            )
         config.messages.extend(persisted.messages)
         if user_input is not None:
             config.append_or_extend_user_input(user_input)

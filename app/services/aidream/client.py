@@ -161,6 +161,7 @@ _ORGANIZATION_SELF_RESOLVED_PATHS: tuple[str, ...] = (
 _ORGANIZATION_OPTIONAL_READ_PATHS: tuple[str, ...] = (
     "/ai-tools",
     "/ai-models",
+    "/prompt-blocks",
 )
 
 

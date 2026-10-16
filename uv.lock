@@ -2008,7 +2008,7 @@ wheels = [
 
 [[package]]
 name = "matrx-ai"
-version = "0.5.610"
+version = "0.5.611"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2049,9 +2049,9 @@ dependencies = [
     { name = "wcmatch" },
     { name = "xai-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/b4/221c95fa2033349a3f8c0e4afd5072ce4f9e8fb7a175f4f3c9faae3b1a8c/matrx_ai-0.5.610.tar.gz", hash = "sha256:1b2b81113da7a80d1dfd653684c7817232a57fdcad284c7bc3964c621c61c08e", size = 5546780, upload-time = "2026-10-16T10:04:43.181Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/3e/122ce8eadb271acda66201f4447fba7f08a3b5d61615d954059e0879b06b/matrx_ai-0.5.611.tar.gz", hash = "sha256:4c6afecc22c6ae2b5426b59c3710a5b5ea7b951452854e49f659f58a69a3b3bd", size = 5547976, upload-time = "2026-10-16T10:14:24.409Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/15/006bccdc1eaf71ed8475d2d0b2a5cf723b0177a1962d58ab4d478e1828f0/matrx_ai-0.5.610-py3-none-any.whl", hash = "sha256:7919c55a6fd4c32d890f9b95a455275eda0e82aa87662043ca8ab5652cff9146", size = 4546615, upload-time = "2026-10-16T10:04:40.464Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/b4/11ce3efe95c077a9d3041cbe1587d681e75ee6cddd53f3c6ed99ff9dd42f/matrx_ai-0.5.611-py3-none-any.whl", hash = "sha256:3f1ad9f6510c48d7efc3e964c055fec64b8f539d701ab0316946b7b9393e584d", size = 4546683, upload-time = "2026-10-16T10:14:22.148Z" },
 ]
 
 [[package]]
@@ -2302,7 +2302,7 @@ requires-dist = [
     { name = "kokoro-onnx", specifier = ">=0.5.0" },
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "markdownify", specifier = ">=0.14.1" },
-    { name = "matrx-ai", specifier = ">=0.5.610" },
+    { name = "matrx-ai", specifier = ">=0.5.611" },
     { name = "matrx-api", specifier = ">=0.1.4" },
     { name = "matrx-coding-history", editable = "packages/matrx-coding-history" },
     { name = "matrx-connect", specifier = ">=0.1.162" },

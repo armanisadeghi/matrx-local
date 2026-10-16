@@ -23,7 +23,7 @@ from app.services.aidream.client import AIDreamError
 
 AGENT_ID = "11111111-1111-4111-8111-111111111111"
 CONV_ID = "22222222-2222-4222-8222-222222222222"
-SYSTEM = "City {{city}}. Keep {{!literal}}. {{#vip}}VIP{{/vip}}{{^vip}}STD{{/vip}}. {{other}}"
+SYSTEM = "City {{city}}. Keep {{!vip}}. {{#vip}}VIP{{/vip}}{{^vip}}STD{{/vip}}. {{other}}"
 DEFAULTS = {
     "city": AgentVariable(name="city", default_value="Paris"),
     "vip": AgentVariable(name="vip", default_value=""),
@@ -96,14 +96,14 @@ def test_no_values_sent_defaults_fill_escape_stripped_sections_evaluated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = asyncio.run(_prepare_agent(monkeypatch, _agent_config(), None))
-    assert _system(config) == "City Paris. Keep {{literal}}. STD. {{other}}"
+    assert _system(config) == "City Paris. Keep {{vip}}. STD. {{other}}"
 
 
 def test_undeclared_client_keys_never_fill(monkeypatch: pytest.MonkeyPatch) -> None:
     config = asyncio.run(
         _prepare_agent(monkeypatch, _agent_config(), {"city": "Rome", "other": "LEAK"})
     )
-    assert _system(config) == "City Rome. Keep {{literal}}. STD. {{other}}"
+    assert _system(config) == "City Rome. Keep {{vip}}. STD. {{other}}"
 
 
 def test_a_cleared_value_is_honoured_as_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,7 +178,7 @@ def _chat_request(is_new: bool) -> LocalChatRequest:
             "conversation_id": CONV_ID,
             "is_new": is_new,
             "store": True,
-            "variables": {"x": "FILLED"},
+            "variables": {"x": "FILLED", "y": ""},
         }
     )
 
@@ -284,7 +284,7 @@ def test_agent_continuation_uses_the_frozen_system_prompt(
 ) -> None:
     persisted = {
         "model": "m",
-        "system_instruction": "City Rome. Keep {{literal}}. STD. {{other}}",
+        "system_instruction": "City Rome. Keep {{vip}}. STD. {{other}}",
         "system_prompt_frozen": True,
         "messages": [
             {"role": "user", "content": "Hi Rome"},
@@ -292,7 +292,7 @@ def test_agent_continuation_uses_the_frozen_system_prompt(
         ],
     }
     config = asyncio.run(_prepare_agent_continue(monkeypatch, persisted))
-    assert _system(config) == "City Rome. Keep {{literal}}. STD. {{other}}"
+    assert _system(config) == "City Rome. Keep {{vip}}. STD. {{other}}"
     assert config.system_prompt_frozen is True
     # What the model receives on turn 2: stored history (turn 1's FILLED authored opening turn
     # and the reply), then the new typed message. The definition's raw copy is not sent too.
@@ -305,7 +305,7 @@ def test_agent_continuation_of_an_unfrozen_conversation_is_filled_not_raw(
     config = asyncio.run(
         _prepare_agent_continue(monkeypatch, {"model": "m", "messages": []})
     )
-    assert _system(config) == "City Paris. Keep {{literal}}. STD. {{other}}"
+    assert _system(config) == "City Paris. Keep {{vip}}. STD. {{other}}"
 
 
 @pytest.mark.anyio
@@ -368,7 +368,7 @@ async def test_a_real_completed_request_lands_its_filled_system_prompt_in_the_co
         }
     )
     config.replace_variables({"city": "Rome", "vip": ""})
-    filled = "City Rome. Keep {{literal}}. STD. {{other}}"
+    filled = "City Rome. Keep {{vip}}. STD. {{other}}"
     assert _system(config) == filled
     completed = CompletedRequest(
         request=AIMatrixRequest(

@@ -596,11 +596,24 @@ async def prepare_agent_start(
     )
     overrides = request.config_overrides
     config = agent_config.config
-    if request.variables:
-        config.replace_variables(request.variables)
+    # THE VARIABLE RULE, through matrx-ai's one composition (the same call the server's agent
+    # door makes): the agent's definitions ARE the declaration, so client value > saved default
+    # > "", a cleared value stays "", and an undeclared client key never fills.
+    from matrx_ai.agents.variables import compose_variable_values
+
+    initial_variables = compose_variable_values(
+        agent_config.variable_defaults, dict(request.variables or {}), declared_only=True
+    )
     if overrides:
         config.apply_overrides(overrides)
     bind_active_local_model(config)
+    # First turn, always (even with no values), after the overrides (a block variant matches the
+    # effective model) and BEFORE the person's content joins: resolve the declared prompt blocks
+    # (refuse by name when one is missing), then the one fill.
+    from app.services.ai.prompt_blocks_client import resolve_declared_prompt_blocks
+
+    await resolve_declared_prompt_blocks(config, ctx)
+    config.replace_variables(initial_variables)
 
     metadata = {
         **ctx.metadata,
@@ -613,7 +626,7 @@ async def prepare_agent_start(
     ctx = ctx.with_overrides(
         conversation_id=conversation_id,
         debug=request.debug,
-        initial_variables=dict(request.variables or {}),
+        initial_variables=dict(initial_variables),
         initial_overrides=(
             overrides.model_dump(exclude_none=True)
             if isinstance(overrides, LLMParams)
@@ -777,6 +790,19 @@ async def prepare_conversation_continue(
     return ctx, config, request.max_iterations, request.max_retries_per_iteration
 
 
+async def _frozen_system_instruction(conversation_id: str) -> tuple[bool, Any | None]:
+    """Whether a saved conversation froze its first turn, and the system instruction it froze.
+
+    Frozen with NO system prompt is still frozen: turn 2 must not fill again. The same read the
+    server makes (matrx-ai's history seam, served here by the SQLite conversation store)."""
+    from matrx_ai.agents.resolver import _load_unified_config
+
+    stored = await _load_unified_config(conversation_id)
+    if not stored.system_prompt_frozen:
+        return False, None
+    return True, stored.system_instruction
+
+
 async def prepare_chat(
     request: Any,  # LocalChatRequest (app/api/ai_routes.py)
     ctx: AppContext,
@@ -837,8 +863,23 @@ async def prepare_chat(
         client=request.client,
     )
 
-    if request.variables:
-        config.replace_variables(request.variables, template_messages=template_messages)
+    # THE VARIABLE RULE: filled ONCE, on the first turn, and always then (the ``{{!x}}`` escape and
+    # sections run even with no variables). A continuation of a saved conversation keeps the system
+    # prompt turn 1 froze, whatever template and values the client re-sends; its history is the
+    # database's, already filled. Same shared helpers as aidream's chat_run.
+    continues_saved = bool(
+        not request.is_new and request.store and await conversation_exists(conversation_id)
+    )
+    is_frozen, frozen = (
+        await _frozen_system_instruction(conversation_id) if continues_saved else (False, None)
+    )
+    if not is_frozen:
+        config.replace_variables(
+            dict(request.variables or {}), template_messages=template_messages
+        )
+    else:
+        config.system_instruction = frozen
+        config.system_prompt_frozen = True
     if request.config_overrides:
         config.apply_overrides(request.config_overrides)
     bind_active_local_model(config)

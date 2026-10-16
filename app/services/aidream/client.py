@@ -392,6 +392,7 @@ class AIDreamClient:
             raise AIDreamError(
                 resp.status_code,
                 f"[aidream_client] {path} → HTTP {resp.status_code}",
+                body=_json_body_or_none(resp),
             )
 
         return resp.json()

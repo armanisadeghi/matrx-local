@@ -12,7 +12,7 @@
  * string and `metadata.__ir` was never read at all: a flashcard deck arrived
  * as a wall of text and the envelope was discarded.
  *
- * ## THE SHADOWED LANE (`@ai-matrx/content-ir-react` 0.11.1)
+ * ## THE SHADOWED LANE (`@ai-matrx/content-ir/react` 0.11.1)
  *
  * A producer that shadows its text channel never hands this client a verified
  * `__ir`. What it does hand over is a `superseded` terminal on
@@ -34,7 +34,7 @@ import {
   resolveSupersededKindRender,
   useContentIrKindVersion,
   type IrRenderBlock,
-} from "@ai-matrx/content-ir-react";
+} from "@ai-matrx/content-ir/react";
 import { readEnvelope, reconstructRegionValue } from "@ai-matrx/content-ir/core";
 import { isProvisionalKind, readPartialKindEvent } from "@ai-matrx/content-ir/wire";
 import { contentIrRouteEnv, contentIrVersionSources } from "../runtime/route-env";

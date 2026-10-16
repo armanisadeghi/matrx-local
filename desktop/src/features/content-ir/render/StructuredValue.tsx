@@ -1,7 +1,7 @@
 /**
  * THE FLOOR — render ANY JSON value as something a human reads.
  *
- * This is the `renderValue` seam of `@ai-matrx/content-ir-react`, and the
+ * This is the `renderValue` seam of `@ai-matrx/content-ir/react`, and the
  * "generic structured fallback" the consumer guide calls a PRODUCT
  * REQUIREMENT, not a temporary error state (§4): it is what makes broad
  * adoption safe while custom components propagate.

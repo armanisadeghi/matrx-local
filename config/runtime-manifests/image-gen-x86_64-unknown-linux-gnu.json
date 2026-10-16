@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "e710410d1e8564da1d23a6d70516c4b583736fe4512f47aa47c229ad334bc3dc",
+  "contract_sha256": "611a0455396c37d5bfd0743c3d46579d92bfe31afaa4b7deccdebce6c163daac",
   "lock_file": "image-gen-x86_64-unknown-linux-gnu.requirements.txt",
-  "lock_sha256": "68b81257b1f1d19587368f801a8e4efbd5f8b380f5bcf6d0a1fcba7da1005e30",
+  "lock_sha256": "5edc712ae9c91787f7af23f53da0629cedf9027d5c2bfe6c1feb97ff1c5c01a5",
   "minimum_glibc": "2.28",
   "packages": [
     {
@@ -519,17 +519,12 @@
     },
     {
       "name": "pillow",
-      "version": "12.1.0",
+      "version": "12.3.0",
       "wheels": [
         {
-          "filename": "pillow-12.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
-          "sha256": "6258f3260986990ba2fa8a874f8b6e808cf5abb51a94015ca3dc3c68aa4f30ea",
-          "url": "https://files.pythonhosted.org/packages/98/aa/938a09d127ac1e70e6ed467bd03834350b33ef646b31edb7452d5de43792/pillow-12.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
-        },
-        {
-          "filename": "pillow-12.1.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
-          "sha256": "6741e6f3074a35e47c77b23a4e4f2d90db3ed905cb1c5e6e0d49bff2045632bc",
-          "url": "https://files.pythonhosted.org/packages/01/9a/632e58ec89a32738cabfd9ec418f0e9898a2b4719afc581f07c04a05e3c9/pillow-12.1.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+          "filename": "pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+          "sha256": "0847a763afefb695bc912d7c131e7e0632d4edc1d8698f58ddabec8e46b8b6d3",
+          "url": "https://files.pythonhosted.org/packages/f7/62/de5bdd77d935331f4f802edc11e4d82950f642caad6cb2f949837b8560e2/pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
         }
       ]
     },

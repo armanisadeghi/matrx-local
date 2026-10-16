@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "e710410d1e8564da1d23a6d70516c4b583736fe4512f47aa47c229ad334bc3dc",
+  "contract_sha256": "611a0455396c37d5bfd0743c3d46579d92bfe31afaa4b7deccdebce6c163daac",
   "lock_file": "image-gen-aarch64-apple-darwin.requirements.txt",
-  "lock_sha256": "9a066aadab45fea85f30569ca079acc0793eacb48fc1eb8550a32532a4a922ef",
+  "lock_sha256": "dd363f67eaa8c2004485a7c839d9b5e83e3747eb04b98018827b093e9f882b7d",
   "minimum_macos": "12.0",
   "packages": [
     {
@@ -297,12 +297,12 @@
     },
     {
       "name": "pillow",
-      "version": "12.1.0",
+      "version": "12.3.0",
       "wheels": [
         {
-          "filename": "pillow-12.1.0-cp313-cp313-macosx_11_0_arm64.whl",
-          "sha256": "db44d5c160a90df2d24a24760bbd37607d53da0b34fb546c4c232af7192298ac",
-          "url": "https://files.pythonhosted.org/packages/1c/34/583420a1b55e715937a85bd48c5c0991598247a1fd2eb5423188e765ea02/pillow-12.1.0-cp313-cp313-macosx_11_0_arm64.whl"
+          "filename": "pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl",
+          "sha256": "d69141514cc30b774ceea5e3ed3a6635c8d8a96edf664689b890f4089111fb35",
+          "url": "https://files.pythonhosted.org/packages/10/76/8803c13605b763d33d156c4678fc77f8443389c0c51c8aef707bb02015f4/pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl"
         }
       ]
     },

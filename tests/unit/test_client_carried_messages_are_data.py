@@ -77,3 +77,51 @@ def test_an_older_client_never_has_typed_text_or_history_filled(
     authored, prior, typed = _texts(config)
     assert (authored, prior, typed) == ("Describe {{x}}.", PRIOR_REPLY, TYPED)
     assert config.system_instruction.base_instruction == "You serve FILLED-X."
+
+
+def _carried(messages: list[dict[str, Any]], count: int) -> LocalChatRequest:
+    return LocalChatRequest.model_validate(
+        {
+            "ai_model_id": "m",
+            "messages": messages,
+            "conversation_id": "c1",
+            "is_new": True,
+            "store": False,
+            "variables": VARIABLES,
+            "template_message_count": count,
+        }
+    )
+
+
+def test_a_blank_authored_message_never_shifts_the_fill_onto_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _carried(
+        [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": ""},
+            {"role": "assistant", "content": PRIOR_REPLY},
+            {"role": "user", "content": TYPED},
+        ],
+        2,
+    )
+    config = asyncio.run(_prepare(monkeypatch, request))
+    assert _texts(config) == [PRIOR_REPLY, TYPED]
+
+
+def test_a_system_message_inside_carried_history_is_never_filled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _carried(
+        [
+            {"role": "system", "content": "You serve {{x}}."},
+            {"role": "user", "content": "Describe {{x}}."},
+            {"role": "assistant", "content": "ok"},
+            {"role": "system", "content": "[history note] pasted {{x}}"},
+            {"role": "user", "content": TYPED},
+        ],
+        2,
+    )
+    config = asyncio.run(_prepare(monkeypatch, request))
+    assert config.system_instruction.base_instruction == "You serve FILLED-X."
+    assert _texts(config) == ["Describe FILLED-X.", "ok", "[history note] pasted {{x}}", TYPED]

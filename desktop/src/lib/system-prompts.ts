@@ -9,7 +9,7 @@
 
 import {
   LOCAL_MODEL_MANDATE_KEYS,
-  fillHolderMessages,
+  holderLeadMessages,
   resolveLocalMandate,
   type LocalModelMandateKey,
 } from "@/lib/local-mandates";
@@ -35,7 +35,10 @@ const STORAGE_KEY = "matrx-system-prompts";
 export type BuiltinPrompt = Omit<
   SystemPrompt,
   "createdAt" | "updatedAt" | "isPinned"
->;
+> & {
+  /** The Mandate whose Holder carries this prompt (filled only when used). */
+  mandateKey: LocalModelMandateKey;
+};
 
 // ── Built-in prompts: each one a Mandate ─────────────────────────────────────
 //
@@ -81,13 +84,13 @@ export async function refreshBuiltinPrompts(): Promise<void> {
       const settled = await Promise.allSettled(
         BUILTIN_PROMPT_MANDATES.map(async (b) => {
           const holder = await resolveLocalMandate(b.mandateKey);
-          // The Holder's system text as the engine fills it (THE VARIABLE RULE).
-          const filled = await fillHolderMessages(holder);
-          const content = filled.find((m) => m.role === "system")?.content ?? "";
+          // The authored text, for the list only: listing never fills (load
+          // law). The fill happens when the prompt is used (builtinPromptRunText).
+          const content = holder.messages.find((m) => m.role === "system")?.content ?? "";
           if (!content.trim()) {
             throw new Error(`${b.mandateKey}'s Holder has no system instructions`);
           }
-          return { id: b.id, name: b.name, category: b.category, content };
+          return { id: b.id, name: b.name, category: b.category, mandateKey: b.mandateKey, content };
         }),
       );
       const prompts: BuiltinPrompt[] = [];
@@ -105,6 +108,23 @@ export async function refreshBuiltinPrompts(): Promise<void> {
     }
   })();
   return refreshInFlight;
+}
+
+/**
+ * The text a built-in prompt RUNS with: its Holder's system message filled by
+ * the engine (THE VARIABLE RULE) — asked only now, when the person uses the
+ * prompt, and frozen per conversation (`holderLeadMessages`). Null when `id`
+ * is not a built-in. Throws, naming the mandate, when the fill is refused.
+ */
+export async function builtinPromptRunText(
+  id: string,
+  conversationKey: string | null = null,
+): Promise<string | null> {
+  const entry = BUILTIN_PROMPT_MANDATES.find((b) => b.id === id);
+  if (!entry) return null;
+  const holder = await resolveLocalMandate(entry.mandateKey);
+  const lead = await holderLeadMessages(holder, { conversationKey });
+  return lead.find((m) => m.role === "system")?.content ?? "";
 }
 
 // ── Storage helpers ──────────────────────────────────────────────────────────

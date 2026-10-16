@@ -120,7 +120,7 @@ import {
   resolveLocalMandate,
   type ResolvedLocalMandate,
 } from "@/lib/local-mandates";
-import { refreshBuiltinPrompts } from "@/lib/system-prompts";
+import { builtinPromptRunText, refreshBuiltinPrompts } from "@/lib/system-prompts";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
 import { engine } from "@/lib/api";
@@ -2662,7 +2662,16 @@ function SystemPromptSelector({
               return;
             }
             const found = allPrompts.find((p) => p.id === e.target.value);
-            if (found) onChange(found.content);
+            if (!found) return;
+            if ("mandateKey" in found) {
+              // A built-in runs with its Holder's text as the engine fills it,
+              // asked only now that it is used.
+              builtinPromptRunText(found.id)
+                .then((text) => onChange(text ?? found.content))
+                .catch((err) => console.warn("[system-prompts] built-in prompt unavailable:", err));
+              return;
+            }
+            onChange(found.content);
           }}
         >
           <option value="__custom__">
@@ -3075,7 +3084,16 @@ function InferenceTab() {
       settings.voiceAssistantSystemPromptId || "builtin-voice-assistant";
     // Built-in prompts are Mandates resolved on demand (engine-cached offline).
     await refreshBuiltinPrompts();
-    const content = systemPrompts.resolve(promptId) ?? "";
+    // A built-in is filled by the engine now that it is used; a person's own
+    // prompt is their text as written.
+    let content: string;
+    try {
+      content = (await builtinPromptRunText(promptId)) ?? systemPrompts.resolve(promptId) ?? "";
+    } catch (err) {
+      // Refused (e.g. a prompt block is missing): never run the unfilled text.
+      console.warn("[voice] built-in prompt unavailable:", err);
+      return;
+    }
     if (content && setSystemPromptRef.current) {
       // Only save pre-voice prompt once per activation
       if (preVoiceSystemPromptRef.current === null) {

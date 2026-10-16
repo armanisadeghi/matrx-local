@@ -9,6 +9,7 @@
 
 import {
   LOCAL_MODEL_MANDATE_KEYS,
+  fillHolderMessages,
   resolveLocalMandate,
   type LocalModelMandateKey,
 } from "@/lib/local-mandates";
@@ -80,7 +81,9 @@ export async function refreshBuiltinPrompts(): Promise<void> {
       const settled = await Promise.allSettled(
         BUILTIN_PROMPT_MANDATES.map(async (b) => {
           const holder = await resolveLocalMandate(b.mandateKey);
-          const content = holder.messages.find((m) => m.role === "system")?.content ?? "";
+          // The Holder's system text as the engine fills it (THE VARIABLE RULE).
+          const filled = await fillHolderMessages(holder);
+          const content = filled.find((m) => m.role === "system")?.content ?? "";
           if (!content.trim()) {
             throw new Error(`${b.mandateKey}'s Holder has no system instructions`);
           }

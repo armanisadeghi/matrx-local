@@ -15,7 +15,6 @@ vi.mock("@/lib/local-mandates", async (orig) => ({
   resolveLocalMandate: (...a: unknown[]) => resolveLocalMandate(...a),
 }));
 
-import { substituteVariables } from "@/lib/local-mandates";
 import { BUILT_IN_PRESETS, personStyleText, polishRunFor } from "@/lib/polish-presets";
 
 describe("polish styles through mandates", () => {
@@ -51,7 +50,9 @@ describe("polish styles through mandates", () => {
     );
     expect(run.mandateKey).toBe("local.polish_style_custom");
     expect(run.vars.style_instructions).toBe("Make it pirate speak.");
-    expect(substituteVariables(`{{style_instructions}}${SUFFIX}`, run.vars)).toBe(legacy);
+    // The engine fills {{style_instructions}} with exactly this text, so the
+    // Holder's system message is `${person text}${SUFFIX}` — the legacy text.
+    expect(`${run.vars.style_instructions}${SUFFIX}`).toBe(legacy);
   });
 
   it("a new custom style is stored as the person's own text only", () => {

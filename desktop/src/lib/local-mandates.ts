@@ -213,26 +213,118 @@ export async function resolveLocalMandate(
   }
 }
 
-/**
- * The Holder's authored messages that lead a conversation — a system message
- * with no text is dropped (it carries no instructions), everything else is
- * kept in order.
- */
-export function holderLeadMessages(holder: ResolvedLocalMandate): HolderMessage[] {
-  return holder.messages.filter((m) => m.role !== "system" || m.content.trim() !== "");
+/** What `POST {engine}/local-mandates/{key}/fill` answers. */
+interface EngineFilledMandate {
+  mandate_key: string;
+  messages: Array<{ role?: unknown; content?: unknown }>;
+  stale: boolean;
+  stale_reason: string | null;
 }
 
-/** Replace `{{name}}` with the value when one is supplied; leave others as authored. */
-export function substituteVariables(
-  template: string,
-  vars: Record<string, string>,
-): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? (vars[key] ?? match) : match,
-  );
+/**
+ * The Holder's authored messages FILLED for a first turn with `variables` —
+ * by the engine, through matrx-ai's one first-turn pass (THE VARIABLE RULE:
+ * declared names only, an empty declared value is "", the `{{!name}}` escape,
+ * sections, declared prompt blocks resolved or the run refused by name).
+ * There is no fill in TypeScript. Throws, naming the mandate, on any refusal.
+ */
+export async function fillHolderMessages(
+  holder: ResolvedLocalMandate,
+  variables: Record<string, string> = {},
+  signal?: AbortSignal,
+): Promise<HolderMessage[]> {
+  try {
+    const raw = (await engine.post(
+      `/local-mandates/${encodeURIComponent(holder.mandateKey)}/fill`,
+      { variables },
+      signal ? { signal } : undefined,
+    )) as EngineFilledMandate | null;
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.messages)) {
+      throw new Error("the engine answered without the filled messages");
+    }
+    const out: HolderMessage[] = [];
+    for (const m of raw.messages) {
+      const role = m?.role;
+      if (role !== "system" && role !== "user" && role !== "assistant") continue;
+      out.push({ role, content: typeof m.content === "string" ? m.content : "" });
+    }
+    return out;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not fill ${holder.mandateKey}: ${detail}`);
+  }
+}
+
+/**
+ * The FROZEN lead of each conversation: filled once on its first turn, then
+ * reused verbatim for every later turn (THE VARIABLE RULE — the same freeze
+ * the engine's agent door applies to a continuation: turn 2+ never refills).
+ * Kept on this device so a reopened conversation keeps its first-turn text.
+ */
+const LEAD_STORAGE_PREFIX = "matrx:local-mandate-lead:";
+const frozenLeads = new Map<string, HolderMessage[]>();
+
+function leadKey(mandateKey: string, conversationKey: string): string {
+  return `${LEAD_STORAGE_PREFIX}${mandateKey}:${conversationKey}`;
+}
+
+function readFrozenLead(key: string): HolderMessage[] | null {
+  const hit = frozenLeads.get(key);
+  if (hit) return hit;
+  try {
+    const stored = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as HolderMessage[];
+    if (!Array.isArray(parsed)) return null;
+    frozenLeads.set(key, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function freezeLead(key: string, lead: HolderMessage[]): void {
+  frozenLeads.set(key, lead);
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(key, JSON.stringify(lead));
+  } catch {
+    // Storage full or unavailable: the in-memory freeze still holds this session.
+  }
+}
+
+export interface HolderLeadOptions {
+  /**
+   * The conversation these messages lead. Its first call fills and freezes
+   * them; every later call returns that frozen text. Omit for a one-shot run.
+   */
+  conversationKey?: string | null;
+  variables?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+/**
+ * The Holder's FILLED messages that lead a conversation — a system message
+ * with no text is dropped (it carries no instructions), everything else is
+ * kept in order. Filled by the engine on the conversation's first turn and
+ * frozen for the rest of it.
+ */
+export async function holderLeadMessages(
+  holder: ResolvedLocalMandate,
+  options: HolderLeadOptions = {},
+): Promise<HolderMessage[]> {
+  const key = options.conversationKey ? leadKey(holder.mandateKey, options.conversationKey) : null;
+  if (key) {
+    const frozen = readFrozenLead(key);
+    if (frozen) return frozen;
+  }
+  const filled = await fillHolderMessages(holder, options.variables ?? {}, options.signal);
+  const lead = filled.filter((m) => m.role !== "system" || m.content.trim() !== "");
+  if (key) freezeLead(key, lead);
+  return lead;
 }
 
 /** Test seam: forget cached resolutions. */
 export function clearLocalMandateCache(): void {
   cache.clear();
+  frozenLeads.clear();
 }

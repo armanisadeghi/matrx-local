@@ -3214,23 +3214,28 @@ function InferenceTab() {
    * Mandate cannot be resolved — the send is then REFUSED with the reason
    * shown; there is no fallback prompt.
    */
-  const confidentialChatPrefix = async (): Promise<ChatMessage[] | null> => {
+  const confidentialChatPrefix = async (
+    conversationKey: string | null,
+  ): Promise<ChatMessage[] | null> => {
     let holder: ResolvedLocalMandate;
+    let lead: ChatMessage[];
     try {
       holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.confidentialChat);
       applyChatHolder(holder);
+      // Filled by the engine on this conversation's first turn, frozen after.
+      lead = await holderLeadMessages(holder, { conversationKey });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return null;
     }
+    // The person's own system prompt replaces the Holder's system text as is
+    // (their text is data, never filled).
     const personal = systemPrompt.trim() ? systemPrompt : null;
-    const prefix: ChatMessage[] = [];
-    for (const m of holder.messages) {
-      const content = m.role === "system" && personal !== null ? personal : m.content;
-      if (m.role === "system" && !content.trim()) continue;
-      prefix.push({ role: m.role, content });
-    }
-    if (personal !== null && !holder.messages.some((m) => m.role === "system")) {
+    if (personal === null) return lead;
+    const prefix: ChatMessage[] = lead.map((m) =>
+      m.role === "system" ? { role: m.role, content: personal } : { role: m.role, content: m.content },
+    );
+    if (!prefix.some((m) => m.role === "system")) {
       prefix.unshift({ role: "system", content: personal });
     }
     return prefix;
@@ -3266,6 +3271,8 @@ function InferenceTab() {
   const [agentMessages, setAgentMessages] = useState<ConversationMessage[]>([]);
   // Full message history (including tool result messages) for accurate context on follow-up turns
   const agentHistoryRef = useRef<ChatMessage[]>([]);
+  // Names the Tools-mode conversation so its Holder lead is filled once, then frozen.
+  const agentConversationKeyRef = useRef<string>(crypto.randomUUID());
   const [agentInput, setAgentInput] = useState("");
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -3380,16 +3387,18 @@ function InferenceTab() {
     // Holder's instructions lead the conversation and its sampling applies.
     // Unresolvable → the send is refused with the reason; no fallback.
     let toolHolder: ResolvedLocalMandate;
+    let toolPrefix: ChatMessage[];
     try {
       toolHolder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.toolCallingChat);
+      toolPrefix = (
+        await holderLeadMessages(toolHolder, {
+          conversationKey: agentConversationKeyRef.current,
+        })
+      ).map((m) => ({ role: m.role, content: m.content }));
     } catch (e) {
       setAgentError(e instanceof Error ? e.message : String(e));
       return;
     }
-    const toolPrefix: ChatMessage[] = holderLeadMessages(toolHolder).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
 
     const userMsg = agentInput.trim();
     setAgentInput("");
@@ -3827,7 +3836,7 @@ function InferenceTab() {
   // ── Edit & resend a user message ──────────────────────────────────────
   const handleEditAndResend = async (msgId: string, newContent: string) => {
     if (!port || !newContent.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const holderPrefix = await confidentialChatPrefix(activeConvId);
     if (!holderPrefix) return;
     setEditingMsgId(null);
     setEditingContent("");
@@ -3915,7 +3924,7 @@ function InferenceTab() {
   // ── Retry an assistant message (re-run the preceding user turn) ───────
   const handleRetry = async (assistantMsgId: string) => {
     if (!port || isGenerating || !activeConvId) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const holderPrefix = await confidentialChatPrefix(activeConvId);
     if (!holderPrefix) return;
     const msgIndex = messages.findIndex((m) => m.id === assistantMsgId);
     if (msgIndex === -1) return;
@@ -4094,7 +4103,8 @@ function InferenceTab() {
   // ── Send message ───────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!port || !input.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const newConvId = activeConvId ?? crypto.randomUUID();
+    const holderPrefix = await confidentialChatPrefix(newConvId);
     if (!holderPrefix) return;
     const userMsg = input.trim();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -4106,7 +4116,7 @@ function InferenceTab() {
     let convId = activeConvId;
     if (!convId) {
       const conv: SavedConversation = {
-        id: crypto.randomUUID(),
+        id: newConvId,
         title: makeTitle(userMsg),
         messages: [],
         systemPrompt,
@@ -4215,7 +4225,8 @@ function InferenceTab() {
   // Variant of handleSend that accepts text directly (used by voice chat hook)
   const handleSendText = async (text: string) => {
     if (!port || !text.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const newConvId = activeConvId ?? crypto.randomUUID();
+    const holderPrefix = await confidentialChatPrefix(newConvId);
     if (!holderPrefix) return;
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setInput("");
@@ -4225,7 +4236,7 @@ function InferenceTab() {
     let convId = activeConvId;
     if (!convId) {
       const conv: SavedConversation = {
-        id: crypto.randomUUID(),
+        id: newConvId,
         title: makeTitle(text),
         messages: [],
         systemPrompt,
@@ -4317,7 +4328,7 @@ function InferenceTab() {
       // fills any value the body leaves out — the body's own values win.
       const holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.rawCompletion);
       const body = JSON.parse(rawJson) as Record<string, unknown>;
-      const lead = holderLeadMessages(holder);
+      const lead = await holderLeadMessages(holder);
       if (lead.length > 0) {
         const own = Array.isArray(body.messages) ? body.messages : [];
         body.messages = [...lead, ...own];
@@ -5766,6 +5777,7 @@ function InferenceTab() {
                         onClick={() => {
                           setAgentMessages([]);
                           agentHistoryRef.current = [];
+                          agentConversationKeyRef.current = crypto.randomUUID();
                         }}
                         className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
                         title="Clear conversation"

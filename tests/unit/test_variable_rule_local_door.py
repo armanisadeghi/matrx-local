@@ -343,3 +343,66 @@ async def test_the_local_store_freezes_turn_ones_system_prompt_and_hands_it_back
         assert after["system_prompt_frozen"] is True
     finally:
         await db.close()
+
+
+@pytest.mark.anyio
+async def test_a_real_completed_request_lands_its_filled_system_prompt_in_the_conversation_row(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store write driven by the object the engine passes (matrx-ai's own CompletedRequest,
+    built through its own constructors with a real filled SystemInstruction), not a dict."""
+    from matrx_ai.orchestrator.requests import AIMatrixRequest, CompletedRequest
+    from matrx_connect.context.app_context import set_app_context
+
+    from app.services.ai.conversation_handler import SQLiteConversationStore
+    from app.services.local_db import database
+
+    config = UnifiedConfig.from_dict(
+        {
+            "model": "local/test",
+            "system_instruction": SYSTEM,
+            "messages": [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Reply"},
+            ],
+        }
+    )
+    config.replace_variables({"city": "Rome", "vip": ""})
+    filled = "City Rome. Keep {{literal}}. STD. {{other}}"
+    assert _system(config) == filled
+    completed = CompletedRequest(
+        request=AIMatrixRequest(
+            conversation_id=CONV_ID,
+            config=config,
+            request_id="44444444-4444-4444-8444-444444444444",
+        ),
+        iterations=1,
+        final_response=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+
+    db = database.LocalDatabase(tmp_path / "matrx.db")
+    await db.connect()
+    monkeypatch.setattr(database, "_instance", db)
+    from unittest.mock import AsyncMock
+
+    set_app_context(
+        AppContext(emitter=AsyncMock(), user_id="user-1", token="jwt-1", organization_id="org-1")
+    )
+    try:
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(CONV_ID, "user-1")
+        await store.create_pending_user_request(
+            "44444444-4444-4444-8444-444444444444", CONV_ID, "user-1"
+        )
+        await store.persist_completed_request(completed, CONV_ID)
+
+        row = await db.fetchone(
+            "SELECT system_instruction FROM chat.conversation WHERE id = ?", (CONV_ID,)
+        )
+        assert row is not None and filled in (row["system_instruction"] or "")
+        again = await store.get_conversation_config(CONV_ID)
+        assert again["system_prompt_frozen"] is True
+        assert filled in again["system_instruction"]
+        assert "{{city}}" not in again["system_instruction"]
+    finally:
+        await db.close()

@@ -134,6 +134,21 @@ def _remove_credential_metadata(value: Any) -> tuple[Any, int]:
     return value, 0
 
 
+def _reported_system_text(conversation: Any) -> str | None:
+    """The system text a completed request REPORTS it sent, or None when it is unknown.
+
+    A ``conversation`` storage dict that carries the ``system_instruction`` key positively
+    reports it: a string is the text, and an explicit None/"" means "sent none" (frozen, empty
+    → ""). A missing dict or key, or any other value, is unknown → None (never frozen).
+    """
+    if not isinstance(conversation, dict) or "system_instruction" not in conversation:
+        return None
+    value = conversation["system_instruction"]
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else None
+
+
 class SQLiteConversationStore:
     """matrx_ai.client_host.ConversationStore backed by the canonical mirror."""
 
@@ -455,9 +470,7 @@ class SQLiteConversationStore:
             user_request_storage = dict(completed.get("user_request") or {})
             request_storage_rows = list(completed.get("requests") or [])
             primary_model_name = completed.get("model")
-            frozen_system_text = (completed.get("conversation") or {}).get(
-                "system_instruction"
-            )
+            frozen_system_text = _reported_system_text(completed.get("conversation"))
         else:
             conv_id = (
                 conversation_id
@@ -482,8 +495,8 @@ class SQLiteConversationStore:
                     primary_model_name = (storage.get("conversation") or {}).get(
                         "ai_model"
                     )
-                    frozen_system_text = (storage.get("conversation") or {}).get(
-                        "system_instruction"
+                    frozen_system_text = _reported_system_text(
+                        storage.get("conversation")
                     )
                 except Exception:
                     logger.warning(
@@ -759,11 +772,20 @@ class SQLiteConversationStore:
                 now,
                 # Turn 1 froze whatever it sent, INCLUDING nothing (an agent with no system
                 # message): "" marks "frozen, empty" and NULL stays "never froze" (the server's
-                # own convention: system_instruction IS NOT NULL means frozen).
-                frozen_system_text if isinstance(frozen_system_text, str) else "",
+                # own convention: system_instruction IS NOT NULL means frozen). Only a request
+                # that positively reported its system text freezes; an unknown one (a failed
+                # serialization, no conversation row) stays NULL so turn 2 still fills it.
+                frozen_system_text,
                 conv_id,
             ),
         )
+        if frozen_system_text is None:
+            logger.warning(
+                "[conv_store] request %s did not report the system instruction it sent; "
+                "conversation %s keeps system_instruction NULL (not frozen)",
+                user_request_id,
+                conv_id,
+            )
         await enqueue_change("chat", "conversation", conv_id, db, commit=False)
         await db.commit()
 

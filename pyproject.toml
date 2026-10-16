@@ -106,7 +106,7 @@ dependencies = [
     # an older ORM that predates that server-side refusal boundary.
     # Do not lower this.
     "matrx-orm>=3.1.202",
-    "matrx-ai>=0.5.611",
+    "matrx-ai>=0.5.612",
     "matrx-connect>=0.1.162",
     "matrx-graph>=0.2.228",
     "matrx-runtime>=0.0.143",

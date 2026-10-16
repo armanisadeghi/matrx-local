@@ -749,7 +749,7 @@ class SQLiteConversationStore:
                                     WHERE conversation_id = ? AND deleted_at IS NULL),
                    last_request_id = ?, last_request_status = ?, updated_at = ?,
                    system_instruction = CASE
-                       WHEN system_instruction IS NULL OR system_instruction = ''
+                       WHEN system_instruction IS NULL
                        THEN ? ELSE system_instruction END
                WHERE id = ?""",
             (
@@ -757,7 +757,10 @@ class SQLiteConversationStore:
                 user_request_id,
                 request_status,
                 now,
-                frozen_system_text if isinstance(frozen_system_text, str) else None,
+                # Turn 1 froze whatever it sent, INCLUDING nothing (an agent with no system
+                # message): "" marks "frozen, empty" and NULL stays "never froze" (the server's
+                # own convention: system_instruction IS NOT NULL means frozen).
+                frozen_system_text if isinstance(frozen_system_text, str) else "",
                 conv_id,
             ),
         )
@@ -1069,8 +1072,10 @@ class SQLiteConversationStore:
             (conversation_id,),
         )
         text = frozen["system_instruction"] if frozen else None
-        if isinstance(text, str) and text:
-            config["system_instruction"] = text
+        if isinstance(text, str):
+            # "" is a freeze too: turn 1 sent no system prompt and turn 2 must not fill again.
+            if text:
+                config["system_instruction"] = text
             config["system_prompt_frozen"] = True
         return config
 

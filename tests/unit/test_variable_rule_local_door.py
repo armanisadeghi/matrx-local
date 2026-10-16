@@ -406,3 +406,80 @@ async def test_a_real_completed_request_lands_its_filled_system_prompt_in_the_co
         assert "{{city}}" not in again["system_instruction"]
     finally:
         await db.close()
+
+
+@pytest.mark.anyio
+async def test_turn_two_of_an_agent_with_no_system_prompt_does_not_refill(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent with NO system message and an authored "Hi {{city}}": turn 1 froze nothing to
+    say, but it DID freeze. The real SQLite store must hand that back so turn 2 sends
+    ['Hi Rome', 'Reply', 'again'], never the raw definition copy ('Hi Paris') on top."""
+    from app.services.ai import conversation_handler
+    from app.services.ai.conversation_handler import SQLiteConversationStore
+    from app.services.local_db import database
+
+    db = database.LocalDatabase(tmp_path / "matrx.db")
+    await db.connect()
+    monkeypatch.setattr(database, "_instance", db)
+    try:
+        store = SQLiteConversationStore()
+        await store.ensure_conversation_exists(CONV_ID, "user-1")
+        request_id = "55555555-5555-4555-8555-555555555555"
+        await store.create_pending_user_request(request_id, CONV_ID, "user-1")
+        await store.persist_completed_request(
+            {
+                "conversation_id": CONV_ID,
+                "user_request_id": request_id,
+                "messages": [
+                    {"role": "user", "content": "Hi Rome"},
+                    {"role": "assistant", "content": "Reply"},
+                ],
+                "conversation": {"system_instruction": None},
+            },
+            CONV_ID,
+        )
+        stored = await store.get_conversation_config(CONV_ID)
+        assert stored["system_prompt_frozen"] is True
+        assert not stored.get("system_instruction")
+
+        monkeypatch.setattr(conversation_handler, "get_conversation_store", lambda: store)
+        no_system = _agent_config(system="")
+        no_system.config.messages = _agent_config().config.messages
+        no_system.config.system_instruction = None
+        no_system.config.messages[0].content[0].text = "Hi {{city}}"
+        # reuse the continuation harness but with the real store
+        import matrx_ai.db.agx_manager as agx_module
+
+        from app.services.local_db import repositories
+
+        async def load(_id: str, is_version: bool = False) -> Any:
+            return no_system
+
+        async def exists(_id: str) -> bool:
+            return True
+
+        async def tools(_config: Any, ctx: Any, *_a: Any, **_k: Any) -> Any:
+            return ctx
+
+        class Repo:
+            async def get(self, _id: str) -> dict[str, Any]:
+                return {"agent_id": AGENT_ID}
+
+        monkeypatch.setattr(agx_module.agx, "load_for_execution", load)
+        monkeypatch.setattr(local_ai_task, "conversation_exists", exists)
+        monkeypatch.setattr(local_ai_task, "apply_request_tools", tools)
+        monkeypatch.setattr(local_ai_task, "bind_active_local_model", lambda _c: "m")
+        monkeypatch.setattr(local_ai_task, "set_app_context", lambda _c: None)
+        monkeypatch.setattr(repositories, "ConversationsRepo", Repo)
+        request = SimpleNamespace(
+            user_input="again", retry=False, config_overrides=None, debug=False, stream=True,
+            store=True, tools=[], tools_replace=None, client=None, max_iterations=5,
+            max_retries_per_iteration=1, organization_id=None,
+        )
+        _, config, _, _ = await local_ai_task.prepare_conversation_continue(
+            CONV_ID, request, _ctx()
+        )
+        assert _texts(config) == ["Hi Rome", "Reply", "again"]
+    finally:
+        await db.close()

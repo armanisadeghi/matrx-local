@@ -3,6 +3,7 @@
 @import "@ai-matrx/design-system/styles.css";
 /* THE ONE AGENT PICKER's structural CSS + its default token sheet. */
 @import "@ai-matrx/agents/catalog/styles.css";
+@import "@ai-matrx/summon/styles.css";
 
 @tailwind base;
 @tailwind components;

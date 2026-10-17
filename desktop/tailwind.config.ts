@@ -15,6 +15,8 @@ export default {
     "./node_modules/@ai-matrx/chat/dist/**/*.{js,mjs}",
     // The Vault (`features/vault`) ships every screen from this package.
     "./node_modules/@ai-matrx/vault/dist/**/*.{js,mjs}",
+    // Summon renders the chat package's real windows for a bare host.
+    "./node_modules/@ai-matrx/summon/dist/**/*.{js,mjs}",
   ],
   theme: {
     container: {

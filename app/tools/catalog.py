@@ -445,8 +445,8 @@ _META: dict[str, ToolMeta] = {
     ),
     "Search": ToolMeta(
         "local_search",
-        "Search the web using Brave Search API and return results.",
-        "local_network", ("search", "web", "brave", "local"), SearchArgs,
+        "Search the web and return results.",
+        "local_network", ("search", "web", "local"), SearchArgs,
         timeout_seconds=30.0,
     ),
     "Research": ToolMeta(

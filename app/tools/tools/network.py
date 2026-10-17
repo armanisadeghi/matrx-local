@@ -801,7 +801,7 @@ async def tool_search(
     count: int = 10,
     freshness: str | None = None,
 ) -> ToolResult:
-    """Search the web using Brave Search API.
+    """Search the web.
 
     Returns structured search results with titles, URLs, descriptions, and
     snippets. Requires the user's own Brave key in the in-app key store

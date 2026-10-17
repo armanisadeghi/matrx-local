@@ -57,6 +57,7 @@
     "@ai-matrx/content-ir": "latest",
     "@ai-matrx/design-system": "latest",
     "@ai-matrx/kit": "latest",
+    "@ai-matrx/summon": "latest",
     "@ai-matrx/vault": "latest",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",

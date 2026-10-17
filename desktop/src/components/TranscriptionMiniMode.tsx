@@ -1,13 +1,15 @@
 /**
  * TranscriptionMiniMode — compact floating overlay for live transcription.
  *
- * Renders as a small draggable panel (similar in size to the update banner)
- * in the bottom-right corner. The user can resize it by dragging the resize
- * handle. All transcription controls are intact in this mode.
+ * A small card that starts in the bottom-right corner. It moves through
+ * summon's Dock (drag by the header bar, clamped to the window, position
+ * remembered) and resizes with the native corner grip. All transcription
+ * controls are intact in this mode.
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { X, Maximize2, GripVertical } from "lucide-react";
+import { Dock, DockHandle } from "@ai-matrx/summon/dock";
 import { RecordingMicButton } from "@/components/recording/RecordingMicButton";
 import { RmsLevelBar } from "@/components/recording/RmsLevelBar";
 
@@ -27,6 +29,16 @@ const MIN_WIDTH = 280;
 const MIN_HEIGHT = 120;
 const DEFAULT_WIDTH = 340;
 const DEFAULT_HEIGHT = 160;
+const EDGE_GAP = 24;
+
+/** Bottom-right resting place, measured from the top-left so the corner grip grows the card toward the pointer. */
+function bottomRightOffset() {
+  if (typeof window === "undefined") return { x: EDGE_GAP, y: EDGE_GAP };
+  return {
+    x: Math.max(EDGE_GAP, window.innerWidth - DEFAULT_WIDTH - EDGE_GAP),
+    y: Math.max(EDGE_GAP, window.innerHeight - DEFAULT_HEIGHT - EDGE_GAP),
+  };
+}
 
 export function TranscriptionMiniMode({
   isRecording,
@@ -39,104 +51,28 @@ export function TranscriptionMiniMode({
   onExpand,
   onClose,
 }: MiniModeProps) {
-  const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = use default (bottom-right via CSS)
-  const [size, setSize] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const dragStartRef = useRef({ mx: 0, my: 0, px: 0, py: 0 });
-  const resizeStartRef = useRef({ mx: 0, my: 0, w: 0, h: 0 });
-
-  // Position defaults to bottom-right via fixed CSS; once dragged, use explicit coords
-  const posStyle: React.CSSProperties =
-    pos.x === -1
-      ? { bottom: 24, right: 24 }
-      : { top: pos.y, left: pos.x };
-
-  // Drag: move the panel
-  const handleDragMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (pos.x === -1) {
-        // Initialise position from the panel's current screen rect
-        const rect = panelRef.current?.getBoundingClientRect();
-        if (rect) {
-          setPos({ x: rect.left, y: rect.top });
-        }
-      }
-      setIsDragging(true);
-      dragStartRef.current = { mx: e.clientX, my: e.clientY, px: pos.x === -1 ? (panelRef.current?.getBoundingClientRect().left ?? 0) : pos.x, py: pos.y === -1 ? (panelRef.current?.getBoundingClientRect().top ?? 0) : pos.y };
-      e.preventDefault();
-    },
-    [pos]
-  );
-
-  // Resize: drag the bottom-right corner
-  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsResizing(true);
-    resizeStartRef.current = {
-      mx: e.clientX,
-      my: e.clientY,
-      w: size.w,
-      h: size.h,
-    };
-    e.preventDefault();
-    e.stopPropagation();
-  }, [size]);
-
-  useEffect(() => {
-    if (!isDragging && !isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging) {
-        const dx = e.clientX - dragStartRef.current.mx;
-        const dy = e.clientY - dragStartRef.current.my;
-        setPos({
-          x: Math.max(0, dragStartRef.current.px + dx),
-          y: Math.max(0, dragStartRef.current.py + dy),
-        });
-      }
-      if (isResizing) {
-        const dx = e.clientX - resizeStartRef.current.mx;
-        const dy = e.clientY - resizeStartRef.current.my;
-        setSize({
-          w: Math.max(MIN_WIDTH, resizeStartRef.current.w + dx),
-          h: Math.max(MIN_HEIGHT, resizeStartRef.current.h + dy),
-        });
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      setIsResizing(false);
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isDragging, isResizing]);
+  const [restingOffset] = useState(bottomRightOffset);
 
   // Keep only the last ~3 lines of text visible
   const displayText = recentText.length > 200 ? "…" + recentText.slice(-200) : recentText;
 
   return (
-    <div
-      ref={panelRef}
-      className="fixed z-50 rounded-2xl border border-border/80 bg-card/95 shadow-2xl backdrop-blur-sm select-none"
+    <Dock
+      id="matrx-local.transcription-mini-mode"
+      corner="top-left"
+      defaultPosition={restingOffset}
+      zIndex={50}
+      className="flex flex-col overflow-hidden rounded-2xl border border-border/80 bg-card/95 shadow-2xl backdrop-blur-sm select-none"
       style={{
-        ...posStyle,
-        width: size.w,
-        height: size.h,
-        cursor: isDragging ? "grabbing" : "default",
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+        minWidth: MIN_WIDTH,
+        minHeight: MIN_HEIGHT,
+        resize: "both",
       }}
     >
       {/* Drag handle bar */}
-      <div
-        className="flex items-center justify-between px-3 py-2 cursor-grab active:cursor-grabbing rounded-t-2xl border-b border-border/50"
-        onMouseDown={handleDragMouseDown}
-      >
+      <DockHandle className="flex shrink-0 items-center justify-between px-3 py-2 active:cursor-grabbing rounded-t-2xl border-b border-border/50">
         <div className="flex items-center gap-2">
           <GripVertical className="h-3.5 w-3.5 text-muted-foreground/50" />
           <span className="text-xs font-medium text-muted-foreground">
@@ -163,10 +99,10 @@ export function TranscriptionMiniMode({
             <X className="h-3 w-3" />
           </button>
         </div>
-      </div>
+      </DockHandle>
 
       {/* Content area */}
-      <div className="flex flex-col h-[calc(100%-36px)] px-3 py-2 gap-2">
+      <div className="flex min-h-0 flex-1 flex-col px-3 py-2 gap-2">
         {/* Text preview */}
         <div className="flex-1 overflow-hidden">
           {displayText ? (
@@ -211,16 +147,6 @@ export function TranscriptionMiniMode({
           )}
         </div>
       </div>
-
-      {/* Resize handle */}
-      <div
-        className="absolute bottom-0 right-0 h-4 w-4 cursor-se-resize rounded-br-2xl flex items-end justify-end pr-1 pb-1"
-        onMouseDown={handleResizeMouseDown}
-      >
-        <svg width="8" height="8" viewBox="0 0 8 8" className="text-muted-foreground/40">
-          <path d="M7 1L1 7M7 4L4 7M7 7H7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </div>
-    </div>
+    </Dock>
   );
 }

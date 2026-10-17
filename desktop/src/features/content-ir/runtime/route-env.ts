@@ -7,7 +7,7 @@
  * type into pixels is `render/dispatch.tsx`.
  */
 
-import type { KindRouteEnv, KindVersionSources } from "@ai-matrx/content-ir-react";
+import type { KindRouteEnv, KindVersionSources } from "@ai-matrx/content-ir/react";
 import { kindRegistry, componentRegistry } from "./registry";
 import { CONTENT_IR_PLATFORM } from "../platform";
 import { reportContentIrError } from "./diagnostics";

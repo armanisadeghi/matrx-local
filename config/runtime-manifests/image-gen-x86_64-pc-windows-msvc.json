@@ -1,7 +1,7 @@
 {
-  "contract_sha256": "e710410d1e8564da1d23a6d70516c4b583736fe4512f47aa47c229ad334bc3dc",
+  "contract_sha256": "611a0455396c37d5bfd0743c3d46579d92bfe31afaa4b7deccdebce6c163daac",
   "lock_file": "image-gen-x86_64-pc-windows-msvc.requirements.txt",
-  "lock_sha256": "799aef7e5335d7eb9befe966b66e5e37fb9d10dde07b902268b62a482e1ba593",
+  "lock_sha256": "d4dc5a48cd86c6c88e8539c4a2429001d31d7ebea0dd45100c0b784ac8fa6b67",
   "packages": [
     {
       "name": "accelerate",
@@ -307,12 +307,12 @@
     },
     {
       "name": "pillow",
-      "version": "12.1.0",
+      "version": "12.3.0",
       "wheels": [
         {
-          "filename": "pillow-12.1.0-cp313-cp313-win_amd64.whl",
-          "sha256": "461f9dfdafa394c59cd6d818bdfdbab4028b83b02caadaff0ffd433faf4c9a7a",
-          "url": "https://files.pythonhosted.org/packages/e5/07/74a9d941fa45c90a0d9465098fe1ec85de3e2afbdc15cc4766622d516056/pillow-12.1.0-cp313-cp313-win_amd64.whl"
+          "filename": "pillow-12.3.0-cp313-cp313-win_amd64.whl",
+          "sha256": "1cca606cd25738df4ed873d5ad46bbdb3d83b5cbca291f6b4ff13a4df6b0bbe8",
+          "url": "https://files.pythonhosted.org/packages/a6/9b/7a58e61d62be561da3a356fe2384d4059a6345fc130e23ef1c36a5b81d24/pillow-12.3.0-cp313-cp313-win_amd64.whl"
         }
       ]
     },

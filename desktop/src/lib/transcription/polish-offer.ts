@@ -4,9 +4,10 @@
  * mandate and the six built-in styles) and
  * `local.transcript_polish_custom_style` (`local.polish_style_custom`).
  *
- * The local door resolves the Holder and fills ITS messages client-side by
- * `{{name}}` (`substituteVariables`); a name the Holder's messages do not
- * reference changes nothing the model receives. The live Holders reference
+ * The local door resolves the Holder and the engine fills ITS messages
+ * (matrx-ai's one first-turn pass, `POST /local-mandates/{key}/fill`): only a
+ * name the Holder DECLARES fills; any other name changes nothing the model
+ * receives. The live Holders reference
  * none of these names (checked 2026-09-28), so adding them is
  * payload-neutral today and lets a future Holder use them.
  *

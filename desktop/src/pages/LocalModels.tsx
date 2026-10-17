@@ -120,9 +120,10 @@ import {
   resolveLocalMandate,
   type ResolvedLocalMandate,
 } from "@/lib/local-mandates";
-import { refreshBuiltinPrompts } from "@/lib/system-prompts";
+import { builtinPromptRunText, refreshBuiltinPrompts } from "@/lib/system-prompts";
 import { usePageRefreshHandler } from "@/hooks/use-page-refresh";
 import { ModelRepoAnalyzer } from "@/components/llm/ModelRepoAnalyzer";
+import { SystemPromptSelector } from "@/components/llm/SystemPromptSelector";
 import { engine } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useTtsApp, useTtsAppOptional } from "@/contexts/TtsContext";
@@ -2444,6 +2445,8 @@ interface SavedConversation {
   title: string;
   messages: ConversationMessage[];
   systemPrompt: string;
+  /** The library prompt `systemPrompt` came from; null/absent = the person's own text. */
+  systemPromptId?: string | null;
   createdAt: number;
   updatedAt: number;
   modelName?: string;
@@ -2577,126 +2580,6 @@ function ModelSwitcher({
         </span>
       )}
       {unloadButton}
-    </div>
-  );
-}
-
-// ── System Prompt Selector ────────────────────────────────────────────────
-// A proper full-width selector for the settings panel.
-// Shows a dropdown of all saved + builtin prompts, a textarea for the
-// current content, and a link to the full System Prompts management page.
-
-function SystemPromptSelector({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (content: string) => void;
-}) {
-  const navigate = useNavigate();
-  const [userPrompts, setUserPrompts] = useState<SystemPrompt[]>(() =>
-    systemPrompts.list(),
-  );
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const allPrompts = [...builtinPrompts(), ...userPrompts];
-  const activePrompt = allPrompts.find((p) => p.content === value);
-
-  const reload = () => {
-    setUserPrompts(systemPrompts.list());
-  };
-
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    reload();
-    setTimeout(() => setIsRefreshing(false), 600);
-  };
-
-  // Reload on mount and whenever prompts change (cross-tab storage event or same-tab custom event)
-  useEffect(() => {
-    reload();
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === "matrx-system-prompts") reload();
-    };
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener("matrx-prompts-changed", reload);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener("matrx-prompts-changed", reload);
-    };
-  }, []);
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs font-medium">System Prompt</Label>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={handleRefresh}
-            title="Refresh prompt list"
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <RefreshCw
-              className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`}
-            />
-          </button>
-          <button
-            className="matrx-glyph-trim flex items-center gap-1 text-xs text-primary hover:underline"
-            onClick={() => navigate("/system-prompts")}
-            title="Open System Prompts library"
-          >
-            <ExternalLink className="h-3 w-3" />
-            Manage
-          </button>
-        </div>
-      </div>
-
-      {/* Prompt picker dropdown */}
-      <div className="space-y-1.5">
-        <select
-          className="w-full h-8 rounded-md border border-input bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          value={activePrompt?.id ?? "__custom__"}
-          onChange={(e) => {
-            if (e.target.value === "__custom__") return;
-            if (e.target.value === "__manage__") {
-              navigate("/system-prompts");
-              return;
-            }
-            const found = allPrompts.find((p) => p.id === e.target.value);
-            if (found) onChange(found.content);
-          }}
-        >
-          <option value="__custom__">
-            {activePrompt ? activePrompt.name : "— custom / paste below —"}
-          </option>
-          {userPrompts.length > 0 && (
-            <optgroup label="My Prompts">
-              {userPrompts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          <optgroup label="Built-in">
-            {builtinPrompts().map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </optgroup>
-          <option value="__manage__">→ Open Prompts Library…</option>
-        </select>
-
-        <Textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="You are a helpful assistant… (or select from the library above)"
-          className="text-xs resize-none h-32"
-        />
-        <p className="text-[10px] text-muted-foreground text-right">
-          {value.length} chars
-        </p>
-      </div>
     </div>
   );
 }
@@ -3066,8 +2949,10 @@ function InferenceTab() {
   // which are declared later in the component body.
   const preVoiceSystemPromptRef = useRef<string | null>(null);
   // Stable ref to setSystemPrompt so callbacks don't go stale
-  const setSystemPromptRef = useRef<((v: string) => void) | null>(null);
+  const setSystemPromptRef = useRef<((v: string, id?: string | null) => void) | null>(null);
   const getCurrentSystemPromptRef = useRef<(() => string) | null>(null);
+  const getCurrentSystemPromptIdRef = useRef<(() => string | null) | null>(null);
+  const preVoiceSystemPromptIdRef = useRef<string | null>(null);
 
   const applyVoiceSystemPrompt = useCallback(async () => {
     const settings = await loadSettings();
@@ -3075,14 +2960,24 @@ function InferenceTab() {
       settings.voiceAssistantSystemPromptId || "builtin-voice-assistant";
     // Built-in prompts are Mandates resolved on demand (engine-cached offline).
     await refreshBuiltinPrompts();
-    const content = systemPrompts.resolve(promptId) ?? "";
+    // A built-in is filled by the engine now that it is used; a person's own
+    // prompt is their text as written.
+    let content: string;
+    try {
+      content = (await builtinPromptRunText(promptId)) ?? systemPrompts.resolve(promptId) ?? "";
+    } catch (err) {
+      // Refused (e.g. a prompt block is missing): never run the unfilled text.
+      console.warn("[voice] built-in prompt unavailable:", err);
+      return;
+    }
     if (content && setSystemPromptRef.current) {
       // Only save pre-voice prompt once per activation
       if (preVoiceSystemPromptRef.current === null) {
         preVoiceSystemPromptRef.current =
           getCurrentSystemPromptRef.current?.() ?? "";
+        preVoiceSystemPromptIdRef.current = getCurrentSystemPromptIdRef.current?.() ?? null;
       }
-      setSystemPromptRef.current(content);
+      setSystemPromptRef.current(content, promptId);
     }
   }, []);
 
@@ -3093,7 +2988,10 @@ function InferenceTab() {
       preVoiceSystemPromptRef.current !== null &&
       setSystemPromptRef.current
     ) {
-      setSystemPromptRef.current(preVoiceSystemPromptRef.current);
+      setSystemPromptRef.current(
+        preVoiceSystemPromptRef.current,
+        preVoiceSystemPromptIdRef.current,
+      );
     }
     preVoiceSystemPromptRef.current = null;
   }, []);
@@ -3173,12 +3071,22 @@ function InferenceTab() {
 
   // ── Settings panel ─────────────────────────────────────────────────────
   const [showSettings, setShowSettings] = useState(false);
-  const [systemPrompt, setSystemPrompt] = useState(
+  const [systemPrompt, setSystemPromptText] = useState(
     activeConv?.systemPrompt ?? "",
   );
+  // Which library prompt is in use, by id — never inferred by comparing text
+  // (a built-in runs with its FILLED Holder text). Null = the person's own text.
+  const [systemPromptId, setSystemPromptId] = useState<string | null>(
+    activeConv?.systemPromptId ?? null,
+  );
+  const setSystemPrompt = (content: string, promptId: string | null = null) => {
+    setSystemPromptText(content);
+    setSystemPromptId(promptId);
+  };
   // Wire the voice system prompt helpers (declared earlier) to these setters.
   setSystemPromptRef.current = setSystemPrompt;
   getCurrentSystemPromptRef.current = () => systemPrompt;
+  getCurrentSystemPromptIdRef.current = () => systemPromptId;
   const [temperature, setTemperature] = useState(0.7);
   const [topP, setTopP] = useState(0.8);
   const [maxTokens, setMaxTokens] = useState(8000);
@@ -3214,23 +3122,28 @@ function InferenceTab() {
    * Mandate cannot be resolved — the send is then REFUSED with the reason
    * shown; there is no fallback prompt.
    */
-  const confidentialChatPrefix = async (): Promise<ChatMessage[] | null> => {
+  const confidentialChatPrefix = async (
+    conversationKey: string | null,
+  ): Promise<ChatMessage[] | null> => {
     let holder: ResolvedLocalMandate;
+    let lead: ChatMessage[];
     try {
       holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.confidentialChat);
       applyChatHolder(holder);
+      // Filled by the engine on this conversation's first turn, frozen after.
+      lead = await holderLeadMessages(holder, { conversationKey });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return null;
     }
+    // The person's own system prompt replaces the Holder's system text as is
+    // (their text is data, never filled).
     const personal = systemPrompt.trim() ? systemPrompt : null;
-    const prefix: ChatMessage[] = [];
-    for (const m of holder.messages) {
-      const content = m.role === "system" && personal !== null ? personal : m.content;
-      if (m.role === "system" && !content.trim()) continue;
-      prefix.push({ role: m.role, content });
-    }
-    if (personal !== null && !holder.messages.some((m) => m.role === "system")) {
+    if (personal === null) return lead;
+    const prefix: ChatMessage[] = lead.map((m) =>
+      m.role === "system" ? { role: m.role, content: personal } : { role: m.role, content: m.content },
+    );
+    if (!prefix.some((m) => m.role === "system")) {
       prefix.unshift({ role: "system", content: personal });
     }
     return prefix;
@@ -3266,6 +3179,8 @@ function InferenceTab() {
   const [agentMessages, setAgentMessages] = useState<ConversationMessage[]>([]);
   // Full message history (including tool result messages) for accurate context on follow-up turns
   const agentHistoryRef = useRef<ChatMessage[]>([]);
+  // Names the Tools-mode conversation so its Holder lead is filled once, then frozen.
+  const agentConversationKeyRef = useRef<string>(crypto.randomUUID());
   const [agentInput, setAgentInput] = useState("");
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -3380,16 +3295,18 @@ function InferenceTab() {
     // Holder's instructions lead the conversation and its sampling applies.
     // Unresolvable → the send is refused with the reason; no fallback.
     let toolHolder: ResolvedLocalMandate;
+    let toolPrefix: ChatMessage[];
     try {
       toolHolder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.toolCallingChat);
+      toolPrefix = (
+        await holderLeadMessages(toolHolder, {
+          conversationKey: agentConversationKeyRef.current,
+        })
+      ).map((m) => ({ role: m.role, content: m.content }));
     } catch (e) {
       setAgentError(e instanceof Error ? e.message : String(e));
       return;
     }
-    const toolPrefix: ChatMessage[] = holderLeadMessages(toolHolder).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
 
     const userMsg = agentInput.trim();
     setAgentInput("");
@@ -3574,7 +3491,7 @@ function InferenceTab() {
 
   // Sync system prompt when switching conversations
   useEffect(() => {
-    setSystemPrompt(activeConv?.systemPrompt ?? "");
+    setSystemPrompt(activeConv?.systemPrompt ?? "", activeConv?.systemPromptId ?? null);
   }, [activeConvId]);
 
   const port = serverStatus?.running ? serverStatus.port : null;
@@ -3646,6 +3563,7 @@ function InferenceTab() {
     id: string,
     msgs: ConversationMessage[],
     sysPrompt?: string,
+    sysPromptId: string | null = null,
   ) => {
     setConversations((prev) => {
       const updated = prev.map((c) =>
@@ -3655,6 +3573,8 @@ function InferenceTab() {
               messages: msgs,
               systemPrompt:
                 sysPrompt !== undefined ? sysPrompt : c.systemPrompt,
+              systemPromptId:
+                sysPrompt !== undefined ? sysPromptId : (c.systemPromptId ?? null),
               title: msgs.find((m) => m.role === "user")
                 ? makeTitle(msgs.find((m) => m.role === "user")!.content)
                 : c.title,
@@ -3827,7 +3747,7 @@ function InferenceTab() {
   // ── Edit & resend a user message ──────────────────────────────────────
   const handleEditAndResend = async (msgId: string, newContent: string) => {
     if (!port || !newContent.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const holderPrefix = await confidentialChatPrefix(activeConvId);
     if (!holderPrefix) return;
     setEditingMsgId(null);
     setEditingContent("");
@@ -3915,7 +3835,7 @@ function InferenceTab() {
   // ── Retry an assistant message (re-run the preceding user turn) ───────
   const handleRetry = async (assistantMsgId: string) => {
     if (!port || isGenerating || !activeConvId) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const holderPrefix = await confidentialChatPrefix(activeConvId);
     if (!holderPrefix) return;
     const msgIndex = messages.findIndex((m) => m.id === assistantMsgId);
     if (msgIndex === -1) return;
@@ -4079,8 +3999,21 @@ function InferenceTab() {
 
   // Prompt/model display helpers
   const allPrompts = [...builtinPrompts(), ...inferenceUserPrompts];
-  const activePromptName =
-    allPrompts.find((p) => p.content === systemPrompt)?.name ?? null;
+  /** Use a library prompt: a built-in runs with its Holder text as the engine fills it. */
+  const pickLibraryPrompt = async (p: { id: string; content: string }) => {
+    let content = p.content;
+    try {
+      content = (await builtinPromptRunText(p.id, activeConvId)) ?? p.content;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setSystemPrompt(content, p.id);
+    if (activeConvId) updateMessages(activeConvId, messages, content, p.id);
+  };
+  const activePromptName = systemPromptId
+    ? (allPrompts.find((p) => p.id === systemPromptId)?.name ?? null)
+    : null;
 
   const matchedModel = downloadedModels.find((m) =>
     serverStatus?.model_path?.includes(m.filename),
@@ -4094,7 +4027,8 @@ function InferenceTab() {
   // ── Send message ───────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!port || !input.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const newConvId = activeConvId ?? crypto.randomUUID();
+    const holderPrefix = await confidentialChatPrefix(newConvId);
     if (!holderPrefix) return;
     const userMsg = input.trim();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -4106,10 +4040,11 @@ function InferenceTab() {
     let convId = activeConvId;
     if (!convId) {
       const conv: SavedConversation = {
-        id: crypto.randomUUID(),
+        id: newConvId,
         title: makeTitle(userMsg),
         messages: [],
         systemPrompt,
+        systemPromptId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         ...(serverStatus?.model_name
@@ -4215,7 +4150,8 @@ function InferenceTab() {
   // Variant of handleSend that accepts text directly (used by voice chat hook)
   const handleSendText = async (text: string) => {
     if (!port || !text.trim() || isGenerating) return;
-    const holderPrefix = await confidentialChatPrefix();
+    const newConvId = activeConvId ?? crypto.randomUUID();
+    const holderPrefix = await confidentialChatPrefix(newConvId);
     if (!holderPrefix) return;
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setInput("");
@@ -4225,10 +4161,11 @@ function InferenceTab() {
     let convId = activeConvId;
     if (!convId) {
       const conv: SavedConversation = {
-        id: crypto.randomUUID(),
+        id: newConvId,
         title: makeTitle(text),
         messages: [],
         systemPrompt,
+        systemPromptId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         ...(serverStatus?.model_name
@@ -4317,7 +4254,7 @@ function InferenceTab() {
       // fills any value the body leaves out — the body's own values win.
       const holder = await resolveLocalMandate(LOCAL_MODEL_MANDATE_KEYS.rawCompletion);
       const body = JSON.parse(rawJson) as Record<string, unknown>;
-      const lead = holderLeadMessages(holder);
+      const lead = await holderLeadMessages(holder);
       if (lead.length > 0) {
         const own = Array.isArray(body.messages) ? body.messages : [];
         body.messages = [...lead, ...own];
@@ -5157,19 +5094,13 @@ function InferenceTab() {
                               <button
                                 key={p.id}
                                 className={`flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-colors ${
-                                  p.content === systemPrompt
+                                  p.id === systemPromptId
                                     ? "bg-accent text-accent-foreground"
                                     : "text-foreground hover:bg-accent/50"
                                 }`}
                                 onClick={() => {
-                                  setSystemPrompt(p.content);
-                                  if (activeConvId)
-                                    updateMessages(
-                                      activeConvId,
-                                      messages,
-                                      p.content,
-                                    );
                                   setShowPromptPicker(false);
+                                  void pickLibraryPrompt(p);
                                 }}
                               >
                                 <span className="font-medium">{p.name}</span>
@@ -5766,6 +5697,7 @@ function InferenceTab() {
                         onClick={() => {
                           setAgentMessages([]);
                           agentHistoryRef.current = [];
+                          agentConversationKeyRef.current = crypto.randomUUID();
                         }}
                         className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
                         title="Clear conversation"
@@ -5845,10 +5777,11 @@ function InferenceTab() {
               {/* System prompt */}
               <SystemPromptSelector
                 value={systemPrompt}
-                onChange={(content) => {
-                  setSystemPrompt(content);
+                selectedId={systemPromptId}
+                onChange={(content, promptId) => {
+                  setSystemPrompt(content, promptId);
                   if (activeConvId)
-                    updateMessages(activeConvId, messages, content);
+                    updateMessages(activeConvId, messages, content, promptId);
                 }}
               />
 

@@ -1,5 +1,5 @@
 {
-  "contract_sha256": "e710410d1e8564da1d23a6d70516c4b583736fe4512f47aa47c229ad334bc3dc",
+  "contract_sha256": "611a0455396c37d5bfd0743c3d46579d92bfe31afaa4b7deccdebce6c163daac",
   "critical_frozen_modules": [
     "doctest",
     "filecmp",
@@ -9,7 +9,7 @@
     "timeit",
     "tqdm.contrib.logging"
   ],
-  "lock_graph_sha256": "41d87bfb032f64e7c12da2190754657c97c996949fa7873b21e739247994e4b3",
+  "lock_graph_sha256": "a00cdebf89e3c0160a0ee17f5eff1c46eb180daa87acca284b727e1e1c1770f2",
   "lock_source": "uv.lock",
   "managed_direct_versions": {
     "accelerate": "1.13.0",
@@ -476,7 +476,7 @@
       "networkx": "3.6.1",
       "numpy": "2.4.2",
       "packaging": "25.0",
-      "pillow": "12.1.0",
+      "pillow": "12.3.0",
       "psutil": "7.2.2",
       "pygments": "2.19.2",
       "pyyaml": "6.0.3",
@@ -516,7 +516,7 @@
       "networkx": "3.6.1",
       "numpy": "2.4.2",
       "packaging": "25.0",
-      "pillow": "12.1.0",
+      "pillow": "12.3.0",
       "psutil": "7.2.2",
       "pygments": "2.19.2",
       "pyyaml": "6.0.3",
@@ -557,7 +557,7 @@
       "networkx": "3.6.1",
       "numpy": "2.4.2",
       "packaging": "25.0",
-      "pillow": "12.1.0",
+      "pillow": "12.3.0",
       "psutil": "7.2.2",
       "pygments": "2.19.2",
       "pyyaml": "6.0.3",
@@ -597,7 +597,7 @@
       "networkx": "3.6.1",
       "numpy": "2.4.2",
       "packaging": "25.0",
-      "pillow": "12.1.0",
+      "pillow": "12.3.0",
       "psutil": "7.2.2",
       "pygments": "2.19.2",
       "pyyaml": "6.0.3",

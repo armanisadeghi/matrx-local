@@ -863,7 +863,7 @@ async def prepare_chat(
     # Only system messages among the authored leading N join the (filled) system prompt; a later
     # one is carried history: data, kept in place, never filled (same rule as aidream).
     config = UnifiedConfig.from_dict(
-        config_dict, authored_message_count=request.template_message_count or 0
+        config_dict, authored_message_count=request.template_message_count
     )
     # THE USER-INPUT LAW: only the authored leading messages are a template; the typed turn
     # and carried history are data. Same shared selection as aidream (matrx-ai).

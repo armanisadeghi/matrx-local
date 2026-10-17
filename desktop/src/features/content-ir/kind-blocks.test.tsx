@@ -103,7 +103,7 @@ describe("StreamBlockBuilder keeps structured content structured", () => {
   });
 
   it("keeps a SHADOWED block structured on its superseded terminal alone", () => {
-    // THE SHADOWED LANE (@ai-matrx/content-ir-react 0.11.1). A producer that
+    // THE SHADOWED LANE (@ai-matrx/content-ir/react 0.11.1). A producer that
     // shadows its text channel never builds a verified `__ir` here — the only
     // identity the block carries is the `superseded` terminal the production
     // fixture already holds, plus its own closed JSON. Before this was wired,

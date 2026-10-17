@@ -1,6 +1,6 @@
 /**
  * THE DESKTOP'S CONTENT IR HOST — the four things
- * `@ai-matrx/content-ir-react` refuses to decide, supplied once.
+ * `@ai-matrx/content-ir/react` refuses to decide, supplied once.
  *
  * A boundary component rather than a root provider, for the reason
  * matrx-frontend made the same call: the host object is a module singleton
@@ -10,7 +10,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { Info } from "lucide-react";
-import { ContentIrRenderProvider, type ContentIrHost } from "@ai-matrx/content-ir-react";
+import { ContentIrRenderProvider, type ContentIrHost } from "@ai-matrx/content-ir/react";
 import { kindRegistry, componentRegistry } from "../runtime/registry";
 import { reportContentIrError } from "../runtime/diagnostics";
 import { CONTENT_IR_PLATFORM } from "../platform";

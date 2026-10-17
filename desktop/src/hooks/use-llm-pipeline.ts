@@ -24,8 +24,8 @@
 import { useState, useCallback } from "react";
 import { chatCompletion, structuredOutput } from "@/lib/llm/api";
 import {
+  fillHolderMessages,
   resolveLocalMandate,
-  substituteVariables,
   type LocalModelMandateKey,
 } from "@/lib/local-mandates";
 
@@ -168,14 +168,12 @@ export async function runLocalMandate<T = string>(
   vars: Record<string, string> = {},
   options: PipelineRunOptions = {},
 ): Promise<T> {
-  // The Holder's messages, filled with the run's variables — nothing replaces
-  // them: a person's own text reaches a Holder only as a declared variable
-  // (e.g. local.polish_style_custom's {{style_instructions}}).
+  // The Holder's messages, filled with the run's variables by the engine's
+  // one first-turn pass (THE VARIABLE RULE) — nothing replaces them: a
+  // person's own text reaches a Holder only as a declared variable (e.g.
+  // local.polish_style_custom's {{style_instructions}}).
   const holder = await resolveLocalMandate(mandateKey, options.signal);
-  const messages = holder.messages.map((m) => ({
-    role: m.role,
-    content: substituteVariables(m.content, vars),
-  }));
+  const messages = await fillHolderMessages(holder, vars, options.signal);
 
   const maxTokens = holder.settings.maxTokens;
   const temperature = holder.settings.temperature;

@@ -690,7 +690,13 @@ export function useChat({ engineUrl }: UseChatOptions) {
               LOCAL_MODEL_MANDATE_KEYS.cloudChatReply,
               abort.signal,
             );
-            const lead = holderLeadMessages(holder).map((m) => ({
+            // Filled on this conversation's first turn, frozen after.
+            const lead = (
+              await holderLeadMessages(holder, {
+                conversationKey: convId ?? null,
+                signal: abort.signal,
+              })
+            ).map((m) => ({
               role: m.role,
               content: m.content,
             }));

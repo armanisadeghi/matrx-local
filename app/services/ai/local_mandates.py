@@ -25,6 +25,7 @@ What it refuses (the platform's word is final when it answers):
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
@@ -216,6 +217,95 @@ class LocalMandateResolver:
         }
 
 
+    async def _block_context(self) -> Any:
+        """Who a declared prompt block is resolved as: this device's person, in the organization
+        the window shows (same identity the mandate resolution uses)."""
+        token = await self._token_repo.get()
+        jwt: str | None = None
+        if token and not self._token_repo.is_expired(token):
+            raw = token.get("access_token")
+            jwt = raw if isinstance(raw, str) and raw else None
+        user_id = (token or {}).get("user_id") or await self._token_repo.get_owner_user_id()
+        organization_id = await get_device_organization(str(user_id)) if user_id else None
+        return SimpleNamespace(user_id=user_id, token=jwt, organization_id=organization_id)
+
+    async def fill(self, mandate_key: str, variables: dict[str, Any]) -> dict[str, Any]:
+        """Resolve ``mandate_key`` and return its Holder's authored messages FILLED for the
+        first turn by matrx-ai's one pass (``fill_holder_messages``). The caller keeps the
+        answer for the rest of its conversation: a later turn never asks again."""
+        payload = await self.resolve(mandate_key)
+        messages = await fill_holder_messages(
+            payload["definition"], variables, await self._block_context()
+        )
+        return {
+            "mandate_key": payload["mandate_key"],
+            "resolution": payload["resolution"],
+            "messages": messages,
+            "resolved_at": payload["resolved_at"],
+            "stale": payload["stale"],
+            "stale_reason": payload["stale_reason"],
+        }
+
+
+def _text_of(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for part in content or []:
+        text = getattr(part, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
+async def fill_holder_messages(
+    definition: dict[str, Any], variables: dict[str, Any], ctx: Any
+) -> list[dict[str, str]]:
+    """THE VARIABLE RULE for a local-model Holder, through matrx-ai's one first-turn pass.
+
+    The same steps the saved-agent door takes (``local_ai_task.prepare_agent_start``): the
+    canonical definition mapper, ``compose_variable_values(declared_only=True)`` (client value >
+    default > "", undeclared keys dropped), declared prompt blocks resolved through the server or
+    the run refused by name, then ``UnifiedConfig.replace_variables`` (``substitute_authored``:
+    escape, sections, blocks). Returns the Holder's messages as plain ``{role, content}`` text in
+    authored order (the system message first when the Holder authored one)."""
+    from matrx_ai.agents.variables import compose_variable_values
+    from matrx_ai.client_host.agent_source import (
+        ExecutionAgentDefinition,
+        definition_to_agent_config,
+    )
+
+    from app.services.ai.prompt_blocks_client import resolve_declared_prompt_blocks
+
+    agent_config = definition_to_agent_config(ExecutionAgentDefinition.model_validate(definition))
+    config = agent_config.config
+    values = compose_variable_values(
+        agent_config.variable_defaults, dict(variables or {}), declared_only=True
+    )
+    await resolve_declared_prompt_blocks(config, ctx)
+    config.replace_variables(values)
+
+    out: list[dict[str, str]] = []
+    authored_system = any(
+        isinstance(m, dict) and m.get("role") == "system" for m in definition.get("messages") or []
+    )
+    si = config.system_instruction
+    if authored_system or si is not None:
+        text = ""
+        if si is not None:
+            # The Holder's authored text only: no date decoration is added on this path.
+            si.include_date = False
+            text = str(si)
+        out.append({"role": "system", "content": text})
+    for message in config.messages:
+        role = str(getattr(getattr(message, "role", None), "value", getattr(message, "role", "")))
+        if role not in ("system", "user", "assistant"):
+            continue
+        out.append({"role": role, "content": _text_of(message)})
+    return out
+
+
 _instance: LocalMandateResolver | None = None
 
 
@@ -226,4 +316,4 @@ def get_local_mandate_resolver() -> LocalMandateResolver:
     return _instance
 
 
-__all__ = ["LocalMandateResolver", "get_local_mandate_resolver"]
+__all__ = ["LocalMandateResolver", "fill_holder_messages", "get_local_mandate_resolver"]

@@ -53,7 +53,6 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { CloudAgentToolsCard } from "@/components/settings/CloudAgentToolsCard";
-import { NativeVaultImport } from "@/components/settings/NativeVaultImport";
 import { VersionFacts } from "@/components/settings/VersionFacts";
 import { SubTabBar } from "@/components/layout/SubTabBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,7 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import type { EngineStatus } from "@/hooks/use-engine";
 import { engine } from "@/lib/api";
 import { useAccessHealthContext } from "@/contexts/AccessHealthContext";
@@ -276,6 +275,7 @@ export function Settings({
   updateActions,
 }: SettingsProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   // THE version helper. About must never show one unlabelled number: there are
   // three simultaneous truths (running / installed on disk / latest offered)
   // and a restart is what closes the gap between the first two.
@@ -3312,7 +3312,12 @@ export function Settings({
                 )}
               </CardContent>
             </Card>
-            <NativeVaultImport />
+            <Card>
+              <CardContent className="flex items-center justify-between gap-3 py-3">
+                <p className="text-sm text-muted-foreground">Logins, keys and passkey import</p>
+                <Button size="sm" variant="outline" onClick={() => navigate("/vault")}>Open Vault</Button>
+              </CardContent>
+            </Card>
             </div>
           )}
 

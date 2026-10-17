@@ -29,6 +29,11 @@ export default defineConfig(async ({ command, mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // The Vault's import parsers run in module workers addressed by `new URL(…, import.meta.url)`;
+  // pre-bundling would move the package and break those URLs (@ai-matrx/vault 0.1.0 consumer action).
+  optimizeDeps: {
+    exclude: ["@ai-matrx/vault"],
+  },
   clearScreen: false,
   server: {
     port: 1420,

@@ -36,6 +36,7 @@ import { Configurations } from "@/pages/Configurations";
 import { TauriFetchBrowser } from "@/pages/TauriFetchBrowser";
 import { BridgeTest } from "@/pages/BridgeTest";
 import { CodingSessions } from "@/pages/CodingSessions";
+import { Vault } from "@/pages/Vault";
 import { OrganizationPickerDialog } from "@/features/org/OrganizationPickerDialog";
 import { useEngine } from "@/hooks/use-engine";
 import {
@@ -592,6 +593,7 @@ function AppInner() {
       { path: "/browser", element: <BrowserLab /> },
       { path: "/browser/tauri", element: <TauriFetchBrowser /> },
       { path: "/configurations", element: <Configurations /> },
+      { path: "/vault", element: <Vault /> },
       { path: "/coding-sessions", requiresEngine: true, element: <CodingSessions /> },
       {
         path: "/bridge-test",

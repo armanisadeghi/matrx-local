@@ -110,6 +110,8 @@ export function sourceFeatureForRoute(route: string): SourceFeature {
       return "scraper";
     case "/configurations":
       return "system";
+    case "/vault":
+      return "system";
     case "/coding-sessions":
       return "coding_session_native";
     case "/bridge-test":

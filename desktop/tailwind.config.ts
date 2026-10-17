@@ -13,6 +13,8 @@ export default {
     "./node_modules/@ai-matrx/agents/dist/**/*.{js,mjs}",
     // Cloud Chat on the chat package (opt-in, L1) lays out with the same utilities.
     "./node_modules/@ai-matrx/chat/dist/**/*.{js,mjs}",
+    // The Vault (`features/vault`) ships every screen from this package.
+    "./node_modules/@ai-matrx/vault/dist/**/*.{js,mjs}",
   ],
   theme: {
     container: {

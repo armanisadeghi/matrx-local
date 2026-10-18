@@ -283,7 +283,12 @@ async def fill_holder_messages(
     values = compose_variable_values(
         agent_config.variable_defaults, dict(variables or {}), declared_only=True
     )
-    await resolve_declared_prompt_blocks(config, ctx)
+    await resolve_declared_prompt_blocks(
+        config,
+        ctx,
+        agent_id=str(definition.get("definition_id") or "") or None,
+        agent_is_version=bool(definition.get("is_version")),
+    )
     config.replace_variables(values)
 
     out: list[dict[str, str]] = []

@@ -143,3 +143,18 @@ def test_route_fills_through_the_resolver(monkeypatch: pytest.MonkeyPatch) -> No
     ]
     assert body["stale"] is True and body["stale_reason"] == "offline"
     assert resp.headers["X-Matrx-Mandate-Stale"] == "true"
+
+
+def test_the_resolve_call_names_the_agent_so_its_own_organizations_blocks_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defect 39, desktop sibling: the server looks up the named agent's owning organization
+    (run org > agent org > system). The device sends the agent id, never an organization."""
+    from urllib.parse import parse_qs, urlsplit
+
+    paths = _serve_blocks(monkeypatch, {"blocks": {"house": "RULES"}, "report": [], "tool_ids": []})
+    _fill(_definition("Pre {{<house>}}", blocks=["house"]), {})
+    query = parse_qs(urlsplit(paths[0]).query)
+    assert query.get("agent_id") == [AGENT]
+    assert "agent_is_version" not in query
+    assert not any("organization" in key for key in query)

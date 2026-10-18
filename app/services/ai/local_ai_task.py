@@ -612,7 +612,9 @@ async def prepare_agent_start(
     # (refuse by name when one is missing), then the one fill.
     from app.services.ai.prompt_blocks_client import resolve_declared_prompt_blocks
 
-    await resolve_declared_prompt_blocks(config, ctx)
+    await resolve_declared_prompt_blocks(
+        config, ctx, agent_id=agent_id, agent_is_version=request.is_version
+    )
     config.replace_variables(initial_variables)
 
     metadata = {
@@ -772,7 +774,9 @@ async def prepare_conversation_continue(
                 resolve_declared_prompt_blocks,
             )
 
-            await resolve_declared_prompt_blocks(config, ctx)
+            await resolve_declared_prompt_blocks(
+                config, ctx, agent_id=source_id, agent_is_version=bool(version_id)
+            )
             config.replace_variables(
                 compose_variable_values(
                     agent_config.variable_defaults, {}, declared_only=True

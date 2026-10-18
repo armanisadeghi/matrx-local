@@ -1,7 +1,7 @@
 """Prompt blocks on the CLIENT host: the one way matrx-local resolves an agent's DECLARED blocks.
 
 The server resolves blocks from tables this host does not have (personal, then the run's
-organization, then system; the shared ``matrx_ai.prompt_blocks.resolve_declared_blocks``). The
+organization, then the agent's own organization when the agent is named, then system; the shared ``matrx_ai.prompt_blocks.resolve_declared_blocks``). The
 client host reaches that answer through the API the server provides for it, ``GET
 /prompt-blocks/resolve``, and puts it on the config exactly where the shared resolver puts it
 (``prompt_block_texts`` / ``prompt_block_report`` / ``prompt_block_tool_ids``), so the shared
@@ -42,8 +42,14 @@ def _missing_names(error: AIDreamError, declared: list[str]) -> list[str]:
     return list(declared)
 
 
-async def resolve_declared_prompt_blocks(config: Any, ctx: Any) -> None:
-    """Resolve ``config``'s declared prompt blocks once (idempotent), or refuse the run by name."""
+async def resolve_declared_prompt_blocks(
+    config: Any, ctx: Any, *, agent_id: str | None = None, agent_is_version: bool = False
+) -> None:
+    """Resolve ``config``'s declared prompt blocks once (idempotent), or refuse the run by name.
+
+    ``agent_id`` names the agent (or version) whose blocks these are: the server looks up that
+    definition's owning organization itself, so a block the agent's own organization holds is
+    found when this device runs in another organization (run org > agent org > system)."""
     names = declared_names(getattr(config, "prompt_blocks", None))
     if getattr(config, "prompt_block_texts", None) is not None:
         return
@@ -64,6 +70,10 @@ async def resolve_declared_prompt_blocks(config: Any, ctx: Any) -> None:
     query.extend(("tools", t) for t in tools)
     if config.prompt_block_creator:
         query.append(("creator", str(config.prompt_block_creator)))
+    if agent_id:
+        query.append(("agent_id", str(agent_id)))
+        if agent_is_version:
+            query.append(("agent_is_version", "true"))
 
     unavailable = ", ".join(names)
     client = get_aidream_client()

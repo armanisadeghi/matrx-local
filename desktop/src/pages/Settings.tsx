@@ -2266,7 +2266,7 @@ export function Settings({
                       }
                       onClick={() => void handleTestAllKeys()}
                       className="shrink-0"
-                      title="Check every saved key against its provider. Free — no credits are used."
+                      title="Check every saved key against its provider."
                     >
                       {testingAllKeys ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2279,8 +2279,8 @@ export function Settings({
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Testing a key is free — it calls the provider's sign-in check
-                    (not the model), so it never uses credits.
+                    Testing a key calls the provider's sign-in check (not the
+                    model).
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Enter your own API keys to use AI providers directly from

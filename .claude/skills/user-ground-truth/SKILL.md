@@ -1,5 +1,6 @@
 ---
 name: user-ground-truth
+subject: skills/user-ground-truth
 type: Skill
 title: "user-ground-truth — the person's own words, extracted by script, summarized by a fresh agent, judged against the work"
 description: "Extract exactly what the person typed in a Claude Code session (script, no agent context spent), have a fresh agent write a faithful structured summary under it, and optionally have an adversarial agent judge whether the working agent is still on track. Use at a checkpoint, before a handoff, after a compaction, when a long session may have drifted from what the owner asked, or when told to 'summarize what I said' or 'check we're on track'."
@@ -33,7 +34,7 @@ directory with `/` turned into `-`). The script keeps only top-level user turns 
 typed: tool results, injected skill bodies, slash-command output, task notifications, the
 compaction summary, cron wake-ups and the app's automatic "Continue from where you left off" are
 all dropped (the harness marks its own turns `isMeta`). One entry per message: the time, then the
-text verbatim. `--include-injected` keeps the dropped records, labelled, to audit the filter.
+text verbatim. `--include-injected` keeps the dropped records, labeled, to audit the filter.
 
 Never do this step by hand or by reading the transcript into an agent — it costs nothing as a
 script and a fortune as context, and an agent "extracting" his words will tidy them.

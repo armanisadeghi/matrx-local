@@ -1,5 +1,6 @@
 ---
 name: agent-review-queue
+subject: operations/review-queue-drain
 timestamp: 2026-09-10T00:00:00Z
 type: Skill
 title: agent-review-queue — get your work seen, get feedback back
@@ -208,7 +209,7 @@ Per [`policies/feature-registry.md`](/policies/feature-registry.md) § THE REGIS
   say why in `metadata.notes`.
 
 **Never stuff your thing into a wrong node because proposing felt slow** — that is the
-behaviour this system exists to end.
+behavior this system exists to end.
 
 ## Approving an agent for a mandate (Arman, 2026-10-06)
 

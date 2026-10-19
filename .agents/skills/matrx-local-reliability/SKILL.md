@@ -1,5 +1,6 @@
 ---
 name: matrx-local-reliability
+subject: skills/matrx-local-reliability
 type: Skill
 title: "matrx-local-reliability — the installed-app repair loop"
 description: "The repair loop for the installed Matrx Local desktop app: run scripts/reliability.py, then fix every issue its README lists until it is verified on the installed build. Use when woken by the Matrx Local reliability schedule, when asked what is broken in Matrx Local, to fix errors or warnings in its logs, or to verify a Matrx Local fix landed. NOT for release or install (the release watch owns those)."

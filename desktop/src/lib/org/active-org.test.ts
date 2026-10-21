@@ -120,12 +120,31 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mockMemberships(containerIds: string[]) {
+/**
+ * An `rpc(...)` answer that is both awaitable directly and through the paged
+ * `.order(...).range(...)` chain — so the same tests pin the behaviour whichever
+ * membership door the store uses.
+ */
+function rpcAnswer(value: unknown) {
+  const answer = {
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(value).then(resolve, reject),
+    order: () => answer,
+    range: () => Promise.resolve(value),
+  };
+  return answer;
+}
+
+function mockRpcAnswer(value: unknown) {
+  rpc.mockImplementation(() => rpcAnswer(value));
+}
+
+function mockMemberships(containerIds: string[], status = "active") {
   // In the order given = oldest first (created_at ascending).
-  rpc.mockResolvedValue({
+  mockRpcAnswer({
     data: containerIds.map((id, i) => ({
       container_id: id,
-      status: "active",
+      status,
       created_at: `2026-01-0${i + 1}T00:00:00Z`,
     })),
     error: null,
@@ -483,5 +502,138 @@ describe("the store — one state value, one persistent value", () => {
     const mod = await import("./active-org");
     await mod.listMemberOrganizations();
     expect(mod.getActiveOrganizationSnapshot().organization?.name).toBe("Renamed Org");
+  });
+});
+
+/**
+ * CHARACTERIZATION (2026-10-21, before the store moved onto @ai-matrx/auth's
+ * ladder and doors): the exact behaviour every consumer relies on — run green
+ * on the old code first, then on the shared implementation.
+ */
+describe("characterization — behaviour pinned across the move to @ai-matrx/auth", () => {
+  it("lists organizations oldest membership first, not by name, and rung 4 is the oldest", async () => {
+    mockMemberships(["org-z", "org-a"]);
+    mockOrganizationsTable([
+      { id: "org-a", name: "Alpha" },
+      { id: "org-z", name: "Zeta" },
+    ]);
+    const mod = await import("./active-org");
+    expect((await mod.listMemberOrganizations()).map((o) => o.id)).toEqual(["org-z", "org-a"]);
+    expect((await mod.resolveActiveOrganization())?.id).toBe("org-z");
+  });
+
+  it("organizations come back as { id, name } only", async () => {
+    mockMemberships(["org-1"]);
+    mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
+    const mod = await import("./active-org");
+    expect(await mod.listMemberOrganizations()).toEqual([{ id: "org-1", name: "Solo Org" }]);
+  });
+
+  it("ignores memberships that are not active", async () => {
+    mockMemberships(["org-1"], "invited");
+    mockOrganizationsTable([{ id: "org-1", name: "Solo Org" }]);
+    const mod = await import("./active-org");
+    expect(await mod.listMemberOrganizations()).toEqual([]);
+    expect(await mod.resolveActiveOrganization()).toBeNull();
+  });
+
+  it("a failed membership read throws its own words and leaves them on the snapshot", async () => {
+    mockRpcAnswer({ data: null, error: { message: "boom" } });
+    mockOrganizationsTable(TWO_ORGS);
+    const mod = await import("./active-org");
+    mod.getActiveOrganizationSnapshot(); // the window has seen its user
+    await expect(mod.resolveActiveOrganization()).rejects.toThrow("Could not read your organizations: boom");
+    expect(mod.getActiveOrganizationSnapshot().error).toBe("Could not read your organizations: boom");
+    expect(mod.getActiveOrganizationSnapshot().loading).toBe(false);
+    expect(mod.getActiveOrganizationSnapshot().organization).toBeNull();
+  });
+
+  it("a failed organizations-table read throws the same words", async () => {
+    mockMemberships(["org-1"]);
+    const inFn = vi.fn().mockResolvedValue({ data: null, error: { message: "denied" } });
+    from.mockImplementation(() => ({ select: vi.fn().mockReturnValue({ in: inFn }) }));
+    const mod = await import("./active-org");
+    await expect(mod.listMemberOrganizations()).rejects.toThrow("Could not read your organizations: denied");
+  });
+
+  it("the account read failure keeps its words", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    prefsMaybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    const mod = await import("./active-org");
+    await expect(mod.resolveActiveOrganization()).rejects.toThrow("Could not read your saved organization: boom");
+    expect(mod.getActiveOrganizationSnapshot().error).toBe("Could not read your saved organization: boom");
+  });
+
+  it("a held organization that is still a membership answers without reading the account", async () => {
+    seedStored("user-1", { id: "org-2", name: "Second Org" });
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    const mod = await import("./active-org");
+    expect((await mod.resolveActiveOrganization())?.id).toBe("org-2");
+    expect(prefsMaybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("a stale last active and stale start-up fall to the oldest membership", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    mockAccountChoice("org-gone", "org-also-gone");
+    const mod = await import("./active-org");
+    expect((await mod.resolveActiveOrganization())?.id).toBe("org-1");
+  });
+
+  it("a switch fires the change event; asking for the picker fires the picker event", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    const mod = await import("./active-org");
+    fakeWindow.seen.length = 0;
+    await mod.setActiveOrganization("org-2");
+    expect(fakeWindow.seen).toContain(mod.ACTIVE_ORGANIZATION_CHANGE_EVENT);
+    expect(mod.ACTIVE_ORGANIZATION_CHANGE_EVENT).toBe("matrx-local.active-organization.change");
+    mod.requestOrganizationPicker();
+    expect(fakeWindow.seen).toContain(mod.REQUEST_PICKER_EVENT);
+    expect(mod.REQUEST_PICKER_EVENT).toBe("matrx-local.active-organization.request-picker");
+  });
+
+  it("a switch saves last active through users.set_last_active_organization", async () => {
+    mockMemberships(["org-1", "org-2"]);
+    mockOrganizationsTable(TWO_ORGS);
+    const mod = await import("./active-org");
+    await mod.setActiveOrganization("org-2");
+    expect(schemaRpc).toHaveBeenCalledWith("set_last_active_organization", { p_organization_id: "org-2" });
+  });
+
+  it("clearing forgets this user's choice and tells the engine to forget", async () => {
+    seedStored("user-1", { id: "org-1", name: "First Org" });
+    const mod = await import("./active-org");
+    mod.getActiveOrganizationSnapshot();
+    mod.clearActiveOrganization();
+    expect(storedFor("user-1")).toBeUndefined();
+    expect(mod.getActiveOrganizationSnapshot().organization).toBeNull();
+    await vi.waitFor(() => expect(engineDelete).toHaveBeenCalledWith("/organization/active"));
+  });
+
+  it("requireActiveOrganizationId with zero memberships throws the typed no-memberships error", async () => {
+    mockMemberships([]);
+    mockOrganizationsTable([]);
+    const mod = await import("./active-org");
+    const err = await mod.requireActiveOrganizationId().catch((e: unknown) => e);
+    expect(mod.isOrganizationNoMembershipsError(err)).toBe(true);
+    expect(err).toBeInstanceOf(mod.OrganizationNoMembershipsError);
+    expect((err as Error).message).toBe("You do not belong to any organization yet.");
+    expect((err as { code: string }).code).toBe("organization_no_memberships");
+    expect((err as { remedy: string }).remedy).toContain("https://web.example.test/organizations");
+    expect((err as Error).name).toBe("OrganizationNoMembershipsError");
+  });
+
+  it("the not-selected error keeps its code, remedy, message and name", async () => {
+    const mod = await import("./active-org");
+    const err = new mod.OrganizationNotSelectedError();
+    expect(mod.isOrganizationNotSelectedError(err)).toBe(true);
+    expect(err.message).toBe("No organization is selected for this device.");
+    expect(err.code).toBe("organization_not_selected");
+    expect(err.remedy).toBe("Choose your organization in the top bar, then try again.");
+    expect(err.name).toBe("OrganizationNotSelectedError");
+    expect(err).toBeInstanceOf(Error);
   });
 });

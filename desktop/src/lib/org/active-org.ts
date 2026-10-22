@@ -41,7 +41,11 @@
  * the client states it, the server verifies membership.
  */
 
-import { resolveActiveOrganizationLazily as resolveLadder } from "@ai-matrx/auth/organizations";
+import {
+  readAccountOrganizationChoices,
+  resolveActiveOrganizationLazily as resolveLadder,
+  type AccountOrganizationChoices,
+} from "@ai-matrx/auth/organizations";
 import supabase from "@/lib/supabase";
 import { currentSession, getAuthedSession } from "@/lib/custodian";
 import { getAppRuntimeConfig } from "@/lib/app-config";
@@ -430,31 +434,18 @@ export async function republishActiveOrganizationToEngine(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 /**
- * THE ONLY READER of the account's two organization columns (STATE rules 12
- * and 14). A failed read throws — a guessed first organization would hide the
- * person's real last choice.
+ * The account's two organization columns, read through @ai-matrx/auth's one
+ * reader (STATE rules 12 and 14; it never touches `supabase.auth`). A failed
+ * read throws — a guessed first organization would hide the person's real
+ * last choice — in this window's own words, with the database's refusal.
  */
-async function readAccountOrganizationChoice(
-  userId: string,
-): Promise<{ lastActive: string | null; startup: string | null }> {
-  const { data, error } = await supabase
-    .schema("users")
-    .from("user_preferences")
-    .select("last_active_organization_id,startup_organization_id")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error) {
-    throw new Error(`Could not read your saved organization: ${error.message}`);
+async function readAccountOrganizationChoice(userId: string): Promise<AccountOrganizationChoices> {
+  try {
+    return await readAccountOrganizationChoices(supabase, userId);
+  } catch (error) {
+    const refusal = (error as { cause?: { message?: unknown } }).cause?.message;
+    throw new Error(`Could not read your saved organization: ${typeof refusal === "string" ? refusal : (error as Error).message}`);
   }
-  const row = (data ?? {}) as {
-    last_active_organization_id?: unknown;
-    startup_organization_id?: unknown;
-  };
-  const pick = (v: unknown) => (typeof v === "string" && v ? v : null);
-  return {
-    lastActive: pick(row.last_active_organization_id),
-    startup: pick(row.startup_organization_id),
-  };
 }
 
 let ladderInFlight: { userId: string; promise: Promise<MemberOrganization | null> } | null = null;
@@ -501,13 +492,7 @@ async function runLadder(userId: string): Promise<MemberOrganization | null> {
   const resolved = await resolveLadder({
     memberships: organizations,
     held,
-    readAccount: async () => {
-      const account = await readAccountOrganizationChoice(userId);
-      return {
-        lastActiveOrganizationId: account.lastActive,
-        startupOrganizationId: account.startup,
-      };
-    },
+    readAccount: () => readAccountOrganizationChoice(userId),
     first: async () => organizations[0] ?? null,
   });
   if (!resolved) return null;

@@ -5,10 +5,11 @@
  */
 
 import { ChatConversationRoom } from "@ai-matrx/chat/agents/components/chat/ChatConversationRoom";
-import { ChatHistorySidebar } from "@ai-matrx/chat/agents/components/chat/ChatHistorySidebar";
 import { ChatNewClient } from "@ai-matrx/chat/agents/components/chat/ChatNewClient";
 import { ChatRoomClient } from "@ai-matrx/chat/agents/components/chat/ChatRoomClient";
 import type { ChatHost } from "@ai-matrx/chat/host";
+import { ConversationSidebar } from "@ai-matrx/chat/sidebar/ConversationSidebar";
+import type { SidebarEntry } from "@ai-matrx/chat/sidebar/sidebar-buckets";
 import { ChatProvider, usePathname, useRouter } from "@ai-matrx/chat/host/react";
 import { Button } from "@ai-matrx/design-system";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -28,6 +29,26 @@ function ReplyNotice({ conversationId }: { conversationId: string }) {
   return <CodingReplyNotice state={state} className="shrink-0 px-4 pt-1" />;
 }
 
+/** The sidebar's entries have no page in this app: they open on the web, in the browser. */
+const WEB_ENTRY_PATH: Partial<Record<SidebarEntry, string>> = {
+  agents: "/agents",
+  "search-agents": "/agents",
+  "pinned-agents": "/agents",
+  workflows: "/workflows",
+  scheduled: "/schedules",
+  templates: "/chat/message-templates",
+  voice: "/chat/voice",
+  confidential: "/chat/new?confidential=1",
+  archived: "/trash",
+};
+
+function openEntryOnWeb(entry: SidebarEntry): boolean {
+  const path = WEB_ENTRY_PATH[entry];
+  if (!path) return false; // Favorites: the sidebar answers it itself (its Pinned section).
+  void window.open(`https://www.aimatrx.com${path}`, "_blank");
+  return true;
+}
+
 function Screens() {
   const pathname = usePathname();
   const router = useRouter();
@@ -39,13 +60,11 @@ function Screens() {
     <div data-package-chat="" className="flex h-full min-h-0 overflow-hidden">
       {historyOpen && (
         <div className="flex w-72 shrink-0 flex-col border-r border-border/60">
-          <ChatHistorySidebar
-            scopeId="matrx-local-cloud-chat"
-            openInPlace
+          <ConversationSidebar
             activeConversationId={conversationId}
-            onOpenConversation={(conversation) =>
-              router.push(`/chat/${conversation.conversationId}`)
-            }
+            onOpenConversation={(conversation) => router.push(`/chat/${conversation.id}`)}
+            onNew={() => router.push("/chat")}
+            onEntry={openEntryOnWeb}
             className="min-h-0 flex-1"
           />
         </div>

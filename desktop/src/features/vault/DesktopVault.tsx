@@ -7,6 +7,7 @@ import {
   locationFromParams,
   locationToParams,
   VaultApp,
+  type ApiVaultPortOptions,
   type VaultHostCapabilities,
   type VaultLocation,
 } from "@ai-matrx/vault";
@@ -22,6 +23,15 @@ import {
 } from "@/features/vault/host";
 
 const VAULT_PATH = "/vault";
+
+// The typed supabase client is the vault's state door; its generics are too deep for TS to
+// match against the door's structural type (TS2589), so it is handed over as the door type —
+// the same bridge the web app and the extension use. Same object at runtime.
+type VaultDoor = NonNullable<ApiVaultPortOptions["userState"]>;
+const vaultPortOptions = (): ApiVaultPortOptions => ({
+  userState: supabase as unknown as VaultDoor,
+  platformDoor: (supabase as unknown as { schema(name: "platform"): VaultDoor }).schema("platform"),
+});
 
 /** The address the workspace writes: everything `locationToParams` carries, plus the open item. */
 function hrefOf(loc: VaultLocation): string {
@@ -64,7 +74,7 @@ export function DesktopVault() {
     };
   }, []);
 
-  const port = useMemo(() => createApiVaultPort(desktopVaultApi(), { userState: supabase, platformDoor: supabase.schema("platform") }), []);
+  const port = useMemo(() => createApiVaultPort(desktopVaultApi(), vaultPortOptions()), []);
 
   const organizationId = organization?.id ?? null;
   const host = useMemo<VaultHostCapabilities>(() => {

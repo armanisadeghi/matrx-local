@@ -21,6 +21,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 export RELEASE_STAGE_CALLER_PWD="$PWD"
+# THE RELEASE PATH IS NEVER BLOCKED (Arman 2026-10-02): git hooks on this run's pushes report, never refuse.
+export MATRX_RELEASE_PATH=1
 
 NOTE="sync and release"
 if [[ $# -gt 0 && "$1" != --* && ! "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -45,18 +47,16 @@ else
     if [[ $SYNC_RC -ne 0 ]]; then
         echo ""
         echo "ship.sh: the sync did not finish (exit $SYNC_RC; its reason is printed above)."
-        echo "ship.sh: hosted release was not dispatched because origin/main may not contain the intended source."
+        echo "ship.sh: releasing origin/main anyway (the release path never blocks, Arman 2026-10-02); this checkout's unpushed commits are not in it."
+        python3 "$HOME/code/matrx-ship/scripts/release-scream.py" --repo matrx-local --where "ship.sh sync" \
+            --check "sync-main did not push (exit $SYNC_RC)" --detail "the hosted release ships origin/main without this checkout's local commits" || true
     fi
 fi
 
 # ── 2. release ───────────────────────────────────────────────────────────────
 echo ""
-if [[ $SYNC_RC -eq 0 ]]; then
-    bash "$RELEASE" --message "$NOTE" "$@"
-    RELEASE_RC=$?
-else
-    RELEASE_RC=$SYNC_RC
-fi
+bash "$RELEASE" --message "$NOTE" "$@"
+RELEASE_RC=$?
 
 # ── 3. open items ────────────────────────────────────────────────────────────
 echo ""

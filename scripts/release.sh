@@ -98,6 +98,15 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()      { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+# THE RELEASE PATH IS NEVER BLOCKED (Arman 2026-09-24 / 10-02 / 10-21: "report warnings and errors and
+# release"). A quality check that fails is REPORTED — a loud banner plus agent mail to the ship-all lanes
+# (matrx-ship/scripts/release-scream.py) — and the release continues. Only what makes the artifact
+# impossible to build (the frozen install, the sidecar, `tsc -b`, which IS the desktop build) still stops it.
+report_gate() {
+    echo -e "${RED}[RELEASE WARNING — RELEASING ANYWAY]${NC}  $*" >&2
+    local scream="$HOME/code/matrx-ship/scripts/release-scream.py"
+    [[ -f "$scream" ]] && python3 "$scream" --repo matrx-local --where "scripts/release.sh" --check "${*:0:80}" --detail "$*" || true
+}
 fail()    { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 preview() { echo -e "${YELLOW}[DRY]${NC}   $*"; }
 
@@ -835,8 +844,8 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     # still decides.
     for CATCHUP_ROUND in 1 2 3; do
         python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
-        (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
-        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || fail "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest, then --depth Infinity) failed (see above)."
+        (cd desktop && node scripts/await-matrx-latest.mjs) || report_gate "npm is not serving the latest @ai-matrx tarballs (see above); the catch-up was not attempted."
+        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || { git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml; (cd desktop && pnpm install --frozen-lockfile) || true; report_gate "The @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest, then --depth Infinity) failed (see above); the lockfile was restored to HEAD and the release continues on it."; break; }
         if (cd desktop && pnpm -s check:matrx-packages >/dev/null 2>&1); then break; fi
         [[ $CATCHUP_ROUND -lt 3 ]] && info "A newer @ai-matrx version landed during catch-up round $CATCHUP_ROUND; catching up again..."
     done
@@ -845,7 +854,7 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
     if [[ $IMPORTS_BEFORE -eq 0 ]] && ! (cd desktop && node scripts/check-matrx-imports.mjs 2>&1 | grep -v '^MATRX-ITEM' | tail -8 >&2; exit "${PIPESTATUS[0]}"); then
         git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml
         (cd desktop && pnpm install --frozen-lockfile) || true
-        fail "The @ai-matrx update breaks an import this repo uses (above), so it was rolled back (lockfile at HEAD). Fix the importers or restore the export in the package, then re-run."
+        report_gate "The @ai-matrx update breaks an import this repo uses (above), so it was rolled back (lockfile at HEAD); the release continues on the old lockfile. Fix the importers or restore the export in the package."
     fi
     if git diff --quiet -- desktop/pnpm-lock.yaml; then
         ok "The @ai-matrx lock graph was already current."
@@ -853,7 +862,8 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
         UNEXPECTED_CATCHUP="$(git status --porcelain | awk '$2 != "desktop/pnpm-lock.yaml" { print }')"
         if [[ -n "$UNEXPECTED_CATCHUP" ]]; then
             echo "$UNEXPECTED_CATCHUP" >&2
-            fail "The @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); that needs consumer adoption, not automation."
+            report_gate "The @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); that needs consumer adoption, not automation. Those files were restored; the release continues."
+            git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml; (cd desktop && pnpm install --frozen-lockfile) || true
         fi
         git add desktop/pnpm-lock.yaml
         git commit -q -m "chore(deps): every @ai-matrx package to npm latest [skip actions]"
@@ -874,19 +884,22 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
 
         info "A newer @ai-matrx version landed after import validation; refreshing before the final gate (round $FINAL_CATCHUP_ROUND)..."
         python3 scripts/sync-main.py --wait-for-publish-train 2>&1 | tail -1
-        (cd desktop && node scripts/await-matrx-latest.mjs) || fail "npm is not serving the latest @ai-matrx tarballs (see above); the final catch-up was not attempted."
-        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || fail "The final @ai-matrx catch-up (pnpm update -r \"@ai-matrx/*\" --latest, then --depth Infinity) failed (see above)."
+        (cd desktop && node scripts/await-matrx-latest.mjs) || report_gate "npm is not serving the latest @ai-matrx tarballs (see above); the final catch-up was not attempted."
+        (cd desktop && pnpm update -r "@ai-matrx/*" --latest && pnpm update -r "@ai-matrx/*" --depth Infinity) || { git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml; (cd desktop && pnpm install --frozen-lockfile) || true; report_gate "The final @ai-matrx catch-up failed (see above); the lockfile was restored to HEAD and the release continues on it."; break; }
 
         if [[ $IMPORTS_BEFORE -eq 0 ]] && ! (cd desktop && node scripts/check-matrx-imports.mjs 2>&1 | grep -v '^MATRX-ITEM' | tail -8 >&2; exit "${PIPESTATUS[0]}"); then
             git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml
             (cd desktop && pnpm install --frozen-lockfile) || true
-            fail "The final @ai-matrx update breaks an import this repo uses (above); the lockfile was restored to HEAD."
+            report_gate "The final @ai-matrx update breaks an import this repo uses (above); the lockfile was restored to HEAD and the release continues on it."
+            break
         fi
 
         UNEXPECTED_FINAL_CATCHUP="$(git status --porcelain | awk '$2 != "desktop/pnpm-lock.yaml" { print }')"
         if [[ -n "$UNEXPECTED_FINAL_CATCHUP" ]]; then
             echo "$UNEXPECTED_FINAL_CATCHUP" >&2
-            fail "The final @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); that needs consumer adoption, not automation."
+            git checkout HEAD -- desktop/package.json desktop/pnpm-lock.yaml; (cd desktop && pnpm install --frozen-lockfile) || true
+            report_gate "The final @ai-matrx catch-up changed files other than desktop/pnpm-lock.yaml (above); restored, the release continues."
+            break
         fi
         if ! git diff --quiet -- desktop/pnpm-lock.yaml; then
             git add desktop/pnpm-lock.yaml
@@ -894,31 +907,31 @@ if [[ "${RELEASE_REFRESH_MATRX_PACKAGES:-false}" == "true" ]]; then
             ok "Committed the final @ai-matrx lock catch-up; it is pushed with the release commit."
         fi
     done
-    [[ "$FINAL_PACKAGE_GATE_PASSED" == "true" ]] || fail "@ai-matrx packages remained stale or pinned after three final gate checks (see above)."
+    [[ "$FINAL_PACKAGE_GATE_PASSED" == "true" ]] || report_gate "@ai-matrx packages remained stale or pinned after three final gate checks (see above)."
 else
-    (cd desktop && pnpm check:matrx-packages) || fail "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
+    (cd desktop && pnpm check:matrx-packages) || report_gate "@ai-matrx packages are stale or pinned (see above). Run 'pnpm sync:matrx-packages' in desktop/, adopt each new version's CHANGELOG 'Consumer action', commit desktop/package.json + desktop/pnpm-lock.yaml, then re-run. Catch-up work for this repo is also queued on the Autonomous Work Loop (campaign package-catch-up)."
 fi
 # Package logic is NEVER duplicated outside the package: a local re-definition of a
 # collapsed @ai-matrx export is a release blocker. Self-test first so a green strict
 # run means the guard can actually fail.
-(cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || fail "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
+(cd desktop && pnpm check:package-twins:self-test && pnpm check:package-twins) || report_gate "A collapsed @ai-matrx export has been re-defined locally (see above). Import it from the package and delete the twin; register the file under 'allow' in desktop/scripts/package-twins.json ONLY with a written reason."
 # Native browser confirmations block the renderer and bypass the app's dialog
 # stack. The package opener plus one host per React root is the only approved
 # path; run the self-test first so this release gate proves it can fail.
-(cd desktop && pnpm check:native-confirm:self-test && pnpm check:native-confirm) || fail "A native browser confirm is back in desktop/src. Import confirm from @ai-matrx/kit/confirm-opener and use the mounted ConfirmDialogHost."
+(cd desktop && pnpm check:native-confirm:self-test && pnpm check:native-confirm) || report_gate "A native browser confirm is back in desktop/src. Import confirm from @ai-matrx/kit/confirm-opener and use the mounted ConfirmDialogHost."
 # THERE IS ONE AGENT PICKER (ruling D1) and matrx-local is NEVER an exception
 # (ruling D4). This desktop shipped a 912-line hand-rolled AgentPicker with its
 # own sorts, filters and a hardcoded default-agent NAME; the guard is what stops
 # that class returning. Self-test first so a green run means it can fail.
-(cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || fail "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
+(cd desktop && pnpm check:canonical-pickers:self-test && pnpm check:canonical-pickers) || report_gate "An alternate agent picker (or a direct agx_get_list_full / agx_search read) is back in desktop/src (see above). Render AgentListDropdown / AgentListInlinePicker from @ai-matrx/agents/catalog/react and take onSelect(agentId)."
 
 # THE ORGANIZATION IS WHAT THE USER SET — never a saved default, never the
 # personal org (Arman, 2026-09-19).
-(cd desktop && pnpm check:org-default-ban:self-test && pnpm check:org-default-ban) || fail "A default organization is back (see above). Nothing that builds a request may read a saved default-organization preference, and the personal org is never a fallback. With nothing SET on this device, HOLD the request, show the picker, and continue once the user picks: desktop/src/lib/org/active-org.ts and app/services/aidream/organization.py."
+(cd desktop && pnpm check:org-default-ban:self-test && pnpm check:org-default-ban) || report_gate "A default organization is back (see above). Nothing that builds a request may read a saved default-organization preference, and the personal org is never a fallback. With nothing SET on this device, HOLD the request, show the picker, and continue once the user picks: desktop/src/lib/org/active-org.ts and app/services/aidream/organization.py."
 # EVERY INTELLIGENCE RUNS THROUGH A MANDATE — no platform prompt lives in
 # desktop code (mandates STATE.md §9). PIPELINE_TEMPLATES shipped six system
 # prompts here until they became the local.* mandates' Holders (2026-09-25).
-(cd desktop && pnpm check:code-prompts:self-test && pnpm check:code-prompts) || fail "A platform prompt is written into desktop code (see above). Declare a mandate in aidream (client_mandates.py), seed its Holder with the prompt, and run it through useLlmPipeline / resolveLocalMandate (desktop/src/lib/local-mandates.ts)."
+(cd desktop && pnpm check:code-prompts:self-test && pnpm check:code-prompts) || report_gate "A platform prompt is written into desktop code (see above). Declare a mandate in aidream (client_mandates.py), seed its Holder with the prompt, and run it through useLlmPipeline / resolveLocalMandate (desktop/src/lib/local-mandates.ts)."
 # THE ARCHIVED-ITEMS LAW (Arman, 2026-09-09 —
 # ../common-docs/policies/archived-items.md): every list over an entity that can
 # be archived carries an archive filter, the default hides archived, revealing
@@ -926,7 +939,7 @@ fi
 # the plumbing built end to end and NOTHING setting it, so 1,671 archived Claude
 # sessions rendered mixed in with live ones. Self-test first so a green run
 # means the detector can still fail.
-(cd desktop && pnpm check:archived-items-law:self-test && pnpm check:archived-items-law) || fail "A list hides archived rows with no way to reveal them (see above). Agent lists use @ai-matrx/agents/catalog's archFilter; anything else uses the tri-state ArchiveFilter with its value passed to the READER (the engine's archived=, the SQLite clause) — three states, never a boolean."
+(cd desktop && pnpm check:archived-items-law:self-test && pnpm check:archived-items-law) || report_gate "A list hides archived rows with no way to reveal them (see above). Agent lists use @ai-matrx/agents/catalog's archFilter; anything else uses the tri-state ArchiveFilter with its value passed to the READER (the engine's archived=, the SQLite clause) — three states, never a boolean."
 ok "@ai-matrx packages are npm latest; the one agent picker holds; archived items are reachable."
 
 # ── Tool registry drift signal (loud, deliberately non-blocking) ─────────────
@@ -999,13 +1012,13 @@ mandate_scan_step || true
 # so a green run means the detector can still fail.
 info "Checking the mirror snapshot against the live cloud schema..."
 uv run --frozen python scripts/check_mirror_snapshot_drift.py --self-test \
-    || fail "The mirror snapshot drift detector cannot detect drift — fix scripts/check_mirror_snapshot_drift.py before releasing."
+    || report_gate "The mirror snapshot drift detector cannot detect drift — fix scripts/check_mirror_snapshot_drift.py before releasing."
 if uv run --frozen python scripts/check_mirror_snapshot_drift.py; then
     ok "The mirror snapshot knows every column the cloud sends."
 else
     mirror_snapshot_status=$?
     if [ "$mirror_snapshot_status" -eq 1 ]; then
-        fail "Confirmed mirror snapshot drift — cloud values in those columns would be dropped locally. Refresh the snapshot before releasing."
+        report_gate "Confirmed mirror snapshot drift — cloud values in those columns would be dropped locally. Refresh the snapshot before releasing."
     fi
     warn "The mirror snapshot check was incomplete (for example, no readable row). Release continues without claiming the snapshot is current."
 fi
@@ -1029,7 +1042,7 @@ fi
 # copies required by their respective toolchains; never begin a release from a
 # drifted tree.
 info "Checking release version manifests agree with pyproject.toml..."
-./scripts/check-version-sync.sh || fail "Version manifests have drifted. Sync them before releasing."
+./scripts/check-version-sync.sh || report_gate "Version manifests have drifted. Sync them before releasing."
 ok "Version manifests are synchronized."
 
 # ── TypeScript type-check ────────────────────────────────────────────────────

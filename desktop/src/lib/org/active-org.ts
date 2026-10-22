@@ -41,6 +41,7 @@
  * the client states it, the server verifies membership.
  */
 
+import { resolveActiveOrganizationLazily as resolveLadder } from "@ai-matrx/auth/organizations";
 import supabase from "@/lib/supabase";
 import { currentSession, getAuthedSession } from "@/lib/custodian";
 import { getAppRuntimeConfig } from "@/lib/app-config";
@@ -486,27 +487,40 @@ async function runLadder(userId: string): Promise<MemberOrganization | null> {
   if (organizations.length === 0) return null;
   const byId = new Map(organizations.map((o) => [o.id, o]));
 
-  // 1. This device's own last choice.
+  // Rung 1's input: this device's own last choice. A selection that survived
+  // losing the membership is dropped rather than sent to a server that will
+  // refuse it.
   const stored = readStoredSelection(userId);
-  if (stored) {
-    const match = byId.get(stored.id);
-    if (match) {
-      if (snapshot.organization?.id !== match.id || snapshot.userId !== userId) {
-        writeStoredSelection(userId, match);
-      }
-      return match;
+  const held = stored && byId.has(stored.id) ? stored.id : null;
+  if (stored && !held) writeStoredSelection(userId, null);
+
+  // THE LADDER is @ai-matrx/auth's (one ladder for every app): held → the
+  // account's last active → its start-up organization → the first. The
+  // account is read only when the device choice does not answer; this file's
+  // reads stay the inputs (memberships oldest-first, so rung 4 is the head).
+  const resolved = await resolveLadder({
+    memberships: organizations,
+    held,
+    readAccount: async () => {
+      const account = await readAccountOrganizationChoice(userId);
+      return {
+        lastActiveOrganizationId: account.lastActive,
+        startupOrganizationId: account.startup,
+      };
+    },
+    first: async () => organizations[0] ?? null,
+  });
+  if (!resolved) return null;
+
+  if (resolved.rung === "held") {
+    const match = resolved.organization;
+    if (snapshot.organization?.id !== match.id || snapshot.userId !== userId) {
+      writeStoredSelection(userId, match);
     }
-    // Selection survived losing the membership — drop it rather than send an
-    // organization the server will refuse.
-    writeStoredSelection(userId, null);
+    return match;
   }
 
-  // 2-4. The account's last active, its start-up organization, the first.
-  const account = await readAccountOrganizationChoice(userId);
-  const chosen =
-    (account.lastActive ? byId.get(account.lastActive) : undefined) ??
-    (account.startup ? byId.get(account.startup) : undefined) ??
-    (organizations[0] as MemberOrganization);
+  const chosen = resolved.organization;
   // In memory only: shown and carried by requests, never stored as a device
   // choice. The window SHOWS this organization, so the engine acts in it too —
   // pushed as the window's active organization, so nobody is asked about it.

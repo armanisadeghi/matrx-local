@@ -35,8 +35,59 @@ const EXPECTED_IN_BROWSER_MODE = [
   /Failed to fetch/i,
 ];
 
+/**
+ * Engine discovery (`src/lib/api.ts` `discover()`) probes `http://127.0.0.1:<port>/health` across
+ * the build's scan band (`src/lib/engine-ports.ts`: live 22140, dev/harness 22240, or an isolated
+ * smoke base; 20 ports each). When ANY app instance is listening on one of those ports — e.g. the
+ * owner's installed app on 22140 — the browser-mode page gets a CORS refusal instead of a
+ * connection refusal. That is the same expected probe noise, so it is allowed for EXACTLY those
+ * probe URLs. A CORS error on any other URL (or any other path on an engine port) still fails.
+ */
+const ENGINE_PORT_SCAN = 20;
+const ENGINE_PORT_BASES = [22140, 22240, Number(process.env.VITE_MATRX_TEST_ENGINE_PORT_BASE)].filter(
+  (base) => Number.isInteger(base) && base > 0,
+);
+const ENGINE_PROBE_CORS =
+  /^Access to fetch at 'http:\/\/127\.0\.0\.1:(\d+)\/health' from origin '[^']+' has been blocked by CORS policy\b/;
+
+function isEngineProbeCorsRefusal(text: string): boolean {
+  const match = ENGINE_PROBE_CORS.exec(text);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return ENGINE_PORT_BASES.some((base) => port >= base && port < base + ENGINE_PORT_SCAN);
+}
+
 const isExpected = (text: string): boolean =>
-  EXPECTED_IN_BROWSER_MODE.some((re) => re.test(text));
+  EXPECTED_IN_BROWSER_MODE.some((re) => re.test(text)) || isEngineProbeCorsRefusal(text);
+
+test.describe("engine-probe CORS allowlist", () => {
+  const cors = (url: string) =>
+    `Access to fetch at '${url}' from origin 'http://localhost:1420' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.`;
+
+  test("allows a CORS refusal from an engine-port /health probe", () => {
+    for (const url of [
+      "http://127.0.0.1:22140/health",
+      "http://127.0.0.1:22159/health",
+      "http://127.0.0.1:22240/health",
+      "http://127.0.0.1:22259/health",
+    ]) {
+      expect(isExpected(cors(url)), url).toBe(true);
+    }
+  });
+
+  test("still fails a CORS refusal anywhere else", () => {
+    for (const url of [
+      "http://127.0.0.1:22160/health", // outside the live band
+      "http://127.0.0.1:22239/health", // just below the dev band
+      "http://127.0.0.1:22140/tools", // engine port, not the probe path
+      "http://127.0.0.1:22140/health/deep", // not exactly the probe URL
+      "http://localhost:22140/health", // not the probe host
+      "https://server.app.matrxserver.com/health", // a real backend
+    ]) {
+      expect(isExpected(cors(url)), url).toBe(false);
+    }
+  });
+});
 
 /**
  * Attach console/pageerror listeners BEFORE the first navigation and return a

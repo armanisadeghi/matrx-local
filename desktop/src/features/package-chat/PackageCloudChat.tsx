@@ -9,7 +9,7 @@ import { ChatNewClient } from "@ai-matrx/chat/agents/components/chat/ChatNewClie
 import { ChatRoomClient } from "@ai-matrx/chat/agents/components/chat/ChatRoomClient";
 import type { ChatHost } from "@ai-matrx/chat/host";
 import { ConversationSidebar } from "@ai-matrx/chat/sidebar/ConversationSidebar";
-import type { SidebarEntry } from "@ai-matrx/chat/sidebar/sidebar-buckets";
+import { entryWebUrl, type SidebarEntry } from "@ai-matrx/chat/sidebar/sidebar-buckets";
 import { ChatProvider, usePathname, useRouter } from "@ai-matrx/chat/host/react";
 import { Button } from "@ai-matrx/design-system";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -29,23 +29,11 @@ function ReplyNotice({ conversationId }: { conversationId: string }) {
   return <CodingReplyNotice state={state} className="shrink-0 px-4 pt-1" />;
 }
 
-/** The sidebar's entries have no page in this app: they open on the web, in the browser. */
-const WEB_ENTRY_PATH: Partial<Record<SidebarEntry, string>> = {
-  agents: "/agents",
-  "search-agents": "/agents",
-  "pinned-agents": "/agents",
-  workflows: "/workflows",
-  scheduled: "/schedules",
-  templates: "/chat/message-templates",
-  voice: "/chat/voice",
-  confidential: "/chat/new?confidential=1",
-  archived: "/trash",
-};
-
+/** The sidebar's entries have no page in this app: they open on the web (the package's one entry map), in the browser. */
 function openEntryOnWeb(entry: SidebarEntry): boolean {
-  const path = WEB_ENTRY_PATH[entry];
-  if (!path) return false; // Favorites: the sidebar answers it itself (its Pinned section).
-  void window.open(`https://www.aimatrx.com${path}`, "_blank");
+  const url = entryWebUrl(entry, "https://www.aimatrx.com");
+  if (!url) return false; // Favorites: the sidebar answers it itself (its Pinned section).
+  void window.open(url, "_blank");
   return true;
 }
 

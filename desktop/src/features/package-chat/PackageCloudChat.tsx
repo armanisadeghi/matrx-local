@@ -9,7 +9,7 @@ import { ChatNewClient } from "@ai-matrx/chat/agents/components/chat/ChatNewClie
 import { ChatRoomClient } from "@ai-matrx/chat/agents/components/chat/ChatRoomClient";
 import type { ChatHost } from "@ai-matrx/chat/host";
 import { ConversationSidebar } from "@ai-matrx/chat/sidebar/ConversationSidebar";
-import { entryWebUrl, type SidebarEntry } from "@ai-matrx/chat/sidebar/sidebar-buckets";
+import { openSidebarEntryOnWeb, type SidebarEntry } from "@ai-matrx/chat/sidebar/sidebar-buckets";
 import { ChatProvider, usePathname, useRouter } from "@ai-matrx/chat/host/react";
 import { Button } from "@ai-matrx/design-system";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -17,6 +17,8 @@ import { useEffect, useState } from "react";
 import { CodingReplyNotice } from "@ai-matrx/chat/agents/coding-session-reply/CodingReplyNotice";
 import { useCodingReplyResponder } from "@ai-matrx/chat/agents/coding-session-reply/useCodingReplyResponder";
 import { useChatServerResponderRead } from "@ai-matrx/chat/agents/coding-session-reply/useChatServerResponderRead";
+import { openExternal } from "@/lib/open-external";
+import { getToken } from "@/lib/custodian";
 import { registerDesktopToolRenderers } from "./desktop-tool-renderers";
 import { createDesktopChatHost } from "./host";
 
@@ -29,12 +31,9 @@ function ReplyNotice({ conversationId }: { conversationId: string }) {
   return <CodingReplyNotice state={state} className="shrink-0 px-4 pt-1" />;
 }
 
-/** The sidebar's entries have no page in this app: they open on the web (the package's one entry map), in the browser. */
-function openEntryOnWeb(entry: SidebarEntry): boolean {
-  const url = entryWebUrl(entry, "https://www.aimatrx.com");
-  if (!url) return false; // Favorites: the sidebar answers it itself (its Pinned section).
-  void window.open(url, "_blank");
-  return true;
+/** The sidebar's entries have no page in this app: they open on the web (the package's one entry map), in the browser. A browser that cannot open is the sidebar's one status line. */
+function openEntryOnWeb(entry: SidebarEntry) {
+  return openSidebarEntryOnWeb(entry, "https://www.aimatrx.com", (url) => openExternal(url));
 }
 
 function Screens() {
@@ -109,11 +108,32 @@ export function PackageCloudChat({ conversationId }: { conversationId?: string |
       live = false;
     };
   }, [conversationId]);
+  // No token from this computer's background service = nothing can load from the cloud: say so, never a blank transcript.
+  const [signedOut, setSignedOut] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void getToken().then(
+      (token) => live && setSignedOut(!token),
+      () => live && setSignedOut(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, [conversationId]);
   if (error) return <p className="p-3 text-sm text-destructive">Chat could not start: {error}</p>;
   if (!host) return null;
   return (
     <ChatProvider host={host}>
-      <Screens />
+      <div className="flex h-full min-h-0 flex-col">
+        {signedOut && (
+          <p className="shrink-0 px-3 py-1 text-sm text-destructive" role="status">
+            Matrx Local is not signed in here (its background service gave no sign-in), so conversations cannot load. Start Matrx Local and sign in.
+          </p>
+        )}
+        <div className="min-h-0 flex-1">
+          <Screens />
+        </div>
+      </div>
     </ChatProvider>
   );
 }

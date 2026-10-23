@@ -243,8 +243,7 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
   every error gets a home, then the inbox is cleared.
 - [.matrx/ARMAN_TASKS.md](.matrx/ARMAN_TASKS.md) — ask-Arman blockers only (verify
   still real first). User grants (OS permissions, their own keys) are never Arman
-  tasks — the app guides the user. `.arman/` is Arman-private: never read, write, or
-  list it. Maintenance: `/task-hygiene`.
+  tasks — the app guides the user. Maintenance: `/task-hygiene`.
 - Never let a discovered issue go untracked; never invent approved tasks.
 
 ## Working style

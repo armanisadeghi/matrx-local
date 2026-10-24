@@ -119,6 +119,8 @@ export const desktopVaultIdentity: VaultIdentity = {
     const fresh = waitForFreshToken(claims.sub, claims.iat ?? 0, before.since);
     await signIn();
     await fresh;
+    // Confirmed in place: the gate closes and reruns the refused call (else it asks forever).
+    return "confirmed" as const;
   },
   withPassword() {
     return Promise.reject(new Error("Confirm in your browser instead."));

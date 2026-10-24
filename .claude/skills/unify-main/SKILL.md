@@ -18,8 +18,8 @@ description: The standing order for local git state in every AI Matrx repo — z
 1. **Commit your own paths, locally and often, by pathspec** (`git commit -m "<message>" -- <your paths>`) as
    soon as your code won't crash the app. Never `git add -A` / `git commit -a`: a stale index put the app
    version back on 2026-09-24. Whatever you leave uncommitted is not lost; the sync commits and ships it.
-   Push is constant: `./ship.sh` pushes for everyone, and changed `@ai-matrx` packages
-   are published at once.
+   Push is constant: `./ship.sh` pushes for everyone; apps inside aidream build changed `@ai-matrx`
+   packages from source, and outside apps get them from a daily npm publish.
 2. **Never run tree-wide destructive or stashing git in a shared checkout:** any `git stash`,
    `pull --rebase --autostash`, `checkout -- .`, `reset --hard`, `clean`, dirty `pull --rebase`. Other
    sessions' uncommitted work rides the stash and is lost. Pathspec-scope every such operation to your own
@@ -42,7 +42,8 @@ description: The standing order for local git state in every AI Matrx repo — z
 7. **A plumbing or private-index commit is proven against what is pushed.** Before committing a shared file,
    `git diff HEAD -- <file>` and confirm every hunk is yours; before reporting done, prove every symbol the
    commit imports exists in the pushed tree (`git archive <commit>` into scratch, then import-test or
-   type-check the touched files).
+   type-check the touched files). In matrx-frontend, first run
+   `node scripts/check-staged-imports.mjs --index "$GIT_INDEX_FILE"`: hooks never see a temp index.
 <!-- rules:stamp-end -->
 
 Arman, 2026-09-20: *"There is no reason for ever having a worktree. Updates should always be made to the single source of truth that is pushed live every 30 minutes or less. Everyone sees the same thing. Branches are ok for remote but not for local. They're forbidden."* Two full days of programming were lost when one release was missed and worktrees piled up. This skill exists so that never happens again, and so an agent with no way to reach Arman still knows exactly what to do.

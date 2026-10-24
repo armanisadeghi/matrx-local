@@ -75,8 +75,8 @@ the code comment and `FEATURE.md` are for.
    `text-gray-*`: a label must look different from the action it names, in light AND dark (the
    2026-10-14 "gray on gray on gray" menu). Table: the style guide's Color section.
 9. **See it rendered, then check it.** In matrx-frontend run
-   `pnpm check:interface-text --changed` before committing; any other repo:
-   `node ../matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. --changed`.
+   `pnpm check:interface-text --changed` before committing; from any other app's folder:
+   `node <aidream>/apps/matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. --changed`.
    Every `NOVEL` line on your diff is fixed before commit.
 
 ## Rationalizations

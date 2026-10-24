@@ -15,7 +15,7 @@ the validator passes.
 ## 1. Get your units
 
 ```bash
-# matrx-frontend (another repo: node ../matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. …)
+# apps/matrx-frontend (another app: node <aidream>/apps/matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. …)
 node scripts/interface-text/check-interface-text.mjs <slice paths...> --units > <run>/units.json
 ```
 

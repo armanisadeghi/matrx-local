@@ -181,7 +181,7 @@ export function AddCustomModelDialog({
               </div>
               {proposal.entry.requires_hf_token && (
                 <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-600 dark:text-amber-400">
-                  <KeyRound className="matrx-line-icon-sm h-3.5 w-3.5" />
+                  <KeyRound className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
                   This is a gated model — it needs your Hugging Face token
                   (Settings → API Keys).
                 </div>
@@ -193,7 +193,7 @@ export function AddCustomModelDialog({
                       key={w}
                       className="flex items-start gap-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400"
                     >
-                      <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
+                      <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
                       {w}
                     </p>
                   ))}
@@ -238,7 +238,7 @@ export function AddCustomModelDialog({
 
           {!proposal && !error && !inspecting && (
             <div className="flex items-start gap-2 rounded-md border border-dashed px-3 py-2.5 text-[11px] text-muted-foreground">
-              <PackagePlus className="matrx-line-icon-sm h-3.5 w-3.5" />
+              <PackagePlus className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
               Checkpoints from the community vary in quality and licensing —
               we&apos;ll surface any warnings here before you confirm.
             </div>

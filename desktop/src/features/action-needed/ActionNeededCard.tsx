@@ -46,7 +46,7 @@ export function ActionNeededCard({
       role="status"
       data-action-needed={item.fingerprint}
     >
-      <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400" />
+      <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-600 dark:text-amber-400" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{item.title}</p>
         <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">

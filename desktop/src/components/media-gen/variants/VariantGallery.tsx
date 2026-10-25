@@ -456,7 +456,7 @@ export function VariantGallery() {
                         videoStatus &&
                         !videoStatus.hardware_supported && (
                           <p className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-[11px] text-muted-foreground">
-                            <AlertCircle className="matrx-line-icon-xs h-3 w-3 text-amber-500" />
+                            <AlertCircle className="matrx-line-icon-xs h-3 w-3 mt-0.5 text-amber-500" />
                             {videoStatus.hardware_reason ??
                               "Video generation is not supported on this hardware."}
                           </p>

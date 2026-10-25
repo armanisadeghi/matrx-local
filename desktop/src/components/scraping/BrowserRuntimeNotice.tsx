@@ -35,7 +35,7 @@ export function BrowserRuntimeNotice() {
         data-testid="browser-runtime-status-unavailable"
       >
         <div className="flex items-start gap-3">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-600 dark:text-amber-400" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">Couldn’t refresh the built-in browser status</p>
             <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">
@@ -64,7 +64,7 @@ export function BrowserRuntimeNotice() {
         data-testid="browser-runtime-notice"
       >
         <div className="flex items-start gap-3">
-          <Loader2 className="matrx-line-icon h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
+          <Loader2 className="matrx-line-icon h-4 w-4 mt-0.5 animate-spin text-amber-600 dark:text-amber-400" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">The built-in browser is still starting</p>
             <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-100/75">
@@ -84,7 +84,7 @@ export function BrowserRuntimeNotice() {
       data-testid="browser-runtime-notice"
     >
       <div className="flex items-start gap-3">
-        <Chrome className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400" />
+        <Chrome className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-600 dark:text-amber-400" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">
             {installing ? "Downloading the built-in browser" : buildMismatch

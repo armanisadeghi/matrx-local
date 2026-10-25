@@ -279,7 +279,7 @@ export function UsageTab({ snapshot }: UsageTabProps) {
           role="alert"
           data-testid="usage-error"
         >
-          <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
+          <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-destructive" />
           <div>
             <p className="font-medium">Couldn't read {providerLabel(provider)} usage</p>
             <p className="mt-1 font-mono text-xs text-muted-foreground">{error}</p>

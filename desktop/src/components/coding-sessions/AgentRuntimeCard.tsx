@@ -159,7 +159,7 @@ export function AgentRuntimeCard() {
       <CardContent className="space-y-4">
         {error && (
           <div className="flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
-            <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
+            <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-destructive" />
             <span>{error}</span>
           </div>
         )}
@@ -173,7 +173,7 @@ export function AgentRuntimeCard() {
 
         {capabilities && !capabilities.available && (
           <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-            <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
+            <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-600" />
             <div>
               <div className="font-medium">Runtime setup needs attention</div>
               <ul className="mt-1 list-disc pl-5">

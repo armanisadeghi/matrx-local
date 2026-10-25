@@ -200,7 +200,7 @@ function SpeakTab({
 
       {state.error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500" />
           <div className="flex-1">
             <p className="text-sm text-red-700 dark:text-red-400">{state.error}</p>
           </div>
@@ -1111,7 +1111,7 @@ function BlendTab({
 
       {error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500 text-sm" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500 text-sm" />
           <p className="flex-1 text-sm text-red-700 dark:text-red-400">{error}</p>
           <button
             onClick={() => setError(null)}
@@ -1510,7 +1510,7 @@ function ImportVoicesTab({
 
       {error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500 text-sm" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500 text-sm" />
           <p className="flex-1 text-sm text-red-700 dark:text-red-400">{error}</p>
           <button
             onClick={() => setError(null)}

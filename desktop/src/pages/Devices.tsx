@@ -236,7 +236,7 @@ function PermissionAlert({ perm }: { perm: PermissionInfo | null }) {
 
   return (
     <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-      <AlertCircle className="matrx-line-icon h-4 w-4 text-amber-500" />
+      <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-500" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-amber-500">
           {isFirstUse ? "Approved on first use" : "Permission Required"}
@@ -1719,7 +1719,7 @@ function LocationCard({ perm }: { perm: PermissionInfo | null }) {
       {location?.available === true && lat !== null && lon !== null ? (
         <div className="rounded-lg border bg-background p-4">
           <div className="flex items-start gap-3">
-            <MapPin className="matrx-line-icon-lg h-5 w-5 text-primary" />
+            <MapPin className="matrx-line-icon-lg h-5 w-5 mt-0.5 text-primary" />
             <div className="space-y-1">
               <p className="text-sm font-semibold">
                 {lat.toFixed(6)}, {lon.toFixed(6)}
@@ -2127,7 +2127,7 @@ export function Devices({ engineStatus }: DevicesProps) {
                   className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3"
                   role="alert"
                 >
-                  <AlertCircle className="matrx-line-icon h-4 w-4 text-amber-500 text-xs" />
+                  <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-500 text-xs" />
                   <p className="text-xs text-muted-foreground">
                     {lastRefresh
                       ? "Couldn’t refresh device capabilities. Showing the last checked results; use Refresh All to try again."

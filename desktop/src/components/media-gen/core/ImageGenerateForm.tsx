@@ -79,7 +79,7 @@ export function ImageRevisionBanner({ ctl }: { ctl: ImageGenController }) {
   const isInstructionEdit = ctl.model?.pipeline_type === "flux2-klein";
   return (
     <div className="flex items-start gap-3 rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2.5">
-      <GitBranch className="matrx-line-icon h-4 w-4 text-violet-500" />
+      <GitBranch className="matrx-line-icon h-4 w-4 mt-0.5 text-violet-500" />
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium">Revision branch</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -554,7 +554,7 @@ export function AlternativeTextEncodersSection({
             </button>
             {retryable && (
               <div className="flex items-start gap-2 border-t px-3 py-2 text-[11px] text-destructive">
-                <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
+                <AlertCircle className="matrx-line-icon-xs h-3 w-3 mt-0.5" />
                 <span className="min-w-0 flex-1 break-words">
                   {download?.error_msg ??
                     (download?.status === "cancelled"

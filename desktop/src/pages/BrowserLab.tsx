@@ -130,7 +130,7 @@ export function BrowserLab() {
                             <ul className="space-y-0.5">
                                 {active.pros.map((p) => (
                                     <li key={p} className="flex items-start gap-1.5 text-[11px] text-foreground/75">
-                                        <ChevronRight className="matrx-line-icon-xs h-3 w-3 text-emerald-500" />
+                                        <ChevronRight className="matrx-line-icon-xs h-3 w-3 mt-0.5 text-emerald-500" />
                                         {p}
                                     </li>
                                 ))}
@@ -143,7 +143,7 @@ export function BrowserLab() {
                             <ul className="space-y-0.5">
                                 {active.cons.map((c) => (
                                     <li key={c} className="flex items-start gap-1.5 text-[11px] text-foreground/75">
-                                        <ChevronRight className="matrx-line-icon-xs h-3 w-3 text-destructive/70" />
+                                        <ChevronRight className="matrx-line-icon-xs h-3 w-3 mt-0.5 text-destructive/70" />
                                         {c}
                                     </li>
                                 ))}

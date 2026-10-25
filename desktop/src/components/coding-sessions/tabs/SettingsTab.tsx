@@ -213,7 +213,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
             className="flex items-start gap-3 border-b border-destructive/40 bg-destructive/10 p-4 text-sm"
             role="alert"
           >
-            <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
+            <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-destructive" />
             <div>
               <p className="font-medium">Couldn't read the artifacts lane</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground">{snapshot.artifactsError ?? artifactsSyncError}</p>
@@ -236,9 +236,9 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
                 data-testid="artifacts-blocker"
               >
                 {laneBlockerTone(snapshot.artifacts.blocker.code).quiet ? (
-                  <Loader2 className="matrx-line-icon h-4 w-4 animate-spin text-muted-foreground" />
+                  <Loader2 className="matrx-line-icon h-4 w-4 mt-0.5 animate-spin text-muted-foreground" />
                 ) : (
-                  <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
+                  <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-destructive" />
                 )}
                 <div className="flex-1">
                   <p className="font-medium">
@@ -267,7 +267,7 @@ export function SettingsTab({ snapshot, refresh, onOpenEvidence }: SettingsTabPr
 
             {snapshot.artifacts.last_error && (
               <div className="flex items-start gap-3 border-b border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-                <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
+                <AlertTriangle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-600" />
                 <div>
                   <p className="font-medium">The last artifacts pass hit an error</p>
                   <p className="mt-1 font-mono text-xs text-muted-foreground">

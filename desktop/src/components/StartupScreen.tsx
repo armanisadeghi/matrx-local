@@ -395,7 +395,7 @@ export function StartupScreen({
                 key={s.id}
                 className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400"
               >
-                <AlertTriangle className="matrx-line-icon-xs h-3 w-3" />
+                <AlertTriangle className="matrx-line-icon-xs h-3 w-3 mt-0.5" />
                 <span>
                   <span className="font-medium">{s.label}:</span>{" "}
                   {s.detail ?? "Failed"}

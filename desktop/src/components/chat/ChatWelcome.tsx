@@ -116,7 +116,7 @@ export function ChatWelcome({
             title={disabled ? disabledReason : undefined}
             className="glass-subtle group flex items-start gap-3 rounded-lg px-4 py-3.5 text-left transition-all duration-200 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:shadow-none disabled:active:scale-100"
           >
-            <Icon className="matrx-line-icon h-4 w-4 text-muted-foreground transition-colors duration-200 group-hover:text-primary" />
+            <Icon className="matrx-line-icon h-4 w-4 mt-0.5 text-muted-foreground transition-colors duration-200 group-hover:text-primary" />
             <div>
               <span className="block text-sm font-medium">
                 {label}

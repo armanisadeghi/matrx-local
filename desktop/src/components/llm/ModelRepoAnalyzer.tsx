@@ -300,7 +300,7 @@ function HelpPanel({
       {/* Machine summary */}
       {hardwareLabel && (
         <div className="flex items-start gap-2 pb-2 border-b border-border/50">
-          <Cpu className="matrx-line-icon-sm h-3.5 w-3.5 text-foreground" />
+          <Cpu className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5 text-foreground" />
           <div>
             <p className="font-medium text-foreground">{hardwareLabel}</p>
             {effectiveCapacityGb !== null && (
@@ -566,7 +566,7 @@ export function ModelRepoAnalyzer({
         {/* Error */}
         {error && !isAnalyzing && (
           <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive-ink">
-            <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
+            <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
             <span className="flex-1">{error}</span>
             <Button
               size="sm"

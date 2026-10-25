@@ -662,7 +662,7 @@ function SetupTab({
 
       {state.error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-4">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500" />
           <div className="flex-1">
             <p className="text-sm font-medium text-red-500">Error</p>
             <p className="text-sm text-red-700 dark:text-red-400 whitespace-pre-wrap">
@@ -1382,7 +1382,7 @@ function TranscribeTab({
                         {isActive ? (
                           <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse mt-1 shrink-0" />
                         ) : (
-                          <Mic className="matrx-line-icon-sm h-3.5 w-3.5 text-muted-foreground" />
+                          <Mic className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5 text-muted-foreground" />
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-medium truncate leading-tight">
@@ -1460,7 +1460,7 @@ function TranscribeTab({
           {/* Permission error */}
           {permError && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-              <AlertCircle className="matrx-line-icon h-4 w-4 text-amber-500 text-sm" />
+              <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-amber-500 text-sm" />
               <p className="text-sm text-amber-700 dark:text-amber-400">{permError}</p>
             </div>
           )}
@@ -1468,7 +1468,7 @@ function TranscribeTab({
           {/* Engine error */}
           {state.error && (
             <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-              <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500 text-sm" />
+              <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500 text-sm" />
               <p className="text-sm text-red-700 dark:text-red-400">{state.error}</p>
             </div>
           )}
@@ -1905,7 +1905,7 @@ function TranscribeTab({
                 {/* Push-to-note error */}
                 {pushError && (
                   <div className="flex items-start gap-2 px-5 py-2 border-b border-destructive/20 bg-destructive/5">
-                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 text-destructive text-xs" />
+                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5 text-destructive text-xs" />
                     <span className="text-xs text-destructive flex-1">
                       {pushError}
                     </span>
@@ -1921,7 +1921,7 @@ function TranscribeTab({
                 {/* AI polish error */}
                 {polishError && (
                   <div className="flex items-start gap-2 px-5 py-2 border-b border-destructive/20 bg-destructive/5">
-                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 text-destructive text-xs" />
+                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5 text-destructive text-xs" />
                     <span className="text-xs text-destructive flex-1">
                       {polishError}
                     </span>
@@ -3313,7 +3313,7 @@ function DevicesTab({
               <div className="p-5 space-y-4">
                 {testError && (
                   <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
-                    <AlertCircle className="matrx-line-icon h-4 w-4 text-red-500" />
+                    <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-red-500" />
                     <div className="flex-1">
                       <p className="text-sm font-medium text-red-500">
                         Microphone access failed

@@ -396,7 +396,7 @@ export function QuickTranscriptModal({
                 role="alert"
                 className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
-                <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
+                <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
                 <span className="flex-1">{pushError}</span>
                 <button
                   className="shrink-0 text-destructive/70 underline hover:text-destructive"
@@ -411,7 +411,7 @@ export function QuickTranscriptModal({
                 role="alert"
                 className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
-                <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
+                <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
                 <span className="flex-1">{polishError}</span>
                 <button
                   className="shrink-0 text-destructive/70 underline hover:text-destructive"

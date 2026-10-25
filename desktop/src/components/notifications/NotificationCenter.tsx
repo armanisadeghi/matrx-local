@@ -89,7 +89,7 @@ function NotificationToast({ notification: n, onHide, onDismiss }: ToastProps) {
           cfg.barClass,
         )}
       />
-      <Icon className={cn("matrx-line-icon h-4 w-4", cfg.iconClass)} />
+      <Icon className={cn("matrx-line-icon h-4 w-4 mt-0.5", cfg.iconClass)} />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold leading-tight">{n.title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-3">
@@ -261,7 +261,7 @@ export function NotificationCenter({
                       <div className="absolute left-1.5 top-4 h-1.5 w-1.5 rounded-full bg-primary" />
                     )}
                     <Icon
-                      className={cn("matrx-line-icon h-4 w-4", cfg.iconClass)}
+                      className={cn("matrx-line-icon h-4 w-4 mt-0.5", cfg.iconClass)}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold">{n.title}</p>

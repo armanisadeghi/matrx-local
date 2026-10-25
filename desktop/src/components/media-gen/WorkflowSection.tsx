@@ -154,7 +154,7 @@ export function WorkflowSection() {
     return (
       <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-4 space-y-3">
         <div className="flex items-start gap-3">
-          <AlertCircle className="matrx-line-icon h-4 w-4 text-destructive text-sm" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 mt-0.5 text-destructive text-sm" />
           <div className="text-sm space-y-1.5 min-w-0">
             <p className="font-medium text-foreground">
               Could not load workflows

@@ -26,7 +26,7 @@ export function VersionHistory({ versions, onRevert }: VersionHistoryProps) {
           key={v.id}
           className="flex items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent group"
         >
-          <Clock className="matrx-line-icon-xs h-3 w-3 text-muted-foreground" />
+          <Clock className="matrx-line-icon-xs h-3 w-3 mt-0.5 text-muted-foreground" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1">
               <span className="font-medium">v{v.version_number}</span>

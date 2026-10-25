@@ -129,7 +129,7 @@ function InstalledLoraRow({
           </p>
           {compatibility === "incompatible" && (
             <p className="mt-1 flex items-start gap-1 text-[10px] text-amber-600 dark:text-amber-400">
-              <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
+              <AlertCircle className="matrx-line-icon-xs h-3 w-3 mt-0.5" />
               Built for {lora.base_family}; activation is disabled for{" "}
               {ctl.model?.name ?? "this model"}.
             </p>
@@ -358,7 +358,7 @@ function LoraManagerDialog({
           {state.loraNeedsCivitaiKey && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
               <p className="flex items-start gap-2 text-[11px] text-amber-600 dark:text-amber-400">
-                <KeyRound className="matrx-line-icon-sm h-3.5 w-3.5" />
+                <KeyRound className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
                 Civitai downloads need your Civitai API key.
               </p>
               <Button

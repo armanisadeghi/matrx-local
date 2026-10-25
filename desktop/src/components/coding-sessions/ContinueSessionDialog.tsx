@@ -271,7 +271,7 @@ export function ContinueSessionDialog({
               data-testid={door.status === "refused" ? "continue-door-refusal" : "continue-door-offer"}
             >
               {door.status === "refused" && (
-                <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
+                <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
               )}
               <span>{reason}</span>
             </p>
@@ -308,7 +308,7 @@ export function ContinueSessionDialog({
 
           {startError && (
             <p className="flex items-start gap-2 text-destructive" role="alert">
-              <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
+              <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5 mt-0.5" />
               <span>{startError}</span>
             </p>
           )}

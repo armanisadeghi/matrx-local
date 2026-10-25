@@ -486,7 +486,7 @@ function PromptRow({
       </div>
       <ChevronRight
         className={cn(
-          "matrx-line-icon h-4 w-4 text-muted-foreground/40 transition-colors",
+          "matrx-line-icon h-4 w-4 mt-0.5 text-muted-foreground/40 transition-colors",
           isActive && "text-primary",
         )}
       />

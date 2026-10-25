@@ -224,7 +224,7 @@ interface EngineFilledMandate {
 /**
  * The Holder's authored messages FILLED for a first turn with `variables` —
  * by the engine, through matrx-ai's one first-turn pass (THE VARIABLE RULE:
- * declared names only, an empty declared value is "", the `{{!name}}` escape,
+ * declared names only, an empty declared value is "", the `{{!name}}` escape (any name),
  * sections, declared prompt blocks resolved or the run refused by name).
  * There is no fill in TypeScript. Throws, naming the mandate, on any refusal.
  */

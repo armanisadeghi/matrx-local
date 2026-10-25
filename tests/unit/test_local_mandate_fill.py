@@ -3,8 +3,8 @@
 The desktop's local-model jobs (AI Polish, the text pipeline, Confidential Chat, Tools and Raw
 modes, Cloud Chat on a local model) run a mandate's Holder on llama-server. Its authored messages
 are filled by matrx-ai's ONE first-turn pass on the engine — never by a TypeScript copy:
-declared ``{{name}}`` only (client value > default > ""), ``{{!name}}`` escape for declared
-names, sections, declared prompt blocks resolved through the server or the run refused by name.
+declared ``{{name}}`` only (client value > default > ""), the ``{{!name}}`` escape for any
+name, sections, declared prompt blocks resolved through the server or the run refused by name.
 """
 
 from __future__ import annotations
@@ -65,9 +65,15 @@ def test_default_fills_when_no_value_is_sent() -> None:
     assert out[1]["content"] == "Text: DEFAULT"
 
 
-def test_escape_applies_to_declared_names_only() -> None:
+def test_escape_applies_to_any_name() -> None:
+    # Rule 6 (Arman, 2026-10-25): the escape is for names that are NOT variables, so it never depends
+    # on what is declared. Needs the matrx-ai that ships it (escape_pattern(()) is a pattern, not None).
+    from matrx_ai.config import template_substitution
+
+    if template_substitution.escape_pattern(()) is None:
+        pytest.skip("installed matrx-ai still escapes declared names only; lands with the next publish")
     out = _fill(_definition("Keep {{!text}} and {{!todo}}"), {"text": "x"})
-    assert out[0]["content"] == "Keep {{text}} and {{!todo}}"
+    assert out[0]["content"] == "Keep {{text}} and {{todo}}"
 
 
 def test_sections_evaluate() -> None:

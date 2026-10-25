@@ -237,7 +237,7 @@ function MessageBlocks({
                 key={key}
                 className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
               >
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
                 <span className="whitespace-pre-wrap">{block.message}</span>
               </div>
             );
@@ -345,7 +345,7 @@ function AssistantMessage({
           <div className="mt-3 space-y-1.5">
             {message.error && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-ink">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
                 <span className="whitespace-pre-wrap">{message.error}</span>
               </div>
             )}
@@ -354,7 +354,7 @@ function AssistantMessage({
                 key={`${message.id}-diag-${index}`}
                 className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
               >
-                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <Info className="matrx-line-icon-sm h-3.5 w-3.5" />
                 <span className="whitespace-pre-wrap">{item}</span>
               </div>
             ))}

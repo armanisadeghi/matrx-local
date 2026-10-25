@@ -188,9 +188,9 @@ export function CodingSessions() {
               data-testid="delivery-blocker"
             >
               {laneBlockerTone(blocker.code).quiet ? (
-                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                <Loader2 className="matrx-line-icon h-4 w-4 animate-spin text-muted-foreground" />
               ) : (
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
               )}
               <div className="flex-1">
                 <p className="font-medium">
@@ -255,14 +255,14 @@ export function CodingSessions() {
               className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm"
               role="alert"
             >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
               <p className="font-mono text-xs">{syncError}</p>
             </div>
           )}
 
           {result && !result.started && result.blocked_reason && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
               <p>{result.blocked_reason}</p>
             </div>
           )}

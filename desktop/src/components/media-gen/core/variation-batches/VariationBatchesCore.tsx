@@ -603,7 +603,7 @@ export function VariationBatchesCore({
                     </p>
                   </div>
                   {active && (
-                    <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+                    <Check className="matrx-line-icon-sm h-3.5 w-3.5 text-green-600" />
                   )}
                 </button>
               );

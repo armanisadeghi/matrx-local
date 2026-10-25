@@ -417,7 +417,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           role="alert"
           data-testid="sessions-error"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+          <AlertTriangle className="matrx-line-icon h-4 w-4 text-destructive" />
           <div>
             <p className="font-medium">Couldn't read your conversations</p>
             <p className="mt-1 font-mono text-xs text-muted-foreground">{snapshot.error}</p>
@@ -450,7 +450,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           role="status"
           data-testid="index-cold"
         >
-          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+          <Loader2 className="matrx-line-icon h-4 w-4 animate-spin text-muted-foreground" />
           <div>
             <p className="font-medium">{notice.headline}</p>
             {notice.detail && <p className="mt-1 text-muted-foreground">{notice.detail}</p>}
@@ -466,7 +466,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           role="status"
           data-testid="cloud-in-flight"
         >
-          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+          <Loader2 className="matrx-line-icon h-4 w-4 animate-spin text-muted-foreground" />
           <div>
             <p className="font-medium">
               AI Matrx has not been asked yet which conversations it holds
@@ -481,7 +481,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
 
       {cloud && !cloud.checked && !cloudPending && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
           <div>
             <p className="font-medium">
               AI Matrx could not be asked which conversations it holds
@@ -501,7 +501,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           role="alert"
           data-testid="delivery-ledger-unavailable"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
           <div>
             <p className="font-medium">This Mac could not read its delivery ledger</p>
             <p className="mt-1">{deliveryLedger.detail}</p>
@@ -518,7 +518,7 @@ export function SessionsTab({ snapshot, onOpenDiagnosis }: SessionsTabProps) {
           role="status"
           data-testid="session-not-openable"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600" />
           <div className="flex-1">
             <p className="font-medium">“{blocked.title}” is not in AI Matrx yet</p>
             <p className="mt-1">{blocked.reason}</p>

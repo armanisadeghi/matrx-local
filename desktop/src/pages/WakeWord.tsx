@@ -371,7 +371,7 @@ function ControlsTab({
       {/* Not-ready warning for whisper */}
       {notReady && (
         <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+          <AlertCircle className="matrx-line-icon h-4 w-4 text-yellow-500" />
           <div>
             <p className="text-sm font-medium text-yellow-500">
               Voice setup required
@@ -769,7 +769,7 @@ function ModelsTab({
     return (
       <div className="p-6">
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-4">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <Info className="matrx-line-icon h-4 w-4 text-muted-foreground text-sm" />
           <p className="text-sm text-muted-foreground">
             The Whisper engine reuses the <strong>ggml-tiny.en.bin</strong>{" "}
             model you already downloaded during Voice Setup — no separate models
@@ -1116,7 +1116,7 @@ function ErrorBanner({
 }) {
   return (
     <div className="flex items-start gap-3 border-b border-destructive/20 bg-destructive/5 px-4 py-3">
-      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+      <AlertCircle className="matrx-line-icon h-4 w-4 text-destructive text-xs" />
       <p className="flex-1 text-xs text-destructive">{message}</p>
       <button
         onClick={onDismiss}

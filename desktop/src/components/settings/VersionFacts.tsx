@@ -37,7 +37,7 @@ export function VersionFacts({ versions, restarting, onRestart }: VersionFactsPr
           data-testid="restart-required-banner"
         >
           <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <AlertCircle className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold">{versions.restartHeadline}</p>
               <p className="mt-0.5 text-xs text-muted-foreground">

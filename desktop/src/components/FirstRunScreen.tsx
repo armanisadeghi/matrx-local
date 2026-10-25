@@ -347,7 +347,7 @@ export function FirstRunScreen({ engineUrl, onComplete }: FirstRunScreenProps) {
         {phase === "error" && errorMessage && (
           <div className="mb-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-800/50 dark:bg-red-950/30 px-4 py-3">
             <div className="flex items-start gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-700 dark:text-red-400" />
+              <AlertCircle className="matrx-line-icon h-4 w-4 text-red-700 dark:text-red-400" />
               <div>
                 <p className="text-sm font-medium text-red-700 dark:text-red-400">
                   Some steps failed

@@ -576,7 +576,7 @@ function ContentSearchView({
           <div className="p-4 text-center text-xs text-muted-foreground">No content matches.</div>
         ) : result.results.map((match) => (
           <div key={match.path} className="group flex items-start gap-2 rounded px-2 py-2 hover:bg-muted/70">
-            <File className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <File className="matrx-line-icon h-4 w-4 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-medium" title={match.path}>{match.path}</div>
               <div className="mt-0.5 line-clamp-3 text-[11px] text-muted-foreground">{match.snippet}</div>

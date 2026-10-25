@@ -2372,7 +2372,7 @@ export function Settings({
                     </div>
                   ) : vaultSource.state !== "ready" ? (
                     <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                      <CloudOff className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <CloudOff className="matrx-line-icon-sm h-3.5 w-3.5" />
                       <span>
                         {vaultSource.message} Keys saved on this machine keep
                         working.
@@ -3305,7 +3305,7 @@ export function Settings({
                       <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{nativeVaultAction.message}</div>
                     )}
                     <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
                       <span>{nativeVaultProvider.message}</span>
                     </div>
                   </>

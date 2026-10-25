@@ -566,7 +566,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
         <ul className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive-ink">
           {blockers.map((b) => (
             <li key={b} className="flex min-w-0 gap-1.5">
-              <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+              <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
               <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                 {b}
               </span>
@@ -577,7 +577,7 @@ export function PromptMatrixQueueBar({ ctl }: { ctl: ImageGenController }) {
 
       {submitError !== null && (
         <div className="flex min-w-0 gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive-ink">
-          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
             {submitError}
           </span>

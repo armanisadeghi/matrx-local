@@ -452,7 +452,7 @@ export function ScrapeMetadataPanel({
         <div className="space-y-2">
           {firewalled && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
-              <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <ShieldAlert className="matrx-line-icon-sm h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
               <div className="min-w-0 flex-1 space-y-1">
                 <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
                   {extraction.firewall} protects this site
@@ -467,7 +467,7 @@ export function ScrapeMetadataPanel({
           )}
           {noindex && (
             <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-2.5">
-              <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <EyeOff className="matrx-line-icon-sm h-3.5 w-3.5 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-semibold">
                   This page asks not to be indexed
@@ -481,7 +481,7 @@ export function ScrapeMetadataPanel({
           )}
           {canonicalDiffers && (
             <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-2.5">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5 text-muted-foreground" />
               <div className="min-w-0 flex-1 space-y-1">
                 <p className="text-[11px] font-semibold">
                   The page names a different canonical URL

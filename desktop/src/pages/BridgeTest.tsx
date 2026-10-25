@@ -1648,7 +1648,7 @@ function TunnelStatusSection({
             </div>
             {showRepairHint ? (
               <div className="mt-1 flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-                <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
                 <span>
                   Engine prefers tunnel — the extension may need to be re-paired
                   to pick up the latest tunnel URL.

@@ -41,7 +41,7 @@ export function LibraryPanel({
   return (
     <div className="space-y-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
       <div className="flex items-start gap-2">
-        <BookMarked className="mt-0.5 h-4 w-4 shrink-0 text-violet-600 dark:text-violet-300" />
+        <BookMarked className="matrx-line-icon h-4 w-4 text-violet-600 dark:text-violet-300" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-medium">Library</p>
@@ -87,7 +87,7 @@ export function LibraryPanel({
 
       {error !== null && (
         <div className="flex gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive-ink">
-          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
           <span>{error}</span>
         </div>
       )}

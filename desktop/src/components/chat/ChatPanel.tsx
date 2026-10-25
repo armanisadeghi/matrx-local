@@ -362,7 +362,7 @@ export function ChatPanel({
             role="alert"
             className="flex items-start gap-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive-ink"
           >
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
             <span className="flex-1">
               {chatTts.readAloudError.code === "model_not_downloaded" &&
               ttsState?.status?.is_downloading
@@ -388,7 +388,7 @@ export function ChatPanel({
             role="alert"
             className="flex items-start gap-2 rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-600"
           >
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
             <span>{agentSelectionError}</span>
           </div>
         </div>

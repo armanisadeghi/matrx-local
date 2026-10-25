@@ -105,7 +105,7 @@ export function Login({ auth }: LoginProps) {
                 role="status"
                 className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-left"
               >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400 text-sm" />
                 <div className="space-y-2 text-sm text-amber-900 dark:text-amber-200">
                   <p>{auth.snapshot.state_reason ?? DAEMON_DOWN_FALLBACK}</p>
                   {auth.snapshot.remedy && <p className="font-medium">{auth.snapshot.remedy}</p>}
@@ -181,7 +181,7 @@ export function Login({ auth }: LoginProps) {
                 role="status"
                 className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-left"
               >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <AlertTriangle className="matrx-line-icon h-4 w-4 text-amber-600 dark:text-amber-400 text-sm" />
                 <p className="text-sm text-amber-900 dark:text-amber-200">{notice}</p>
               </div>
             )}

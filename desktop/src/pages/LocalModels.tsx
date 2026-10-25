@@ -571,7 +571,7 @@ function SetupTab() {
 
           {error && (
             <div className="text-xs text-destructive-ink flex items-start gap-2 bg-destructive/10 rounded px-3 py-2">
-              <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+              <AlertCircle className="matrx-line-icon-xs h-3 w-3" />
               <span className="whitespace-pre-wrap">{error}</span>
             </div>
           )}
@@ -1649,7 +1649,7 @@ function ModelsTab() {
 
       {(error || localError) && (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive-ink">
-          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <AlertCircle className="matrx-line-icon h-4 w-4" />
           <span className="whitespace-pre-wrap flex-1">
             {error ?? localError}
           </span>
@@ -4339,7 +4339,7 @@ function InferenceTab() {
           <CardContent className="space-y-4">
             {error && (
               <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-ink">
-                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <AlertCircle className="matrx-line-icon h-4 w-4" />
                 <span>{error}</span>
               </div>
             )}
@@ -4626,7 +4626,7 @@ function InferenceTab() {
 
         {error && (
           <div className="flex gap-2 px-4 py-3 text-sm text-destructive-ink bg-destructive/10 border-b shrink-0">
-            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <AlertCircle className="matrx-line-icon h-4 w-4" />
             <span className="flex-1 whitespace-pre-wrap leading-relaxed">
               {error}
             </span>
@@ -5016,7 +5016,7 @@ function InferenceTab() {
                     role="alert"
                     className="flex items-start gap-2 text-xs text-destructive-ink bg-destructive/10 rounded px-3 py-2 mb-2"
                   >
-                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
                     <span className="flex-1">
                       {chatTts.readAloudError.code === "model_not_downloaded" &&
                       ttsState?.status?.is_downloading
@@ -5390,7 +5390,7 @@ function InferenceTab() {
                 )}
                 {toolSchemasError && (
                   <div className="px-3 py-3 text-xs text-destructive flex items-start gap-1.5">
-                    <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <AlertCircle className="matrx-line-icon-sm h-3.5 w-3.5" />
                     {toolSchemasError}
                   </div>
                 )}
@@ -5532,7 +5532,7 @@ function InferenceTab() {
 
               {agentError && (
                 <div className="flex gap-2 px-4 py-3 text-sm text-destructive-ink bg-destructive/10 border-b shrink-0">
-                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <AlertCircle className="matrx-line-icon h-4 w-4" />
                   <span className="flex-1">{agentError}</span>
                   <button
                     className="text-xs underline"
@@ -6012,7 +6012,7 @@ function ServerTab() {
       {localError && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive-ink space-y-1">
           <div className="flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <AlertCircle className="matrx-line-icon h-4 w-4" />
             <pre className="whitespace-pre-wrap font-sans break-words flex-1">
               {localError}
             </pre>

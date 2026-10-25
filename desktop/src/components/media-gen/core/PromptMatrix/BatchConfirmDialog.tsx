@@ -116,7 +116,7 @@ export function BatchConfirmDialog({
 
           {large && (
             <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <AlertTriangle className="matrx-line-icon-sm h-3.5 w-3.5" />
               <span>
                 That is a lot of generations
                 {estimate !== null ? ` — roughly ${estimate} of GPU time` : ""}.

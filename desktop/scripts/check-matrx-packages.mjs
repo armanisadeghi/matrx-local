@@ -122,6 +122,46 @@ const DEPENDENCY_SECTIONS = ['dependencies', 'devDependencies', 'optionalDepende
 const UPSTREAM_PIN_SECTIONS = ['dependencies', 'optionalDependencies', 'peerDependencies'];
 const SCOPE = '@ai-matrx/';
 
+// RENAMED PACKAGES (2026-10-25): @ai-matrx/chat hit npm's 100 MB metadata cap (E406) and now publishes as
+// @ai-matrx/chat-v2; every consumer keeps its imports by declaring the npm alias
+// "@ai-matrx/chat": "npm:@ai-matrx/chat-v2@latest". That one exact alias IS "latest" of the registry
+// name; any other npm: spec is still a pin. Mirrors aidream apps/shared/scripts/registry-names.mjs.
+export const REGISTRY_ALIASES = Object.freeze({ '@ai-matrx/chat': '@ai-matrx/chat-v2' });
+const ALIAS_SOURCE_OF = new Map(Object.entries(REGISTRY_ALIASES).map(([from, to]) => [to, from]));
+
+/** A declared `name: specifier`, with the one lawful alias read as its registry name at `latest`. */
+export function normalizeAlias(name, specifier) {
+    const target = REGISTRY_ALIASES[name];
+    if (target && specifier === `npm:${target}@latest`) return { name: target, specifier: 'latest' };
+    return { name, specifier };
+}
+
+/**
+ * `pnpm update --latest` rewrites an alias's `@latest` to a caret range of the version it found
+ * (2026-10-25: `npm:@ai-matrx/chat-v2@latest` -> `npm:@ai-matrx/chat-v2@^0.0.0`). Every npm: spec naming a
+ * renamed package's registry name goes back to exactly `npm:<registry name>@latest`. Pure: returns the
+ * rewritten manifest and the [section, name, from] it changed. Run by `--restore-aliases` after every update.
+ */
+export function restoreAliases(manifest) {
+    const changed = [];
+    for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+        for (const [name, spec] of Object.entries(manifest[section] ?? {})) {
+            const target = REGISTRY_ALIASES[name];
+            const lawful = target && `npm:${target}@latest`;
+            if (target && typeof spec === 'string' && spec.startsWith(`npm:${target}@`) && spec !== lawful) {
+                manifest[section][name] = lawful;
+                changed.push([section, name, spec]);
+            }
+        }
+    }
+    return changed;
+}
+
+/** `name` resolved to `resolved` (a version, or `@scope/real@version` for an alias) → `{ name, version }` | null. */
+function splitResolved(name, resolved) {
+    return resolved.startsWith(SCOPE) ? splitPackageKey(resolved) : splitPackageKey(`${name}@${resolved}`);
+}
+
 /**
  * The specifier ruling, as one pure function. Everything else in this file is I/O.
  *
@@ -237,9 +277,10 @@ function addRequiredBy(graph, name, version, owner) {
     graph.requiredBy.get(key).add(owner);
 }
 
-function addDeclared(graph, name, section, specifier, source) {
-    if (!name?.startsWith(SCOPE)) return;
-    graph.declared.push({ name, section, specifier, source });
+function addDeclared(graph, declaredName, section, declaredSpecifier, source) {
+    if (!declaredName?.startsWith(SCOPE)) return;
+    const { name, specifier } = normalizeAlias(declaredName, declaredSpecifier);
+    graph.declared.push({ name, section, specifier, source: name === declaredName ? source : `${source} as ${declaredName}` });
 }
 
 /** `@ai-matrx/kit@0.9.0(react@19.2.8)` → `{ name, version }`; anything else → null. */
@@ -325,7 +366,7 @@ export function parsePnpmLock(text, graph = emptyGraph(), label = 'pnpm-lock.yam
             const version = /^ {8}version:\s*(.+?)\s*$/.exec(rawLine);
             if (version && pendingDep) {
                 const resolved = unquote(version[1]);
-                const split = splitPackageKey(`${pendingDep}@${resolved}`);
+                const split = splitResolved(pendingDep, resolved);
                 if (split) addRequiredBy(graph, split.name, split.version, `${importer} (this repo)`);
             }
             continue;
@@ -359,7 +400,7 @@ export function parsePnpmLock(text, graph = emptyGraph(), label = 'pnpm-lock.yam
             const dep = /^ {6}(\S.*?):\s*(.+?)\s*$/.exec(rawLine);
             if (dep && inSnapshotDeps && snapshotOwner) {
                 const depName = unquote(dep[1]);
-                const split = splitPackageKey(`${depName}@${unquote(dep[2])}`);
+                const split = splitResolved(depName, unquote(dep[2]));
                 if (split) addRequiredBy(graph, split.name, split.version, snapshotOwner);
             }
         }
@@ -394,8 +435,10 @@ export function parseNpmLock(json, graph = emptyGraph(), label = 'package-lock.j
             }
             continue;
         }
-        const name = path.slice(index + marker.length);
-        if (!name.startsWith(SCOPE)) continue;
+        const installedAs = path.slice(index + marker.length);
+        if (!installedAs.startsWith(SCOPE)) continue;
+        // an aliased copy records its real name (`"name": "@ai-matrx/chat-v2"` under node_modules/@ai-matrx/chat)
+        const name = ALIAS_SOURCE_OF.get(entry?.name) === installedAs ? entry.name : installedAs;
         if (entry?.link) continue; // a symlink to workspace source, not a registry copy
         addInstalled(graph, name, entry?.version, `${label} (${path})`);
         addRequiredBy(graph, name, entry?.version, index === 0 ? 'the repo' : path.slice(0, index - 1));
@@ -408,7 +451,7 @@ export function parseNpmLock(json, graph = emptyGraph(), label = 'package-lock.j
             if (!name.startsWith(SCOPE)) continue;
             if (!owner.startsWith(SCOPE)) continue;
             graph.upstreamSpecs ??= [];
-            graph.upstreamSpecs.push({ owner: `${owner}@${entry?.version ?? '?'}`, name, specifier });
+            graph.upstreamSpecs.push({ owner: `${owner}@${entry?.version ?? '?'}`, ...normalizeAlias(name, specifier) });
         }
     }
     return graph;
@@ -481,7 +524,8 @@ export function scanNodeModules(projectRoot, graph = emptyGraph()) {
             if (isWorkspaceLink(dir)) continue;
             const manifest = readManifestVersion(dir);
             if (!manifest?.version) continue;
-            const name = `${SCOPE}${pkg}`;
+            const dirName = `${SCOPE}${pkg}`;
+            const name = ALIAS_SOURCE_OF.get(manifest.name) === dirName ? manifest.name : dirName;
             const evidence = `node_modules (${dir.slice(projectRoot.length + 1)})`;
             if (storeOnly) {
                 graph.store ??= [];
@@ -496,7 +540,7 @@ export function scanNodeModules(projectRoot, graph = emptyGraph()) {
                 for (const [dep, specifier] of Object.entries(manifest[section] ?? {})) {
                     if (!dep.startsWith(SCOPE)) continue;
                     graph.upstreamSpecs ??= [];
-                    graph.upstreamSpecs.push({ owner: `${name}@${manifest.version}`, name: dep, specifier });
+                    graph.upstreamSpecs.push({ owner: `${name}@${manifest.version}`, ...normalizeAlias(dep, specifier) });
                 }
             }
         }
@@ -1087,6 +1131,27 @@ async function selfTest() {
     };
     const silence = () => {};
 
+    // ── The one lawful alias (renamed @ai-matrx/chat) is latest; every other npm: spec is a pin ──
+    expect('alias to the registry name at latest', JSON.stringify(normalizeAlias('@ai-matrx/chat', 'npm:@ai-matrx/chat-v2@latest')), JSON.stringify({ name: '@ai-matrx/chat-v2', specifier: 'latest' }));
+    expect('alias pinned to a version stays a pin', normalizeAlias('@ai-matrx/chat', 'npm:@ai-matrx/chat-v2@0.8.371').specifier, 'npm:@ai-matrx/chat-v2@0.8.371');
+    expect('an alias of any other package stays a pin', normalizeAlias('@ai-matrx/kit', 'npm:@ai-matrx/kit-v2@latest').specifier, 'npm:@ai-matrx/kit-v2@latest');
+    {
+        const aliasLock = `lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      '@ai-matrx/chat':\n        specifier: npm:@ai-matrx/chat-v2@latest\n        version: '@ai-matrx/chat-v2@0.8.371(react@19.2.8)'\n\npackages:\n\n  '@ai-matrx/chat-v2@0.8.371':\n    resolution: {integrity: sha512-x}\n`;
+        const g = parsePnpmLock(aliasLock);
+        expect('aliased declaration is read as the registry name', g.declared[0]?.name, '@ai-matrx/chat-v2');
+        expect('aliased declaration is latest', g.declared[0]?.specifier, 'latest');
+        expect('aliased resolution is required by the repo', g.requiredBy.has('@ai-matrx/chat-v2@0.8.371'), true);
+        expect('aliased copy is installed under its registry name', g.installed.get('@ai-matrx/chat-v2')?.has('0.8.371'), true);
+    }
+
+    {
+        const m = { dependencies: { '@ai-matrx/chat': 'npm:@ai-matrx/chat-v2@^0.0.0', '@ai-matrx/kit': '^0.9.0' } };
+        const changed = restoreAliases(m);
+        expect('a caret-rewritten alias is restored to @latest', m.dependencies['@ai-matrx/chat'], 'npm:@ai-matrx/chat-v2@latest');
+        expect('restoreAliases never touches another package', m.dependencies['@ai-matrx/kit'], '^0.9.0');
+        expect('restoreAliases reports what it changed', changed.length, 1);
+    }
+
     // ── The classifier (unchanged rulings) ──────────────────────────────────
 
     // 1. THE INCIDENT: behind + latest's tarball 404s inside the window = transient.
@@ -1487,6 +1552,14 @@ const projectRoot =
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     if (process.argv.includes('--self-test')) {
         await selfTest();
+    } else if (process.argv.includes('--restore-aliases')) {
+        const manifestPath = resolve(projectRoot, 'package.json');
+        const raw = readFileSync(manifestPath, 'utf8');
+        const manifest = JSON.parse(raw);
+        const changed = restoreAliases(manifest);
+        for (const [section, name, from] of changed) console.log(`restored ${section}["${name}"]: "${from}" -> "${manifest[section][name]}"`);
+        if (changed.length) writeFileSync(manifestPath, `${JSON.stringify(manifest, null, raw.match(/^( +)"/m)?.[1].length ?? 2)}\n`);
+        process.exit(0);
     } else if (process.argv.includes('--duplicates')) {
         const pnpm = existsSync(resolve(projectRoot, 'pnpm-lock.yaml'));
         process.exit(runDuplicatesCheck({ graph: collectGraph(projectRoot), updateCommand: updateCommandFor({ pnpm }) }));

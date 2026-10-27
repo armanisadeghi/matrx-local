@@ -59,7 +59,7 @@ A question that survives §1 is his to answer, and asking it is the right move, 
 
 ## 3. File it on the Question Desk (when it can wait)
 
-For a question that can wait while you finish other work, or when he is not in the chat. The desk is the in-app surface `https://manage.aimatrx.com/administration/question-desk/<interview id>`
+For a question that can wait while you finish other work, or when he is not in the chat. The desk is the in-app surface `https://manage.aimatrx.com/admin/question-desk/<interview id>`
 (send him the tool's full `url`), driven by the
 AI Dream MCP tool `question_desk`. There is no markdown ledger.
 

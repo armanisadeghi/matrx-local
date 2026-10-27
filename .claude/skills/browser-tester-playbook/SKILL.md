@@ -32,7 +32,9 @@ section you need, not the whole file.
 3. Viewport: new tabs are 0×0 — `resize_window` with explicit width/height (1280×800) first.
    `computer` needs the tab fronted (`tabs_select`).
 4. Sign in as admin@admin.com with `node scripts/real-tests/pw.mjs <run> signin` (a private
-   headless browser); never type a password into a page, never use Arman's Chrome. In the local
+   headless browser); never type a password into a page, never use Arman's Chrome. 🚨 The built-in
+   browser pane on www.aimatrx.com is usually signed in as ARMAN: read-only there — never create,
+   type, save or submit anything in his account (`policies/test-data-looks-real.md`). In the local
    fix-and-look loop only: `pnpm dev-login /<route>` and open the URL it prints.
 5. Local fix-and-look loop only: warm the route with `curl` first; first compiles take 45–60 s,
    longer than a tool timeout. Live needs no warm-up.
@@ -63,7 +65,7 @@ One entry per defect, numbered:
 - **Where**: URL and the control.
 - **Steps**: the exact clicks/inputs from a fresh page.
 - **Expected** / **Actual**: one line each; actual quotes the error text if any.
-- **Evidence**: console/network line, row id, or screenshot path.
+- **Evidence**: console/network line, row id, or screenshot path (a scratch dir: `mktemp -d` or `~/.cache/matrx-evidence/`, never a repo).
 - **Severity**: broken · wrong · rough.
 Then a line per brief item that PASSED with its evidence. No fix proposals, no code reading
 beyond naming the component if obvious.

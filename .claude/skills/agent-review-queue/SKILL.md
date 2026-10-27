@@ -15,7 +15,7 @@ description: "The agent.review_queue register for work Arman must see or test in
 
 # Agent Review Queue — get your work seen, get feedback back
 
-**The failure this kills:** agents build things, mention them mid-message, Arman misses it, and finished features rot undiscovered for weeks. The queue at `/administration/users/agent-review` is the ONE place he checks. If you built something he must look at and you didn't register it, assume it will never be seen. It is one table for every repo: aidream, matrx-extend, and every other repo's agents register here too.
+**The failure this kills:** agents build things, mention them mid-message, Arman misses it, and finished features rot undiscovered for weeks. The queue at `/admin/users/agent-review` is the ONE place he checks. If you built something he must look at and you didn't register it, assume it will never be seen. It is one table for every repo: aidream, matrx-extend, and every other repo's agents register here too.
 
 ## Which part you need
 
@@ -75,7 +75,7 @@ Whenever any agent asks Arman to look at, test, or approve something, the messag
 row's own URL**:
 
 ```
-https://manage.aimatrx.com/administration/users/agent-review/<id>
+https://manage.aimatrx.com/admin/users/agent-review/<id>
 ```
 
 "It's in the agent review queue", "find it under Ready for you", a title alone, or a route to
@@ -283,7 +283,7 @@ Allowed values are defined and runtime-validated in `features/admin/agent-review
 
 `metadata.origin.agent_label` is not optional — THE LANE TAG RULE. Return the inserted `id`
 (`returning id`), because your final message must carry
-`https://manage.aimatrx.com/administration/users/agent-review/<id>`, and because the reviewer
+`https://manage.aimatrx.com/admin/users/agent-review/<id>`, and because the reviewer
 agent you dispatch next needs it.
 
 Dispatch the independent reviewer, follow the result, then report the direct link and actual
@@ -339,7 +339,7 @@ Browser isolation and admin sign-in, the one-item-per-run worker order, the atom
 ## Rules
 
 - **This queue, not prose.** A "please test /demos/foo" buried in a chat message is the anti-pattern — register it. And a registered row you never mention with its link is the *other* anti-pattern — THE DIRECT-LINK RULE.
-- **Find a row the way Arman does.** The list at `/administration/users/agent-review` searches title, instructions, target page, repository, domain/feature names, lane, and notes — and a search WIDENS to every non-archived step, saying how many matches sit outside the step you were browsing. Filter by **Filed by / lane** to see one campaign's whole backlog.
+- **Find a row the way Arman does.** The list at `/admin/users/agent-review` searches title, instructions, target page, repository, domain/feature names, lane, and notes — and a search WIDENS to every non-archived step, saying how many matches sit outside the step you were browsing. Filter by **Filed by / lane** to see one campaign's whole backlog.
 - Keep human instructions focused on the interaction; keep truthful deployment and verification evidence in metadata and the conversation.
 - Before inserting, find an existing row for the same reviewable thing and target. Coordinate any active owner before updating it; preserve conversation/metadata and reset repaired work to the independent review pool. A matching URL alone does not authorize overwriting another item's claim.
 - Never infer ownership or repository from `source`; use `metadata.origin` and registry-backed `repo_slug`.

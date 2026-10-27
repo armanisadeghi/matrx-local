@@ -22,13 +22,13 @@ timestamp: 2026-10-14T00:00:00Z
 1. **Labels, not prose.** A screen is label → value → action; the label carries the meaning (`Batch savings (7d)`). If a number needs a paragraph, rename it; if it still needs a definition, one sentence in a tooltip. No page or section descriptions on dashboard and functionality pages: a title is not followed by a sentence. Moving one into a help icon is a fix, never a regression, and lost taglines are not damage. AI-written descriptions are worse than none ("Choose which channels each notice reaches you on…"). Only promotional pages may carry one.
 2. **A dashboard is numbers, lists and tables**. Per signal: title, number, share, a compact table of top rows; no "meaning" text, threshold sentences or hints under tiles. One big table first, drill-downs beneath it or on click, never scattered panels each with its own story. A broken dashboard is fixed surgically, keeping what worked (the window picker, the dimensions, the drill); never rip data out to undo a mistake. A tooltip on an icon is the ceiling for explanation; the explanation lives in `FEATURE.md`, not on the screen.
 3. **Tooltips always, sentences never**. Every label, icon button, abbreviation or number a newcomer might not understand gets a tooltip (`InfoHint`); a complex thing gets a help popover (`FieldHelp`; settings rows use `helpText`). Never a native `title=` (phones cannot open it).
-4. **Every slot has a budget, and the component enforces it** ([budgets](#slot-budgets)). A primitive renders secondary text on one line (`truncate` / `line-clamp-1`) with the full definition in its tooltip slot; `components/official/kpi/KpiTile.tsx` is the model. A primitive that lets secondary text grow is the defect, not the long string; choosing a hand-rolled component because the shared one "cuts off long hints" is this rule broken twice.
+4. **Every slot has a budget, and the component enforces it** ([budgets](#slot-budgets)). A primitive renders secondary text on one line (`truncate` / `line-clamp-1`) with the full definition in its tooltip slot; `KpiTile` in `@ai-matrx/design-system/controls` is the model. A primitive that lets secondary text grow is the defect, not the long string; choosing a hand-rolled component because the shared one "cuts off long hints" is this rule broken twice.
 5. **Text sets the size of its row and its column, and siblings match.** Before adding text, look at the row and the column it lives in. Repeated components fill the same visible slots at similar length (within about 1.5x) and the same grammatical shape, or none do; one tile with a hint among five without is a defect. A tooltip states only what the code or data contract proves, never an invented definition.
 6. **Identifiers never render.** A key, variable name, slug, kind or tool name (`normal_text`) shows as the thing's label, else through the one humanizer (`humanizeIdentifier` / `displayLabel`, `@ai-matrx/kit/text-case`); raw only where the person types or uses it, as a monospace token. Guard: `pnpm check:raw-identifiers`.
 7. **Copy is adult and concise**. Never repeat a name the app header already shows; a panel header is one compact row of controls; no subtitle that explains the obvious or describes the agent. When one instance is found, sweep its siblings. In a focused mode (the docked chat) the main app sidebar is not a column: it collapses behind one icon that opens it on click ([UI shell style guide](/systems/platform/ui-shell/STYLE-GUIDE.md)).
 8. **Human-written text is protected.** An AI judge falls for what made the junk and deletes the few texts a person wrote. Any judgment sweep over user-facing text protects human-authored strings mechanically (git authorship, an approved keep list), gives Arman a click-through review (page link, before → after, keep / revert / note), and turns his answers into documented patterns the skill teaches. Every scheduled sweep honors the keep list.
 9. **A person's own content may carry emoji** and anything other companies allow: page, callout and workspace icons, text, reactions. The no-emoji rule covers our own chrome (labels, buttons, empty states), which stays Lucide-only.
-10. **You see it rendered before it is done.** Agents write a string into source, where 190 characters look like one line. Interface text is done only after it has been seen rendered at desktop and narrow widths ([reality is the referee](./reality-is-the-referee.md)) and `pnpm check:interface-text --changed` (matrx-frontend) has been run on the diff.
+10. **You see it rendered before it is done.** Agents write a string into source, where 190 characters look like one line. Interface text is done only after it has been seen rendered at desktop and narrow widths ([reality is the referee](/policies/reality-is-the-referee.md)) and `pnpm check:interface-text --changed` (matrx-frontend) has been run on the diff.
 <!-- rules:stamp-end -->
 
 Doctrine (read once): `common-docs/policies/interface-text-is-layout.md`.
@@ -46,7 +46,7 @@ the code comment and `FEATURE.md` are for.
    never renders.
 2. **Label first, tooltip always.** Make the label carry the meaning (`Batch savings (7d)`).
    Then give every label, icon button, abbreviation or number a newcomer might not understand a
-   **one-sentence tooltip**: `title=` on `KpiTile`, `components/official/InfoHint` everywhere
+   **one-sentence tooltip**: `title=` on `KpiTile`, `InfoHint` (`@ai-matrx/design-system/controls`) everywhere
    else (hover, keyboard and touch — a native `title=` attribute is unreachable on phones). A
    complex thing gets a help popover (`FieldHelp` from `@ai-matrx/design-system/controls`; a `Field`'s string `help` and a settings row's `helpText` already render one).
    When you delete prose, ask what a newcomer loses and move that into a tooltip — never just
@@ -59,8 +59,8 @@ the code comment and `FEATURE.md` are for.
    the width of every cell in its column. Fill a **visible** slot on **all siblings, at similar
    length and in the same shape, or on none**. Tooltips are hidden and per need — never add one
    to a sibling just to match.
-5. **Use the primitive that enforces the budget.** `components/official/kpi/KpiTile` +
-   `KpiGrid` for KPI rows (one-line `hint`, `title` tooltip). If the official primitive "cuts
+5. **Use the primitive that enforces the budget.** `KpiTile` +
+   `KpiGrid` from `@ai-matrx/design-system/controls` for KPI rows (one-line `hint`, `title` tooltip). If the official primitive "cuts
    off" your text, your text is too long — shorten it; never hand-roll a component to escape
    the limit. A local component that renders unbounded secondary text is itself a finding.
 6. **A tooltip states only what you verified in the code or the data contract.** Cannot prove
@@ -76,7 +76,8 @@ the code comment and `FEATURE.md` are for.
    2026-10-14 "gray on gray on gray" menu). Table: the style guide's Color section.
 9. **See it rendered, then check it.** In matrx-frontend run
    `pnpm check:interface-text --changed` before committing; from any other app's folder:
-   `node <aidream>/apps/matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. --changed`.
+   `node <path-to-aidream>/apps/matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. --changed`
+   (inside aidream, e.g. from `apps/dashboard`: `node ../matrx-frontend/scripts/interface-text/check-interface-text.mjs --root=. --changed`).
    Every `NOVEL` line on your diff is fixed before commit.
 
 ## Rationalizations
@@ -98,7 +99,7 @@ From the 2026-09-30 baseline runs (`evals.md`) — each one produced a defect.
 - Your string contains a dot-separated or snake_case name, a backtick, "backend", "server", or "not yet".
 - One sibling gets a hint and the others do not.
 - You are writing a second sentence in a hint or description.
-- You are choosing a local component over `components/official/*` because of text length.
+- You are choosing a local component over the shared `@ai-matrx/design-system` one because of text length.
 - You are writing a tooltip definition you did not read in the code or the data contract.
 - You are making text fainter with `/NN`, `opacity-*` or a hand-picked gray, or hand-styling a menu group label.
 

@@ -30,6 +30,11 @@ Smoke check first: one click, confirm the screen changed. Two environment failur
 ## Context you cannot derive
 [interfaces from earlier tasks · my resolution of ambiguity X · parked findings in this area]
 
+## Test data (delete if the job creates no records)
+Anything you create to test carries your run's stamp and is archived before you report:
+`uv run python scripts/test_run_left_live.py <run-id> --archive` (in `aidream`) lists and archives what your run left live.
+Never touch a record you did not create; the owner's records are never disposable.
+
 ## Ownership
 Exclusive paths: [globs]. Touch nothing else. Shared checkout: `git add <explicit paths>` only (never
 `-a` / `-A`), confirm `git status --short` shows only your paths staged, commit, push `main`.

@@ -11,7 +11,7 @@ timestamp: 2026-09-30T00:00:00Z
 ## Scenario E1 — the kg-cost Batch savings tile (real incident)
 
 Source: matrx-frontend commit `c35e1f946e` (2026-09-14) put its own commit message into the
-"Batch savings (7d)" hint on `/administration/knowledge/kg-cost`; Arman flagged it 2026-09-30.
+"Batch savings (7d)" hint on `/admin/knowledge/kg-cost`; Arman flagged it 2026-09-30.
 Prompt: the pre-change tile code (`git show c35e1f946e^:features/administration/kg-cost/components/KgCostDashboard.tsx`,
 lines 160–290) plus the commit's intent — "make the tile honest about what it now shows; fix
 anything else a reviewer would flag" — answer-only, no repo edits. Pressures: "a screen never

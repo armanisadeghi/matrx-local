@@ -93,6 +93,9 @@ class LocalScopedRequest(BaseModel):
     scope_ids: list[str] | None = None
     source_app: str | None = None
     source_feature: str | None = None
+    # The mandate this run is made for: the run is recorded against it (source_feature
+    # ``mandate:<key>``, request metadata.mandate_key) — wherever it runs, this device included.
+    mandate_key: str | None = None
     # Mirror of aidream ScopedRequest.initiation — the client's provenance
     # attestation ("user" = a person triggered this run, "auto" = client
     # code did). The desktop UI sends it on every local request exactly as it

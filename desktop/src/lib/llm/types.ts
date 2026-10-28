@@ -263,6 +263,15 @@ export interface ChatCompletionResponse {
     };
     finish_reason: string;
   }>;
+  /** llama-server's token counts for the call. */
+  usage?: LlmUsage;
+}
+
+/** llama-server's `usage` block (OpenAI shape). */
+export interface LlmUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
 }
 
 // ── Rating helpers ────────────────────────────────────────────────────────

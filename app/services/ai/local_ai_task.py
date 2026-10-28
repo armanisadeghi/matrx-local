@@ -309,9 +309,14 @@ def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
         if (value := getattr(request, name, None)) is not None
     }
     metadata: dict[str, Any] | None = None
+    mandate_key = getattr(request, "mandate_key", None)
+    if mandate_key:
+        # Attribution: conversation_handler stamps mandate:<key> from this (same as the server).
+        metadata = {**ctx.metadata, "mandate_key": mandate_key}
+        overrides["source_feature"] = f"mandate:{mandate_key}"
     scope_ids = getattr(request, "scope_ids", None)
     if scope_ids is not None:
-        metadata = {**ctx.metadata, "scope_ids": list(scope_ids)}
+        metadata = {**(metadata if metadata is not None else ctx.metadata), "scope_ids": list(scope_ids)}
     dropped = context_keys_not_delivered(request)
     if dropped:
         logger.warning(

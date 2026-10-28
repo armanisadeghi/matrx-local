@@ -23,6 +23,8 @@
 
 import { useState, useCallback } from "react";
 import { chatCompletion, structuredOutput } from "@/lib/llm/api";
+import type { LlmUsage } from "@/lib/llm/types";
+import { engine } from "@/lib/api";
 import {
   fillHolderMessages,
   resolveLocalMandate,
@@ -177,15 +179,36 @@ export async function runLocalMandate<T = string>(
 
   const maxTokens = holder.settings.maxTokens;
   const temperature = holder.settings.temperature;
+  // Every mandate run, and its cost, is recorded against its mandate — on this device too.
+  // llama-server's `usage` is kept and reported to the engine after the run (a failed run is
+  // reported too); a recording failure is said in the console and never fails the run.
+  let usage: LlmUsage | undefined;
+  const startedAt = Date.now();
   const sampling = {
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(temperature !== undefined ? { temperature } : {}),
+    onUsage: (u: LlmUsage) => {
+      usage = u;
+    },
   };
-
-  if (holder.outputSchema) {
-    return structuredOutput<T>(port, messages, holder.outputSchema, sampling);
+  let failed = true;
+  try {
+    const result = holder.outputSchema
+      ? await structuredOutput<T>(port, messages, holder.outputSchema, sampling)
+      : ((await chatCompletion(port, messages, sampling)) as T);
+    failed = false;
+    return result;
+  } finally {
+    void engine
+      .post(`/local-mandates/${encodeURIComponent(mandateKey)}/runs`, {
+        usage: usage ?? {},
+        duration_ms: Date.now() - startedAt,
+        failed,
+      })
+      .catch((err: unknown) =>
+        console.error(`[mandate] could not record the ${mandateKey} run on this device`, err),
+      );
   }
-  return (await chatCompletion(port, messages, sampling)) as T;
 }
 
 // ── The hook ──────────────────────────────────────────────────────────────

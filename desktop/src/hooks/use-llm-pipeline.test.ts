@@ -65,7 +65,29 @@ describe("runLocalMandate", () => {
       { variables: { text: "hello", other: "LEAK" } },
       undefined,
     );
-    expect(chatCompletion).toHaveBeenCalledWith(1234, filled, {});
+    expect(chatCompletion).toHaveBeenCalledWith(
+      1234,
+      filled,
+      expect.objectContaining({ onUsage: expect.any(Function) }),
+    );
+  });
+
+  it("reports the run's usage to the engine so it is recorded against its mandate", async () => {
+    enginePost.mockResolvedValue({ mandate_key: "local.summarize_text", messages: [] });
+    chatCompletion.mockImplementation(
+      async (_p: number, _m: unknown, o: { onUsage: (u: unknown) => void }) => {
+        o.onUsage({ prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 });
+        return "ok";
+      },
+    );
+    await runLocalMandate(1234, LOCAL_MODEL_MANDATE_KEYS.summarizeText, { text: "x" });
+    expect(enginePost).toHaveBeenCalledWith(
+      "/local-mandates/local.summarize_text/runs",
+      expect.objectContaining({
+        usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+        failed: false,
+      }),
+    );
   });
 
   it("refuses the run, naming the block, when the engine cannot resolve it", async () => {

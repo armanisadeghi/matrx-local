@@ -44,6 +44,12 @@ from decimal import Decimal
 from typing import Any
 
 from app.common.system_logger import get_logger
+from app.services.ai.mandate_attribution import (
+    MANDATE_KEY_METADATA,
+    mandate_feature,
+    mandate_key_from_ctx,
+    mandate_run_stamp,
+)
 from app.services.local_db.database import get_db
 from app.services.local_db.mirror_schema import MIRROR_TABLES
 from app.services.local_db.outbox import enqueue_change
@@ -183,6 +189,13 @@ class SQLiteConversationStore:
             source_feature = (
                 (ctx.source_feature or "chat") if ctx is not None else "chat"
             )
+            # Mandate attribution: the run is recorded against its mandate (same stamp as
+            # the server's stamp_mandate_attribution), including on the person's device.
+            mandate_key = mandate_key_from_ctx(ctx)
+            conversation_metadata: dict[str, Any] = {}
+            if mandate_key:
+                source_feature = mandate_feature(mandate_key)
+                conversation_metadata["mandate_run"] = mandate_run_stamp(mandate_key)
             config = {
                 "mode": "chat",
                 "route_mode": overrides.get("route_mode", "chat"),
@@ -206,7 +219,7 @@ class SQLiteConversationStore:
                     metadata, cache_state, exclude_from_kg)
                    VALUES (?, 'New conversation', ?, 'active', ?, ?, ?, ?, ?,
                            ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'standard',
-                           1, '{}', '{}', 0)""",
+                           1, ?, '{}', 0)""",
                 (
                     conversation_id,
                     json.dumps(config, ensure_ascii=False),
@@ -222,6 +235,7 @@ class SQLiteConversationStore:
                     user_id,
                     _now(),
                     _now(),
+                    json.dumps(conversation_metadata),
                 ),
             )
             if cursor.rowcount:
@@ -262,17 +276,24 @@ class SQLiteConversationStore:
                 await self.ensure_conversation_exists(conversation_id, user_id)
             db = get_db()
             now = _now()
+            from matrx_connect.context.app_context import try_get_app_context
+
+            mandate_key = mandate_key_from_ctx(try_get_app_context())
+            request_metadata: dict[str, Any] = {"conversation_id": conversation_id}
+            if mandate_key:
+                request_metadata[MANDATE_KEY_METADATA] = mandate_key
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO chat.user_request
-                   (id, status, source_app, metadata, created_by,
+                   (id, status, source_app, source_feature, metadata, created_by,
                     created_at, updated_at, last_activity_at,
                     total_input_tokens, total_output_tokens, total_cached_tokens,
                    total_tokens, iterations, total_tool_calls, version)
-                   VALUES (?, 'pending', 'matrx_local', ?, ?, ?, ?, ?,
+                   VALUES (?, 'pending', 'matrx_local', ?, ?, ?, ?, ?, ?,
                            0, 0, 0, 0, 0, 0, 1)""",
                 (
                     request_id,
-                    json.dumps({"conversation_id": conversation_id}),
+                    mandate_feature(mandate_key) if mandate_key else None,
+                    json.dumps(request_metadata),
                     user_id,
                     now,
                     now,

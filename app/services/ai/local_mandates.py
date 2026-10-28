@@ -116,6 +116,37 @@ class LocalMandateResolver:
         )
         return resolution, organization_id, fetched_at
 
+    async def record_run(
+        self,
+        mandate_key: str,
+        *,
+        usage: dict[str, Any],
+        duration_ms: int | None = None,
+        failed: bool = False,
+    ) -> dict[str, str]:
+        """Record a run llama-server answered against its mandate (see mandate_attribution)."""
+        from app.services.ai.mandate_attribution import record_local_model_run
+
+        token = await self._token_repo.get()
+        user_id = (token or {}).get("user_id") or await self._token_repo.get_owner_user_id()
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "authentication_required",
+                    "message": f"Sign in to AI Matrx — the {mandate_key} run cannot be recorded "
+                    "against your account on a device that has never been signed in.",
+                },
+            )
+        return await record_local_model_run(
+            mandate_key=mandate_key,
+            user_id=str(user_id),
+            organization_id=await get_device_organization(str(user_id)),
+            usage=usage,
+            duration_ms=duration_ms,
+            failed=failed,
+        )
+
     async def resolve(self, mandate_key: str) -> dict[str, Any]:
         token = await self._token_repo.get()
         jwt: str | None = None

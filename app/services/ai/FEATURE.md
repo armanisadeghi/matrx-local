@@ -11,11 +11,11 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
   ledger). What a client cannot do is reach server-only tables directly, so for exactly those it
   calls an **API**. Mandate resolution is one of them: `matrx_ai.configure()` auto-installs
   `ServerMandateSource` because `engine.py` supplies both `server_url` and `get_jwt`, so a Mandate
-  resolves over `GET {server_url}/api/mandates/{mandate_key}/resolution` with the SAME precedence
-  the server uses for itself (system default → org binding → user binding), and a user's rebind
+  reads the server's answer from `GET {server_url}/api/mandates/{mandate_key}/resolution` (system
+  default → org binding → user binding, decided by the server; desktop keeps no ladder of its own) to run it here, and a user's rebind
   reaches desktop with no deploy. A missing capability is a missing API call to add, never a licence
   to hardcode an agent id. Cross-repo law:
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/STATE.md`.
+  `/Users/armanisadeghi/code/common-docs/systems/intelligence/mandates/STATE.md` § 9.
 - A successful terminal turn must contain user-visible output. The shared
   orchestrator enforces this; `local_ai_task` repeats the check as a packaging
   backstop and converts reasoning-only stops into a persisted failed turn plus

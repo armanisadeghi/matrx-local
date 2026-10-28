@@ -84,7 +84,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
   Chat, its prompt library, Tools/Raw modes) resolve `local.*` mandates through the engine's
   offline-cached `GET /local-mandates/{key}`; guard `pnpm check:code-prompts`. Never add an
   agent UUID or a prompt here. →
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/STATE.md` (+ `STATE.md`, `ROLLOUT.md`)
+  `/Users/armanisadeghi/code/common-docs/systems/intelligence/mandates/STATE.md` § 9 (the server alone decides; a run on this device is recorded against its mandate)
 - **No unapproved schedules.** Every scheduled task exists only with Arman's approval
   by name and interval, registered and claimed via the master registry. →
   `/Users/armanisadeghi/code/common-docs/operations/scheduled-tasks.md`

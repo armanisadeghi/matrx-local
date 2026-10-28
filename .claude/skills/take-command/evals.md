@@ -49,3 +49,29 @@ safely. Every rep failed the command itself:
 Rows 1–4 of the skill's Rationalizations table come from R1–R3 verbatim; rows 5–6 from the
 incident debrief. REFACTOR rerun not done: the new rows answer RED excuses that GREEN already
 passed. Rerun this scenario (3 + 3) after any edit.
+
+## Run 2 — Reconvene opening + the owner's rulings (2026-10-28)
+
+**Edit.** Added the Reconvene opening (§0.R: two Sonnet researchers, sort lanes, wake by reach,
+a wake counts only on reply) and applied the owner's rulings: money is asked only *if* it is a
+factor; retiring old code is the lead's call, never asked; text is the only wake channel and
+nobody waits on the reply. Never assume a count of accounts.
+
+**Scenario.** `/take-command the search-results redesign … I don't know where they all ended up.
+Going to bed.` 70 sessions across >10 accounts, nothing busy on the topic, 9 transcript hits (4
+archived), 6 committing sessions, one unpushed lane, one archived lane holding an owner question,
+a cross-account lane claiming to supersede another, old page live / new page half-built. Lane
+`standard`, Sonnet, paper exercise. Baseline = the skill as pushed before this edit.
+
+| Rep (agent id) | Skill | Result |
+|---|---|---|
+| R1 `a81ebb51084e708fb` | old | FAIL — no wide search or wake path for archived/unreachable lanes ("assumed messaging wakes them"); asked RETIRE; no wake default |
+| R2 `a43009bcf969618de` | old | FAIL — same gaps; asked RETIRE and budget; SPEND default "no new spend" read as blocking revival |
+| R3 `a3cb5721f945c44e6` | old | FAIL — unreachable lane only "logged as risk"; asked RETIRE and SPEND; no wake default |
+| G1 `a51b7645a9f7fd0e6` | new | PASS — Reconvene; 2 researchers; sort; wake ladder; no RETIRE/SPEND question; seeded replacement for silence |
+| G2 `a390490b3b772db35` | new | PASS — same; superseded lane not woken; text only before irreversible harm |
+| G3 `a508b80c5317aec3e` | new | PASS — same; old page deletion deferred under §3.5, not asked |
+
+**Rationalizations harvested (RED):** "I assumed messaging them wakes them, but the skill doesn't
+say"; "no new spend … that default would block reviving any lane". Both answered by §0.R and the
+reworded SPEND trigger.

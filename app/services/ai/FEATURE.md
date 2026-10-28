@@ -64,3 +64,14 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
 
 - Conversation history/export excludes soft-deleted `chat.tool_trace` rows,
   including tombstones restored by schema hydration; the mirror retains them for sync.
+
+- **Every mandate run, and its cost, is recorded against its mandate on this device too**
+  (Arman, 2026-10-28). Stamp = the server's (`stamp_mandate_attribution` / `mandate_run_stamp`):
+  `source_feature = mandate:<key>` on `chat.conversation` and `chat.user_request`,
+  `user_request.metadata.mandate_key`, `conversation.metadata.mandate_run`. Engine path: a request
+  carrying `mandate_key` (`LocalScopedRequest`) puts it in `ctx.metadata` and `conversation_handler`
+  stamps it. Local-model path: the desktop calls llama-server directly, keeps its `usage`, and
+  reports `POST /local-mandates/{key}/runs` -> `mandate_attribution.record_local_model_run`
+  (tokens from `usage`, `total_cost = 0`, enqueued for chat_sync like any run). The chat push is
+  direct PostgREST to the `chat` schema (no aidream filter); `chat_sync/engine.py` already allows
+  `source_feature` and `metadata`. Test: `tests/unit/test_mandate_runs_are_recorded_on_device.py`.

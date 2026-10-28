@@ -138,10 +138,22 @@ class LocalMandateResolver:
                     "against your account on a device that has never been signed in.",
                 },
             )
+        organization_id = await get_device_organization(str(user_id))
+        if not organization_id:
+            # The cloud row requires an organization; a row without one would sit in the
+            # outbox and fail every sync push with nobody told.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "organization_required",
+                    "message": f"Choose an organization — the {mandate_key} run cannot be recorded "
+                    "without one.",
+                },
+            )
         return await record_local_model_run(
             mandate_key=mandate_key,
             user_id=str(user_id),
-            organization_id=await get_device_organization(str(user_id)),
+            organization_id=organization_id,
             usage=usage,
             duration_ms=duration_ms,
             failed=failed,

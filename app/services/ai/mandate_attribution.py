@@ -75,6 +75,10 @@ async def record_local_model_run(
     ``total_cost`` is 0 for a local model (it costs the person nothing but time) — written
     explicitly so the run is a priced run of 0, not an unpriced one.
     """
+    if not organization_id:
+        # chat.conversation / chat.user_request require an organization in the cloud: a row
+        # without one would sit in the outbox and fail every sync push with nobody told.
+        raise ValueError(f"the {mandate_key} run cannot be recorded without an organization")
     from app.services.local_db.database import get_db  # noqa: PLC0415
     from app.services.local_db.outbox import enqueue_change  # noqa: PLC0415
 

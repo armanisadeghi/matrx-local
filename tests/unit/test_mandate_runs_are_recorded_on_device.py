@@ -46,7 +46,7 @@ def test_local_model_run_is_recorded_against_its_mandate(tmp_path: Path) -> None
         ids = await record_local_model_run(
             mandate_key=KEY,
             user_id="u1",
-            organization_id=None,
+            organization_id="00000000-0000-4000-8000-000000000001",
             usage={"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
             duration_ms=900,
         )
@@ -70,6 +70,22 @@ def test_local_model_run_is_recorded_against_its_mandate(tmp_path: Path) -> None
     assert json.loads(req["metadata"])["mandate_key"] == KEY
     assert (req["total_input_tokens"], req["total_output_tokens"], req["total_tokens"]) == (120, 30, 150)
     assert req["total_cost"] == 0
+
+
+def test_a_run_with_no_organization_is_refused_not_queued(tmp_path: Path) -> None:
+    """The cloud tables require an organization; an org-less row would fail every sync push."""
+    import pytest
+
+    async def body(db: LocalDatabase) -> Any:
+        from app.services.ai.mandate_attribution import record_local_model_run
+
+        with pytest.raises(ValueError, match="without an organization"):
+            await record_local_model_run(
+                mandate_key=KEY, user_id="u1", organization_id=None, usage={"total_tokens": 5}
+            )
+        return await db.fetchall("SELECT entity_id FROM sync_queue")
+
+    assert _with_db(tmp_path, body) == []
 
 
 def test_engine_run_with_a_mandate_key_stamps_it(tmp_path: Path) -> None:

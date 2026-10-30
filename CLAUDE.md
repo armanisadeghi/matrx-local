@@ -70,6 +70,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 
 ## Platform laws (canonical bodies in common-docs; one-liners only here)
 
+- 🚨 **Every action is registered** (Arman, 2026-10-30) — every named thing this app can do (a client-side action, a surface action, a Redux action, an API call, an integration call) belongs in the ONE Action registry: name, typed input, engine, typed output; a private action list is unfinished work. Rules and what is owed: `/Users/armanisadeghi/code/aidream/common-docs/systems/platform/actions/STATE.md`.
 - **The Platform List is Arman's alone.** Never read it at session start: a hook on Arman's Mac tells the first attended session of the day when a row is due, and only that session tells him (he snoozes by naming a new date). Only Arman adds, kills, or removes a row. Agents suggest in plain English and never write copies, histories, or "deleted" notes anywhere. Skill: `platform-list`.
 - **Clients consume, never reimplement.** No agent UUID, prompt, resolution ladder, or
   rebuilt server-owned record in this repo; ask the platform by name. Sole exception:

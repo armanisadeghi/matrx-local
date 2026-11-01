@@ -98,14 +98,14 @@ export interface ReasoningPayload {
 }
 
 export interface PhasePayload {
-  phase: "connected" | "processing" | "generating" | "using_tools" | "persisting" | "searching" | "scraping" | "analyzing" | "synthesizing" | "retrying" | "executing" | "complete";
+  phase: "analyzing" | "complete" | "connected" | "executing" | "generating" | "persisting" | "processing" | "retrying" | "scraping" | "searching" | "synthesizing" | "using_tools";
 }
 
 export interface WarningPayload {
   code: string;
   system_message: string;
   user_message?: string | null;
-  level?: "low" | "medium" | "high";
+  level?: "high" | "low" | "medium";
   recoverable?: boolean;
   metadata?: Record<string, unknown>;
 }
@@ -118,16 +118,16 @@ export interface InfoPayload {
 }
 
 export interface InitPayload {
-  operation: "llm_request" | "tool_execution" | "user_request" | "sub_agent" | "persistence";
+  operation: "llm_request" | "persistence" | "sub_agent" | "tool_execution" | "user_request";
   operation_id: string;
   parent_operation_id?: string | null;
   metadata?: Record<string, unknown>;
 }
 
 export interface CompletionPayload {
-  operation: "llm_request" | "tool_execution" | "user_request" | "sub_agent" | "persistence";
+  operation: "llm_request" | "persistence" | "sub_agent" | "tool_execution" | "user_request";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result?: Record<string, unknown>;
 }
 
@@ -140,7 +140,7 @@ export interface ErrorPayload {
 }
 
 export interface ProviderRetryPayload {
-  state: "scheduled" | "retrying_now" | "cancelled" | "suspended" | "recovered";
+  state: "cancelled" | "recovered" | "retrying_now" | "scheduled" | "suspended";
   provider: string;
   error_type: string;
   message: string;
@@ -163,7 +163,7 @@ export interface ProviderRetryPayload {
 }
 
 export interface ToolEventPayload {
-  event: "tool_started" | "tool_progress" | "tool_step" | "tool_result_preview" | "tool_completed" | "tool_error" | "tool_delegated";
+  event: "tool_completed" | "tool_delegated" | "tool_error" | "tool_progress" | "tool_result_preview" | "tool_started" | "tool_step";
   call_id: string;
   tool_name: string;
   timestamp?: number;
@@ -186,7 +186,7 @@ export interface RenderBlockPayload {
   blockId: string;
   blockIndex: number;
   type: string;
-  status: "streaming" | "complete" | "error";
+  status: "complete" | "error" | "streaming";
   content?: string | null;
   data?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
@@ -199,6 +199,7 @@ export interface RecordReservedPayload {
   status?: "pending";
   parent_refs?: Record<string, string>;
   metadata?: Record<string, unknown>;
+  created_at?: string | null;
 }
 
 export interface RecordUpdatePayload {
@@ -207,11 +208,12 @@ export interface RecordUpdatePayload {
   record_id: string;
   status: "active" | "completed" | "failed";
   metadata?: Record<string, unknown>;
+  created_at?: string | null;
 }
 
 export interface ResourceChangedPayload {
   kind: string;
-  action: "created" | "modified" | "deleted" | "moved" | "renamed" | "invalidated";
+  action: "created" | "deleted" | "invalidated" | "modified" | "moved" | "renamed";
   resource_id: string;
   sandbox_id?: string | null;
   user_id?: string | null;
@@ -296,7 +298,7 @@ export interface CxMessageReservedParentRefs {
 
 export interface CxMessageReservedMetadata {
   [key: string]: unknown;
-  role: "user" | "assistant" | "system" | "tool";
+  role: "assistant" | "system" | "tool" | "user";
   position: number;
 }
 
@@ -375,12 +377,80 @@ export interface DataPayload {
   type: string;
 }
 
+export interface AgentStudioFromChatProgressData {
+  type?: "agent_studio_from_chat_progress";
+  step: "briefing" | "building" | "proving" | "reading";
+  says: string;
+  build_id?: string | null;
+  proof_cases?: number | null;
+  run_conversation_id?: string | null;
+  brief?: Record<string, unknown> | null;
+  scope?: Record<string, unknown> | null;
+}
+
+export interface AgentStudioBriefVariable {
+  name: string;
+  description?: string;
+  test_value?: string;
+}
+
+export interface AgentStudioFromChatResultData {
+  type?: "agent_studio_from_chat_result";
+  conversation_id: string;
+  agent_id: string;
+  version_id: string;
+  agent_name: string;
+  summary?: string;
+  deliverable?: string;
+  goals?: string[];
+  variables?: AgentStudioBriefVariable[];
+  fit?: string;
+  fit_reason?: string;
+  accepted_turns?: number[];
+  accepted_result?: string | null;
+  proof_output?: string | null;
+  proof_error?: string | null;
+  brief_conversation_id?: string | null;
+  builder_conversation_id?: string | null;
+  proof_conversation_id?: string | null;
+  says: string;
+}
+
+export interface AgentTestProgressEvent {
+  type?: "agent_test_progress";
+  run_id: string;
+  counts?: Record<string, unknown>;
+}
+
+export interface AgentTestResultEvent {
+  type?: "agent_test_result";
+  run_id: string;
+  result_id: string;
+  verdict?: string | null;
+  door?: string | null;
+  setup_key?: string | null;
+}
+
+export interface AgentTestRunStartedEvent {
+  type?: "agent_test_run_started";
+  run_id: string;
+  execution_id: string;
+  result_count?: number;
+  status?: string;
+}
+
+export interface AgentTestRunStatusEvent {
+  type?: "agent_test_run_status";
+  run_id: string;
+  status: string;
+}
+
 export interface AssignmentProgressData {
   type?: "assignment_progress";
   session_id: string;
   completed: number;
   total: number;
-  status: "pending" | "running" | "completed" | "partially_failed" | "failed" | "cancelled";
+  status: "cancelled" | "completed" | "failed" | "partially_failed" | "pending" | "running";
 }
 
 export interface AudioOutputData {
@@ -395,10 +465,11 @@ export interface AudioOutputData {
 export interface AudioStreamChunkData {
   type?: "audio_stream_chunk";
   stream_id: string;
+  take?: number;
   seq: number;
   audio_base64: string;
   mime_type?: string;
-  encoding?: "pcm_s16le" | "mp3";
+  encoding?: "mp3" | "pcm_s16le";
   sample_rate?: number;
   bits_per_sample?: number;
   channels?: number;
@@ -407,6 +478,7 @@ export interface AudioStreamChunkData {
 export interface AudioStreamEndData {
   type?: "audio_stream_end";
   stream_id: string;
+  take?: number;
   total_chunks: number;
   url?: string;
   mime_type?: string;
@@ -417,6 +489,47 @@ export interface AudioStreamEndData {
   sample_rate?: number;
   bits_per_sample?: number;
   channels?: number;
+}
+
+export interface EsignBulkSendCreatedData {
+  type?: "bulk_send_created";
+  campaign_id: string;
+  rows: number;
+}
+
+export interface EsignBulkSendResultData {
+  type?: "bulk_send_result";
+  campaign_id: string;
+  total: number;
+  sent?: number;
+  failed?: number;
+  reminded?: number;
+  status?: string | null;
+}
+
+export interface EsignBulkSendRowData {
+  type?: "bulk_send_row";
+  done: number;
+  total: number;
+  member_id?: string | null;
+  row_no?: number | null;
+  full_name?: string | null;
+  email?: string | null;
+  status: string;
+  envelope_id?: string | null;
+  reason?: string | null;
+}
+
+export interface EsignBulkSendRowProblem {
+  row_no: number;
+  role_key?: string | null;
+  code: string;
+  message: string;
+}
+
+export interface EsignBulkSendRowsInvalidData {
+  type?: "bulk_send_rows_invalid";
+  problems: EsignBulkSendRowProblem[];
 }
 
 export interface CategorizationResultData {
@@ -491,7 +604,7 @@ export interface ContextDeltaData {
   source_kind?: string;
   source_id?: string | null;
   seq?: number;
-  delta_kind?: "splice" | "full";
+  delta_kind?: "full" | "splice";
   start?: number | null;
   end?: number | null;
   text?: string | null;
@@ -520,24 +633,79 @@ export interface ContextPersistedData {
 }
 
 export interface ContextDecidedBy {
-  include: "default" | "page" | "agent" | "you";
-  max_inline_chars: "default" | "page" | "agent" | "you";
+  include: "agent" | "default" | "page" | "you";
+  max_inline_chars: "agent" | "default" | "page" | "you";
+}
+
+export interface ContextDeliveredRef {
+  chars: number;
+  sha256: string;
+}
+
+export interface ContextReceiptBlock {
+  id: string;
+  label: string;
+  delivered: ContextDeliveredRef;
+}
+
+export interface ContextReceiptPassthrough {
+  conductor_id: string;
+  mode: "closed" | "handed_over" | "mirror";
+  person_and_org: boolean;
+  handed_over?: string[];
+  mirrored?: string[];
+  declared?: string[];
+  withheld?: ContextReceiptPassthroughWithheld[];
+  overrides?: ContextReceiptPassthroughOverride[];
+}
+
+export interface ContextReceiptPassthroughOverride {
+  key: string;
+  show?: "pointer" | "whole" | null;
+  limit?: number | null;
+}
+
+export interface ContextReceiptPassthroughWithheld {
+  key: string;
+  reason: "closed" | "conductor_owned" | "page_off" | "person_and_org_off" | "refused";
+}
+
+export interface ContextReceiptRoomView {
+  participant_id: string;
+  participant_key: string;
+  round: number;
+  policy_version: number;
+  included?: string[];
+  digested?: string[];
+  withheld?: ContextReceiptWithheldItem[];
+  error?: string | null;
 }
 
 export interface ContextReceiptRow {
   key: string;
   label: string;
   surface_key: string;
-  origin: "client" | "server" | "surroundings" | "rule";
+  origin: "client" | "rule" | "server" | "surroundings";
   chars?: number | null;
   include: boolean;
   max_inline_chars: number;
-  delivery: "inline" | "on_request" | "off";
+  delivery: "inline" | "off" | "on_request";
   decided_by: ContextDecidedBy;
   user_rule?: ContextRule | null;
   clamped?: boolean;
   client_sent_excluded?: boolean;
   blocked_by?: "model" | "self_check" | null;
+  consumed_as?: "directive" | "expanded" | "renamed" | "unaccounted" | null;
+  consumed_into?: string[];
+  delivered?: ContextDeliveredRef | null;
+  on_request?: ContextDeliveredRef | null;
+}
+
+export interface ContextReceiptWithheldItem {
+  message_id: string;
+  conversation_id: string;
+  speaker: string;
+  rule: string;
 }
 
 export interface ContextRule {
@@ -553,6 +721,9 @@ export interface ContextReceiptData {
   model_reads_context?: boolean;
   rows?: ContextReceiptRow[];
   rules_error?: string | null;
+  blocks?: ContextReceiptBlock[];
+  room_view?: ContextReceiptRoomView | null;
+  passthrough?: ContextReceiptPassthrough | null;
 }
 
 export interface ConversationIdData {
@@ -626,12 +797,27 @@ export interface CutoverFinalSwitchStageData {
 
 export interface DecisionAnswerBlock {
   __kind?: "decision_answer";
-  type: "noul" | "choice" | "score";
-  answer: boolean | number | string;
+  type: "box" | "choice" | "noul" | "score";
+  answer: DecisionBoxBlock | boolean | number | string;
   probability?: number | null;
   probabilities?: Record<string, number> | null;
-  confidence: number;
+  confidence?: number | null;
   legend?: Record<string, string> | null;
+  image?: number | null;
+}
+
+export interface DecisionBoxBlock {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+export interface DecisionImageBlock {
+  file_id?: string | null;
+  url?: string | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface DecisionUsageBlock {
@@ -648,6 +834,70 @@ export interface DecisionAnswersData {
   unanswerable?: Record<string, string>;
   usage: DecisionUsageBlock;
   cost_usd: number;
+  images?: DecisionImageBlock[];
+}
+
+export interface DecisionReferenceItemData {
+  type?: "decision_reference_item";
+  run_id: string;
+  item_id: string;
+  question: string;
+  reference_id?: string | null;
+  reference_answer: Record<string, number> | boolean | number | string;
+  reference_verdict: string;
+  reference_p?: number | null;
+  reference_probability?: number | null;
+  reference_probabilities?: Record<string, number> | null;
+  reference_legend?: Record<string, string> | null;
+  item_verdict: string;
+  item_p_answer?: number | null;
+  item_probability?: number | null;
+  item_probabilities?: Record<string, number> | null;
+  item_confidence?: number | null;
+  agree: boolean;
+  already_checked?: boolean;
+  model?: string | null;
+  cost_usd: number;
+  latency_ms: number;
+}
+
+export interface DecisionReferenceItemFailedData {
+  type?: "decision_reference_item_failed";
+  run_id: string;
+  item_id: string;
+  question: string;
+  error: string;
+  status?: "failed" | "in_flight" | "unanswerable" | "unbuildable";
+  reference_id?: string | null;
+  already_checked?: boolean;
+}
+
+export interface DecisionReferenceRunDoneData {
+  type?: "decision_reference_run_done";
+  run_id: string;
+  done: number;
+  failed: number;
+  unanswerable?: number;
+  in_flight?: number;
+  agreement_rate?: number | null;
+  cost_usd: number;
+}
+
+export interface DecisionReferenceModel {
+  id: string;
+  name: string;
+}
+
+export interface DecisionReferenceRunStartedData {
+  type?: "decision_reference_run_started";
+  run_id: string;
+  agent_id: string;
+  item_count: number;
+  skipped_existing?: number;
+  in_flight?: number;
+  unbuildable?: number;
+  reference_model: DecisionReferenceModel;
+  judge_key: string;
 }
 
 export interface DictionaryPublishCompleteData {
@@ -664,7 +914,7 @@ export interface DictionaryPublishCompleteData {
 export interface QuestionnaireQuestion {
   id: string;
   prompt: string;
-  component_type: "dropdown" | "checkboxes" | "radio" | "toggle" | "slider" | "input" | "textarea";
+  component_type: "checkboxes" | "dropdown" | "input" | "radio" | "slider" | "textarea" | "toggle";
   options?: string[];
   min?: number | null;
   max?: number | null;
@@ -795,6 +1045,13 @@ export interface FileSearchStartedData {
   total_pages: number;
 }
 
+export interface FirstTurnFilledData {
+  type?: "first_turn_filled";
+  system_instruction?: string | null;
+  messages?: Record<string, unknown>[];
+  wire_swaps?: string | null;
+}
+
 export interface FunctionResultData {
   type?: "function_result";
   function_name: string;
@@ -912,6 +1169,97 @@ export interface MediaSelectionJobProgressData {
   totals?: Record<string, number>;
 }
 
+export interface KnowledgeBucketsDryRunDoneData {
+  type?: "knowledge_buckets_dry_run_done";
+  subject_user_id: string;
+  organizations: number;
+  items: number;
+  seconds: number;
+}
+
+export interface KnowledgeBucketsFollowUpDoneData {
+  type?: "knowledge_buckets_follow_up_done";
+  kind: "merge" | "split";
+  outcome: "existing" | "made" | "none";
+  ids?: string[];
+  why?: string;
+}
+
+export interface KnowledgeBucketsFollowUpProgressData {
+  type?: "knowledge_buckets_follow_up_progress";
+  kind: "merge" | "split";
+  stage: "agent" | "entities" | "read" | "search" | "write";
+  detail: string;
+  done?: number;
+  total?: number;
+}
+
+export interface KnowledgeBucketsOrgCounts {
+  organization_id: string;
+  counts: Record<string, number>;
+}
+
+export interface KnowledgeBucketsInventoryData {
+  type?: "knowledge_buckets_inventory";
+  subject_user_id: string;
+  direct_counts: Record<string, number>;
+  gathered_counts: Record<string, number>;
+  counts_match: boolean;
+  mismatches?: Record<string, number[]>;
+  unmapped?: Record<string, number>;
+  excluded?: Record<string, number>;
+  per_org?: KnowledgeBucketsOrgCounts[];
+}
+
+export interface KnowledgeBucketCandidate {
+  key: string;
+  name: string;
+  origin: string[];
+  homes: number;
+  by_group: Record<string, number>;
+  weeks: number;
+  score: number;
+  score_all: number;
+  entity_share: number;
+  obvious: boolean;
+  own_homes?: string[];
+  outside: number;
+  entity_kinds?: Record<string, number>;
+  existing_scope?: KnowledgeBucketCandidateScope | null;
+}
+
+export interface KnowledgeBucketCandidateScope {
+  kind: "scope" | "scope_type";
+  id: string;
+  name: string;
+}
+
+export interface KnowledgeBucketsOrgSpreadData {
+  type?: "knowledge_buckets_org_spread";
+  organization_id: string;
+  homes: number;
+  items_scored: number;
+  items_with_text: number;
+  items_with_entities: number;
+  automation_skipped?: number;
+  derived_files_skipped?: number;
+  excluded?: Record<string, Record<string, number>>;
+  candidates: number;
+  scope_types: number;
+  scopes: number;
+  top_matching_scopes: number;
+  top: KnowledgeBucketCandidate[];
+}
+
+export interface KnowledgeBucketsProgressData {
+  type?: "knowledge_buckets_progress";
+  stage: "homes" | "inventory" | "material" | "scopes" | "spread";
+  detail: string;
+  organization_id?: string | null;
+  done?: number;
+  total?: number;
+}
+
 export interface LegalSyncEventData {
   type?: "legal_sync_event";
   phase: string;
@@ -968,6 +1316,7 @@ export interface LibrarySyncCompletedData {
   retire_refused?: boolean;
   skipped_by_reason?: Record<string, number>;
   skipped_total?: number;
+  channel_link_error?: string | null;
 }
 
 export interface LibrarySyncFailedData {
@@ -1032,6 +1381,66 @@ export interface LibrarySyncUnavailableData {
   message: string;
   remedy?: string | null;
   partial_total?: number;
+}
+
+export interface MandateInputRequiredData {
+  type?: "mandate_input_required";
+  mandate_key: string;
+  run_id: string;
+  checkpoint_id?: string | null;
+  inputs?: Record<string, JsonValue>[];
+  message?: string;
+}
+
+export interface MandateRunData {
+  type?: "mandate_run";
+  mandate_key: string;
+  door: string;
+  request_id?: string | null;
+  conversation_id?: string | null;
+  mandate_id?: string | null;
+  provenance?: string;
+  replay_of?: string | null;
+  rung?: string | null;
+  holder_type?: string;
+  holder_id?: string | null;
+  holder_version_id?: string | null;
+  holder_version_number?: number | null;
+  holder_version_live?: boolean;
+  model_id?: string | null;
+  goal?: string | null;
+  definition_version?: number | null;
+  input_kind?: string | null;
+  output_kind?: string | null;
+  required_output_keys?: string[];
+  placement?: Record<string, JsonValue> | null;
+  placement_captured_at?: string;
+  provision_applied?: boolean;
+  holder_source?: string;
+  started_by_request_id?: string | null;
+  turn_author?: string | null;
+  turn_input?: JsonValue;
+  host_turn_reason?: string | null;
+  turn_context?: Record<string, JsonValue> | null;
+  earlier_frames?: Record<string, JsonValue>[];
+}
+
+export interface MandateTryResultData {
+  type?: "mandate_try_result";
+  mandate_key: string;
+  result: Record<string, unknown>;
+}
+
+export interface MasterworkAgentBuildData {
+  type?: "masterwork_agent_build";
+  role: string;
+  agent_name: string;
+  message: string;
+  build_id?: string | null;
+  outcome?: string | null;
+  agent_id?: string | null;
+  reason?: string | null;
+  proof_cases?: number;
 }
 
 export interface MasterworkAuditionOutcomeVerdictData {
@@ -1558,11 +1967,11 @@ export interface MasterworkTriageProgressData {
 }
 
 export interface AudioBlock {
-  origin: "matrx" | "external";
+  origin: "external" | "matrx";
   file_id?: string | null;
   published_to_web?: boolean | null;
-  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
-  visibility?: "personal" | "internal" | "link" | "public" | null;
+  shown_to?: "everyone" | "everyone_on_ai_matrx" | "my_team" | "only_me" | null;
+  visibility?: "internal" | "link" | "personal" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
   parent_file_id?: string | null;
@@ -1573,7 +1982,7 @@ export interface AudioBlock {
   mime_type?: string | null;
   file_name?: string | null;
   size_bytes?: number | null;
-  status?: "complete" | "streaming" | "error";
+  status?: "complete" | "error" | "streaming";
   progress?: number | null;
   error_message?: string | null;
   metadata?: Record<string, JsonValue>;
@@ -1583,11 +1992,11 @@ export interface AudioBlock {
 }
 
 export interface DocumentBlock {
-  origin: "matrx" | "external";
+  origin: "external" | "matrx";
   file_id?: string | null;
   published_to_web?: boolean | null;
-  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
-  visibility?: "personal" | "internal" | "link" | "public" | null;
+  shown_to?: "everyone" | "everyone_on_ai_matrx" | "my_team" | "only_me" | null;
+  visibility?: "internal" | "link" | "personal" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
   parent_file_id?: string | null;
@@ -1598,7 +2007,7 @@ export interface DocumentBlock {
   mime_type?: string | null;
   file_name?: string | null;
   size_bytes?: number | null;
-  status?: "complete" | "streaming" | "error";
+  status?: "complete" | "error" | "streaming";
   progress?: number | null;
   error_message?: string | null;
   metadata?: Record<string, JsonValue>;
@@ -1608,11 +2017,11 @@ export interface DocumentBlock {
 }
 
 export interface ImageBlock {
-  origin: "matrx" | "external";
+  origin: "external" | "matrx";
   file_id?: string | null;
   published_to_web?: boolean | null;
-  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
-  visibility?: "personal" | "internal" | "link" | "public" | null;
+  shown_to?: "everyone" | "everyone_on_ai_matrx" | "my_team" | "only_me" | null;
+  visibility?: "internal" | "link" | "personal" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
   parent_file_id?: string | null;
@@ -1623,7 +2032,7 @@ export interface ImageBlock {
   mime_type?: string | null;
   file_name?: string | null;
   size_bytes?: number | null;
-  status?: "complete" | "streaming" | "error";
+  status?: "complete" | "error" | "streaming";
   progress?: number | null;
   error_message?: string | null;
   metadata?: Record<string, JsonValue>;
@@ -1634,11 +2043,11 @@ export interface ImageBlock {
 }
 
 export interface VideoBlock {
-  origin: "matrx" | "external";
+  origin: "external" | "matrx";
   file_id?: string | null;
   published_to_web?: boolean | null;
-  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
-  visibility?: "personal" | "internal" | "link" | "public" | null;
+  shown_to?: "everyone" | "everyone_on_ai_matrx" | "my_team" | "only_me" | null;
+  visibility?: "internal" | "link" | "personal" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
   parent_file_id?: string | null;
@@ -1649,7 +2058,7 @@ export interface VideoBlock {
   mime_type?: string | null;
   file_name?: string | null;
   size_bytes?: number | null;
-  status?: "complete" | "streaming" | "error";
+  status?: "complete" | "error" | "streaming";
   progress?: number | null;
   error_message?: string | null;
   metadata?: Record<string, JsonValue>;
@@ -1664,8 +2073,8 @@ export interface YouTubeBlock {
   origin?: "external";
   file_id?: string | null;
   published_to_web?: boolean | null;
-  shown_to?: "only_me" | "my_team" | "everyone" | "everyone_on_ai_matrx" | null;
-  visibility?: "personal" | "internal" | "link" | "public" | null;
+  shown_to?: "everyone" | "everyone_on_ai_matrx" | "my_team" | "only_me" | null;
+  visibility?: "internal" | "link" | "personal" | "public" | null;
   cdn_url?: string | null;
   download_url?: string | null;
   parent_file_id?: string | null;
@@ -1676,7 +2085,7 @@ export interface YouTubeBlock {
   mime_type?: string | null;
   file_name?: string | null;
   size_bytes?: number | null;
-  status?: "complete" | "streaming" | "error";
+  status?: "complete" | "error" | "streaming";
   progress?: number | null;
   error_message?: string | null;
   metadata?: Record<string, JsonValue>;
@@ -1692,7 +2101,7 @@ export interface MediaBlockData {
 export interface MediaNoticeData {
   type?: "media_notice";
   media_kind: string;
-  action: "dropped" | "extracted" | "transcribed" | "converted";
+  action: "converted" | "dropped" | "extracted" | "transcribed";
   user_message: string;
   system_message?: string;
   provider?: string | null;
@@ -1717,13 +2126,13 @@ export interface MediaResearchRow {
   party_id: string;
   name: string;
   outlet?: string | null;
-  status: "fit" | "soft_fit" | "research_needed" | "cut";
+  status: "cut" | "fit" | "research_needed" | "soft_fit";
   rank?: number;
   why_them?: string;
   anchor?: MediaResearchAnchor | null;
   pitch_note?: string | null;
   cut_reason?: string | null;
-  contact_state?: "verified" | "quarantined" | "unresolved";
+  contact_state?: "quarantined" | "unresolved" | "verified";
   contact_address?: string | null;
   contact_note?: string | null;
   first_wave?: boolean;
@@ -1734,7 +2143,7 @@ export interface MediaResearchRow {
 export interface MediaResearchProgressData {
   type?: "media_research_progress";
   run_key: string;
-  stage: "approved" | "search" | "resolve" | "judge" | "contacts" | "first_wave" | "save";
+  stage: "approved" | "contacts" | "first_wave" | "judge" | "resolve" | "save" | "search";
   percent: number;
   says: string;
   found?: number;
@@ -1835,7 +2244,7 @@ export interface PdfClassifyCompleteData {
 
 export interface PdfCleanStartedData {
   type?: "pdf_clean_started";
-  mode?: "per_page" | "aggregate";
+  mode?: "aggregate" | "per_page";
   doc_id: string;
   total_pages?: number;
 }
@@ -1844,6 +2253,9 @@ export interface PdfExtractCompleteData {
   type?: "pdf_extract_complete";
   filename?: string | null;
   page_count: number;
+  total_pages?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
   ocr_pages: number;
   total_chars: number;
   text_content: string;
@@ -2031,7 +2443,7 @@ export interface PlanCmsFillPreviewData {
   model?: string;
   wrote?: boolean;
   is_published?: boolean;
-  write_target?: "live" | "draft";
+  write_target?: "draft" | "live";
   global_css?: string;
   header_html?: string;
   footer_html?: string;
@@ -2211,7 +2623,7 @@ export interface ProofEvaluatedData {
   run_id: string;
   proof_id: string;
   title: string;
-  status: "passed" | "failed" | "skipped";
+  status: "failed" | "passed" | "skipped";
   required?: boolean;
   detail?: string;
   observed?: Record<string, JsonValue>;
@@ -2222,7 +2634,7 @@ export interface ProofRunCompletedData {
   run_id: string;
   slug: string;
   mode: "live" | "replay";
-  verdict: "pass" | "fail" | "inconclusive";
+  verdict: "fail" | "inconclusive" | "pass";
   strength: "live_receipts" | "replay_only";
   summary?: string;
   passed?: number;
@@ -2317,6 +2729,55 @@ export interface SearchResultsData {
   results?: SearchResultItem[];
 }
 
+export interface SocialResultEvent {
+  type?: "social_result";
+  operation: "ingest_post" | "ingest_profile" | "refresh" | "track";
+  result: Record<string, JsonValue>;
+}
+
+export interface SocialStageEvent {
+  type?: "social_stage";
+  operation: "ingest_post" | "ingest_profile" | "refresh" | "track";
+  stage: string;
+  label: string;
+  current?: number;
+  total?: number;
+}
+
+export interface LandedSourceRefData {
+  envelope?: "resource_ref";
+  resource_type: "file" | "processed_document";
+  resource_id: string;
+  label?: string | null;
+}
+
+export interface LandingNoticeData {
+  code: string;
+  message: string;
+  remedy?: string;
+}
+
+export interface SourceLandUrlResultData {
+  type?: "source_land_url_result";
+  kind: "file" | "web_page" | "youtube";
+  url: string;
+  canonical_url?: string | null;
+  file_id?: string | null;
+  processed_document_id?: string | null;
+  reused_existing?: boolean;
+  mime_type?: string | null;
+  name: string;
+  ref: LandedSourceRefData;
+  notices?: LandingNoticeData[];
+}
+
+export interface SourceLandUrlStageData {
+  type?: "source_land_url_stage";
+  stage: "fetching" | "landing" | "scraping" | "transcribing";
+  url: string;
+  detail?: string;
+}
+
 export interface StructuredInputFailure {
   url?: string;
   ref?: string;
@@ -2327,6 +2788,37 @@ export interface StructuredInputWarningData {
   type?: "structured_input_warning";
   block_type: string;
   failures?: StructuredInputFailure[];
+}
+
+export interface VaultPasswordHealthDiscoveryReference {
+  request_id: string;
+  execution_id: string;
+}
+
+export interface VaultPasswordHealthDiscoveryPageData {
+  type?: "vault_password_health_discovery_page";
+  references: VaultPasswordHealthDiscoveryReference[];
+  continuation?: string | null;
+}
+
+export interface VaultPasswordHealthProgressData {
+  type?: "vault_password_health_progress";
+  request_id: string;
+  execution_id: string;
+  checked: number;
+  skipped: number;
+}
+
+export interface VaultPasswordHealthScanReferenceData {
+  type?: "vault_password_health_scan_reference";
+  request_id: string;
+  execution_id: string;
+  resumed_from_execution_id?: string | null;
+  status_path: string;
+  events_path: string;
+  rejoin_path: string;
+  result_path: string;
+  resume_path: string;
 }
 
 export interface VideoOutputData {
@@ -2367,6 +2859,12 @@ export interface YouTubeTranscriptSourceData {
 }
 
 export type TypedDataPayload =
+  | AgentStudioFromChatProgressData
+  | AgentStudioFromChatResultData
+  | AgentTestProgressEvent
+  | AgentTestResultEvent
+  | AgentTestRunStartedEvent
+  | AgentTestRunStatusEvent
   | AssignmentProgressData
   | AudioOutputData
   | AudioStreamChunkData
@@ -2389,7 +2887,15 @@ export type TypedDataPayload =
   | CutoverFinalSwitchResultData
   | CutoverFinalSwitchStageData
   | DecisionAnswersData
+  | DecisionReferenceItemData
+  | DecisionReferenceItemFailedData
+  | DecisionReferenceRunDoneData
+  | DecisionReferenceRunStartedData
   | DictionaryPublishCompleteData
+  | EsignBulkSendCreatedData
+  | EsignBulkSendResultData
+  | EsignBulkSendRowData
+  | EsignBulkSendRowsInvalidData
   | ExtractionIndexCompleteData
   | ExtractionIndexProgressData
   | FetchResultsData
@@ -2399,6 +2905,7 @@ export type TypedDataPayload =
   | FileSearchCompleteData
   | FileSearchPageData
   | FileSearchStartedData
+  | FirstTurnFilledData
   | FunctionResultData
   | ImageDocumentDetectedData
   | ImageEditCompleteData
@@ -2409,6 +2916,12 @@ export type TypedDataPayload =
   | ImageStudioCommitItemData
   | ImageStudioProcessCompleteData
   | ImageStudioVariantData
+  | KnowledgeBucketsDryRunDoneData
+  | KnowledgeBucketsFollowUpDoneData
+  | KnowledgeBucketsFollowUpProgressData
+  | KnowledgeBucketsInventoryData
+  | KnowledgeBucketsOrgSpreadData
+  | KnowledgeBucketsProgressData
   | LegalSyncEventData
   | LibrarySyncClassifiedData
   | LibrarySyncCompletedData
@@ -2418,6 +2931,10 @@ export type TypedDataPayload =
   | LibrarySyncPersistedData
   | LibrarySyncStartedData
   | LibrarySyncUnavailableData
+  | MandateInputRequiredData
+  | MandateRunData
+  | MandateTryResultData
+  | MasterworkAgentBuildData
   | MasterworkAuditionOutcomeVerdictData
   | MasterworkAuditionProgressData
   | MasterworkAuditionVerdictData
@@ -2506,7 +3023,14 @@ export type TypedDataPayload =
   | ScrapeBatchCompleteData
   | SearchErrorData
   | SearchResultsData
+  | SocialResultEvent
+  | SocialStageEvent
+  | SourceLandUrlResultData
+  | SourceLandUrlStageData
   | StructuredInputWarningData
+  | VaultPasswordHealthDiscoveryPageData
+  | VaultPasswordHealthProgressData
+  | VaultPasswordHealthScanReferenceData
   | VideoOutputData
   | WorkflowNodeTestResultData
   | WorkflowStepData
@@ -2677,6 +3201,7 @@ export interface TimingStatsResult {
   processing_duration?: number | null;
   iterations?: number | null;
   avg_iteration_duration?: number | null;
+  first_token_seconds?: number | null;
 }
 
 export interface ToolCallByTool {
@@ -2743,7 +3268,7 @@ export interface LlmRequestResult {
 export interface LlmRequestCompletionEvent {
   operation: "llm_request";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result: LlmRequestResult;
 }
 
@@ -2756,7 +3281,7 @@ export interface ToolExecutionResult {
 export interface ToolExecutionCompletionEvent {
   operation: "tool_execution";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result: ToolExecutionResult;
 }
 
@@ -2774,7 +3299,7 @@ export interface UserRequestResult {
 export interface UserRequestCompletionEvent {
   operation: "user_request";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result: UserRequestResult;
 }
 
@@ -2787,7 +3312,7 @@ export interface SubAgentResult {
 export interface SubAgentCompletionEvent {
   operation: "sub_agent";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result: SubAgentResult;
 }
 
@@ -2799,7 +3324,7 @@ export interface PersistenceResult {
 export interface PersistenceCompletionEvent {
   operation: "persistence";
   operation_id: string;
-  status: "success" | "failed" | "cancelled";
+  status: "cancelled" | "failed" | "success";
   result: PersistenceResult;
 }
 
@@ -2841,6 +3366,10 @@ export interface ToolResultPreviewData {
 
 export interface ToolCompletedData {
   result?: JsonValue;
+  result_omitted?: boolean;
+  result_preview?: string | null;
+  output_chars?: number | null;
+  tool_call_id?: string | null;
 }
 
 export interface ToolErrorData {
@@ -2927,6 +3456,10 @@ export interface ToolResultPreviewToolEvent {
 
 export interface ToolCompletedData {
   result?: JsonValue;
+  result_omitted?: boolean;
+  result_preview?: string | null;
+  output_chars?: number | null;
+  tool_call_id?: string | null;
 }
 
 export interface ToolCompletedToolEvent {
@@ -2987,278 +3520,6 @@ export function isTypedToolEvent(e: ToolEventPayload): e is ToolEventPayload & T
 
 // --- Render Block Data Models (RenderBlockPayload.data per type) ---
 
-export interface FlashcardItem {
-  front: string;
-  back?: string | null;
-}
-
-export interface TranscriptSegment {
-  id: string;
-  timecode: string;
-  seconds: number;
-  text: string;
-  speaker?: string | null;
-}
-
-export interface TaskItem {
-  id: string;
-  title: string;
-  type: "section" | "task" | "subtask";
-  bold?: boolean;
-  checked?: boolean;
-  children?: TaskItem[];
-}
-
-export interface TaskItem {
-}
-
-export interface QuizQuestion {
-  id: number;
-  question: string;
-  options: string[];
-  correctAnswer: number;
-  explanation: string;
-}
-
-export interface Slide {
-  type?: string;
-  title?: string | null;
-  subtitle?: string | null;
-  description?: string | null;
-  bullets?: string[];
-  notes?: string | null;
-  imageUrl?: string | null;
-  quote?: string | null;
-  author?: string | null;
-  layout?: string | null;
-  extra?: Record<string, unknown>;
-}
-
-export interface SlideTheme {
-  primaryColor?: string;
-  secondaryColor?: string;
-  accentColor?: string;
-  backgroundColor?: string;
-  textColor?: string;
-  variant?: string;
-  font?: string | null;
-}
-
-export interface Ingredient {
-  amount?: string;
-  item: string;
-}
-
-export interface RecipeStep {
-  action: string;
-  description: string;
-  time?: string | null;
-}
-
-export interface TimelineEvent {
-  id: string;
-  title: string;
-  date?: string;
-  description?: string;
-  status?: "completed" | "in-progress" | "pending" | null;
-  category?: string | null;
-}
-
-export interface TimelineEvent {
-  id: string;
-  title: string;
-  date?: string;
-  description?: string;
-  status?: "completed" | "in-progress" | "pending" | null;
-  category?: string | null;
-}
-
-export interface TimelinePeriod {
-  period: string;
-  events?: TimelineEvent[];
-}
-
-export interface Position {
-  x: number;
-  y: number;
-}
-
-export interface Position {
-  x: number;
-  y: number;
-}
-
-export interface DiagramNode {
-  id: string;
-  label: string;
-  type?: string | null;
-  nodeType?: string;
-  description?: string | null;
-  details?: string | null;
-  position?: Position | null;
-}
-
-export interface DiagramEdge {
-  id: string;
-  source: string;
-  target: string;
-  label?: string | null;
-  type?: string;
-  color?: string | null;
-  dashed?: boolean;
-  strokeWidth?: number;
-}
-
-export interface DiagramLayout {
-  direction?: "TB" | "LR" | "BT" | "RL";
-  spacing?: number;
-}
-
-export interface ResourceItem {
-  id: string;
-  title: string;
-  url?: string;
-  description?: string;
-  type?: string;
-  duration?: string | null;
-  difficulty?: "beginner" | "intermediate" | "advanced" | null;
-  rating?: number | null;
-  tags?: string[];
-}
-
-export interface ResourceItem {
-  id: string;
-  title: string;
-  url?: string;
-  description?: string;
-  type?: string;
-  duration?: string | null;
-  difficulty?: "beginner" | "intermediate" | "advanced" | null;
-  rating?: number | null;
-  tags?: string[];
-}
-
-export interface ResourceCategory {
-  name: string;
-  items?: ResourceItem[];
-}
-
-export interface ProgressItem {
-  id: string;
-  text: string;
-  completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
-  estimatedHours?: number | null;
-  optional?: boolean;
-  category?: string | null;
-}
-
-export interface ProgressItem {
-  id: string;
-  text: string;
-  completed?: boolean;
-  priority?: "low" | "medium" | "high" | null;
-  estimatedHours?: number | null;
-  optional?: boolean;
-  category?: string | null;
-}
-
-export interface ProgressCategory {
-  id: string;
-  name: string;
-  description?: string | null;
-  color?: string | null;
-  completionPercentage?: number;
-  items?: ProgressItem[];
-}
-
-export interface ComparisonCriterion {
-  name: string;
-  values: unknown[];
-  type?: "cost" | "rating" | "text" | "boolean";
-  weight?: number | null;
-  higherIsBetter?: boolean | null;
-}
-
-export interface TroubleshootingLink {
-  title: string;
-  url: string;
-}
-
-export interface TroubleshootingStep {
-  id: string;
-  title: string;
-  description: string;
-  commands?: string[];
-  difficulty?: "easy" | "medium" | "hard" | null;
-  estimatedTime?: string | null;
-  links?: TroubleshootingLink[];
-}
-
-export interface TroubleshootingStep {
-  id: string;
-  title: string;
-  description: string;
-  commands?: string[];
-  difficulty?: "easy" | "medium" | "hard" | null;
-  estimatedTime?: string | null;
-  links?: TroubleshootingLink[];
-}
-
-export interface TroubleshootingSolution {
-  id: string;
-  title: string;
-  description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
-  successRate?: number | null;
-  tags?: string[];
-  steps?: TroubleshootingStep[];
-}
-
-export interface TroubleshootingSolution {
-  id: string;
-  title: string;
-  description?: string | null;
-  priority?: "low" | "medium" | "high" | null;
-  successRate?: number | null;
-  tags?: string[];
-  steps?: TroubleshootingStep[];
-}
-
-export interface TroubleshootingIssue {
-  id: string;
-  symptom: string;
-  description?: string | null;
-  severity?: "low" | "medium" | "high" | "critical" | null;
-  causes?: string[];
-  relatedIssues?: string[];
-  solutions?: TroubleshootingSolution[];
-}
-
-export interface DecisionNode {
-  id: string;
-  question?: string | null;
-  action?: string | null;
-  type?: string;
-  yes?: DecisionNode | null;
-  no?: DecisionNode | null;
-  priority?: string | null;
-  category?: string | null;
-  estimatedTime?: string | null;
-}
-
-export interface DecisionNode {
-}
-
-export interface QuestionnaireSection {
-  title?: string;
-  content?: string;
-  items?: Record<string, unknown>[];
-  tables?: Record<string, unknown>[];
-  codeBlocks?: Record<string, unknown>[];
-  jsonBlocks?: Record<string, unknown>[];
-}
-
 export interface TextBlockData {
 }
 
@@ -3294,146 +3555,6 @@ export interface VideoBlockData {
   alt?: string;
 }
 
-export interface FlashcardItem {
-  front: string;
-  back?: string | null;
-}
-
-export interface FlashcardsBlockData {
-  cards: FlashcardItem[];
-  isComplete?: boolean;
-  title?: string | null;
-}
-
-export interface TranscriptSegment {
-  id: string;
-  timecode: string;
-  seconds: number;
-  text: string;
-  speaker?: string | null;
-}
-
-export interface TranscriptBlockData {
-  segments: TranscriptSegment[];
-}
-
-export interface TasksBlockData {
-  items: TaskItem[];
-}
-
-export interface QuizQuestion {
-  id: number;
-  question: string;
-  options: string[];
-  correctAnswer: number;
-  explanation: string;
-}
-
-export interface QuizBlockData {
-  quizTitle: string;
-  category?: string | null;
-  multipleChoice: QuizQuestion[];
-}
-
-export interface Slide {
-  type?: string;
-  title?: string | null;
-  subtitle?: string | null;
-  description?: string | null;
-  bullets?: string[];
-  notes?: string | null;
-  imageUrl?: string | null;
-  quote?: string | null;
-  author?: string | null;
-  layout?: string | null;
-  extra?: Record<string, unknown>;
-}
-
-export interface SlideTheme {
-  primaryColor?: string;
-  secondaryColor?: string;
-  accentColor?: string;
-  backgroundColor?: string;
-  textColor?: string;
-  variant?: string;
-  font?: string | null;
-}
-
-export interface PresentationBlockData {
-  title?: string | null;
-  slides?: Slide[];
-  theme?: SlideTheme;
-}
-
-export interface Ingredient {
-  amount?: string;
-  item: string;
-}
-
-export interface RecipeStep {
-  action: string;
-  description: string;
-  time?: string | null;
-}
-
-export interface RecipeBlockData {
-  title?: string;
-  yields?: string;
-  totalTime?: string;
-  prepTime?: string;
-  cookTime?: string;
-  ingredients?: Ingredient[];
-  instructions?: RecipeStep[];
-  notes?: string | null;
-}
-
-export interface TimelinePeriod {
-  period: string;
-  events?: TimelineEvent[];
-}
-
-export interface TimelineBlockData {
-  title?: string;
-  description?: string | null;
-  periods?: TimelinePeriod[];
-}
-
-export interface DiagramEdge {
-  id: string;
-  source: string;
-  target: string;
-  label?: string | null;
-  type?: string;
-  color?: string | null;
-  dashed?: boolean;
-  strokeWidth?: number;
-}
-
-export interface DiagramLayout {
-  direction?: "TB" | "LR" | "BT" | "RL";
-  spacing?: number;
-}
-
-export interface DiagramNode {
-  id: string;
-  label: string;
-  type?: string | null;
-  nodeType?: string;
-  description?: string | null;
-  details?: string | null;
-  position?: Position | null;
-}
-
-export interface DiagramBlockData {
-  title: string;
-  description?: string | null;
-  type?: "flowchart" | "mindmap" | "orgchart" | "network" | "system" | "process";
-  requested_type?: string | null;
-  nodes?: DiagramNode[];
-  edges?: DiagramEdge[];
-  layout?: DiagramLayout;
-}
-
 export interface MermaidBlockData {
   title?: string | null;
   diagramType?: string;
@@ -3447,197 +3568,6 @@ export interface TableBlockData {
   rows: string[][];
   isComplete?: boolean;
   rawMarkdown?: string;
-}
-
-export interface ResearchFinding {
-  id: string;
-  title: string;
-  primarySource?: string;
-  additionalSources?: string[];
-  urls?: string[];
-  keyDetails?: string;
-  significance?: string;
-  futureImplications?: string;
-  confidenceLevel?: "HIGH" | "MEDIUM" | "LOW";
-}
-
-export interface ResearchSection {
-  id: string;
-  title: string;
-  subtitle?: string | null;
-  findings?: ResearchFinding[];
-}
-
-export interface ConvergentTheme {
-  theme: string;
-  description: string;
-}
-
-export interface ResearchChallenge {
-  id: string;
-  title: string;
-  description: string;
-  currentSolutions?: string | null;
-  researchGaps?: string | null;
-  category?: "technical" | "ethical" | "regulatory" | "other";
-}
-
-export interface ResearchMetadata {
-  researchDate?: string | null;
-  lastUpdated?: string | null;
-  confidenceRating?: string | null;
-  biasAssessment?: string | null;
-}
-
-export interface ResearchRecommendation {
-  id: string;
-  recommendation: string;
-  target?: "researchers" | "industry" | "policymakers" | "general";
-}
-
-export interface ResearchSection {
-  id: string;
-  title: string;
-  subtitle?: string | null;
-  findings?: ResearchFinding[];
-}
-
-export interface ResearchBlockData {
-  title: string;
-  overview?: string;
-  introduction?: string;
-  conclusion?: string;
-  executiveSummary?: string | null;
-  researchScope?: string | null;
-  keyFocusAreas?: string | null;
-  analysisPeriod?: string | null;
-  researchQuestions?: string[];
-  sections?: ResearchSection[];
-  convergentThemes?: ConvergentTheme[];
-  shortTermOutlook?: string[];
-  mediumTermOutlook?: string[];
-  longTermVision?: string[];
-  challenges?: ResearchChallenge[];
-  recommendations?: ResearchRecommendation[];
-  keyTakeaways?: string[];
-  limitations?: string[];
-  metadata?: ResearchMetadata;
-}
-
-export interface ResourceCategory {
-  name: string;
-  items?: ResourceItem[];
-}
-
-export interface ResourcesBlockData {
-  title: string;
-  description?: string | null;
-  categories?: ResourceCategory[];
-}
-
-export interface ProgressCategory {
-  id: string;
-  name: string;
-  description?: string | null;
-  color?: string | null;
-  completionPercentage?: number;
-  items?: ProgressItem[];
-}
-
-export interface ProgressTrackerBlockData {
-  title: string;
-  description?: string | null;
-  overallProgress?: number;
-  totalItems?: number;
-  completedItems?: number;
-  categories?: ProgressCategory[];
-}
-
-export interface ComparisonCriterion {
-  name: string;
-  values: unknown[];
-  type?: "cost" | "rating" | "text" | "boolean";
-  weight?: number | null;
-  higherIsBetter?: boolean | null;
-}
-
-export interface ComparisonBlockData {
-  title: string;
-  description?: string | null;
-  items: string[];
-  criteria?: ComparisonCriterion[];
-}
-
-export interface TroubleshootingIssue {
-  id: string;
-  symptom: string;
-  description?: string | null;
-  severity?: "low" | "medium" | "high" | "critical" | null;
-  causes?: string[];
-  relatedIssues?: string[];
-  solutions?: TroubleshootingSolution[];
-}
-
-export interface TroubleshootingBlockData {
-  title: string;
-  description?: string | null;
-  issues?: TroubleshootingIssue[];
-}
-
-export interface DecisionTreeBlockData {
-  title: string;
-  description?: string | null;
-  root: DecisionNode;
-}
-
-export interface MathProblemInner {
-  title?: string;
-  courseName?: string;
-  topicName?: string;
-  moduleName?: string;
-  description?: string | null;
-  introText?: string | null;
-  finalStatement?: string | null;
-  problemStatement?: MathProblemStatement;
-  solutions?: MathSolution[];
-}
-
-export interface MathProblemStatement {
-  text?: string;
-  equation?: string;
-  instruction?: string;
-}
-
-export interface MathSolution {
-  task?: string;
-  transitionText?: string | null;
-  solutionAnswer?: string;
-  steps?: MathSolutionStep[];
-}
-
-export interface MathSolutionStep {
-  title?: string;
-  equation?: string;
-  explanation?: string | null;
-  simplified?: string | null;
-}
-
-export interface MathProblemBlockData {
-  math_problem: MathProblemInner;
-}
-
-export interface QuestionnaireSection {
-  title?: string;
-  content?: string;
-  items?: Record<string, unknown>[];
-  tables?: Record<string, unknown>[];
-  codeBlocks?: Record<string, unknown>[];
-  jsonBlocks?: Record<string, unknown>[];
-}
-
-export interface QuestionnaireBlockData {
-  sections?: QuestionnaireSection[];
-  rawContent?: string;
 }
 
 // --- Typed Render Block Interfaces (discriminated on `type`) ---
@@ -3725,146 +3655,6 @@ export interface VideoRenderBlock {
   metadata?: Record<string, unknown>;
 }
 
-export interface TasksRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "tasks";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TasksBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TranscriptRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "transcript";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TranscriptBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface StructuredInfoRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "structured_info";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface QuestionnaireRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "questionnaire";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: QuestionnaireBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface FlashcardsRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "flashcards";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: FlashcardsBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface QuizRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "quiz";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: QuizBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PresentationRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "presentation";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: PresentationBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CookingRecipeRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "cooking_recipe";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: RecipeBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TimelineRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "timeline";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TimelineBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ProgressTrackerRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "progress_tracker";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: ProgressTrackerBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ComparisonTableRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "comparison_table";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: ComparisonBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TroubleshootingRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "troubleshooting";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TroubleshootingBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ResourcesRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "resources";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: ResourcesBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface DecisionTreeRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "decision_tree";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: DecisionTreeBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
 export interface DecisionRenderBlock {
   blockId: string;
   blockIndex: number;
@@ -3872,26 +3662,6 @@ export interface DecisionRenderBlock {
   status: "streaming" | "complete" | "error";
   content?: string | null;
   data?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ResearchRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "research";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: ResearchBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface DiagramRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "diagram";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: DiagramBlockData | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -3905,16 +3675,6 @@ export interface MermaidRenderBlock {
   metadata?: Record<string, unknown>;
 }
 
-export interface MathProblemRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "math_problem";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: MathProblemBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
 export interface ArtifactRenderBlock {
   blockId: string;
   blockIndex: number;
@@ -3922,76 +3682,6 @@ export interface ArtifactRenderBlock {
   status: "streaming" | "complete" | "error";
   content?: string | null;
   data?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface InfoRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "info";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TaskRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "task";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface DatabaseRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "database";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PrivateRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "private";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface PlanRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "plan";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface EventRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "event";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ToolRenderBlock {
-  blockId: string;
-  blockIndex: number;
-  type: "tool";
-  status: "streaming" | "complete" | "error";
-  content?: string | null;
-  data?: TextBlockData | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -4004,36 +3694,12 @@ export type TypedRenderBlock =
   | ConsolidatedReasoningRenderBlock
   | ImageRenderBlock
   | VideoRenderBlock
-  | TasksRenderBlock
-  | TranscriptRenderBlock
-  | StructuredInfoRenderBlock
-  | QuestionnaireRenderBlock
-  | FlashcardsRenderBlock
-  | QuizRenderBlock
-  | PresentationRenderBlock
-  | CookingRecipeRenderBlock
-  | TimelineRenderBlock
-  | ProgressTrackerRenderBlock
-  | ComparisonTableRenderBlock
-  | TroubleshootingRenderBlock
-  | ResourcesRenderBlock
-  | DecisionTreeRenderBlock
   | DecisionRenderBlock
-  | ResearchRenderBlock
-  | DiagramRenderBlock
   | MermaidRenderBlock
-  | MathProblemRenderBlock
-  | ArtifactRenderBlock
-  | InfoRenderBlock
-  | TaskRenderBlock
-  | DatabaseRenderBlock
-  | PrivateRenderBlock
-  | PlanRenderBlock
-  | EventRenderBlock
-  | ToolRenderBlock;
+  | ArtifactRenderBlock;
 
 const TYPED_RENDER_BLOCK_TYPES = new Set<string>([
-  "text", "code", "table", "thinking", "reasoning", "consolidated_reasoning", "image", "video", "tasks", "transcript", "structured_info", "questionnaire", "flashcards", "quiz", "presentation", "cooking_recipe", "timeline", "progress_tracker", "comparison_table", "troubleshooting", "resources", "decision_tree", "decision", "research", "diagram", "mermaid", "math_problem", "artifact", "info", "task", "database", "private", "plan", "event", "tool",
+  "text", "code", "table", "thinking", "reasoning", "consolidated_reasoning", "image", "video", "decision", "mermaid", "artifact",
 ]);
 
 export function isTypedRenderBlock(e: RenderBlockPayload): e is RenderBlockPayload & TypedRenderBlock {
@@ -4059,7 +3725,7 @@ export interface SearchReplaceRenderData {
 
 export interface DirectiveReceiptRenderData {
   directive: string;
-  outcome: "proposed" | "applied" | "already_applied" | "failed" | "blocked";
+  outcome: "already_applied" | "applied" | "blocked" | "failed" | "pending" | "proposed";
   message: string;
   resource_kind?: string;
   resource_ids?: string[];
@@ -4151,6 +3817,14 @@ export interface WorkflowStepRenderBlock {
   metadata?: Record<string, unknown>;
 }
 
+/** A mandate run PARKED for a person's answer — the frontend renders the server's sentence plus the served inputs as a form whose Continue posts `POST /mandates/runs/{request_id}/answer` and streams the resumed run. Until 2026-10-17 it fell to the Unknown Data Event card. */
+export interface MandateInputRequiredRenderBlock {
+  type: "mandate_input_required";
+  content: string;
+  data: MandateInputRequiredData;
+  metadata?: Record<string, unknown>;
+}
+
 /** Web search failure event. */
 export interface SearchErrorRenderBlock {
   type: "search_error";
@@ -4238,6 +3912,7 @@ export interface UnknownDataEventRenderBlock {
 export type ServerProtocolRenderBlock =
   | FunctionResultRenderBlock
   | WorkflowStepRenderBlock
+  | MandateInputRequiredRenderBlock
   | SearchErrorRenderBlock
   | StructuredInputWarningRenderBlock
   | PodcastStageRenderBlock
@@ -4249,7 +3924,7 @@ export type ServerProtocolRenderBlock =
   | DirectiveReceiptRenderBlock;
 
 export const SERVER_PROTOCOL_RENDER_BLOCK_TYPES = new Set<string>([
-  "function_result", "workflow_step", "search_error", "structured_input_warning", "podcast_stage", "podcast_complete", "scrape_batch_complete", "value_store_stored", "context_groomed", "search_replace", "directive_receipt",
+  "function_result", "workflow_step", "mandate_input_required", "search_error", "structured_input_warning", "podcast_stage", "podcast_complete", "scrape_batch_complete", "value_store_stored", "context_groomed", "search_replace", "directive_receipt",
 ]);
 
 /** Generated-media delivery blocks — generic media primitives. */
@@ -4295,8 +3970,8 @@ export type ServerOnlyBlockType = ServerOnlyRenderBlock["type"];
 // --- Message Part Models (cx_message.content[] items) ---
 
 export interface NormalizedCitation {
-  kind: "document_char" | "document_page" | "document_block" | "search_result" | "web" | "grounding";
-  provider: "anthropic" | "openai" | "google" | "xai";
+  kind: "document_block" | "document_char" | "document_page" | "grounding" | "search_result" | "web";
+  provider: "anthropic" | "google" | "openai" | "xai";
   cited_text?: string | null;
   title?: string | null;
   url?: string | null;
@@ -4312,7 +3987,7 @@ export interface NormalizedCitation {
 }
 
 export interface TextPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "text";
   text?: string;
   id?: string;
@@ -4320,18 +3995,18 @@ export interface TextPart {
 }
 
 export interface ThinkingPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "thinking";
   text?: string;
   id?: string;
-  provider?: "openai" | "anthropic" | "google" | "cerebras" | "moonshot" | "together" | "groq" | "xai" | "generic_openai" | null;
+  provider?: "anthropic" | "cerebras" | "generic_openai" | "google" | "groq" | "moonshot" | "openai" | "together" | "xai" | null;
   signature?: string | null;
   signature_encoding?: "base64" | null;
   summary?: unknown[];
 }
 
 export interface ToolCallPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "tool_call";
   call_id?: string;
   name?: string;
@@ -4339,7 +4014,7 @@ export interface ToolCallPart {
 }
 
 export interface ToolResultPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "tool_result";
   call_id?: string;
   tool_use_id?: string;
@@ -4350,8 +4025,8 @@ export interface ToolResultPart {
 }
 
 export type ImageMediaPart = {
-  metadata?: Record<string, unknown>;
-  origin?: "matrx" | "external" | null;
+  metadata?: Record<string, JsonValue>;
+  origin?: "external" | "matrx" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
@@ -4362,7 +4037,7 @@ export type ImageMediaPart = {
   kind: "image";
   width?: number | null;
   height?: number | null;
-  role?: "subject" | "character" | "style" | "mask" | "edit_target" | "composition_control" | "first_frame" | "last_frame" | "asset" | null;
+  role?: "asset" | "character" | "composition_control" | "edit_target" | "first_frame" | "last_frame" | "mask" | "style" | "subject" | null;
   name?: string | null;
 } & ({
   url: string;
@@ -4371,8 +4046,8 @@ export type ImageMediaPart = {
 });
 
 export type AudioMediaPart = {
-  metadata?: Record<string, unknown>;
-  origin?: "matrx" | "external" | null;
+  metadata?: Record<string, JsonValue>;
+  origin?: "external" | "matrx" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
@@ -4391,8 +4066,8 @@ export type AudioMediaPart = {
 });
 
 export type VideoMediaPart = {
-  metadata?: Record<string, unknown>;
-  origin?: "matrx" | "external" | null;
+  metadata?: Record<string, JsonValue>;
+  origin?: "external" | "matrx" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
@@ -4413,8 +4088,8 @@ export type VideoMediaPart = {
 });
 
 export type DocumentMediaPart = {
-  metadata?: Record<string, unknown>;
-  origin?: "matrx" | "external" | null;
+  metadata?: Record<string, JsonValue>;
+  origin?: "external" | "matrx" | null;
   file_id?: string | null;
   url?: string | null;
   mime_type?: string | null;
@@ -4433,7 +4108,7 @@ export type DocumentMediaPart = {
 });
 
 export interface YouTubeMediaPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "media";
   kind: "youtube";
   url: string;
@@ -4445,28 +4120,28 @@ export interface YouTubeMediaPart {
 }
 
 export interface CodeExecPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "code_exec";
   language?: string;
   code?: string;
 }
 
 export interface CodeResultPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "code_result";
   output?: string;
   outcome?: string;
 }
 
 export interface WebSearchPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "web_search";
   id?: string;
   status?: string;
 }
 
 export interface HostedToolPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "hosted_tool";
   provider?: string;
   block?: Record<string, unknown>;
@@ -4482,7 +4157,7 @@ export interface PreFetchedUrl {
 }
 
 export interface WebpageInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_webpage";
   urls: (string | PreFetchedUrl)[];
   convert_to_text?: boolean;
@@ -4530,7 +4205,7 @@ export interface SnapshotValueResourceRefInput {
 }
 
 export interface NotesInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_notes";
   note_ids: (string | ResourceRefInput)[];
   template?: string;
@@ -4541,7 +4216,7 @@ export interface NotesInputPart {
 }
 
 export interface TaskInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_task";
   task_ids: (string | ResourceRefInput)[];
   template?: string;
@@ -4552,78 +4227,78 @@ export interface TaskInputPart {
 }
 
 export interface AgentInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_agent";
   agent_ids: string[];
 }
 
 export interface ProjectInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_project";
   project_ids: string[];
 }
 
 export interface AgentAppInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_agent_app";
   agent_app_ids: string[];
 }
 
 export interface TranscriptInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_transcript";
   transcript_ids: string[];
 }
 
 export interface TranscriptSessionInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_transcript_session";
   transcript_session_ids: string[];
 }
 
 export interface WorkbookInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_workbook";
   workbook_ids: (string | LiveResourceRefInput)[];
 }
 
 export interface DocumentInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   convert_to_text?: boolean;
   optional_context?: boolean;
   keep_fresh?: boolean;
   editable?: boolean | null;
-  template?: "full" | "compact" | "minimal" | null;
+  template?: "compact" | "full" | "minimal" | null;
   type: "input_document";
   document_ids: (string | LiveResourceRefInput)[];
 }
@@ -4668,7 +4343,7 @@ export interface TableSchemaBookmark {
 }
 
 export interface TableInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_table";
   bookmarks: (FullTableBookmark | TableColumnBookmark | TableRowBookmark | TableCellBookmark | TableSchemaBookmark)[];
   convert_to_text?: boolean;
@@ -4701,7 +4376,7 @@ export interface ListItemBookmark {
 }
 
 export interface ListInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_list";
   bookmarks: (FullListBookmark | ListGroupBookmark | ListItemBookmark)[];
   convert_to_text?: boolean;
@@ -4716,7 +4391,7 @@ export interface DataRefSort {
 }
 
 export interface DbFieldRef {
-  table: "notes" | "tasks" | "projects" | "organizations";
+  table: "notes" | "organizations" | "projects" | "tasks";
   label?: string;
   optional_context?: boolean;
   ref_type: "db_field";
@@ -4725,7 +4400,7 @@ export interface DbFieldRef {
 }
 
 export interface DbQueryRef {
-  table: "notes" | "tasks" | "projects" | "organizations";
+  table: "notes" | "organizations" | "projects" | "tasks";
   label?: string;
   optional_context?: boolean;
   ref_type: "db_query";
@@ -4736,7 +4411,7 @@ export interface DbQueryRef {
 }
 
 export interface DbRecordRef {
-  table: "notes" | "tasks" | "projects" | "organizations";
+  table: "notes" | "organizations" | "projects" | "tasks";
   label?: string;
   optional_context?: boolean;
   ref_type: "db_record";
@@ -4745,7 +4420,7 @@ export interface DbRecordRef {
 }
 
 export interface DataInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_data";
   refs: (DbRecordRef | DbQueryRef | DbFieldRef)[];
   convert_to_text?: boolean;
@@ -4755,7 +4430,7 @@ export interface DataInputPart {
 }
 
 export interface ContextInputPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "input_context";
   context_id?: string;
   context_name?: string;
@@ -4766,17 +4441,161 @@ export interface ContextInputPart {
   editable?: boolean | null;
 }
 
+export interface BlockStateRef {
+  id: string;
+  state_version: number;
+}
+
+export interface RemarkAnswer {
+  question: string;
+  answer: string | boolean | number | string[];
+  name?: string | null;
+  type: "choice" | "noul" | "score" | "text" | null;
+}
+
+export interface RemarkItem {
+  kind: "answers" | "choice" | "comment" | "edit" | "interaction";
+  target?: RemarkTarget | null;
+  quote?: string | null;
+  body?: string | null;
+  diff?: string | null;
+  answers?: RemarkAnswer[] | null;
+  title?: string | null;
+  comment_id?: string | null;
+  id?: string | null;
+  handle?: string | null;
+  thread?: RemarkThreadEntry[] | null;
+  block_state_ref?: BlockStateRef | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RemarkTarget {
+  message_id?: string | null;
+  record_token?: string | null;
+  record_id?: string | null;
+  record_title?: string | null;
+}
+
+export interface RemarkThreadEntry {
+  author_name: string;
+  author_kind: "agent" | "person";
+  body: string;
+  created_at?: string | null;
+}
+
+export interface RemarksInputPart {
+  metadata?: Record<string, JsonValue>;
+  type: "input_remarks";
+  items: RemarkItem[];
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+}
+
+export interface CellPart {
+  scope: "cell";
+  row_id: string;
+  column: string;
+}
+
+export interface ColumnPart {
+  scope: "column";
+  column: string;
+}
+
+export interface ContextCellPart {
+  scope: "context_cell";
+  scope_id: string;
+}
+
+export interface GroupPart {
+  scope: "group";
+  group: string;
+}
+
+export interface ItemPart {
+  scope: "item";
+  item_id: string;
+}
+
+export interface PagePart {
+  scope: "page";
+  page: number;
+}
+
+export interface ResourcePromotion {
+  representation: string;
+  max_chars?: number;
+}
+
+export interface RowPart {
+  scope: "row";
+  row_id: string;
+}
+
+export interface SchemaPart {
+  scope: "schema";
+}
+
+export interface SheetPart {
+  scope: "sheet";
+  sheet: string;
+}
+
+export interface SourceRef {
+  envelope?: "resource_ref";
+  resource_type: string;
+  resource_id: string;
+  representation?: string | null;
+  include_segments?: string[] | null;
+  delivery?: "context" | "direct" | null;
+  max_chars?: number | null;
+  promote?: ResourcePromotion | ResourcePromotion[] | null;
+  exclude?: string[] | null;
+  label?: string | null;
+  overlay?: Record<string, JsonValue> | null;
+  part?: ColumnPart | RowPart | CellPart | SchemaPart | GroupPart | ItemPart | PagePart | SheetPart | ContextCellPart | null;
+  editable?: boolean | null;
+  keep_fresh?: boolean | null;
+  optional_context?: boolean | null;
+  template?: "compact" | "full" | "minimal" | null;
+  persistence?: "durable" | "turn" | null;
+}
+
+export interface SourceSet {
+  envelope?: "source_set";
+  version?: 1;
+  sources?: SourceRef[];
+  topic?: string | null;
+  grounding?: "retrieve" | "selected" | "whole";
+  retrieve_query?: string | null;
+  target_model_id?: string | null;
+}
+
+export interface SourceSetPart {
+  metadata?: Record<string, JsonValue>;
+  type: "source_set";
+  source_set: SourceSet;
+  convert_to_text?: boolean;
+  optional_context?: boolean;
+  keep_fresh?: boolean;
+  editable?: boolean | null;
+}
+
 export interface DecisionQuestion {
-  __kind?: string;
+  __kind?: "";
   name: string;
-  type: "noul" | "choice" | "score";
+  type: "box" | "choice" | "noul" | "score";
   instructions: string;
   criteria?: Record<string, string> | string[] | null;
+  image?: number | null;
+  guidance?: string | null;
   suggested_threshold?: number | null;
 }
 
 export interface DecisionQuestionsPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "decision_questions";
   __kind: "decision_questions";
   questions: DecisionQuestion[];
@@ -4784,22 +4603,31 @@ export interface DecisionQuestionsPart {
 
 export interface DecisionAnswer {
   __kind?: "decision_answer";
-  type: "noul" | "choice" | "score";
-  answer: boolean | number | string;
+  type: "box" | "choice" | "noul" | "score";
+  answer: DecisionBox | boolean | number | string;
   probability?: number | null;
   probabilities?: Record<string, number> | null;
-  confidence: number;
+  confidence?: number | null;
+  image?: number | null;
   legend?: Record<string, string> | null;
 }
 
+export interface DecisionBox {
+  __kind?: "";
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
 export interface DecisionUsage {
-  __kind?: string;
+  __kind?: "";
   input_tokens: number;
   output_tokens: number;
 }
 
 export interface DecisionAnswersPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "decision_answers";
   __kind: "decision_answers";
   model: string;
@@ -4811,7 +4639,7 @@ export interface DecisionAnswersPart {
 }
 
 export interface SpeechTurn {
-  __kind?: string;
+  __kind?: "";
   speaker: string;
   voice?: string | null;
   text: string;
@@ -4820,7 +4648,7 @@ export interface SpeechTurn {
 }
 
 export interface SpeechScriptPart {
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, JsonValue>;
   type: "speech_script";
   __kind: "speech_script";
   turns: SpeechTurn[];
@@ -4854,6 +4682,8 @@ export type MessagePart =
   | ListInputPart
   | DataInputPart
   | ContextInputPart
+  | RemarksInputPart
+  | SourceSetPart
   | DecisionQuestionsPart
   | DecisionAnswersPart
   | SpeechScriptPart;
@@ -4886,23 +4716,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -4913,9 +4738,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -4930,14 +4753,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_agent_app",
-          "default": "input_agent_app",
-          "title": "Type",
           "type": "string"
         },
         "agent_app_ids": {
@@ -4946,7 +4765,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "type": "string"
           },
           "minItems": 1,
-          "title": "Agent App Ids",
           "type": "array"
         }
       },
@@ -4954,30 +4772,24 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "agent_app_ids",
         "type"
       ],
-      "title": "AgentAppInputPart",
       "type": "object"
     },
     "AgentInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -4988,9 +4800,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -5005,14 +4815,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_agent",
-          "default": "input_agent",
-          "title": "Type",
           "type": "string"
         },
         "agent_ids": {
@@ -5021,7 +4827,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "type": "string"
           },
           "minItems": 1,
-          "title": "Agent Ids",
           "type": "array"
         }
       },
@@ -5029,7 +4834,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "agent_ids",
         "type"
       ],
-      "title": "AgentInputPart",
       "type": "object"
     },
     "AudioMediaPart": {
@@ -5064,8 +4868,9 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       ],
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "origin": {
@@ -5080,9 +4885,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Origin"
+          ]
         },
         "file_id": {
           "anyOf": [
@@ -5092,9 +4895,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "url": {
           "anyOf": [
@@ -5104,9 +4905,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Url"
+          ]
         },
         "mime_type": {
           "anyOf": [
@@ -5116,9 +4915,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Mime Type"
+          ]
         },
         "size_bytes": {
           "anyOf": [
@@ -5128,9 +4925,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Size Bytes"
+          ]
         },
         "visibility": {
           "anyOf": [
@@ -5140,9 +4935,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Visibility"
+          ]
         },
         "cdn_url": {
           "anyOf": [
@@ -5152,20 +4945,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Cdn Url"
+          ]
         },
         "type": {
           "const": "media",
-          "default": "media",
-          "title": "Type",
           "type": "string"
         },
         "kind": {
           "const": "audio",
-          "default": "audio",
-          "title": "Kind",
           "type": "string"
         },
         "duration_ms": {
@@ -5176,9 +4963,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Duration Ms"
+          ]
         },
         "transcription_result": {
           "anyOf": [
@@ -5188,9 +4973,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Transcription Result"
+          ]
         },
         "role": {
           "anyOf": [
@@ -5201,122 +4984,173 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Role"
+          ]
         }
       },
       "required": [
         "type",
         "kind"
       ],
-      "title": "AudioMediaPart",
+      "type": "object"
+    },
+    "BlockStateRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "type": "string"
+        },
+        "state_version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "state_version"
+      ],
+      "type": "object"
+    },
+    "CellPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "cell",
+          "type": "string"
+        },
+        "row_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "column": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "row_id",
+        "column"
+      ],
       "type": "object"
     },
     "CodeExecPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "code_exec",
-          "default": "code_exec",
-          "title": "Type",
           "type": "string"
         },
         "language": {
-          "default": "python",
-          "title": "Language",
           "type": "string"
         },
         "code": {
-          "default": "",
-          "title": "Code",
           "type": "string"
         }
       },
       "required": [
         "type"
       ],
-      "title": "CodeExecPart",
       "type": "object"
     },
     "CodeResultPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "code_result",
-          "default": "code_result",
-          "title": "Type",
           "type": "string"
         },
         "output": {
-          "default": "",
-          "title": "Output",
           "type": "string"
         },
         "outcome": {
-          "default": "success",
-          "title": "Outcome",
           "type": "string"
         }
       },
       "required": [
         "type"
       ],
-      "title": "CodeResultPart",
+      "type": "object"
+    },
+    "ColumnPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "column",
+          "type": "string"
+        },
+        "column": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "column"
+      ],
+      "type": "object"
+    },
+    "ContextCellPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "context_cell",
+          "type": "string"
+        },
+        "scope_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "scope_id"
+      ],
       "type": "object"
     },
     "ContextInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_context",
-          "default": "input_context",
-          "title": "Type",
           "type": "string"
         },
         "context_id": {
-          "default": "",
-          "title": "Context Id",
           "type": "string"
         },
         "context_name": {
-          "default": "",
-          "title": "Context Name",
           "type": "string"
         },
         "context_data": {
           "additionalProperties": true,
-          "title": "Context Data",
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -5327,29 +5161,25 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "type"
       ],
-      "title": "ContextInputPart",
       "type": "object"
     },
     "DataInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_data",
-          "default": "input_data",
-          "title": "Type",
           "type": "string"
         },
         "refs": {
@@ -5375,22 +5205,15 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Refs",
           "type": "array"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -5401,16 +5224,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "refs",
         "type"
       ],
-      "title": "DataInputPart",
       "type": "object"
     },
     "DataRefSort": {
@@ -5418,28 +5238,23 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "field": {
           "minLength": 1,
-          "title": "Field",
           "type": "string"
         },
         "direction": {
-          "default": "asc",
           "enum": [
             "asc",
             "desc"
           ],
-          "title": "Direction",
           "type": "string"
         }
       },
       "required": [
         "field"
       ],
-      "title": "DataRefSort",
       "type": "object"
     },
     "DbFieldRef": {
       "additionalProperties": false,
-      "description": "Fetch a single field value from one row of a system table.",
       "properties": {
         "table": {
           "enum": [
@@ -5448,32 +5263,24 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "projects",
             "organizations"
           ],
-          "title": "Table",
           "type": "string"
         },
         "label": {
-          "default": "",
-          "title": "Label",
           "type": "string"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "ref_type": {
           "const": "db_field",
-          "title": "Ref Type",
           "type": "string"
         },
         "id": {
           "minLength": 1,
-          "title": "Id",
           "type": "string"
         },
         "field_name": {
           "minLength": 1,
-          "title": "Field Name",
           "type": "string"
         }
       },
@@ -5483,12 +5290,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "id",
         "field_name"
       ],
-      "title": "DbFieldRef",
       "type": "object"
     },
     "DbQueryRef": {
       "additionalProperties": false,
-      "description": "Fetch multiple rows from a system table with optional filters.",
       "properties": {
         "table": {
           "enum": [
@@ -5497,27 +5302,20 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "projects",
             "organizations"
           ],
-          "title": "Table",
           "type": "string"
         },
         "label": {
-          "default": "",
-          "title": "Label",
           "type": "string"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "ref_type": {
           "const": "db_query",
-          "title": "Ref Type",
           "type": "string"
         },
         "filter": {
           "additionalProperties": true,
-          "title": "Filter",
           "type": "object"
         },
         "fields": {
@@ -5531,9 +5329,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Fields"
+          ]
         },
         "sort": {
           "anyOf": [
@@ -5543,14 +5339,11 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "limit": {
-          "default": 50,
           "maximum": 1000,
           "minimum": 1,
-          "title": "Limit",
           "type": "integer"
         }
       },
@@ -5558,12 +5351,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "table",
         "ref_type"
       ],
-      "title": "DbQueryRef",
       "type": "object"
     },
     "DbRecordRef": {
       "additionalProperties": false,
-      "description": "Fetch one full row from a system table by primary key.",
       "properties": {
         "table": {
           "enum": [
@@ -5572,27 +5363,20 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "projects",
             "organizations"
           ],
-          "title": "Table",
           "type": "string"
         },
         "label": {
-          "default": "",
-          "title": "Label",
           "type": "string"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "ref_type": {
           "const": "db_record",
-          "title": "Ref Type",
           "type": "string"
         },
         "id": {
           "minLength": 1,
-          "title": "Id",
           "type": "string"
         },
         "fields": {
@@ -5606,9 +5390,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Fields"
+          ]
         }
       },
       "required": [
@@ -5616,31 +5398,29 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "ref_type",
         "id"
       ],
-      "title": "DbRecordRef",
       "type": "object"
     },
     "DecisionAnswer": {
       "additionalProperties": false,
-      "description": "One answer, with the holder's own uncertainty attached.",
       "properties": {
         "__kind": {
           "const": "decision_answer",
-          "default": "decision_answer",
-          "description": "The registered kind this payload is an instance of.",
-          "title": "Kind",
           "type": "string"
         },
         "type": {
           "enum": [
             "noul",
             "choice",
-            "score"
+            "score",
+            "box"
           ],
-          "title": "Type",
           "type": "string"
         },
         "answer": {
           "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionBox"
+            },
             {
               "type": "boolean"
             },
@@ -5650,8 +5430,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "string"
             }
-          ],
-          "title": "Answer"
+          ]
         },
         "probability": {
           "anyOf": [
@@ -5663,9 +5442,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Probability"
+          ]
         },
         "probabilities": {
           "anyOf": [
@@ -5678,15 +5455,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Probabilities"
+          ]
         },
         "confidence": {
-          "maximum": 1.0,
-          "minimum": 0.0,
-          "title": "Confidence",
-          "type": "number"
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "legend": {
           "anyOf": [
@@ -5699,42 +5491,34 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Legend"
+          ]
         }
       },
       "required": [
         "type",
-        "answer",
-        "confidence"
+        "answer"
       ],
-      "title": "DecisionAnswer",
       "type": "object"
     },
     "DecisionAnswersPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "decision_answers",
-          "default": "decision_answers",
-          "title": "Type",
           "type": "string"
         },
         "__kind": {
           "const": "decision_answers",
-          "default": "decision_answers",
-          "title": "Kind",
           "type": "string"
         },
         "model": {
           "minLength": 1,
-          "title": "Model",
           "type": "string"
         },
         "method": {
@@ -5743,21 +5527,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "verbalized",
             "verbalized_calibrated"
           ],
-          "title": "Method",
           "type": "string"
         },
         "answers": {
           "additionalProperties": {
             "$ref": "#/$defs/DecisionAnswer"
           },
-          "title": "Answers",
           "type": "object"
         },
         "unanswerable": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Unanswerable",
           "type": "object"
         },
         "usage": {
@@ -5765,7 +5546,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         },
         "cost_usd": {
           "minimum": 0.0,
-          "title": "Cost Usd",
           "type": "number"
         }
       },
@@ -5776,37 +5556,67 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "cost_usd",
         "type"
       ],
-      "title": "DecisionAnswersPart",
+      "type": "object"
+    },
+    "DecisionBox": {
+      "additionalProperties": false,
+      "properties": {
+        "__kind": {
+          "const": "",
+          "type": "string"
+        },
+        "top": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "bottom": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "left": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "right": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ],
       "type": "object"
     },
     "DecisionQuestion": {
       "additionalProperties": false,
-      "description": "One question. Not a kind: it has no meaning outside its batch.",
       "properties": {
         "__kind": {
-          "default": "",
-          "description": "The registered kind this payload is an instance of, when it is one.",
-          "title": "Kind",
+          "const": "",
           "type": "string"
         },
         "name": {
           "maxLength": 128,
           "minLength": 1,
-          "title": "Name",
           "type": "string"
         },
         "type": {
           "enum": [
             "noul",
             "choice",
-            "score"
+            "score",
+            "box"
           ],
-          "title": "Type",
           "type": "string"
         },
         "instructions": {
           "minLength": 1,
-          "title": "Instructions",
           "type": "string"
         },
         "criteria": {
@@ -5826,9 +5636,28 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Criteria"
+          ]
+        },
+        "image": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "guidance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "suggested_threshold": {
           "anyOf": [
@@ -5840,9 +5669,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Suggested Threshold"
+          ]
         }
       },
       "required": [
@@ -5850,27 +5677,23 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "type",
         "instructions"
       ],
-      "title": "DecisionQuestion",
       "type": "object"
     },
     "DecisionQuestionsPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "decision_questions",
-          "default": "decision_questions",
-          "title": "Type",
           "type": "string"
         },
         "__kind": {
           "const": "decision_questions",
-          "default": "decision_questions",
-          "title": "Kind",
           "type": "string"
         },
         "questions": {
@@ -5878,7 +5701,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "$ref": "#/$defs/DecisionQuestion"
           },
           "minItems": 1,
-          "title": "Questions",
           "type": "array"
         }
       },
@@ -5886,27 +5708,21 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "questions",
         "type"
       ],
-      "title": "DecisionQuestionsPart",
       "type": "object"
     },
     "DecisionUsage": {
       "additionalProperties": false,
-      "description": "What the decision call consumed. Zero is a real value, never a stand-in.",
       "properties": {
         "__kind": {
-          "default": "",
-          "description": "The registered kind this payload is an instance of, when it is one.",
-          "title": "Kind",
+          "const": "",
           "type": "string"
         },
         "input_tokens": {
           "minimum": 0,
-          "title": "Input Tokens",
           "type": "integer"
         },
         "output_tokens": {
           "minimum": 0,
-          "title": "Output Tokens",
           "type": "integer"
         }
       },
@@ -5914,30 +5730,24 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "input_tokens",
         "output_tokens"
       ],
-      "title": "DecisionUsage",
       "type": "object"
     },
     "DocumentInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -5948,9 +5758,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -5965,14 +5773,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_document",
-          "default": "input_document",
-          "title": "Type",
           "type": "string"
         },
         "document_ids": {
@@ -5988,7 +5792,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Document Ids",
           "type": "array"
         }
       },
@@ -5996,7 +5799,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "document_ids",
         "type"
       ],
-      "title": "DocumentInputPart",
       "type": "object"
     },
     "DocumentMediaPart": {
@@ -6031,8 +5833,9 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       ],
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "origin": {
@@ -6047,9 +5850,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Origin"
+          ]
         },
         "file_id": {
           "anyOf": [
@@ -6059,9 +5860,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "url": {
           "anyOf": [
@@ -6071,9 +5870,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Url"
+          ]
         },
         "mime_type": {
           "anyOf": [
@@ -6083,9 +5880,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Mime Type"
+          ]
         },
         "size_bytes": {
           "anyOf": [
@@ -6095,9 +5890,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Size Bytes"
+          ]
         },
         "visibility": {
           "anyOf": [
@@ -6107,9 +5900,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Visibility"
+          ]
         },
         "cdn_url": {
           "anyOf": [
@@ -6119,20 +5910,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Cdn Url"
+          ]
         },
         "type": {
           "const": "media",
-          "default": "media",
-          "title": "Type",
           "type": "string"
         },
         "kind": {
           "const": "document",
-          "default": "document",
-          "title": "Kind",
           "type": "string"
         },
         "width": {
@@ -6143,9 +5928,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Width"
+          ]
         },
         "height": {
           "anyOf": [
@@ -6155,9 +5938,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Height"
+          ]
         },
         "page_count": {
           "anyOf": [
@@ -6167,16 +5948,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Page Count"
+          ]
         }
       },
       "required": [
         "type",
         "kind"
       ],
-      "title": "DocumentMediaPart",
       "type": "object"
     },
     "FullListBookmark": {
@@ -6184,13 +5962,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "full_list",
-          "default": "full_list",
-          "title": "Type",
           "type": "string"
         },
         "list_id": {
           "minLength": 1,
-          "title": "List Id",
           "type": "string"
         },
         "list_name": {
@@ -6201,15 +5976,12 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "List Name"
+          ]
         }
       },
       "required": [
         "list_id"
       ],
-      "title": "FullListBookmark",
       "type": "object"
     },
     "FullTableBookmark": {
@@ -6217,13 +5989,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "full_table",
-          "default": "full_table",
-          "title": "Type",
           "type": "string"
         },
         "table_id": {
           "minLength": 1,
-          "title": "Table Id",
           "type": "string"
         },
         "table_name": {
@@ -6234,47 +6003,56 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Table Name"
+          ]
         }
       },
       "required": [
         "table_id"
       ],
-      "title": "FullTableBookmark",
+      "type": "object"
+    },
+    "GroupPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "group",
+          "type": "string"
+        },
+        "group": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "group"
+      ],
       "type": "object"
     },
     "HostedToolPart": {
       "additionalProperties": false,
-      "description": "A provider-hosted tool block (Anthropic ``server_tool_use`` /\n``web_search_tool_result``) stored verbatim so a resumed tool loop can\nreplay the assistant turn block-for-block. Provider state, never a call.",
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "hosted_tool",
-          "default": "hosted_tool",
-          "title": "Type",
           "type": "string"
         },
         "provider": {
-          "default": "",
-          "title": "Provider",
           "type": "string"
         },
         "block": {
           "additionalProperties": true,
-          "title": "Block",
           "type": "object"
         }
       },
       "required": [
         "type"
       ],
-      "title": "HostedToolPart",
       "type": "object"
     },
     "ImageMediaPart": {
@@ -6309,8 +6087,9 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       ],
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "origin": {
@@ -6325,9 +6104,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Origin"
+          ]
         },
         "file_id": {
           "anyOf": [
@@ -6337,9 +6114,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "url": {
           "anyOf": [
@@ -6349,9 +6124,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Url"
+          ]
         },
         "mime_type": {
           "anyOf": [
@@ -6361,9 +6134,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Mime Type"
+          ]
         },
         "size_bytes": {
           "anyOf": [
@@ -6373,9 +6144,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Size Bytes"
+          ]
         },
         "visibility": {
           "anyOf": [
@@ -6385,9 +6154,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Visibility"
+          ]
         },
         "cdn_url": {
           "anyOf": [
@@ -6397,20 +6164,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Cdn Url"
+          ]
         },
         "type": {
           "const": "media",
-          "default": "media",
-          "title": "Type",
           "type": "string"
         },
         "kind": {
           "const": "image",
-          "default": "image",
-          "title": "Kind",
           "type": "string"
         },
         "width": {
@@ -6421,9 +6182,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Width"
+          ]
         },
         "height": {
           "anyOf": [
@@ -6433,9 +6192,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Height"
+          ]
         },
         "role": {
           "anyOf": [
@@ -6456,9 +6213,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Role"
+          ]
         },
         "name": {
           "anyOf": [
@@ -6468,35 +6223,47 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Name"
+          ]
         }
       },
       "required": [
         "type",
         "kind"
       ],
-      "title": "ImageMediaPart",
       "type": "object"
     },
+    "ItemPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "item",
+          "type": "string"
+        },
+        "item_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "item_id"
+      ],
+      "type": "object"
+    },
+    "JsonValue": {},
     "ListGroupBookmark": {
       "additionalProperties": true,
       "properties": {
         "type": {
           "const": "list_group",
-          "default": "list_group",
-          "title": "Type",
           "type": "string"
         },
         "list_id": {
           "minLength": 1,
-          "title": "List Id",
           "type": "string"
         },
         "group_name": {
           "minLength": 1,
-          "title": "Group Name",
           "type": "string"
         },
         "list_name": {
@@ -6507,30 +6274,26 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "List Name"
+          ]
         }
       },
       "required": [
         "list_id",
         "group_name"
       ],
-      "title": "ListGroupBookmark",
       "type": "object"
     },
     "ListInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_list",
-          "default": "input_list",
-          "title": "Type",
           "type": "string"
         },
         "bookmarks": {
@@ -6556,22 +6319,15 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Bookmarks",
           "type": "array"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -6582,16 +6338,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "bookmarks",
         "type"
       ],
-      "title": "ListInputPart",
       "type": "object"
     },
     "ListItemBookmark": {
@@ -6599,18 +6352,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "list_item",
-          "default": "list_item",
-          "title": "Type",
           "type": "string"
         },
         "list_id": {
           "minLength": 1,
-          "title": "List Id",
           "type": "string"
         },
         "item_id": {
           "minLength": 1,
-          "title": "Item Id",
           "type": "string"
         },
         "list_name": {
@@ -6621,43 +6370,34 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "List Name"
+          ]
         }
       },
       "required": [
         "list_id",
         "item_id"
       ],
-      "title": "ListItemBookmark",
       "type": "object"
     },
     "LiveResourceRefInput": {
       "additionalProperties": true,
-      "description": "A live id-backed reference; snapshots are not meaningful for opaque resources.",
       "properties": {
         "id": {
           "minLength": 1,
-          "title": "Id",
           "type": "string"
         },
         "mode": {
           "const": "reference",
-          "default": "reference",
-          "title": "Mode",
           "type": "string"
         }
       },
       "required": [
         "id"
       ],
-      "title": "LiveResourceRefInput",
       "type": "object"
     },
     "NormalizedCitation": {
       "additionalProperties": false,
-      "description": "The canonical cross-provider citation shape — the FE contract.\n\nOffsets come in two flavours and are never conflated:\n  - ``source_start`` / ``source_end``: char/block offsets INTO THE SOURCE\n    document (Anthropic char/content_block locations).\n  - ``answer_start`` / ``answer_end``: char offsets INTO THE ANSWER TEXT\n    (OpenAI url_citation annotations, Gemini grounding segment offsets).\n``page`` / ``end_page`` are 1-based (Anthropic page_location).",
       "properties": {
         "kind": {
           "enum": [
@@ -6668,7 +6408,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "web",
             "grounding"
           ],
-          "title": "Kind",
           "type": "string"
         },
         "provider": {
@@ -6678,7 +6417,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "google",
             "xai"
           ],
-          "title": "Provider",
           "type": "string"
         },
         "cited_text": {
@@ -6689,9 +6427,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Cited Text"
+          ]
         },
         "title": {
           "anyOf": [
@@ -6701,9 +6437,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Title"
+          ]
         },
         "url": {
           "anyOf": [
@@ -6713,13 +6447,9 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Url"
+          ]
         },
         "source_index": {
-          "default": 0,
-          "title": "Source Index",
           "type": "integer"
         },
         "file_id": {
@@ -6730,9 +6460,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "page": {
           "anyOf": [
@@ -6742,9 +6470,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Page"
+          ]
         },
         "end_page": {
           "anyOf": [
@@ -6754,9 +6480,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "End Page"
+          ]
         },
         "source_start": {
           "anyOf": [
@@ -6766,9 +6490,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Source Start"
+          ]
         },
         "source_end": {
           "anyOf": [
@@ -6778,9 +6500,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Source End"
+          ]
         },
         "answer_start": {
           "anyOf": [
@@ -6790,9 +6510,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Answer Start"
+          ]
         },
         "answer_end": {
           "anyOf": [
@@ -6802,13 +6520,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Answer End"
+          ]
         },
         "raw": {
           "additionalProperties": true,
-          "title": "Raw",
           "type": "object"
         }
       },
@@ -6816,21 +6531,19 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "kind",
         "provider"
       ],
-      "title": "NormalizedCitation",
       "type": "object"
     },
     "NotesInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_notes",
-          "default": "input_notes",
-          "title": "Type",
           "type": "string"
         },
         "note_ids": {
@@ -6846,27 +6559,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Note Ids",
           "type": "array"
         },
         "template": {
-          "default": "full",
-          "title": "Template",
           "type": "string"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -6877,29 +6581,41 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "note_ids",
         "type"
       ],
-      "title": "NotesInputPart",
+      "type": "object"
+    },
+    "PagePart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "page",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "page"
+      ],
       "type": "object"
     },
     "PreFetchedUrl": {
       "additionalProperties": true,
-      "description": "A webpage entry that has already been scraped by the client.\n\nWhen the frontend has already fetched a page (e.g. via /scraper/quick-scrape)\nit can embed the content here instead of a plain URL string. The server will\nuse this content directly and skip re-scraping.",
       "properties": {
         "url": {
           "minLength": 1,
-          "title": "Url",
           "type": "string"
         },
         "textContent": {
-          "title": "Textcontent",
           "type": "string"
         },
         "title": {
@@ -6910,9 +6626,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Title"
+          ]
         },
         "scrapedAt": {
           "anyOf": [
@@ -6922,9 +6636,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Scrapedat"
+          ]
         },
         "charCount": {
           "anyOf": [
@@ -6935,39 +6647,31 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Charcount"
+          ]
         }
       },
       "required": [
         "url",
         "textContent"
       ],
-      "title": "PreFetchedUrl",
       "type": "object"
     },
     "ProjectInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -6978,9 +6682,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -6995,14 +6697,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_project",
-          "default": "input_project",
-          "title": "Type",
           "type": "string"
         },
         "project_ids": {
@@ -7011,7 +6709,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "type": "string"
           },
           "minItems": 1,
-          "title": "Project Ids",
           "type": "array"
         }
       },
@@ -7019,7 +6716,353 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "project_ids",
         "type"
       ],
-      "title": "ProjectInputPart",
+      "type": "object"
+    },
+    "RemarkAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "noul",
+                "choice",
+                "score",
+                "text"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "question",
+        "answer"
+      ],
+      "type": "object"
+    },
+    "RemarkItem": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "comment",
+            "choice",
+            "edit",
+            "answers",
+            "interaction"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemarkTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "body": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diff": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "answers": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RemarkAnswer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "pattern": "^c[1-9][0-9]{0,5}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RemarkThreadEntry"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "block_state_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlockStateRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "RemarkTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "record_token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "record_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "record_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RemarkThreadEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "author_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "author_kind": {
+          "enum": [
+            "person",
+            "agent"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "author_name",
+        "author_kind",
+        "body"
+      ],
+      "type": "object"
+    },
+    "RemarksInputPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "input_remarks",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RemarkItem"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "convert_to_text": {
+          "type": "boolean"
+        },
+        "optional_context": {
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ResourcePromotion": {
+      "additionalProperties": false,
+      "properties": {
+        "representation": {
+          "type": "string"
+        },
+        "max_chars": {
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "representation"
+      ],
       "type": "object"
     },
     "ResourceRefInput": {
@@ -7044,17 +7087,64 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         }
       ]
     },
+    "RowPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "row",
+          "type": "string"
+        },
+        "row_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "row_id"
+      ],
+      "type": "object"
+    },
+    "SchemaPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
+    "SheetPart": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "sheet",
+          "type": "string"
+        },
+        "sheet": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "sheet"
+      ],
+      "type": "object"
+    },
     "SnapshotBodyResourceRefInput": {
       "additionalProperties": true,
       "properties": {
         "mode": {
           "const": "snapshot",
-          "title": "Mode",
           "type": "string"
         },
         "body": {
           "minLength": 1,
-          "title": "Body",
           "type": "string"
         }
       },
@@ -7062,7 +7152,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "mode",
         "body"
       ],
-      "title": "SnapshotBodyResourceRefInput",
       "type": "object"
     },
     "SnapshotContentResourceRefInput": {
@@ -7070,12 +7159,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "mode": {
           "const": "snapshot",
-          "title": "Mode",
           "type": "string"
         },
         "content": {
           "minLength": 1,
-          "title": "Content",
           "type": "string"
         }
       },
@@ -7083,7 +7170,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "mode",
         "content"
       ],
-      "title": "SnapshotContentResourceRefInput",
       "type": "object"
     },
     "SnapshotDescriptionResourceRefInput": {
@@ -7091,12 +7177,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "mode": {
           "const": "snapshot",
-          "title": "Mode",
           "type": "string"
         },
         "description": {
           "minLength": 1,
-          "title": "Description",
           "type": "string"
         }
       },
@@ -7104,7 +7188,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "mode",
         "description"
       ],
-      "title": "SnapshotDescriptionResourceRefInput",
       "type": "object"
     },
     "SnapshotTextResourceRefInput": {
@@ -7112,12 +7195,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "mode": {
           "const": "snapshot",
-          "title": "Mode",
           "type": "string"
         },
         "text": {
           "minLength": 1,
-          "title": "Text",
           "type": "string"
         }
       },
@@ -7125,7 +7206,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "mode",
         "text"
       ],
-      "title": "SnapshotTextResourceRefInput",
       "type": "object"
     },
     "SnapshotValueResourceRefInput": {
@@ -7133,12 +7213,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "mode": {
           "const": "snapshot",
-          "title": "Mode",
           "type": "string"
         },
         "value": {
           "minLength": 1,
-          "title": "Value",
           "type": "string"
         }
       },
@@ -7146,27 +7224,355 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "mode",
         "value"
       ],
-      "title": "SnapshotValueResourceRefInput",
+      "type": "object"
+    },
+    "SourceRef": {
+      "properties": {
+        "envelope": {
+          "const": "resource_ref",
+          "type": "string"
+        },
+        "resource_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string"
+        },
+        "representation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "include_segments": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "enum": [
+                "direct",
+                "context"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_chars": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "promote": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePromotion"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ResourcePromotion"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overlay": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "part": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "cell": "#/$defs/CellPart",
+                  "column": "#/$defs/ColumnPart",
+                  "context_cell": "#/$defs/ContextCellPart",
+                  "group": "#/$defs/GroupPart",
+                  "item": "#/$defs/ItemPart",
+                  "page": "#/$defs/PagePart",
+                  "row": "#/$defs/RowPart",
+                  "schema": "#/$defs/SchemaPart",
+                  "sheet": "#/$defs/SheetPart"
+                },
+                "propertyName": "scope"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ColumnPart"
+                },
+                {
+                  "$ref": "#/$defs/RowPart"
+                },
+                {
+                  "$ref": "#/$defs/CellPart"
+                },
+                {
+                  "$ref": "#/$defs/SchemaPart"
+                },
+                {
+                  "$ref": "#/$defs/GroupPart"
+                },
+                {
+                  "$ref": "#/$defs/ItemPart"
+                },
+                {
+                  "$ref": "#/$defs/PagePart"
+                },
+                {
+                  "$ref": "#/$defs/SheetPart"
+                },
+                {
+                  "$ref": "#/$defs/ContextCellPart"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keep_fresh": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "optional_context": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "compact",
+                "minimal"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "persistence": {
+          "anyOf": [
+            {
+              "enum": [
+                "durable",
+                "turn"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resource_type",
+        "resource_id"
+      ],
+      "type": "object"
+    },
+    "SourceSet": {
+      "properties": {
+        "envelope": {
+          "const": "source_set",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "type": "array"
+        },
+        "topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grounding": {
+          "enum": [
+            "whole",
+            "selected",
+            "retrieve"
+          ],
+          "type": "string"
+        },
+        "retrieve_query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SourceSetPart": {
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "source_set",
+          "type": "string"
+        },
+        "source_set": {
+          "$ref": "#/$defs/SourceSet"
+        },
+        "convert_to_text": {
+          "type": "boolean"
+        },
+        "optional_context": {
+          "type": "boolean"
+        },
+        "keep_fresh": {
+          "type": "boolean"
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source_set",
+        "type"
+      ],
       "type": "object"
     },
     "SpeechScriptPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "speech_script",
-          "default": "speech_script",
-          "title": "Type",
           "type": "string"
         },
         "__kind": {
           "const": "speech_script",
-          "default": "speech_script",
-          "title": "Kind",
           "type": "string"
         },
         "turns": {
@@ -7174,7 +7580,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "$ref": "#/$defs/SpeechTurn"
           },
           "minItems": 1,
-          "title": "Turns",
           "type": "array"
         }
       },
@@ -7182,24 +7587,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "turns",
         "type"
       ],
-      "title": "SpeechScriptPart",
       "type": "object"
     },
     "SpeechTurn": {
       "additionalProperties": false,
-      "description": "One spoken turn. Not a kind: it has no meaning outside its script.",
       "properties": {
         "__kind": {
-          "default": "",
-          "description": "The registered kind this payload is an instance of, when it is one.",
-          "title": "Kind",
+          "const": "",
           "type": "string"
         },
         "speaker": {
-          "description": "The speaker's name. Turns with the same name are the same speaker. For multi-speaker vendors (Gemini) this is the transcript label.",
           "maxLength": 40,
           "minLength": 1,
-          "title": "Speaker",
           "type": "string"
         },
         "voice": {
@@ -7210,15 +7609,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "description": "The voice this speaker uses: a literal provider voice id from the model's catalog, or a {{variable}}. Empty = bound to the agent's Voice setting (tts_voice).",
-          "title": "Voice"
+          ]
         },
         "text": {
-          "description": "What is said. Any {{variable}} is filled at run time.",
           "minLength": 1,
-          "title": "Text",
           "type": "string"
         },
         "direction": {
@@ -7229,10 +7623,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "description": "Free-text performance direction for this turn only (e.g. 'warm, a little amused').",
-          "title": "Direction"
+          ]
         },
         "pause_after_ms": {
           "anyOf": [
@@ -7244,17 +7635,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "description": "Silence after this turn, in milliseconds.",
-          "title": "Pause After Ms"
+          ]
         }
       },
       "required": [
         "speaker",
         "text"
       ],
-      "title": "SpeechTurn",
       "type": "object"
     },
     "TableCellBookmark": {
@@ -7262,23 +7649,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "table_cell",
-          "default": "table_cell",
-          "title": "Type",
           "type": "string"
         },
         "table_id": {
           "minLength": 1,
-          "title": "Table Id",
           "type": "string"
         },
         "row_id": {
           "minLength": 1,
-          "title": "Row Id",
           "type": "string"
         },
         "column_name": {
           "minLength": 1,
-          "title": "Column Name",
           "type": "string"
         },
         "table_name": {
@@ -7289,9 +7671,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Table Name"
+          ]
         }
       },
       "required": [
@@ -7299,7 +7679,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "row_id",
         "column_name"
       ],
-      "title": "TableCellBookmark",
       "type": "object"
     },
     "TableColumnBookmark": {
@@ -7307,18 +7686,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "table_column",
-          "default": "table_column",
-          "title": "Type",
           "type": "string"
         },
         "table_id": {
           "minLength": 1,
-          "title": "Table Id",
           "type": "string"
         },
         "column_name": {
           "minLength": 1,
-          "title": "Column Name",
           "type": "string"
         },
         "table_name": {
@@ -7329,30 +7704,26 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Table Name"
+          ]
         }
       },
       "required": [
         "table_id",
         "column_name"
       ],
-      "title": "TableColumnBookmark",
       "type": "object"
     },
     "TableInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_table",
-          "default": "input_table",
-          "title": "Type",
           "type": "string"
         },
         "bookmarks": {
@@ -7386,22 +7757,15 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Bookmarks",
           "type": "array"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -7412,16 +7776,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "bookmarks",
         "type"
       ],
-      "title": "TableInputPart",
       "type": "object"
     },
     "TableRowBookmark": {
@@ -7429,18 +7790,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "table_row",
-          "default": "table_row",
-          "title": "Type",
           "type": "string"
         },
         "table_id": {
           "minLength": 1,
-          "title": "Table Id",
           "type": "string"
         },
         "row_id": {
           "minLength": 1,
-          "title": "Row Id",
           "type": "string"
         },
         "table_name": {
@@ -7451,16 +7808,13 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Table Name"
+          ]
         }
       },
       "required": [
         "table_id",
         "row_id"
       ],
-      "title": "TableRowBookmark",
       "type": "object"
     },
     "TableSchemaBookmark": {
@@ -7468,13 +7822,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       "properties": {
         "type": {
           "const": "table_schema",
-          "default": "table_schema",
-          "title": "Type",
           "type": "string"
         },
         "table_id": {
           "minLength": 1,
-          "title": "Table Id",
           "type": "string"
         },
         "table_name": {
@@ -7485,29 +7836,25 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Table Name"
+          ]
         }
       },
       "required": [
         "table_id"
       ],
-      "title": "TableSchemaBookmark",
       "type": "object"
     },
     "TaskInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_task",
-          "default": "input_task",
-          "title": "Type",
           "type": "string"
         },
         "task_ids": {
@@ -7523,27 +7870,18 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Task Ids",
           "type": "array"
         },
         "template": {
-          "default": "full",
-          "title": "Template",
           "type": "string"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -7554,78 +7892,63 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "task_ids",
         "type"
       ],
-      "title": "TaskInputPart",
       "type": "object"
     },
     "TextPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "text",
-          "default": "text",
-          "title": "Type",
           "type": "string"
         },
         "text": {
-          "default": "",
-          "title": "Text",
           "type": "string"
         },
         "id": {
-          "default": "",
-          "title": "Id",
           "type": "string"
         },
         "citations": {
           "items": {
             "$ref": "#/$defs/NormalizedCitation"
           },
-          "title": "Citations",
           "type": "array"
         }
       },
       "required": [
         "type"
       ],
-      "title": "TextPart",
       "type": "object"
     },
     "ThinkingPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "thinking",
-          "default": "thinking",
-          "title": "Type",
           "type": "string"
         },
         "text": {
-          "default": "",
-          "title": "Text",
           "type": "string"
         },
         "id": {
-          "default": "",
-          "title": "Id",
           "type": "string"
         },
         "provider": {
@@ -7647,9 +7970,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Provider"
+          ]
         },
         "signature": {
           "anyOf": [
@@ -7659,9 +7980,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Signature"
+          ]
         },
         "signature_encoding": {
           "anyOf": [
@@ -7672,95 +7991,73 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Signature Encoding"
+          ]
         },
         "summary": {
           "items": {},
-          "title": "Summary",
           "type": "array"
         }
       },
       "required": [
         "type"
       ],
-      "title": "ThinkingPart",
       "type": "object"
     },
     "ToolCallPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "tool_call",
-          "default": "tool_call",
-          "title": "Type",
           "type": "string"
         },
         "call_id": {
-          "default": "",
-          "title": "Call Id",
           "type": "string"
         },
         "name": {
-          "default": "",
-          "title": "Name",
           "type": "string"
         },
         "arguments": {
           "additionalProperties": true,
-          "title": "Arguments",
           "type": "object"
         }
       },
       "required": [
         "type"
       ],
-      "title": "ToolCallPart",
       "type": "object"
     },
     "ToolResultPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "tool_result",
-          "default": "tool_result",
-          "title": "Type",
           "type": "string"
         },
         "call_id": {
-          "default": "",
-          "title": "Call Id",
           "type": "string"
         },
         "tool_use_id": {
-          "default": "",
-          "title": "Tool Use Id",
           "type": "string"
         },
         "name": {
-          "default": "",
-          "title": "Name",
           "type": "string"
         },
         "is_error": {
-          "default": false,
-          "title": "Is Error",
           "type": "boolean"
         },
         "output_chars": {
-          "default": 0,
-          "title": "Output Chars",
           "type": "integer"
         },
         "output_preview": {
@@ -7772,38 +8069,30 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Output Preview"
+          ]
         }
       },
       "required": [
         "type"
       ],
-      "title": "ToolResultPart",
       "type": "object"
     },
     "TranscriptInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -7814,9 +8103,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -7831,14 +8118,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_transcript",
-          "default": "input_transcript",
-          "title": "Type",
           "type": "string"
         },
         "transcript_ids": {
@@ -7847,7 +8130,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "type": "string"
           },
           "minItems": 1,
-          "title": "Transcript Ids",
           "type": "array"
         }
       },
@@ -7855,30 +8137,24 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "transcript_ids",
         "type"
       ],
-      "title": "TranscriptInputPart",
       "type": "object"
     },
     "TranscriptSessionInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -7889,9 +8165,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -7906,14 +8180,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_transcript_session",
-          "default": "input_transcript_session",
-          "title": "Type",
           "type": "string"
         },
         "transcript_session_ids": {
@@ -7922,7 +8192,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             "type": "string"
           },
           "minItems": 1,
-          "title": "Transcript Session Ids",
           "type": "array"
         }
       },
@@ -7930,7 +8199,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "transcript_session_ids",
         "type"
       ],
-      "title": "TranscriptSessionInputPart",
       "type": "object"
     },
     "VideoMediaPart": {
@@ -7965,8 +8233,9 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
       ],
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "origin": {
@@ -7981,9 +8250,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Origin"
+          ]
         },
         "file_id": {
           "anyOf": [
@@ -7993,9 +8260,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "url": {
           "anyOf": [
@@ -8005,9 +8270,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Url"
+          ]
         },
         "mime_type": {
           "anyOf": [
@@ -8017,9 +8280,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Mime Type"
+          ]
         },
         "size_bytes": {
           "anyOf": [
@@ -8029,9 +8290,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Size Bytes"
+          ]
         },
         "visibility": {
           "anyOf": [
@@ -8041,9 +8300,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Visibility"
+          ]
         },
         "cdn_url": {
           "anyOf": [
@@ -8053,20 +8310,14 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Cdn Url"
+          ]
         },
         "type": {
           "const": "media",
-          "default": "media",
-          "title": "Type",
           "type": "string"
         },
         "kind": {
           "const": "video",
-          "default": "video",
-          "title": "Kind",
           "type": "string"
         },
         "width": {
@@ -8077,9 +8328,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Width"
+          ]
         },
         "height": {
           "anyOf": [
@@ -8089,9 +8338,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Height"
+          ]
         },
         "duration_ms": {
           "anyOf": [
@@ -8101,9 +8348,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Duration Ms"
+          ]
         },
         "role": {
           "anyOf": [
@@ -8117,9 +8362,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Role"
+          ]
         },
         "name": {
           "anyOf": [
@@ -8129,61 +8372,51 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Name"
+          ]
         }
       },
       "required": [
         "type",
         "kind"
       ],
-      "title": "VideoMediaPart",
       "type": "object"
     },
     "WebSearchPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "web_search",
-          "default": "web_search",
-          "title": "Type",
           "type": "string"
         },
         "id": {
-          "default": "",
-          "title": "Id",
           "type": "string"
         },
         "status": {
-          "default": "",
-          "title": "Status",
           "type": "string"
         }
       },
       "required": [
         "type"
       ],
-      "title": "WebSearchPart",
       "type": "object"
     },
     "WebpageInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "input_webpage",
-          "default": "input_webpage",
-          "title": "Type",
           "type": "string"
         },
         "urls": {
@@ -8199,22 +8432,15 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Urls",
           "type": "array"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -8225,39 +8451,31 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         }
       },
       "required": [
         "urls",
         "type"
       ],
-      "title": "WebpageInputPart",
       "type": "object"
     },
     "WorkbookInputPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "convert_to_text": {
-          "default": true,
-          "title": "Convert To Text",
           "type": "boolean"
         },
         "optional_context": {
-          "default": false,
-          "title": "Optional Context",
           "type": "boolean"
         },
         "keep_fresh": {
-          "default": false,
-          "title": "Keep Fresh",
           "type": "boolean"
         },
         "editable": {
@@ -8268,9 +8486,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Editable"
+          ]
         },
         "template": {
           "anyOf": [
@@ -8285,14 +8501,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Template"
+          ]
         },
         "type": {
           "const": "input_workbook",
-          "default": "input_workbook",
-          "title": "Type",
           "type": "string"
         },
         "workbook_ids": {
@@ -8308,7 +8520,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             ]
           },
           "minItems": 1,
-          "title": "Workbook Ids",
           "type": "array"
         }
       },
@@ -8316,32 +8527,27 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "workbook_ids",
         "type"
       ],
-      "title": "WorkbookInputPart",
       "type": "object"
     },
     "YouTubeMediaPart": {
       "additionalProperties": false,
       "properties": {
         "metadata": {
-          "additionalProperties": true,
-          "title": "Metadata",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
           "type": "object"
         },
         "type": {
           "const": "media",
-          "default": "media",
-          "title": "Type",
           "type": "string"
         },
         "kind": {
           "const": "youtube",
-          "default": "youtube",
-          "title": "Kind",
           "type": "string"
         },
         "url": {
           "minLength": 1,
-          "title": "Url",
           "type": "string"
         },
         "external_url": {
@@ -8352,14 +8558,10 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "External Url"
+          ]
         },
         "origin": {
           "const": "external",
-          "default": "external",
-          "title": "Origin",
           "type": "string"
         },
         "file_id": {
@@ -8370,9 +8572,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "File Id"
+          ]
         },
         "mime_type": {
           "anyOf": [
@@ -8382,9 +8582,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Mime Type"
+          ]
         },
         "size_bytes": {
           "anyOf": [
@@ -8394,9 +8592,7 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
             {
               "type": "null"
             }
-          ],
-          "default": null,
-          "title": "Size Bytes"
+          ]
         }
       },
       "required": [
@@ -8404,7 +8600,6 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
         "type",
         "kind"
       ],
-      "title": "YouTubeMediaPart",
       "type": "object"
     }
   },
@@ -8503,6 +8698,12 @@ const MESSAGE_PART_SCHEMA: MessagePartJsonSchema = {
     },
     {
       "$ref": "#/$defs/ContextInputPart"
+    },
+    {
+      "$ref": "#/$defs/RemarksInputPart"
+    },
+    {
+      "$ref": "#/$defs/SourceSetPart"
     },
     {
       "$ref": "#/$defs/DecisionQuestionsPart"
@@ -8617,16 +8818,16 @@ export function parseMessageContent(content: unknown[]): MessagePart[] {
 // --- Message wrapper (matrx_ai.config.message_flags) ---
 
 /** The translator flags a message can carry. */
-export const MESSAGE_FLAG_KEYS = ["prefill", "cache_boundary", "example"] as const;
+export const MESSAGE_FLAG_KEYS = ["prefill", "example"] as const;
 export type MessageFlagKey = (typeof MESSAGE_FLAG_KEYS)[number];
 /** Stored form (`MessageFlags.as_dict`): only `true` means anything; absence is false. */
 export type MessageFlags = Partial<Record<MessageFlagKey, true>>;
 /** Where a runtime message keeps its flags: `cx_message.metadata[MESSAGE_FLAGS_METADATA_KEY]`. */
 export const MESSAGE_FLAGS_METADATA_KEY = "flags";
-/** What a flag the model cannot honour becomes (org knob agents.messages / flag_compatibility_mode). */
+/** What a flag the model cannot honor becomes (org knob agents.messages / flag_compatibility_mode). */
 export const FLAG_COMPATIBILITY_MODES = ["refuse", "convert", "drop"] as const;
 export type FlagCompatibilityMode = (typeof FLAG_COMPATIBILITY_MODES)[number];
-export const DEFAULT_FLAG_COMPATIBILITY_MODE: FlagCompatibilityMode = "refuse";
+export const DEFAULT_FLAG_COMPATIBILITY_MODE: FlagCompatibilityMode = "convert";
 
 /** One message: its role, its parts, and its translator flags (top level on an
  *  agent-definition message; `metadata.flags` on a runtime cx_message). */

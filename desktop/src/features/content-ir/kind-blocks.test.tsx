@@ -4,8 +4,8 @@
  * THE END-TO-END PROOF that this app renders server-built kinds.
  *
  * 🚨 The fixture is NOT hand-written. `__fixtures__/server-render-blocks.json`
- * was produced by running aidream's PRODUCTION block processor over answer
- * text an agent really emits, against the LIVE `content_ir` schemas. A test
+ * was produced by running aidream's PRODUCTION block processor over the
+ * `__kind` answer text a kind-bound agent really emits, against the LIVE `content_ir` schemas. A test
  * that passes on a hand-built envelope proves nothing — that is exactly how
  * the render-block channel stayed dead.
  *
@@ -75,6 +75,24 @@ beforeAll(() => {
       tier: "warm",
     });
   }
+});
+
+describe("the fixture is what the server sends today", () => {
+  it("carries each deck as a `kind` block — the only way the server types one", () => {
+    // LEGACY-5: the server no longer types `flashcards` / `quiz` render blocks.
+    // A deck arrives ONLY as a `__kind` body the detector types `kind` and
+    // stamps with a verified envelope. A fixture carrying a retired block type
+    // is stale: regenerate it from the producer, never hand-edit it.
+    for (const name of ["flashcard_set", "quiz_set"] as const) {
+      const source = BLOCKS[name];
+      expect(source?.type, `fixture "${name}" is not a kind block`).toBe("kind");
+      const ir = (source?.metadata as Record<string, unknown> | undefined)?.__ir as
+        | { root: { kind: string; discriminator: unknown } }
+        | undefined;
+      expect(ir?.root.kind).toBe(name);
+      expect(ir?.root.discriminator).toEqual({ format: "json", key: "__kind" });
+    }
+  });
 });
 
 describe("StreamBlockBuilder keeps structured content structured", () => {

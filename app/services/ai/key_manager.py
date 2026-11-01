@@ -115,7 +115,32 @@ def _resolve_env_var(env_var_name: str) -> str | None:
     provider = _ENV_TO_PROVIDER.get(env_var_name.upper())
     if provider is None:
         return None
-    return _user_keys.get(provider) or _vault_keys.get(provider) or None
+    key = _user_keys.get(provider) or _vault_keys.get(provider) or None
+    if key is None:
+        _announce_environment_fallback(env_var_name, provider)
+    return key
+
+
+# Env var names whose fall-through to the process environment was already said (once per process).
+_announced_env_fallback: set[str] = set()
+
+
+def _announce_environment_fallback(env_var_name: str, provider: str) -> None:
+    """THE FALL-THROUGH SPEAKS (feedback b1d61a7d). With no local or Vault key, matrx-ai reads
+    ``os.environ`` — a key from this machine's ``.env`` that may be a shared/production key, whose
+    spend this app records only in local SQLite. Never silent: say which variable is about to be
+    used, once per process, as a warning."""
+    name = env_var_name.upper()
+    if name in _announced_env_fallback or not os.environ.get(name):
+        return
+    _announced_env_fallback.add(name)
+    logger.warning(
+        "[key_manager] No %s key saved on this machine or in the Credential Vault; matrx-ai will use "
+        "%s from the process environment (.env). That key is billed to whoever owns it — save your own "
+        "key in Settings > API Keys to stop using it.",
+        provider,
+        name,
+    )
 
 
 def get_key_resolver() -> Callable[[str], str | None]:

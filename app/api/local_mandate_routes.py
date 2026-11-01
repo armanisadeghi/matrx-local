@@ -20,6 +20,12 @@
            blocks. The caller keeps them for its conversation; a later turn never refills.
       422/503: a declared prompt block could not be resolved (``detail.blocks`` names it)
 
+  POST /local-mandates/{mandate_key}/runs   body: {usage: {prompt_tokens, completion_tokens,
+                                                    total_tokens}, duration_ms?, failed?}
+      200: {conversation_id, user_request_id} — the run llama-server answered, recorded against
+           its mandate (source_feature ``mandate:<key>``, total_cost 0) and queued for chat_sync.
+      401: never signed in on this device
+
 Service + rationale: app/services/ai/local_mandates.py.
 """
 
@@ -53,3 +59,18 @@ async def fill_local_mandate(
     payload = await get_local_mandate_resolver().fill(mandate_key, body.variables)
     response.headers["X-Matrx-Mandate-Stale"] = "true" if payload["stale"] else "false"
     return payload
+
+
+class LocalMandateRunRequest(BaseModel):
+    usage: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
+    failed: bool = False
+
+
+@router.post("/{mandate_key}/runs")
+async def record_local_mandate_run(
+    mandate_key: str, body: LocalMandateRunRequest
+) -> dict[str, str]:
+    return await get_local_mandate_resolver().record_run(
+        mandate_key, usage=body.usage, duration_ms=body.duration_ms, failed=body.failed
+    )

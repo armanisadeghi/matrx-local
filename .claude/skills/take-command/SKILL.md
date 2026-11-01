@@ -3,7 +3,7 @@ name: take-command
 subject: skills/take-command
 type: Skill
 title: "take-command — acting lead of a team of agents while the human is away"
-description: "Acting command of a team of agents while the human is away. Use when told 'you're in charge', 'take over X', 'I'm stepping away / going to sleep', 'keep the team moving', or on /take-command <topic>. NOT for launching a new build (use campaign-pattern)."
+description: "Acting command of a team of agents while the human is away, including waking lanes that went quiet. Use when told 'you're in charge', 'take over X', 'wake the team on X', 'I'm going to sleep', or on /take-command <topic>. NOT for launching a new build (use campaign-pattern)."
 tags: [coordination, delegation, autonomy, fleet, operations]
 timestamp: 2026-10-28T00:00:00Z
 ---
@@ -16,9 +16,15 @@ timestamp: 2026-10-28T00:00:00Z
 
 # take-command — acting lead while the human is away
 
-The human hands you a **topic** and leaves. A team of agents is already working on it (or should
-be). You become the acting lead: find the team, take over, keep every agent moving toward the
-human's intent, use exactly the authority you were given, and hand back a clean report.
+The human hands you a **topic** and leaves. A team of agents is working on it, or worked on it and
+has gone quiet. You become the acting lead: find the team, wake whoever has stopped, take over,
+keep every agent moving toward the human's intent, use exactly the authority you were given, and
+hand back a clean report.
+
+**Two openings, one command.** *Running* — most lanes are busy; go straight to the roster.
+*Reconvene* — most lanes are idle, stopped, archived, or unknown; first find and wake them (§0.R).
+Work out which from the roster; ask only if you truly cannot tell, and take Reconvene as the
+default when unsure — it costs a few searches and finds lanes Running would miss.
 
 **The one-sentence version:** ask only what you cannot work out, start on defaults in the same
 turn, write your authority down before you use it, never let an agent wait on the human, and never
@@ -31,12 +37,14 @@ a good run. Answers make it better; their absence never stops it.
 
 ## Phase 0 — Homework before the first question (≤3 minutes, silent)
 
-1. **The team.** `ListAgents` first — it lists every session on this machine across **all signed-in
-   accounts**; the session list (`mcp__ccd_session_mgmt__list_sessions`) shows only the current
-   account. Then transcript search for the topic's words, and agent mail (`agent_messages`) for
-   sessions on other machines or in the cloud. Match **by topic, not title** — titles go stale. For
-   each: name, id, state (busy / idle / waiting), last activity, what it is doing (read its latest
-   turns; don't ask yet).
+1. **The team.** `ListAgents` first — it lists every live session on this machine across **every
+   signed-in account**, however many there are; never assume a count. The session list
+   (`mcp__ccd_session_mgmt__list_sessions`) shows only the current account. Then transcript search
+   for the topic's words, and agent mail (`agent_messages`) for sessions on other machines or in the
+   cloud. Match **by topic, not title** — titles go stale. For each: name, id, state (busy / idle /
+   waiting / archived / not listed), last activity, what it is doing (read its latest turns; don't
+   ask yet). Mostly not busy → Reconvene: send Phase 1's questions first, then run §0.R in the
+   same turn.
 2. **The deputy candidate.** The agent with the deepest context: longest relevant history, most
    recent commits on the topic, or the one the human named.
 3. **The intent.** What "done" most plausibly means, in the human's own words.
@@ -46,15 +54,42 @@ a good run. Answers make it better; their absence never stops it.
 
 | Trigger | Fires when you observe |
 |---|---|
-| `SPEND` | the team's work costs money (AI runs, browsers, CI, providers), or an agent is waiting on a budget approval |
-| `RETIRE` | an old system, code path, data, or feature is being replaced by a new one |
+| `SPEND` | the work's own purpose is paid runs at a scale where cost matters (large test batteries, bulk AI or browser runs), or an agent is already waiting on a money approval — ordinary work does not fire it |
 | `OPTIMIZE` | the work keeps surfacing savings, simplifications, or cost cuts |
 | `OUTWARD` | the work can message real people, publish, release outside the normal cycle, or touch external accounts |
 | `DATA` | the work changes production data or schema destructively |
 | `REMOTE` | team members live on other machines or in the cloud |
 | `SMALL` | fewer than 3 agents, or work nobody owns |
 
-**Done when:** a draft roster, a deputy candidate, an intent sentence, and the fired triggers exist.
+**Done when:** a draft roster, a deputy candidate, an intent sentence, the fired triggers, and the
+opening (Running / Reconvene) exist.
+
+### §0.R — Reconvene: find, summarize, wake
+
+1. **Search wide with cheap helpers.** Dispatch two Sonnet researchers in parallel, each with the
+   topic's words and synonyms: one over transcripts (transcript search incl. archived, the
+   transcript files on disk for every account, the `conversations` tool), one over the work itself
+   (recent commits and docs on the topic, agent mail, task lists). Each returns, per lane: name, id,
+   account if known, state, what it was building, where it stopped and why, unpushed or uncommitted
+   work, open questions to the human. **Done when** both lists are merged into the board.
+2. **Sort every lane:** *finished* (verified outcome, pushed) · *superseded* (another lane or a
+   later decision replaced it) · *stalled* (work left, nobody moving) · *blocked* (named blocker).
+   Wake only stalled and blocked lanes. A finished lane with unpushed work gets one message to push.
+3. **Wake, by what reaches it:**
+   - Listed in `ListAgents` (any account, idle or waiting) → `SendMessage` by name. Idle sessions
+     take the message as their next turn.
+   - Archived in this account → `unarchive_session`, then message it.
+   - Not reachable (closed, another account's archive, another machine that's off) → start a fresh
+     session seeded with that lane's summary and its transcript path, and record it on the board
+     as the lane's new owner.
+   The wake message is the §3.1 announcement plus: "here is where you stopped, as I read it — correct
+   me, then continue with <next item>."
+4. **A wake counts only when the lane replies.** Silence through one check-in → it did not wake
+   (it may hold messages for its own user's approval, or be closed); start a seeded session for its
+   unit and mark the old one superseded so two never work one unit.
+
+**Done when:** every stalled or blocked lane either replied with done / doing / blocked, or its unit
+has a new owner.
 
 ## Phase 1 — The triage interview: ask, then start in the same turn
 
@@ -70,14 +105,14 @@ a good run. Answers make it better; their absence never stops it.
 
 1. **Intent.** "Here's the mission and what success looks like when you're back: … — right?"
 2. **Priorities, in order, each with a done-criterion** you propose (a verified outcome, never activity).
-3. **Window and wake-up.** When are you back? May I wake you — for what, and how (text / push / never)?
+3. **Window.** When are you back, and is there anything you'd want a text about? (Default: a text
+   only before harm that cannot be undone.)
 
 **Ask only when its trigger fired:**
 
 | Trigger | Question | Default (silence / skipped) |
 |---|---|---|
-| `SPEND` | Spending authority: exact per-run limit, total ceiling, and hard nos (models, tiers, things never switched on)? | No new spend beyond work already running |
-| `RETIRE` | Burn the ships: is deleting the old version pre-approved, and once what is proven? | Delete only after the replacement is proven live with no lost capability, one item at a time, each in its own commit |
+| `SPEND` | Is money a factor here? If so, any limits? | The house rules on spend; nothing beyond them |
 | `OPTIMIZE` | Chase improvements now, or log them? | Log; start one only if it serves a current priority |
 | `OUTWARD` | May the team message people / publish / release outside the cycle? | Reserved |
 | `DATA` | Which destructive data or schema changes are allowed? | Reserved unless named |
@@ -86,8 +121,11 @@ a good run. Answers make it better; their absence never stops it.
 | (always, if any decision looks like a rule change) | Which decisions stay yours no matter what? | Anything that changes doctrine, a protected asset, or another agent's direct brief from you |
 | (deputy found) | Confirm the deputy: <name>? | The agent with the deepest context |
 
+**Never asked — yours to decide:** retiring old code once its replacement is proven (§3.5). Taking
+command means making that call; the human does not want the question.
+
 **The floor — never asked, never delegable:** anything in the human's personal account; rotating
-credentials; deleting user data; creating a new package or service; spend over the ceiling;
+credentials; deleting user data; creating a new package or service; money past a limit the human set;
 **loosening a cap, guard, or limit to unblock work**; anything the safety rules forbid. When a
 system refuses you an approval (a DB function, a permission check), the refusal stands: log it for
 the human, never route around it.
@@ -108,8 +146,8 @@ anything:
 COMMISSION — <topic>                     acting lead: <this session>   deputy: <name>
 Intent:      <one sentence>
 Priorities:  1. <…> — done when <…>   2. …   3. …
-Window:      until <time>       Wake me: <conditions> via <channel> | never
-Authority:   spend <per-run $X, total $Y, hard nos | none>; deletion <rule>; <other grants>
+Window:      until <time>       Text me: <conditions>
+Authority:   <grants given>; money <limits — only if SPEND fired>
 Reserved:    <decisions that stay the human's>  + the floor
 Record:      <link to the committed commission>
 Mode:        answered | autopilot (defaults marked *)
@@ -120,10 +158,10 @@ Mode:        answered | autopilot (defaults marked *)
 ## Phase 3 — Command
 
 ### 3.1 Take over
-1. **Deputy first.** Get their read and agree a split in writing (e.g. lead: roster, spend, summary;
+1. **Deputy first.** Get their read and agree a split in writing (e.g. lead: roster, approvals, summary;
    deputy: technical calls, conversions, deletions).
 2. **Announce to every agent**, one message each: acting lead, appointed by <human>, until <time>;
-   intent and priorities; your authority in numbers with the link to the record; the hard nos; how
+   intent and priorities; your authority with the link to the record; the hard nos; how
    to reach you; and "don't stop to wait on me — make the call the rules support and tell me." Ask
    for three lines: **done / doing / blocked.** All of it within minutes of activation.
 3. **The board** — agent · unit of work · priority · state · blocker · last verified outcome ·
@@ -165,8 +203,8 @@ Mode:        answered | autopilot (defaults marked *)
 - Relaying a wrong fact costs a correction to every agent. Verify once, then broadcast.
 
 ### 3.4 Use the authority given — exactly
-- Inside the written limits → approve at once, quoting the record. Log: what, amount, requester,
-  reason, **running total.**
+- Inside the written limits → approve at once, quoting the record. Log: what, requester, reason
+  (amount and running total when money is involved).
 - Outside the limits, reserved, or refused by the system → say so plainly, add it to the human's
   decision list, and give the agent its next item. **Nobody waits on the human.**
 - **A specific instruction the human gave an agent directly beats your general grant.** Don't
@@ -184,8 +222,10 @@ never bulk. Uncertain → defer and log.
 ### 3.6 Escalate — choose one for every issue
 - **Handle it** — inside your authority.
 - **Log it** — outside your authority, can wait.
-- **Wake the human** — a wake condition is met, or continuing would cause harm you cannot undo
-  (pause the affected work first).
+- **Text the human** — a text condition is met, or continuing would cause harm you cannot undo.
+  Text is the only channel with a chance of reaching them (`send_text`), and it usually won't: pause
+  only the affected work, then decide yourself from their recorded intent and keep everything else
+  moving. Never wait on a reply.
 
 ### 3.7 Stop
 When the intent is met or nothing actionable remains: tell the team to finish their current item,
@@ -197,8 +237,9 @@ the gap before their return is unattended.
 
 ```
 TURNOVER — <topic>     <start> → <now>     mode: answered | autopilot
+Woken:            each lane — how it was reached, or who replaced it (Reconvene only)
 Completed:        per priority — verified outcome + link
-Approvals:        each — amount, requester, reason; running total
+Approvals:        each — requester, reason (amount + running total if money applied)
 Irreversible:     each action — how its preconditions were verified; rollback point
 In progress:      owner · state · blocker
 Decisions needed: ranked, recommendation first; items waiting on one click
@@ -239,4 +280,4 @@ From the baseline reps without this skill (see `evals.md`) and the 2026-10-28 ov
 - Reversible work moves fast; irreversible work needs proof first.
 - Progress is verified outcomes, pushed, not activity.
 - One owner per unit; one board; every decision logged as it is made.
-- Waking the human when a wake condition is met is part of the job, not a failure.
+- Texting the human when a text condition is met is part of the job; waiting for the reply is not.

@@ -1,6 +1,7 @@
 import type {
   ChatMessage,
   ChatCompletionResponse,
+  LlmUsage,
   ToolDefinition,
   ToolCall,
 } from "./types";
@@ -99,6 +100,8 @@ export async function chatCompletion(
     temperature?: number;
     maxTokens?: number;
     thinking?: boolean;
+    /** Receives llama-server's `usage` so the caller can record the run. */
+    onUsage?: (usage: LlmUsage) => void;
   },
 ): Promise<string> {
   const s = await cfg();
@@ -126,6 +129,7 @@ export async function chatCompletion(
   }
 
   const data: ChatCompletionResponse = await response.json();
+  if (data.usage) options?.onUsage?.(data.usage);
   const content = data.choices[0]?.message?.content ?? "";
 
   return stripThinking(content);
@@ -467,6 +471,8 @@ export async function structuredOutput<T>(
     temperature?: number;
     /** The resolved Holder's output ceiling; absent = 2048. */
     maxTokens?: number;
+    /** Receives llama-server's `usage` so the caller can record the run. */
+    onUsage?: (usage: LlmUsage) => void;
   },
 ): Promise<T> {
   const s = await cfg();
@@ -495,6 +501,7 @@ export async function structuredOutput<T>(
   }
 
   const data: ChatCompletionResponse = await response.json();
+  if (data.usage) options?.onUsage?.(data.usage);
   const choice = data.choices[0];
   if (!choice) throw new Error("Structured output failed: response had no choices");
   return JSON.parse(choice.message.content!) as T;

@@ -229,3 +229,5 @@ desktop/src-tauri/macos-helpers/
 # Release-preparation output from the pinned public Matrx Extend source. The
 # signed bundle is copied into the Tauri macOS app only by the release overlay.
 desktop/safari-web-extension/
+
+.matrx/sync-paused

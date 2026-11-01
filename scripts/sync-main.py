@@ -1502,6 +1502,157 @@ def nothing_left_after_wait():
     return rc == 0 and head.strip() == remote.strip()
 
 
+
+# PAUSE  .matrx/sync-paused (gitignored; written by --pause, removed by --resume). While it is
+#        live every sweep exits at once with SYNC PAUSED and PAUSED_EXIT, touching nothing, and
+#        ./ship.sh skips its release. It always expires: at its `until:` line, never later than
+#        PAUSE_MAX_MIN after the file was written, and PAUSE_DEFAULT_MIN after it was written when
+#        `until:` is unreadable. An expired pause is removed and announced; the sweep runs.
+# OLD-PATH REFUSAL  .matrx/moved-paths.txt (tracked; one `old -> new` per line, a directory
+#        ends in `/`; `R100<TAB>old<TAB>new` lines from `git diff --name-status -M` also work).
+#        A NEW file (untracked, or staged as added) at a listed old path is never committed
+#        there: it is moved, bytes intact, to _conflicts/<stamp>-old-path-refused/<path>.held
+#        with the path it belongs at, listed in _conflicts/README.md, and the sweep goes on.
+#        A file still tracked at HEAD is never refused (it was not moved).
+PAUSE_REL = ".matrx/sync-paused"
+PAUSE_DEFAULT_MIN = 90
+PAUSE_MAX_MIN = 480
+PAUSED_EXIT = 3      # ship.sh reads it; 75 already means "release slot busy" to ship-all
+MOVED_REL = ".matrx/moved-paths.txt"
+REFUSED_DIR = "old-path-refused"
+
+
+def _now():
+    return datetime.datetime.now().astimezone()
+
+
+def _iso(t):
+    return t.replace(microsecond=0).isoformat()
+
+
+def read_pause():
+    """None when not paused. Otherwise {by, reason, since, until, note}. An expired pause file is
+    removed (announced) and reads as None, so a forgotten pause can never freeze the repo."""
+    if not os.path.lexists(PAUSE_REL):
+        return None
+    info = {}
+    # A pause marker that is not a readable regular file (a directory, a dangling link, no read
+    # permission) has no trustworthy write time, so it could never expire. It is IGNORED, loudly:
+    # a pause that cannot end is worse than a sweep that runs.
+    try:
+        if not os.path.isfile(PAUSE_REL):
+            raise OSError("not a regular file")
+        with open(PAUSE_REL, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                k, sep, v = line.partition(":")
+                if sep:
+                    info[k.strip().lower()] = v.strip()
+        # A future-dated mtime would stretch the cap; never trust a write time later than now.
+        written = min(datetime.datetime.fromtimestamp(os.path.getmtime(PAUSE_REL)).astimezone(), _now())
+    except (OSError, OverflowError, ValueError) as e:
+        say("SYNC PAUSE MARKER IGNORED: %s is unreadable (%s) — syncing normally. Remove it, then "
+            "pause again with: python3 scripts/sync-main.py --pause \"<reason>\"" % (PAUSE_REL, e))
+        return None
+    cap = written + datetime.timedelta(minutes=PAUSE_MAX_MIN)
+    note = ""
+    try:
+        until = datetime.datetime.fromisoformat(info.get("until", "")).astimezone()
+    except (ValueError, OverflowError, OSError):
+        until = written + datetime.timedelta(minutes=PAUSE_DEFAULT_MIN)
+        note = "its until: line is unreadable, so it ends %d min after the file was written" % PAUSE_DEFAULT_MIN
+    if until > cap:
+        until = cap
+        note = "capped at %d min after the file was written" % PAUSE_MAX_MIN
+    if _now() >= until:
+        try:
+            os.remove(PAUSE_REL)
+        except OSError:
+            pass
+        say("SYNC PAUSE EXPIRED at %s (by %s: %s) — removed %s; syncing normally."
+            % (_iso(until), info.get("by", "?"), info.get("reason", "?"), PAUSE_REL))
+        return None
+    return {"by": info.get("by", "?"), "reason": info.get("reason", "?"),
+            "since": info.get("since", "?"), "until": until, "note": note}
+
+
+def pause_line(p):
+    left = max(1, int((p["until"] - _now()).total_seconds() // 60) + 1)
+    return "SYNC PAUSED by %s until %s (%d min left)%s: %s" % (
+        p["by"], _iso(p["until"]), left, " [%s]" % p["note"] if p["note"] else "", p["reason"])
+
+
+def stop_paused(p, where="Nothing was committed, merged or pushed."):
+    print(pause_line(p), file=sys.stderr, flush=True)
+    print(where + " Resume: python3 scripts/sync-main.py --resume", file=sys.stderr, flush=True)
+    sys.exit(PAUSED_EXIT)
+
+
+def other_sweeps():
+    """Other sync-main sweeps running right now ('pid command' lines), so a pauser knows to wait."""
+    r = subprocess.run(["pgrep", "-lf", "sync-main.py"], capture_output=True, text=True)
+    out = []
+    for line in r.stdout.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        if pid != str(os.getpid()) and not re.search(r"--(pause|resume|status|hold-status|hold-now)\b", cmd):
+            out.append(line.strip())
+    return out
+
+
+def pause_cmd(argv):
+    """--pause "<reason>" [--minutes N] [--by NAME]"""
+    def opt(name, default):
+        if name in argv:
+            i = argv.index(name)
+            if i + 1 >= len(argv):
+                die("%s needs a value." % name)
+            return argv[i + 1]
+        return default
+    i = argv.index("--pause")
+    reason = argv[i + 1].strip() if i + 1 < len(argv) and not argv[i + 1].startswith("--") else ""
+    if not reason:
+        die('usage: python3 scripts/sync-main.py --pause "<reason>" [--minutes N] [--by NAME]')
+    try:
+        minutes = int(opt("--minutes", PAUSE_DEFAULT_MIN))
+    except ValueError:
+        die("--minutes takes a whole number.")
+    if not 1 <= minutes <= PAUSE_MAX_MIN:
+        die("--minutes must be 1..%d; a pause always expires." % PAUSE_MAX_MIN)
+    by = opt("--by", "%s@%s" % (os.environ.get("USER", "?"), os.uname().nodename.split(".")[0]))
+    now = _now()
+    os.makedirs(os.path.dirname(PAUSE_REL), exist_ok=True)
+    with open(PAUSE_REL, "w") as f:
+        f.write("by: %s\nreason: %s\nsince: %s\nuntil: %s\n" % (
+            by, " ".join(reason.split()), _iso(now), _iso(now + datetime.timedelta(minutes=minutes))))
+    say(pause_line(read_pause()))
+    say("Every sweep of this checkout now exits without touching anything; ./ship.sh skips its release.")
+    running = other_sweeps()
+    if running:
+        say("A sweep STARTED BEFORE the pause is still running; wait for it to finish:\n  "
+            + "\n  ".join(running))
+
+
+def pause_active_cmd():
+    """--pause-active: the ONE answer to "is a valid, unexpired pause in force?" for every other
+    path that pushes or releases from this checkout. Same reader as the sweep (expiry, cap and
+    unreadable-marker rules included); paused -> the SYNC PAUSED line on stderr, PAUSED_EXIT."""
+    p = read_pause()
+    if p:
+        stop_paused(p, "Refused: nothing was committed, merged, pushed or released.")
+
+
+def resume_cmd():
+    p = read_pause()
+    if os.path.lexists(PAUSE_REL):
+        os.remove(PAUSE_REL)
+    say("sync resumed%s; the next sweep runs normally." % (
+        " (was: %s)" % pause_line(p) if p else " (it was not paused)"))
+
+
+def pause_status_cmd():
+    p = read_pause()
+    say(pause_line(p) if p else "sync: not paused (no %s)" % PAUSE_REL)
+
+
 def main():
     if sys.argv[1:2] == ["--wait-for-publish-train"]:
         # release.sh's @ai-matrx catch-up: wait for the npm publish runs in flight, print one line.
@@ -1517,6 +1668,21 @@ def main():
     skip_matrx_packages = "--skip-matrx-packages" in sys.argv[1:]
     _, top, _ = git("rev-parse", "--show-toplevel")
     os.chdir(top.strip())
+    if "--pause-active" in sys.argv[1:]:
+        pause_active_cmd()
+        return
+    if "--pause" in sys.argv[1:]:
+        pause_cmd(sys.argv[1:])
+        return
+    if "--resume" in sys.argv[1:]:
+        resume_cmd()
+        return
+    if "--pause-status" in sys.argv[1:]:
+        pause_status_cmd()
+        return
+    _paused = read_pause()
+    if _paused:
+        stop_paused(_paused)
     if acquire_sync_lock() and nothing_left_after_wait():
         say("synced: the sync this one waited for already pushed everything here; nothing to do.")
         return

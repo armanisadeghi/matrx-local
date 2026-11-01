@@ -43,11 +43,11 @@
  * session's own commit; it is never part of a release, publish or deploy path.
  * `node scripts/content-lane.mjs --self-test` proves it.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const MIN_LINES = 20;
 export const THRESHOLD = 0.8;
@@ -62,25 +62,25 @@ const SKIP_PATH =
 export function normalize(source) {
   let s = source;
   // block + line comments (string-aware enough: skip quoted runs)
-  let out = "";
+  let out = '';
   for (let i = 0; i < s.length; ) {
     const c = s[i];
     const n = s[i + 1];
-    if (c === "/" && n === "/") {
-      const e = s.indexOf("\n", i);
+    if (c === '/' && n === '/') {
+      const e = s.indexOf('\n', i);
       i = e === -1 ? s.length : e;
       continue;
     }
-    if (c === "/" && n === "*") {
-      const e = s.indexOf("*/", i + 2);
+    if (c === '/' && n === '*') {
+      const e = s.indexOf('*/', i + 2);
       i = e === -1 ? s.length : e + 2;
       continue;
     }
-    if (c === '"' || c === "'" || c === "`") {
+    if (c === '"' || c === "'" || c === '`') {
       let j = i + 1;
       while (j < s.length && s[j] !== c) {
-        if (s[j] === "\\") j++;
-        else if (c !== "`" && s[j] === "\n") break;
+        if (s[j] === '\\') j++;
+        else if (c !== '`' && s[j] === '\n') break;
         j++;
       }
       out += s.slice(i, j + 1);
@@ -91,12 +91,15 @@ export function normalize(source) {
     i++;
   }
   s = out;
-  s = s.replace(/^\s*import\s[^;]*?from\s*["'][^"']+["'];?[ \t]*$/gms, "");
-  s = s.replace(/^\s*import\s*["'][^"']+["'];?[ \t]*$/gm, "");
-  s = s.replace(/^\s*export\s+(type\s+)?(\*|\{[^}]*\})(\s+as\s+\w+)?\s*from\s*["'][^"']+["'];?[ \t]*$/gms, "");
+  s = s.replace(/^\s*import\s[^;]*?from\s*["'][^"']+["'];?[ \t]*$/gms, '');
+  s = s.replace(/^\s*import\s*["'][^"']+["'];?[ \t]*$/gm, '');
+  s = s.replace(
+    /^\s*export\s+(type\s+)?(\*|\{[^}]*\})(\s+as\s+\w+)?\s*from\s*["'][^"']+["'];?[ \t]*$/gms,
+    '',
+  );
   return s
-    .split("\n")
-    .map((l) => l.replace(/\s+/g, " ").trim())
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 }
 
@@ -119,10 +122,10 @@ function hash32(str) {
 }
 
 function shingles(lines) {
-  const toks = lines.join("\n").match(/[A-Za-z_$][\w$]*|\d+|\S/g) ?? [];
+  const toks = lines.join('\n').match(/[A-Za-z_$][\w$]*|\d+|\S/g) ?? [];
   const set = new Set();
   for (let i = 0; i + SHINGLE <= toks.length; i++) {
-    set.add(hash32(toks.slice(i, i + SHINGLE).join(" ")));
+    set.add(hash32(toks.slice(i, i + SHINGLE).join(' ')));
   }
   return set;
 }
@@ -155,7 +158,13 @@ export function prepare(files) {
     if (lines.length < MIN_LINES) continue;
     const sh = shingles(lines);
     if (sh.size < 10) continue;
-    out.push({ ...f, lines, n: lines.length, sh, sample: [...sh].filter((h) => h % SAMPLE_MOD === 0) });
+    out.push({
+      ...f,
+      lines,
+      n: lines.length,
+      sh,
+      sample: [...sh].filter((h) => h % SAMPLE_MOD === 0),
+    });
   }
   return out;
 }
@@ -165,7 +174,12 @@ export function prepare(files) {
  * (different `side`); mode "within" compares every pair of `left` from
  * DIFFERENT pkgs. Returns [{ a, b, ratio }] with a/b the paths.
  */
-export function findContentPairs({ left, right = null, crossPackage = false, differentPkg = false }) {
+export function findContentPairs({
+  left,
+  right = null,
+  crossPackage = false,
+  differentPkg = false,
+}) {
   const L = prepare(left);
   const R = crossPackage ? L : right.every((r) => r.sh) ? right : prepare(right);
   const index = new Map();
@@ -219,23 +233,28 @@ function crossKey(a, b) {
 function foreignEnv(foreign) {
   // A sibling checkout must not inherit THIS repo's GIT_INDEX_FILE / GIT_DIR (set by hooks and plumbing commits).
   const env = { ...process.env };
-  if (foreign) for (const k of ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX"]) delete env[k];
+  if (foreign)
+    for (const k of ['GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_PREFIX']) delete env[k];
   return env;
 }
 
 /** [{ path, hash }] of tracked source index entries passing `keep`. */
 function trackedRows(dir, keep, { foreign = false } = {}) {
-  return execFileSync("git", ["ls-files", "-s", "-z", "--", "*.ts", "*.tsx", "*.js", "*.mjs", "*.cjs", "*.jsx"], {
-    cwd: dir,
-    env: foreignEnv(foreign),
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-  })
-    .split("\0")
+  return execFileSync(
+    'git',
+    ['ls-files', '-s', '-z', '--', '*.ts', '*.tsx', '*.js', '*.mjs', '*.cjs', '*.jsx'],
+    {
+      cwd: dir,
+      env: foreignEnv(foreign),
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+    },
+  )
+    .split('\0')
     .filter(Boolean)
     .map((r) => {
-      const tab = r.indexOf("\t");
-      return { hash: r.slice(0, tab).split(" ")[1], path: r.slice(tab + 1) };
+      const tab = r.indexOf('\t');
+      return { hash: r.slice(0, tab).split(' ')[1], path: r.slice(tab + 1) };
     })
     .filter((r) => keep(r.path));
 }
@@ -244,19 +263,19 @@ function trackedRows(dir, keep, { foreign = false } = {}) {
 function readBlobs(dir, hashes, { foreign = false } = {}) {
   const out = new Map();
   if (hashes.length === 0) return out;
-  const buf = execFileSync("git", ["cat-file", "--batch"], {
+  const buf = execFileSync('git', ['cat-file', '--batch'], {
     cwd: dir,
     env: foreignEnv(foreign),
-    input: hashes.join("\n") + "\n",
+    input: hashes.join('\n') + '\n',
     maxBuffer: 1024 * 1024 * 1024,
   });
   let pos = 0;
   for (const h of hashes) {
     const nl = buf.indexOf(10, pos);
-    const [, type, size] = buf.toString("latin1", pos, nl).split(" ");
+    const [, type, size] = buf.toString('latin1', pos, nl).split(' ');
     const len = Number(size);
     pos = nl + 1;
-    if (type === "blob" && len >= 400) out.set(h, buf.toString("utf8", pos, pos + len));
+    if (type === 'blob' && len >= 400) out.set(h, buf.toString('utf8', pos, pos + len));
     pos += len + 1;
   }
   return out;
@@ -264,14 +283,18 @@ function readBlobs(dir, hashes, { foreign = false } = {}) {
 
 function trackedSources(dir, keep, opts = {}) {
   const rows = trackedRows(dir, keep, opts);
-  const blobs = readBlobs(dir, rows.map((r) => r.hash), opts);
+  const blobs = readBlobs(
+    dir,
+    rows.map((r) => r.hash),
+    opts,
+  );
   return rows
     .filter((r) => blobs.has(r.hash))
     .map((r) => ({ path: r.path, src: blobs.get(r.hash) }))
     .sort((x, y) => (x.path < y.path ? -1 : 1));
 }
 
-const CACHE_FILE = join(tmpdir(), "content-lane-pool-cache-v2.json");
+const CACHE_FILE = join(tmpdir(), 'content-lane-pool-cache-v2.json');
 
 /**
  * The write-time pool, prepared once and remembered by blob hash (content-addressed, so it is
@@ -283,7 +306,7 @@ function preparedPool(dir, keep, { foreign = false } = {}) {
   const rows = trackedRows(dir, keep, { foreign });
   let cache = {};
   try {
-    cache = JSON.parse(readFileSync(CACHE_FILE, "utf8"));
+    cache = JSON.parse(readFileSync(CACHE_FILE, 'utf8'));
   } catch {
     cache = {};
   }
@@ -311,11 +334,11 @@ function preparedPool(dir, keep, { foreign = false } = {}) {
     const sh = new Set(c[1]);
     out.push({
       path: r.path,
-      pkg: r.path.split("/")[0],
+      pkg: r.path.split('/')[0],
       n: c[0],
       sh,
       sample: c[1].filter((h) => h % SAMPLE_MOD === 0),
-      loadLines: () => normalize(readBlobs(dir, [r.hash], { foreign }).get(r.hash) ?? ""),
+      loadLines: () => normalize(readBlobs(dir, [r.hash], { foreign }).get(r.hash) ?? ''),
     });
   }
   return out;
@@ -328,44 +351,63 @@ export function staleContentCensus(census, foundKeys) {
 
 /** Remove only stale entry lines from the register text. Returns {text, removed}. */
 export function pruneStaleText(text, stalePairs) {
-  const lines = text.split("\n");
+  const lines = text.split('\n');
   let removed = 0;
   const kept = lines.filter((l) => {
     const hit = stalePairs.some((p) => l.includes(`"pair": ${JSON.stringify(p)}`));
     if (hit) removed++;
     return !hit;
   });
-  return { text: kept.join("\n"), removed };
+  return { text: kept.join('\n'), removed };
 }
 
 /**
  * Run the lane for a root. Returns { skipped, found, uncensused, stale, ms }.
  * `excludePrefixes` = vendored prefixes + register `contentLane.exclude`.
  */
-export async function runContentLane({ root, register, registerPath, excludePrefixes, prune, log, error }) {
+export async function runContentLane({
+  root,
+  register,
+  registerPath,
+  excludePrefixes,
+  prune,
+  log,
+  error,
+}) {
   const cfg = register.contentLane;
   if (!cfg) return { skipped: true, silent: true, ok: true };
   const t0 = Date.now();
   const ex = [...(excludePrefixes ?? []), ...(cfg.exclude ?? [])];
   let found;
   let scope;
-  if (cfg.mode === "app-vs-packages") {
+  if (cfg.mode === 'app-vs-packages') {
     const pkgRoot = resolve(root, cfg.packagesRoot);
     if (!existsSync(pkgRoot)) {
       error(`check:package-twins content lane SKIPPED: no package source at ${pkgRoot}`);
       return { skipped: true, ok: true };
     }
-    const pkgSrc = trackedSources(pkgRoot, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex), { foreign: true }).map((f) => ({ ...f, pkg: f.path.split("/")[0] }));
-    const appSrc = trackedSources(root, (p) => isCandidatePath(p, ex)).map((f) => ({ ...f, pkg: "app" }));
+    const pkgSrc = trackedSources(
+      pkgRoot,
+      (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex),
+      { foreign: true },
+    ).map((f) => ({ ...f, pkg: f.path.split('/')[0] }));
+    const appSrc = trackedSources(root, (p) => isCandidatePath(p, ex)).map((f) => ({
+      ...f,
+      pkg: 'app',
+    }));
     found = findContentPairs({ left: appSrc, right: pkgSrc });
     scope = `${appSrc.length} app file(s) vs ${pkgSrc.length} package source file(s)`;
-  } else if (cfg.mode === "cross-package") {
-    const src = trackedSources(root, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex)).map((f) => ({ ...f, pkg: f.path.split("/")[0] }));
+  } else if (cfg.mode === 'cross-package') {
+    const src = trackedSources(root, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex)).map(
+      (f) => ({ ...f, pkg: f.path.split('/')[0] }),
+    );
     found = findContentPairs({ left: src, crossPackage: true });
     found = found.map((f) => (f.a <= f.b ? f : { ...f, a: f.b, b: f.a }));
     scope = `${src.length} package source file(s), across different packages`;
   } else {
-    error(`check:package-twins: contentLane.mode "${cfg.mode}" is not app-vs-packages or cross-package`);
+    error(
+      `check:package-twins: contentLane.mode "${cfg.mode}" is not app-vs-packages or cross-package`,
+    );
     return { ok: false };
   }
   const census = register.contentCensus ?? [];
@@ -380,10 +422,12 @@ export async function runContentLane({ root, register, registerPath, excludePref
       `(${censused.length} censused DEBT, ${uncensused.length} new) in ${ms}ms.`,
   );
   if (stale.length > 0 && prune) {
-    const text = readFileSync(registerPath, "utf8");
+    const text = readFileSync(registerPath, 'utf8');
     const r = pruneStaleText(text, stale);
     writeFileSync(registerPath, r.text);
-    log(`check:package-twins --prune-stale: removed ${r.removed} stale contentCensus line(s) from ${registerPath}.`);
+    log(
+      `check:package-twins --prune-stale: removed ${r.removed} stale contentCensus line(s) from ${registerPath}.`,
+    );
     return { found, uncensused, stale: [], ms, ok: uncensused.length === 0 };
   }
   for (const f of uncensused) {
@@ -412,15 +456,17 @@ export async function runContentLane({ root, register, registerPath, excludePref
  */
 export function findFileCopies({ mode, files, pool, censusKeys = new Set() }) {
   let pairs;
-  if (mode === "cross-package") {
-    const left = files.filter((f) => /^[^/]+\/src\//.test(f.path)).map((f) => ({ ...f, pkg: f.path.split("/")[0] }));
+  if (mode === 'cross-package') {
+    const left = files
+      .filter((f) => /^[^/]+\/src\//.test(f.path))
+      .map((f) => ({ ...f, pkg: f.path.split('/')[0] }));
     pairs = findContentPairs({ left, right: pool, differentPkg: true });
   } else {
-    pairs = findContentPairs({ left: files.map((f) => ({ ...f, pkg: "app" })), right: pool });
+    pairs = findContentPairs({ left: files.map((f) => ({ ...f, pkg: 'app' })), right: pool });
   }
   const out = [];
   for (const p of pairs) {
-    const key = mode === "cross-package" ? crossKey(...[p.a, p.b].sort()) : pairKey(p);
+    const key = mode === 'cross-package' ? crossKey(...[p.a, p.b].sort()) : pairKey(p);
     if (censusKeys.has(key)) continue;
     out.push({ file: p.a, other: p.b, ratio: p.ratio, key });
   }
@@ -439,41 +485,52 @@ export function runFilesMode({ root, register, files, log = console.log, error =
   const cfg = register.contentLane;
   if (!cfg) return 0;
   const t0 = Date.now();
-  const ex = [...(cfg.exclude ?? []), ...(register.vendored ?? []).map((v) => v?.path).filter((p) => typeof p === "string")];
+  const ex = [
+    ...(cfg.exclude ?? []),
+    ...(register.vendored ?? []).map((v) => v?.path).filter((p) => typeof p === 'string'),
+  ];
   const given = [];
   for (const rel of files) {
     if (!isCandidatePath(rel, ex)) continue;
     const abs = resolve(root, rel);
     if (!existsSync(abs)) continue;
-    const src = readFileSync(abs, "utf8");
-    if (src.length >= 400) given.push({ path: rel.replace(/^\.\//, ""), src });
+    const src = readFileSync(abs, 'utf8');
+    if (src.length >= 400) given.push({ path: rel.replace(/^\.\//, ''), src });
   }
   if (given.length === 0) return 0;
   let pool;
-  if (cfg.mode === "app-vs-packages") {
+  if (cfg.mode === 'app-vs-packages') {
     const pkgRoot = resolve(root, cfg.packagesRoot);
     if (!existsSync(pkgRoot)) {
       error(`content-lane --files SKIPPED: no package source at ${pkgRoot}; nothing was checked.`);
       return 0;
     }
-    pool = preparedPool(pkgRoot, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex), { foreign: true });
-  } else if (cfg.mode === "cross-package") {
+    pool = preparedPool(pkgRoot, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex), {
+      foreign: true,
+    });
+  } else if (cfg.mode === 'cross-package') {
     pool = preparedPool(root, (p) => /^[^/]+\/src\//.test(p) && isCandidatePath(p, ex));
   } else {
-    error(`content-lane --files SKIPPED: contentLane.mode "${cfg.mode}" unknown; nothing was checked.`);
+    error(
+      `content-lane --files SKIPPED: contentLane.mode "${cfg.mode}" unknown; nothing was checked.`,
+    );
     return 0;
   }
   const censusKeys = new Set((register.contentCensus ?? []).map((e) => e.pair));
   const found = findFileCopies({ mode: cfg.mode, files: given, pool, censusKeys });
   for (const f of found) error(formatFileCopy(f));
-  log(`content-lane --files: ${given.length} file(s) vs ${pool.length} package source file(s), ${found.length} new copy(ies) in ${Date.now() - t0}ms.`);
+  log(
+    `content-lane --files: ${given.length} file(s) vs ${pool.length} package source file(s), ${found.length} new copy(ies) in ${Date.now() - t0}ms.`,
+  );
   return found.length > 0 ? 1 : 0;
 }
 
 // ── self-test ───────────────────────────────────────────────────────────────
-const SYNTH = Array.from({ length: 30 }, (_, i) =>
-  `export function planted${i}(value: number, scale: number): number { const r = value * ${i + 3} + scale; return r > ${i * 7} ? r : ${i}; }`,
-).join("\n");
+const SYNTH = Array.from(
+  { length: 30 },
+  (_, i) =>
+    `export function planted${i}(value: number, scale: number): number { const r = value * ${i + 3} + scale; return r > ${i * 7} ? r : ${i}; }`,
+).join('\n');
 
 export function selfTestContentLane({ sampleSource = null } = {}) {
   const fail = (msg) => {
@@ -482,76 +539,200 @@ export function selfTestContentLane({ sampleSource = null } = {}) {
   };
   const body = sampleSource && normalize(sampleSource).length >= MIN_LINES ? sampleSource : SYNTH;
   const pkg = [
-    { path: "sharing/src/real.ts", pkg: "sharing", src: body },
-    { path: "kit/src/other.ts", pkg: "kit", src: SYNTH.replace(/planted/g, "different").replace(/\* (\d+)/g, "+ $1") + "\nconst z = 1;\n".repeat(0) },
+    { path: 'sharing/src/real.ts', pkg: 'sharing', src: body },
+    {
+      path: 'kit/src/other.ts',
+      pkg: 'kit',
+      src:
+        SYNTH.replace(/planted/g, 'different').replace(/\* (\d+)/g, '+ $1') +
+        '\nconst z = 1;\n'.repeat(0),
+    },
   ];
   // 1. a copy under an app path (imports and comments differ) IS reported
   const copy = `import { x } from "@/somewhere";\n// my copy\n${body}\n/* trailing */\n`;
-  let r = findContentPairs({ left: [{ path: "features/x/copy.ts", pkg: "app", src: copy }], right: pkg });
-  if (!r.some((f) => f.a === "features/x/copy.ts" && f.b === "sharing/src/real.ts")) fail("a planted copy was NOT reported");
+  let r = findContentPairs({
+    left: [{ path: 'features/x/copy.ts', pkg: 'app', src: copy }],
+    right: pkg,
+  });
+  if (!r.some((f) => f.a === 'features/x/copy.ts' && f.b === 'sharing/src/real.ts'))
+    fail('a planted copy was NOT reported');
   // 2. an unrelated file is not
-  const unrelated = Array.from({ length: 30 }, (_, i) => `const unrelated${i} = fetch("/api/thing/${i}").then((res) => res.json()).catch(() => null);`).join("\n");
-  r = findContentPairs({ left: [{ path: "features/x/unrelated.ts", pkg: "app", src: unrelated }], right: pkg });
-  if (r.length) fail("an unrelated file was reported");
+  const unrelated = Array.from(
+    { length: 30 },
+    (_, i) =>
+      `const unrelated${i} = fetch("/api/thing/${i}").then((res) => res.json()).catch(() => null);`,
+  ).join('\n');
+  r = findContentPairs({
+    left: [{ path: 'features/x/unrelated.ts', pkg: 'app', src: unrelated }],
+    right: pkg,
+  });
+  if (r.length) fail('an unrelated file was reported');
   // 3. a pure re-export door (25 export-from lines) is not
-  const door = Array.from({ length: 25 }, (_, i) => `export { planted${i} } from "@ai-matrx/sharing";`).join("\n");
-  r = findContentPairs({ left: [{ path: "features/x/door.ts", pkg: "app", src: door }], right: [{ path: "sharing/src/door.ts", pkg: "sharing", src: door }] });
-  if (r.length) fail("a pure re-export door was reported");
+  const door = Array.from(
+    { length: 25 },
+    (_, i) => `export { planted${i} } from "@ai-matrx/sharing";`,
+  ).join('\n');
+  r = findContentPairs({
+    left: [{ path: 'features/x/door.ts', pkg: 'app', src: door }],
+    right: [{ path: 'sharing/src/door.ts', pkg: 'sharing', src: door }],
+  });
+  if (r.length) fail('a pure re-export door was reported');
   // 4. a two-line option-binding wrapper is not
   const wrap = `import { f } from "@ai-matrx/kit";\nexport const g = (v: number) => f(v, { style: "coarse" });\n`;
-  r = findContentPairs({ left: [{ path: "a/wrap.ts", pkg: "app", src: wrap }], right: [{ path: "kit/src/wrap.ts", pkg: "kit", src: wrap }] });
-  if (r.length) fail("an option-binding wrapper was reported");
+  r = findContentPairs({
+    left: [{ path: 'a/wrap.ts', pkg: 'app', src: wrap }],
+    right: [{ path: 'kit/src/wrap.ts', pkg: 'kit', src: wrap }],
+  });
+  if (r.length) fail('an option-binding wrapper was reported');
   // 5. cross-package: same package twice is not, different packages is
-  r = findContentPairs({ crossPackage: true, left: [{ path: "a/src/1.ts", pkg: "a", src: body }, { path: "a/src/2.ts", pkg: "a", src: copy }] });
-  if (r.length) fail("a same-package pair was reported");
-  r = findContentPairs({ crossPackage: true, left: [{ path: "a/src/1.ts", pkg: "a", src: body }, { path: "b/src/2.ts", pkg: "b", src: copy }] });
-  if (r.length !== 1) fail("a cross-package copy was not reported");
+  r = findContentPairs({
+    crossPackage: true,
+    left: [
+      { path: 'a/src/1.ts', pkg: 'a', src: body },
+      { path: 'a/src/2.ts', pkg: 'a', src: copy },
+    ],
+  });
+  if (r.length) fail('a same-package pair was reported');
+  r = findContentPairs({
+    crossPackage: true,
+    left: [
+      { path: 'a/src/1.ts', pkg: 'a', src: body },
+      { path: 'b/src/2.ts', pkg: 'b', src: copy },
+    ],
+  });
+  if (r.length !== 1) fail('a cross-package copy was not reported');
   // 6. the census ratchet: stale entries are named, live ones are not
-  const stale = staleContentCensus([{ pair: "gone|gone2" }, { pair: "x|y" }], new Set(["x|y"]));
-  if (stale.length !== 1 || stale[0] !== "gone|gone2") fail("the stale-census ratchet did not name the stale entry");
-  const pruned = pruneStaleText('  { "pair": "gone|gone2", "reason": "r" },\n  { "pair": "x|y", "reason": "r" }\n', ["gone|gone2"]);
-  if (pruned.removed !== 1 || pruned.text.includes("gone")) fail("--prune-stale did not remove exactly the stale line");
+  const stale = staleContentCensus([{ pair: 'gone|gone2' }, { pair: 'x|y' }], new Set(['x|y']));
+  if (stale.length !== 1 || stale[0] !== 'gone|gone2')
+    fail('the stale-census ratchet did not name the stale entry');
+  const pruned = pruneStaleText(
+    '  { "pair": "gone|gone2", "reason": "r" },\n  { "pair": "x|y", "reason": "r" }\n',
+    ['gone|gone2'],
+  );
+  if (pruned.removed !== 1 || pruned.text.includes('gone'))
+    fail('--prune-stale did not remove exactly the stale line');
   // 7. skip rules
-  if (isCandidatePath("a/b.test.ts") || isCandidatePath("demo/a.ts") || isCandidatePath("examples/a.ts") || isCandidatePath("x/dist/a.ts") || isCandidatePath("a/b.d.ts")) fail("a skipped path was a candidate");
-  if (!isCandidatePath("a/b.tsx") || !isCandidatePath("a/b.mjs") || !isCandidatePath("a/b.js") || !isCandidatePath("a/b.generated.ts")) fail("a normal, .js/.mjs or generated path was skipped");
+  if (
+    isCandidatePath('a/b.test.ts') ||
+    isCandidatePath('demo/a.ts') ||
+    isCandidatePath('examples/a.ts') ||
+    isCandidatePath('x/dist/a.ts') ||
+    isCandidatePath('a/b.d.ts')
+  )
+    fail('a skipped path was a candidate');
+  if (
+    !isCandidatePath('a/b.tsx') ||
+    !isCandidatePath('a/b.mjs') ||
+    !isCandidatePath('a/b.js') ||
+    !isCandidatePath('a/b.generated.ts')
+  )
+    fail('a normal, .js/.mjs or generated path was skipped');
   // 7b. generated twins: caught against another generated file, never against a hand-written one
-  r = findContentPairs({ crossPackage: true, left: [{ path: "a/src/keys.generated.ts", pkg: "a", src: body }, { path: "b/src/keys.generated.ts", pkg: "b", src: body }] });
-  if (r.length !== 1) fail("a planted generated twin was NOT reported");
-  r = findContentPairs({ crossPackage: true, left: [{ path: "a/src/keys.generated.ts", pkg: "a", src: body }, { path: "b/src/keys.ts", pkg: "b", src: body }] });
-  if (r.length) fail("a generated file was compared against a hand-written one");
+  r = findContentPairs({
+    crossPackage: true,
+    left: [
+      { path: 'a/src/keys.generated.ts', pkg: 'a', src: body },
+      { path: 'b/src/keys.generated.ts', pkg: 'b', src: body },
+    ],
+  });
+  if (r.length !== 1) fail('a planted generated twin was NOT reported');
+  r = findContentPairs({
+    crossPackage: true,
+    left: [
+      { path: 'a/src/keys.generated.ts', pkg: 'a', src: body },
+      { path: 'b/src/keys.ts', pkg: 'b', src: body },
+    ],
+  });
+  if (r.length) fail('a generated file was compared against a hand-written one');
   // 7c. a .mjs twin is seen (the lane used to read .ts/.tsx only)
-  r = findContentPairs({ left: [{ path: "scripts/copy.mjs", pkg: "app", src: copy }], right: [{ path: "sharing/src/real.mjs", pkg: "sharing", src: body }] });
-  if (r.length !== 1) fail("a planted .mjs twin was NOT reported");
+  r = findContentPairs({
+    left: [{ path: 'scripts/copy.mjs', pkg: 'app', src: copy }],
+    right: [{ path: 'sharing/src/real.mjs', pkg: 'sharing', src: body }],
+  });
+  if (r.length !== 1) fail('a planted .mjs twin was NOT reported');
   // 8. write-time --files mode: a planted copy is reported; a censused pair, a door, an unrelated file, a same-package file are not
-  const poolPkg = [{ path: "sharing/src/real.ts", pkg: "sharing", src: body }];
-  let w = findFileCopies({ mode: "app-vs-packages", files: [{ path: "features/x/copy.ts", src: copy }], pool: poolPkg });
-  if (w.length !== 1 || w[0].file !== "features/x/copy.ts" || w[0].other !== "sharing/src/real.ts") fail("--files: a planted copy was NOT reported");
-  if (!/^ {2}\u2717 features\/x\/copy\.ts \u2014 \d+% copy of sharing\/src\/real\.ts; delete one side/.test(formatFileCopy(w[0]))) fail("--files: the finding line does not match the lint-guard format");
-  w = findFileCopies({ mode: "app-vs-packages", files: [{ path: "features/x/copy.ts", src: copy }], pool: poolPkg, censusKeys: new Set(["features/x/copy.ts|sharing/src/real.ts"]) });
-  if (w.length) fail("--files: a censused pair was reported");
-  w = findFileCopies({ mode: "app-vs-packages", files: [{ path: "features/x/door.ts", src: door }], pool: [{ path: "sharing/src/door.ts", pkg: "sharing", src: door }] });
-  if (w.length) fail("--files: a door file was reported");
-  w = findFileCopies({ mode: "app-vs-packages", files: [{ path: "features/x/unrelated.ts", src: unrelated }], pool: poolPkg });
-  if (w.length) fail("--files: an unrelated file was reported");
-  w = findFileCopies({ mode: "cross-package", files: [{ path: "b/src/2.ts", src: copy }], pool: [{ path: "a/src/1.ts", pkg: "a", src: body }, { path: "b/src/2.ts", pkg: "b", src: copy }] });
-  if (w.length !== 1 || w[0].other !== "a/src/1.ts") fail("--files: a cross-package copy was not reported (or its own file / same package was)");
-  w = findFileCopies({ mode: "cross-package", files: [{ path: "b/src/2.ts", src: copy }], pool: [{ path: "a/src/1.ts", pkg: "a", src: body }], censusKeys: new Set(["a/src/1.ts|b/src/2.ts"]) });
-  if (w.length) fail("--files: a censused cross-package pair was reported");
-  if (findFileCopies({ mode: "cross-package", files: [{ path: "scripts/x.ts", src: copy }], pool: [{ path: "a/src/1.ts", pkg: "a", src: body }] }).length) fail("--files: a non-package file was compared in cross-package mode");
-  console.log("check:package-twins content lane self-test PASSED (copy reported, incl. a .mjs twin and a generated twin; unrelated, door, wrapper, same-package, generated-vs-handwritten not; stale census named and prunable; --files mode reports a copy, skips censused/door/unrelated).");
+  const poolPkg = [{ path: 'sharing/src/real.ts', pkg: 'sharing', src: body }];
+  let w = findFileCopies({
+    mode: 'app-vs-packages',
+    files: [{ path: 'features/x/copy.ts', src: copy }],
+    pool: poolPkg,
+  });
+  if (w.length !== 1 || w[0].file !== 'features/x/copy.ts' || w[0].other !== 'sharing/src/real.ts')
+    fail('--files: a planted copy was NOT reported');
+  if (
+    !/^ {2}\u2717 features\/x\/copy\.ts \u2014 \d+% copy of sharing\/src\/real\.ts; delete one side/.test(
+      formatFileCopy(w[0]),
+    )
+  )
+    fail('--files: the finding line does not match the lint-guard format');
+  w = findFileCopies({
+    mode: 'app-vs-packages',
+    files: [{ path: 'features/x/copy.ts', src: copy }],
+    pool: poolPkg,
+    censusKeys: new Set(['features/x/copy.ts|sharing/src/real.ts']),
+  });
+  if (w.length) fail('--files: a censused pair was reported');
+  w = findFileCopies({
+    mode: 'app-vs-packages',
+    files: [{ path: 'features/x/door.ts', src: door }],
+    pool: [{ path: 'sharing/src/door.ts', pkg: 'sharing', src: door }],
+  });
+  if (w.length) fail('--files: a door file was reported');
+  w = findFileCopies({
+    mode: 'app-vs-packages',
+    files: [{ path: 'features/x/unrelated.ts', src: unrelated }],
+    pool: poolPkg,
+  });
+  if (w.length) fail('--files: an unrelated file was reported');
+  w = findFileCopies({
+    mode: 'cross-package',
+    files: [{ path: 'b/src/2.ts', src: copy }],
+    pool: [
+      { path: 'a/src/1.ts', pkg: 'a', src: body },
+      { path: 'b/src/2.ts', pkg: 'b', src: copy },
+    ],
+  });
+  if (w.length !== 1 || w[0].other !== 'a/src/1.ts')
+    fail('--files: a cross-package copy was not reported (or its own file / same package was)');
+  w = findFileCopies({
+    mode: 'cross-package',
+    files: [{ path: 'b/src/2.ts', src: copy }],
+    pool: [{ path: 'a/src/1.ts', pkg: 'a', src: body }],
+    censusKeys: new Set(['a/src/1.ts|b/src/2.ts']),
+  });
+  if (w.length) fail('--files: a censused cross-package pair was reported');
+  if (
+    findFileCopies({
+      mode: 'cross-package',
+      files: [{ path: 'scripts/x.ts', src: copy }],
+      pool: [{ path: 'a/src/1.ts', pkg: 'a', src: body }],
+    }).length
+  )
+    fail('--files: a non-package file was compared in cross-package mode');
+  console.log(
+    'check:package-twins content lane self-test PASSED (copy reported, incl. a .mjs twin and a generated twin; unrelated, door, wrapper, same-package, generated-vs-handwritten not; stale census named and prunable; --files mode reports a copy, skips censused/door/unrelated).',
+  );
 }
 
 // ── CLI: `node scripts/content-lane.mjs --files <paths...> | --self-test` ────
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const argv = process.argv.slice(2);
-  if (argv.includes("--self-test")) {
+  if (argv.includes('--self-test')) {
     selfTestContentLane();
-  } else if (argv.includes("--files")) {
-    const files = argv.slice(argv.indexOf("--files") + 1).filter((a) => !a.startsWith("--"));
-    const registerPath = resolve(dirname(fileURLToPath(import.meta.url)), "package-twins.json");
-    process.exit(runFilesMode({ root: process.cwd(), register: JSON.parse(readFileSync(registerPath, "utf8")), files }));
+  } else if (argv.includes('--files')) {
+    const files = argv.slice(argv.indexOf('--files') + 1).filter((a) => !a.startsWith('--'));
+    const registerPath = resolve(dirname(fileURLToPath(import.meta.url)), 'package-twins.json');
+    process.exit(
+      runFilesMode({
+        root: process.cwd(),
+        register: JSON.parse(readFileSync(registerPath, 'utf8')),
+        files,
+      }),
+    );
   } else {
-    console.error("usage: node scripts/content-lane.mjs --files <repo-relative paths...> | --self-test");
+    console.error(
+      'usage: node scripts/content-lane.mjs --files <repo-relative paths...> | --self-test',
+    );
     process.exit(2);
   }
 }

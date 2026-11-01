@@ -11,11 +11,11 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
   ledger). What a client cannot do is reach server-only tables directly, so for exactly those it
   calls an **API**. Mandate resolution is one of them: `matrx_ai.configure()` auto-installs
   `ServerMandateSource` because `engine.py` supplies both `server_url` and `get_jwt`, so a Mandate
-  resolves over `GET {server_url}/api/mandates/{mandate_key}/resolution` with the SAME precedence
-  the server uses for itself (system default → org binding → user binding), and a user's rebind
+  reads the server's answer from `GET {server_url}/api/mandates/{mandate_key}/resolution` (system
+  default → org binding → user binding, decided by the server; desktop keeps no ladder of its own) to run it here, and a user's rebind
   reaches desktop with no deploy. A missing capability is a missing API call to add, never a licence
   to hardcode an agent id. Cross-repo law:
-  `/Users/armanisadeghi/code/common-docs/systems/mandates/STATE.md`.
+  `/Users/armanisadeghi/code/common-docs/systems/intelligence/mandates/STATE.md` § 9.
 - A successful terminal turn must contain user-visible output. The shared
   orchestrator enforces this; `local_ai_task` repeats the check as a packaging
   backstop and converts reasoning-only stops into a persisted failed turn plus
@@ -64,3 +64,14 @@ and tool turns; `SQLiteConversationStore` owns local-first chat persistence.
 
 - Conversation history/export excludes soft-deleted `chat.tool_trace` rows,
   including tombstones restored by schema hydration; the mirror retains them for sync.
+
+- **Every mandate run, and its cost, is recorded against its mandate on this device too**
+  (Arman, 2026-10-28). Stamp = the server's (`stamp_mandate_attribution` / `mandate_run_stamp`):
+  `source_feature = mandate:<key>` on `chat.conversation` and `chat.user_request`,
+  `user_request.metadata.mandate_key`, `conversation.metadata.mandate_run`. Engine path: a request
+  carrying `mandate_key` (`LocalScopedRequest`) puts it in `ctx.metadata` and `conversation_handler`
+  stamps it. Local-model path: the desktop calls llama-server directly, keeps its `usage`, and
+  reports `POST /local-mandates/{key}/runs` -> `mandate_attribution.record_local_model_run`
+  (tokens from `usage`, `total_cost = 0`, enqueued for chat_sync like any run). The chat push is
+  direct PostgREST to the `chat` schema (no aidream filter); `chat_sync/engine.py` already allows
+  `source_feature` and `metadata`. Test: `tests/unit/test_mandate_runs_are_recorded_on_device.py`.

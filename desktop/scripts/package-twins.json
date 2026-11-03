@@ -1359,7 +1359,13 @@
       "name": "StatusBadge",
       "package": "@ai-matrx/design-system/controls",
       "why": "The one status capsule (tone names over role tokens, icon aria-hidden, title as meaning). Moved from matrx-frontend components/official/status-badge on 2026-10-22 (wave 2). Import it from @ai-matrx/design-system/controls.",
-      "allow": []
+      "allow": [],
+      "census": [
+        { "file": "src/components/PermissionsModal.tsx", "reason": "IS the status capsule (a status value mapped to a label, tone and icon, drawn as a pill) and is not collapsed: the body hand-styles a shadcn Badge with raw green/red/amber classes; the collapse is a status-to-{label, tone, icon} map onto StatusBadge from @ai-matrx/design-system/controls, which moves the pill's colors onto role tokens, so it needs a visual pass in the running Tauri desktop app (not available to the unattended watch run). Census 2026-11-03." },
+        { "file": "src/pages/Devices.tsx", "reason": "IS the status capsule (a status value mapped to a label, tone and icon, drawn as a pill) and is not collapsed: the body hand-styles a shadcn Badge with raw green/red/amber classes; the collapse is a status-to-{label, tone, icon} map onto StatusBadge from @ai-matrx/design-system/controls, which moves the pill's colors onto role tokens, so it needs a visual pass in the running Tauri desktop app (not available to the unattended watch run). Census 2026-11-03." },
+        { "file": "src/pages/TextToSpeech.tsx", "reason": "IS the status capsule (a status value mapped to a label, tone and icon, drawn as a pill) and is not collapsed: the body hand-styles a shadcn Badge with raw green/red/amber classes; the collapse is a status-to-{label, tone, icon} map onto StatusBadge from @ai-matrx/design-system/controls, which moves the pill's colors onto role tokens, so it needs a visual pass in the running Tauri desktop app (not available to the unattended watch run). Census 2026-11-03." },
+        { "file": "src/components/tools/shared/StatusBadge.tsx", "reason": "IS the status capsule and cannot collapse yet: it has a `running` status (violet) with a PULSING dot that @ai-matrx/design-system/controls' StatusBadge does not offer (tones success/warning/danger/neutral/info, no live-dot option). Blocked on adding a pulse/live-dot option to the package with a test, then collapsing every tool-page importer with a visual pass in the desktop app. Census 2026-11-03." }
+      ]
     },
     {
       "name": "KpiTile",

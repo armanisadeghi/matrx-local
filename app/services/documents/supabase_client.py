@@ -194,17 +194,38 @@ class SupabaseDocClient:
             return resp.json() if resp.text else []
 
     # ── Homes ────────────────────────────────────────────────────────────────
-    # Every note has exactly one home, a scope (item-homes plan). Names are read
-    # from the custom.context_scopes view; organization names from iam.
+    # Every note has exactly one home, a scope (item-homes plan). Scopes are read
+    # through the store's door custom.context_tree (the one the web's scope tree
+    # uses) for the person's live memberships; organization names from iam.
+    # Never the custom.context_scopes VIEW: people have no SELECT on it, so every
+    # listing answered 403 / 42501 and the homes directory was always empty
+    # (3,440 matrx-local system_error rows, 2026-10-11..23).
 
     async def list_scopes(self) -> list[dict[str, Any]]:
         """Every home the signed-in person can see: id, organization_id, name."""
-        return await self._request(
-            "GET",
-            "context_scopes",
-            params={"select": "id,organization_id,name", "order": "name.asc"},
-            schema="custom",
+        from app.services.aidream.organization import _active_memberships
+
+        jwt = self._jwt.get()
+        if not jwt:
+            raise RuntimeError("No JWT set — user must be authenticated")
+        memberships = await _active_memberships(jwt)
+        org_ids = sorted({str(row["container_id"]) for row in memberships})
+        if not org_ids:
+            return []
+        tree = await self._rpc(
+            "context_tree", {"p_organization_ids": org_ids}, schema="custom"
         )
+        scopes = tree.get("scopes") if isinstance(tree, dict) else None
+        rows = [
+            {
+                "id": str(s["id"]),
+                "organization_id": str(s.get("organization_id") or ""),
+                "name": str(s.get("name") or ""),
+            }
+            for s in (scopes or [])
+            if isinstance(s, dict) and s.get("id")
+        ]
+        return sorted(rows, key=lambda r: r["name"])
 
     async def list_organization_names(self) -> dict[str, str]:
         rows = await self._request(

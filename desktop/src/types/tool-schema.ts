@@ -3,6 +3,8 @@
  * Each tool gets a ToolUISchema that describes its inputs and output format.
  */
 
+import type { AgentVariableDefinition } from "@ai-matrx/api/agents";
+
 /** Supported field types that map to specific UI components */
 export type FieldType =
   | "text"
@@ -26,19 +28,13 @@ export type OutputType =
   | "log-stream";
 
 /** Schema for a single form field */
-export interface ToolFieldSchema {
-  /** Unique key matching the tool's parameter name */
-  name: string;
+export interface ToolFieldSchema extends Pick<AgentVariableDefinition, "name" | "required" | "defaultValue"> {
   /** Human-readable label */
   label: string;
   /** Field type determines which UI component renders */
   type: FieldType;
   /** Brief description shown as helper text */
   description?: string;
-  /** Whether this field is required */
-  required?: boolean;
-  /** Default value */
-  defaultValue?: unknown;
   /** Placeholder text */
   placeholder?: string;
 

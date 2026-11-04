@@ -24,7 +24,7 @@ import { requireActiveOrganizationId } from "@/lib/org/active-org";
 import { getAuthedSession } from "@/lib/custodian";
 import { loadSettings } from "@/lib/settings";
 import type { EngineStatus } from "@/hooks/use-engine";
-import type { PromptVariable } from "@/types/agents";
+import { variableDefaultText, type PromptVariable } from "@/types/agents";
 import {
   ActionNeededCard,
   actionNeededStore,
@@ -183,7 +183,8 @@ export function ChatPanel({
       setActiveVariables(payload.variables);
       const defaults: Record<string, string> = {};
       payload.variables.forEach((v) => {
-        if (v.defaultValue) defaults[v.name] = v.defaultValue;
+        const text = variableDefaultText(v);
+        if (text) defaults[v.name] = text;
       });
       setVariableValues(defaults);
     });

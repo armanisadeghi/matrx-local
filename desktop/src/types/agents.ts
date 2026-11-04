@@ -9,6 +9,8 @@
  * re-adding one is re-adding the drift the package exists to end.
  */
 
+import type { AgentVariableDefinition, VariableComponentSpec } from "@ai-matrx/api/agents";
+
 // ---- Variable system ----
 
 export type VariableComponentType =
@@ -20,22 +22,16 @@ export type VariableComponentType =
   | "toggle"
   | "number";
 
-export interface VariableCustomComponent {
-  type: VariableComponentType;
-  options?: string[];
-  allowOther?: boolean;
-  toggleValues?: [string, string];
-  min?: number;
-  max?: number;
-  step?: number;
-}
+/** The platform's one variable declaration (generated from the server contract), not a local copy. */
+export type PromptVariable = AgentVariableDefinition;
+export type VariableCustomComponent = VariableComponentSpec;
 
-export interface PromptVariable {
-  name: string;
-  defaultValue?: string;
-  helpText?: string;
-  required?: boolean;
-  customComponent?: VariableCustomComponent;
+/** The declared default as the text a field shows: a string stays itself, null/absent is empty, anything else is its JSON. */
+export function variableDefaultText(variable: PromptVariable): string {
+  const d = variable.defaultValue;
+  if (typeof d === "string") return d;
+  if (d === null || d === undefined) return "";
+  return JSON.stringify(d);
 }
 
 // ---- One agent's execution settings ----

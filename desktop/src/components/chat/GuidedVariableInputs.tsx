@@ -9,7 +9,7 @@ import {
   Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { PromptVariable } from "@/types/agents";
+import { variableDefaultText, type PromptVariable } from "@/types/agents";
 
 // ============================================================================
 // HELPERS
@@ -445,7 +445,7 @@ function VariableContent({
           value={value}
           onChange={onChange}
           options={cc.options}
-          {...(cc.allowOther !== undefined ? { allowOther: cc.allowOther } : {})}
+          {...(cc.allowOther != null ? { allowOther: cc.allowOther } : {})}
           onAutoAdvance={onAutoAdvance}
         />
       );
@@ -465,7 +465,7 @@ function VariableContent({
           value={value}
           onChange={onChange}
           options={cc.options}
-          {...(cc.allowOther !== undefined ? { allowOther: cc.allowOther } : {})}
+          {...(cc.allowOther != null ? { allowOther: cc.allowOther } : {})}
         />
       );
     case "toggle":
@@ -473,7 +473,7 @@ function VariableContent({
         <GuidedToggle
           value={value}
           onChange={onChange}
-          {...(cc.toggleValues !== undefined ? { toggleValues: cc.toggleValues } : {})}
+          {...(cc.toggleValues?.length === 2 ? { toggleValues: [cc.toggleValues[0], cc.toggleValues[1]] as [string, string] } : {})}
           onAutoAdvance={onAutoAdvance}
         />
       );
@@ -482,9 +482,9 @@ function VariableContent({
         <GuidedNumber
           value={value}
           onChange={onChange}
-          {...(cc.min !== undefined ? { min: cc.min } : {})}
-          {...(cc.max !== undefined ? { max: cc.max } : {})}
-          {...(cc.step !== undefined ? { step: cc.step } : {})}
+          {...(cc.min != null ? { min: cc.min } : {})}
+          {...(cc.max != null ? { max: cc.max } : {})}
+          {...(cc.step != null ? { step: cc.step } : {})}
         />
       );
     default:
@@ -533,12 +533,12 @@ export function GuidedVariableInputs({
   const safeIndex = Math.min(activeIndex, total - 1);
   const variable = variableDefaults[safeIndex];
   if (!variable) return null;
-  const value = values[variable.name] ?? variable.defaultValue ?? "";
+  const value = values[variable.name] ?? variableDefaultText(variable);
   const formattedName = formatLabel(variable.name);
   const helpText = variable.helpText;
 
   const answeredCount = variableDefaults.filter((v) => {
-    const val = values[v.name] ?? v.defaultValue ?? "";
+    const val = values[v.name] ?? variableDefaultText(v);
     return val.trim() !== "";
   }).length;
 
@@ -573,7 +573,7 @@ export function GuidedVariableInputs({
   const progressDots = (
     <div className="flex items-center gap-1">
       {variableDefaults.map((v, i) => {
-        const filled = (values[v.name] ?? v.defaultValue ?? "").trim() !== "";
+        const filled = (values[v.name] ?? variableDefaultText(v)).trim() !== "";
         const isCurrent = i === safeIndex;
         return (
           <button

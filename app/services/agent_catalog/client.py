@@ -103,8 +103,11 @@ MIRRORED_COLUMNS: tuple[str, ...] = CATALOG_COLUMNS + OPTIONAL_CATALOG_COLUMNS
 
 # Supabase's server-side max-rows silently truncates an unranged response
 # (default 1000). The live catalog was 1022 rows on 2026-09-08 — already past
-# it — so paging is mandatory, not defensive. Same Range-header pattern as
-# app/services/catalogs/client.py.
+# it — so paging is mandatory, not defensive. The RPC is a POST, and PostgREST
+# IGNORES the Range header on a POST (measured 2026-11-05: `Range: 0-1` answered
+# `0-999/1404`), so every "page" was rows 0-999 again and a person who can see
+# more than 1000 agents looped to the 50,000-row runaway refusal on every sync.
+# Pages are asked for with `limit`/`offset` query parameters, which a POST honors.
 _PAGE_SIZE = 1000
 _MAX_TOTAL_ROWS = 50_000
 
@@ -174,14 +177,17 @@ async def fetch_agent_catalog(jwt: str) -> list[dict[str, Any]]:
                 **SUPABASE_PROFILE_HEADERS,
                 "Authorization": f"Bearer {jwt}",
                 "Content-Type": "application/json",
-                "Range-Unit": "items",
-                "Range": f"{start}-{start + _PAGE_SIZE - 1}",
                 # count=exact turns a silent truncation into an arithmetic
                 # check we can fail on.
                 "Prefer": "count=exact",
             }
             try:
-                resp = await http.post(url, json={}, headers=headers)
+                resp = await http.post(
+                    url,
+                    json={},
+                    headers=headers,
+                    params={"limit": str(_PAGE_SIZE), "offset": str(start)},
+                )
             except httpx.HTTPError as exc:
                 raise AgentCatalogError(f"{CATALOG_RPC} unreachable: {exc}") from exc
 

@@ -59,7 +59,7 @@ only as a loudly-announced fallback.
 
 | Step | Where |
 |---|---|
-| Read the RPC (publishable key + user JWT, `Content-Profile: public`, Range-paged, `count=exact` verified) | `app/services/agent_catalog/client.py::fetch_agent_catalog` |
+| Read the RPC (publishable key + user JWT, `Content-Profile: public`, paged by `limit`/`offset` query params (PostgREST ignores `Range` on a POST), `count=exact` verified) | `app/services/agent_catalog/client.py::fetch_agent_catalog` |
 | Mirror the rows verbatim into SQLite `agents` (19 platform columns + `user_id` / `catalog_position` / `raw_json` / `synced_at`) | `app/services/local_db/schema.py::_V32_AGENTS_PLATFORM_CATALOG`, `repositories.py::AgentsRepo` |
 | Refresh on startup + every 10 min | `app/services/local_db/sync_engine.py::sync_agents` |
 | Serve identically, offline | `app/api/agent_catalog_routes.py` (`GET /agents/catalog`, `POST /agents/catalog/rpc`, `GET /agents/catalog/status`) |

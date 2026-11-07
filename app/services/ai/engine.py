@@ -371,6 +371,15 @@ def initialize_matrx_ai() -> None:
     )
     if execution_agent_source is not None:
         configure_kwargs["execution_agent_source"] = execution_agent_source
+    from matrx_ai import mandates as _matrx_mandates
+
+    if server_url and hasattr(_matrx_mandates, "AgentAsToolRunnerPort"):
+        # The desktop runner: matrx-ai's client runner plus the agent-as-tool verbs, so an agent calling an
+        # agent still loads and runs its child on this device (app/services/ai/mandate_runner.py). A matrx-ai
+        # that declares no AgentAsToolRunnerPort still loads the child itself and needs no runner verbs.
+        from app.services.ai.mandate_runner import install_desktop_mandate_runner
+
+        install_desktop_mandate_runner(server_url, _get_jwt)
     matrx_ai.configure(**configure_kwargs)
     install_client_host_queue_guard()
     _client_mode_active = True

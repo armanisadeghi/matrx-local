@@ -53,9 +53,18 @@ def main():
     os.chdir(top)
 
     found = {}  # path -> set of kinds
-    for kind, mark in (("held", HELD_MARK), ("docs", DOCS_MARK)):
-        for path in git("grep", "-l", "--untracked", "-F", "-e", mark).splitlines():
-            if path and path not in SELF:
+    # ONE pass over the tree for both markers, on few threads: two full-tree greps at git's default
+    # thread count took ~12 cores for ~20 s on every ship and froze the Mac (2026-11-06). Only the
+    # few files that match are then searched per marker.
+    marks = (("held", HELD_MARK), ("docs", DOCS_MARK))
+    hits = [p for p in git("grep", "--threads", "4", "-l", "--untracked", "-F",
+                           "-e", HELD_MARK, "-e", DOCS_MARK).splitlines() if p and p not in SELF]
+    for kind, mark in marks:
+        if not hits:
+            break
+        for path in git("grep", "-l", "--untracked", "-F", "-e", mark, "--",
+                        *[":(literal)" + p for p in hits]).splitlines():
+            if path:
                 found.setdefault(path, set()).add(kind)
 
     # A .held file is held whether or not it carries the marker.

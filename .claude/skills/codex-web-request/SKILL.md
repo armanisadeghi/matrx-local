@@ -4,7 +4,7 @@ subject: [architecture/work-loop/web-requests, integrations/provider-access]
 rules: [custody]
 type: Skill
 title: Submit a Codex web request
-description: "The shared Codex web-work inbox. Use when a coding agent needs browser work, provider account setup, OAuth or ecommerce portal work, npm publishing, or recovery of an incomplete Vault/account handoff delegated to Codex."
+description: "The shared Codex web-work inbox. Use when a coding agent needs browser work, provider account setup, OAuth or ecommerce portal work, or recovery of an incomplete Vault/account handoff delegated to Codex."
 ---
 
 <!-- SYNCED COPY — do not edit here.
@@ -199,9 +199,9 @@ MCP acceptance response—not your draft—is proof of submission. Return its sa
 key/ID and current state. If submission fails, report **not queued** and the exact
 error; do not pretend that leaving a file or message schedules work.
 
-For npm: include repo, exact package/version and source commit, build/check
-results, existing release owner, and whether the work is portal bootstrap or
-explicit publication. For OAuth: exact app/client, redirect URLs, scopes and
+Never queue npm bootstrap or publication: every `@ai-matrx/*` package is
+source-only and unpublished ([standard](/policies/typescript-package-standard.md)
+rule 10). For OAuth: exact app/client, redirect URLs, scopes and
 implemented test operation. For commerce: separate developer-app ownership from
 seller/store authorization, sandbox from production, and test store from a real
 customer store; account setup never implies authority to buy, charge or transact.

@@ -47,6 +47,13 @@ then `groom.py dev-caches --apply`.
 launchd already runs `temp` hourly and `dev-caches` daily at 04:15. Do not
 invent a second cleaner. Do not `mv` anything to `~/.Trash`.
 
+`temp` never deletes a git work tree (the entry itself or within 2 levels, e.g.
+`/private/tmp/lane.*/x`) while it has uncommitted changes, commits not on its
+remote, a process holding it open, or is under 48 h old by newest mtime. Each
+skip is logged as `KEEP git work tree: <reason>`. After 48 h a clean one is
+renamed to `<name>.groom-deleting` and then removed, so it is never left
+half-deleted. Prove it with `groom.py selftest-git-guard`.
+
 ## When your script parks copies
 
 Put throwaway copies in `mktemp -d` and delete them in an EXIT trap. If they

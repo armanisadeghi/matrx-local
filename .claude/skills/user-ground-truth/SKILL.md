@@ -64,7 +64,7 @@ Why "no other resources": a summarizer that has seen the codebase or the plan su
 them. Why appended, never replacing: the raw text is the check on the summary. A reader who
 doubts a summary sentence finds the message it came from, or finds that it has none.
 
-Commit the file after the summary is appended — an uncommitted summary is one regeneration from gone.
+Keep the file in the scratchpad; never regenerate over it once a summary is appended. It is never committed into common-docs — his words worth keeping go to the node's VISION.md, dated.
 
 Known trap: his messages are often dictated. A transcription slip ("contact slots" for "context
 slots") can be carried into the summary as a confident wrong term. The summarizer may not fix what
@@ -78,8 +78,8 @@ marker, refuses to overwrite a file that has no marker (it cannot tell appended 
 words), and `--verify` recomputes the words and exits non-zero if the file's upper part differs —
 a tampered ground truth is found in one command. A summary is derived from the words, never
 from an earlier summary; a judge's note is derived from words + summary + the agent's claims, and
-the claims are read as claims. Nothing derived is ever written above the marker. The first time
-this skill was used, an uncommitted summary was lost to a regeneration — commit what you append.
+the claims are read as claims. Nothing derived is ever written above the marker. Never regenerate
+over a file whose summary you still need.
 
 **Runaway.** This is reached for at a decision — before a dispatch, a freeze, a "done", a
 handoff, after a compaction — never on a clock and never every N messages ([no unapproved

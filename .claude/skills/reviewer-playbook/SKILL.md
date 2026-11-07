@@ -28,6 +28,7 @@ rules: `subagent-dispatch` § 3 and its `verifier-brief.md`.
 ## What counts
 - Report only gaps against the brief, the person's words, and doctrine (reuse-first, no legacy,
   nothing fails silently, guard red→green, real test data). Not taste, not polish.
+- Before reporting "a table can't be restricted" or "members see rows they shouldn't", read the table's level: an Organization table being open to every member is by design; the restriction is Confidential or a protected column ([recipe](/systems/data/custom-data/STATE.md#how-to-keep-some-people-out-of-a-custom-table)).
 - Two verdicts, separate: A (does it do what was asked, live) and B (doctrine/quality from the diff).
 - Each finding: file:line or URL, what is wrong, why it matters, severity
   (Critical = broken/unsafe/data loss · Important = cannot be trusted · Minor).

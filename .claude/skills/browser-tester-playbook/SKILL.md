@@ -59,6 +59,7 @@ section you need, not the whole file.
 - Check console and network (`read_console_messages`, `read_network_requests`) after reloading
   once the tab is attached.
 - Do not wait more than 5 minutes for anything. A wait that long → note it and move on.
+- Before reporting "a table can't be restricted" or "a member sees rows they shouldn't", read the table's level (its Settings → Access level): an Organization table being open to every member is by design, not a defect ([recipe](/systems/data/custom-data/STATE.md#how-to-keep-some-people-out-of-a-custom-table)).
 
 ## The defect list (your report file)
 One entry per defect, numbered:

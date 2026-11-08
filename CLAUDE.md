@@ -228,8 +228,9 @@ grow or import the in-code lists. [app/services/catalogs/FEATURE.md](app/service
 - **Before finishing any code change, scan
   [.matrx/LANDING_CHECKLIST.md](.matrx/LANDING_CHECKLIST.md)** (trigger→verify pairs
   for shipped regression classes).
-- **Authenticated UI verification** uses the shared canonical admin test account —
-  never create a replacement or ask Arman for credentials:
+- **Authenticated UI verification** uses the shared test seats (which account when: aidream
+  `common-docs/policies/test-accounts.md`: the agent member by default, the agent admin for admin pages) —
+  never create a replacement or ask Arman for credentials. Admin seat:
   `AI_ADMIN_USERNAME="admin@admin.com"`, `AI_ADMIN_PASSWORD="<see AI_ADMIN_PASSWORD in .env>"`
   (Playwright reads them from gitignored `desktop/.env.test`; legacy
   `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` aliases accepted). Super-admin identity —
@@ -255,7 +256,7 @@ keep going until done or stuck; update docs when code changes. Never edit
 `docs/official/**` (or any `*/official/*`) without Arman's explicit approval — flag
 staleness instead.
 
-- **Logging into any Matrx UI**: sign in as `admin@admin.com` — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
+- **Logging into any Matrx UI**: the agent member (`MATRX_TEST_MEMBER_EMAIL` / `MATRX_TEST_MEMBER_PASSWORD` in aidream's env files) by default; `admin@admin.com` for admin pages — the password is `AI_ADMIN_PASSWORD` in the `.env` of `aidream` or `matrx-frontend` (`AI_ADMIN_USERNAME` holds the email).
   **Never in Arman's installed app.** `/Applications/AI Matrx.app` and its engine on port **22140** are his, signed in as him: agents never sign in, sign out, click, restart, or update it. Test only on a source engine you started (ports 22240–22259, isolated home) with the desktop in dev mode — read the installed engine only via `Authorization: Bearer local-probe` GETs. (Arman, 2026-09-15: "the installed app on my system is for my use; if they're screwing with it, they're breaking my rules.")
 
 ## 🚨 THE LATEST LAW — @ai-matrx packages are NEVER pinned (pre-launch rule)

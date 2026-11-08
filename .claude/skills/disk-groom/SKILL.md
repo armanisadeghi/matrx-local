@@ -59,3 +59,13 @@ half-deleted. Prove it with `groom.py selftest-git-guard`.
 Put throwaway copies in `mktemp -d` and delete them in an EXIT trap. If they
 must outlive a reboot and live under `$HOME`, add the folder to
 `SCRATCH_RUN_ROOTS` in `groom.py` (keep newest N), never leave them unbounded.
+
+## Never put code where Apple syncs or backs up
+
+Nothing coding-related (repos, `node_modules`, `.venv`, Codex or Claude
+workspaces, scratch) goes under `~/Documents`, `~/Desktop` or iCloud Drive:
+on 2026-11-06, 1.85M Codex automation files there were syncing to every Mac.
+Codex workspaces live in `~/code/agent-chats/codex`. The daily run re-applies
+Time Machine exclusions and prints `ICLOUD CODE <path>` (and fails) when code
+shows up in iCloud Drive. A new Mac gets the schedule with
+`zsh common-docs/meta/scripts/disk-groom/install_launchd.sh`.

@@ -184,9 +184,13 @@ Marked "coming soon" in the + menu; each item names its frontend reference:
 5. **Active context / scopes** → `scope_ids` (ref: features/scopes).
 6. **Memory controls** → `memory` / `memory_model` / `memory_scope`.
 7. **Sandbox / compute-target binding** (ref: SandboxPanel + token broker).
-8. **Purpose bundles** — finer than the 2 categories (e.g. "email",
-   "coding"): create `tool.bundle` rows + surface defaults per purpose.
-   NOTE: bundle name `desktop` is TAKEN by the chrome-extension taxonomy.
+8. **Purpose bundles** — **DONE in code, not a gap** (Matrx 2, 2026-11-08): two categories (Files and code,
+   This computer) and six purpose bundles (work-with-files, run-code, control-this-computer, web-and-network,
+   personal-data, manage-windows) in `@ai-matrx/desktop-protocol`'s catalog; the chat's Tools picker groups by
+   bundle with a per-chat switch for each, and the server withholds small-model-off bundles from small models.
+   The `tool.bundle` / `tool.surface_defaults` rows are prepared, not yet applied to the database. Design:
+   `aidream/apps/matrx-desktop/design/local-tools.md` § 4. (Bundle name `desktop` stays taken by the
+   chrome-extension taxonomy.)
 9. **`loaded_categories` hint** in the envelope (skip re-discovery across
    turns) — payload field exists, UI doesn't track it yet.
 10. **Instance targeting (Tier 2)** — **DONE, not a gap.** The "two engines on one account

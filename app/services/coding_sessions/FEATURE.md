@@ -1205,8 +1205,12 @@ person's Files and Recents (and how a machine writer registers before it writes)
 
 `get_coding_session_artifacts_lane(provider)` returns one lane per provider, each with its
 own durable root (`data/coding-sessions/artifacts/<provider>`) and its own cloud path
-(`coding-sessions/<provider>/<session id>/<relative path>`); Claude Code's existing folder
-does not move. The lifespan starts and stops every lane
+(`system-files/coding/<provider>/<session id>/<relative path>` — the placement registry's
+`coding.session_artifact` pathway in the one System folder, read from `files.file_pathway` once
+per process with the session's token, compiled copy as fallback; 2026-11-09). The read-back still
+accepts the pre-registry `coding-sessions/…` path as the entry's own placement, so a row there or
+one the server's ledgered mover relocated is never re-filed (guards in
+`tests/unit/test_coding_session_artifacts.py`, "placement registry" section). The lifespan starts and stops every lane
 (`start/stop_coding_session_artifact_lanes`), and each artifacts endpoint takes an optional
 `?provider=` — omitted means every lane, with the Claude Code numbers still at the top
 level for screens written before there was more than one.

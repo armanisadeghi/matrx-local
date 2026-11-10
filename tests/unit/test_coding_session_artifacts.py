@@ -21,6 +21,13 @@ from app.services.local_db.database import LocalDatabase
 pytestmark = pytest.mark.anyio
 
 
+@pytest.fixture(autouse=True)
+def _registry_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests never reach the live placement registry: pin the subfolder
+    the registry declares so ``refresh_pathway`` answers without a request."""
+    monkeypatch.setattr(mod, "_pathway_subfolder", mod.FALLBACK_PATHWAY_SUBFOLDER)
+
+
 class _Tokens:
     def __init__(self, row: dict[str, Any] | None = None, expired: bool = False) -> None:
         self.row, self.expired = row, expired
@@ -224,12 +231,12 @@ async def test_publish_uploads_each_captured_file_once_with_session_tags(tmp_pat
         assert tick["uploaded"] == 6 and tick["failed"] == 0
         paths = sorted(u["file_path"] for u in client.uploads)
         assert paths == [
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/component.tsx",
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/config.cts",
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/module.mts",
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/qd/page/desk.html",
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md",
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/useAgentApp.fixed.ts",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/component.tsx",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/config.cts",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/module.mts",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/qd/page/desk.html",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/report.md",
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/useAgentApp.fixed.ts",
         ]
         meta = client.uploads[0]["metadata"]
         assert meta["kind"] == "coding_session_artifact"
@@ -451,8 +458,8 @@ async def test_identical_bytes_across_two_sessions_each_get_their_own_placement(
             assert id_a and id_b and id_a != id_b
             assert entries_a[rel]["deduplicated"] is False
             assert entries_b[rel]["deduplicated"] is False
-            assert client.rows[id_a]["file_path"] == f"coding-sessions/claude_code/{session_a}/{rel}"
-            assert client.rows[id_b]["file_path"] == f"coding-sessions/claude_code/{session_b}/{rel}"
+            assert client.rows[id_a]["file_path"] == f"system-files/coding/claude_code/{session_a}/{rel}"
+            assert client.rows[id_b]["file_path"] == f"system-files/coding/claude_code/{session_b}/{rel}"
     finally:
         await db.close()
 
@@ -475,10 +482,10 @@ async def test_identical_bytes_two_paths_same_session_each_get_their_own_placeme
         assert entries["report.md"]["deduplicated"] is False
         assert entries["report-copy.md"]["deduplicated"] is False
         assert client.rows[id_report]["file_path"] == (
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md"
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/report.md"
         )
         assert client.rows[id_copy]["file_path"] == (
-            "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report-copy.md"
+            "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/report-copy.md"
         )
     finally:
         await db.close()
@@ -498,7 +505,7 @@ async def test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased(
     monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
     try:
         await lane.run_once()
-        own_path = "coding-sessions/claude_code/11111111-2222-3333-4444-555555555555/report.md"
+        own_path = "system-files/coding/claude_code/11111111-2222-3333-4444-555555555555/report.md"
         entry = lane.session_detail("11111111-2222-3333-4444-555555555555")["entries"]["report.md"]
         assert client.rows[entry["file_id"]]["file_path"] == own_path
 
@@ -507,12 +514,12 @@ async def test_queue_placement_repairs_refiles_an_entry_an_older_build_aliased(
         alien_id = "file-alien"
         client.rows[alien_id] = {
             "id": alien_id,
-            "file_path": "coding-sessions/claude_code/other-session/report.md",
+            "file_path": "system-files/coding/claude_code/other-session/report.md",
             "deleted_at": None,
         }
         entry["file_id"] = alien_id
         entry["deduplicated"] = True
-        entry["cloud_file_path"] = "coding-sessions/claude_code/other-session/report.md"
+        entry["cloud_file_path"] = "system-files/coding/claude_code/other-session/report.md"
         entry["placement_error"] = None
 
         queued = lane._queue_placement_repairs()
@@ -585,3 +592,79 @@ async def test_placement_repair_gives_up_loudly_after_max_rounds(
         assert lane.status()["placement_failed"] >= 1
     finally:
         await db.close()
+
+
+# ── placement registry: System folder, never a top-level Files folder ──────
+SID = "11111111-2222-3333-4444-555555555555"
+
+
+async def test_new_uploads_land_in_the_registry_system_folder_never_top_level(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Every upload is filed under the coding-session pathway's System folder
+    (``system-files/coding/<provider>/<session>/…``); the old top-level
+    ``coding-sessions/`` folder is never written again."""
+    _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        paths = [u["file_path"] for u in client.uploads]
+        assert paths
+        assert all(p.startswith(f"system-files/coding/claude_code/{SID}/") for p in paths), paths
+        assert not any(p.startswith("coding-sessions/") for p in paths)
+    finally:
+        await db.close()
+
+
+async def test_a_row_still_at_the_legacy_path_is_its_own_placement_never_refiled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """During the switch a row may sit at either placement: the old
+    ``coding-sessions/`` path (not yet relocated) or the System folder (the
+    server's mover relocated it). Both are this entry's OWN row — the
+    read-back must not call it a dedupe and the repair pass must stay quiet,
+    or it re-uploads every legacy artifact forever."""
+    _scratchpad(tmp_path)
+    client = _FakeFilesClient()
+    db, lane = await _lane(tmp_path, client=client, tokens=_Tokens({"access_token": "jwt"}))
+    monkeypatch.setattr(mod, "TokenRepo", lambda _db: _Tokens({"access_token": "jwt"}))
+    try:
+        await lane.run_once()
+        uploads_before = len(client.uploads)
+        entry = lane.session_detail(SID)["entries"]["report.md"]
+        client.rows[entry["file_id"]]["file_path"] = f"coding-sessions/claude_code/{SID}/report.md"
+
+        result = await lane.verify_now()
+        entry = lane.session_detail(SID)["entries"]["report.md"]
+        assert entry["deduplicated"] is False
+        assert result["queued_for_refiling"] == 0
+        assert lane._queue_placement_repairs() == 0
+        assert len(client.uploads) == uploads_before
+
+        # And a row the server's mover relocated into the System folder.
+        client.rows[entry["file_id"]]["file_path"] = f"system-files/coding/claude_code/{SID}/report.md"
+        result = await lane.verify_now()
+        entry = lane.session_detail(SID)["entries"]["report.md"]
+        assert entry["deduplicated"] is False
+        assert result["queued_for_refiling"] == 0
+        assert len(client.uploads) == uploads_before
+    finally:
+        await db.close()
+
+
+def test_the_registry_row_decides_the_folder_and_a_bad_row_never_does(monkeypatch) -> None:
+    session = mod.SessionArtifacts(
+        provider="claude_code", cli_session_id=SID, project_slug="p",
+        source_root=Path("/src"), durable_dir=Path("/x"),
+    )
+    monkeypatch.setattr(mod, "_pathway_subfolder", "coding/v2/{session}")
+    assert mod._cloud_path(session, "a/b.md") == f"system-files/coding/v2/claude_code/{SID}/a/b.md"
+    ok = {"root": "system", "subfolder": "coding/{session}", "is_active": True, "deleted_at": None}
+    assert mod._accept_pathway_row(ok) == "coding/{session}"
+    assert mod._accept_pathway_row({**ok, "root": "person"}) is None
+    assert mod._accept_pathway_row({**ok, "subfolder": "coding"}) is None
+    assert mod._accept_pathway_row({**ok, "subfolder": "{session}/coding"}) is None
+    assert mod._accept_pathway_row({**ok, "is_active": False}) is None
+    assert mod._accept_pathway_row(None) is None

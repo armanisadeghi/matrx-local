@@ -867,6 +867,7 @@ class CodingSessionArtifactsLane:
             )
             return 0, 0
         self._client.set_jwt(jwt)
+        await refresh_pathway(jwt)
         counts = {"uploaded": 0, "failed": 0}
         touched: set[str] = set()
         halt = asyncio.Event()  # a session/organization refusal stops the wave
@@ -940,7 +941,11 @@ class CodingSessionArtifactsLane:
                     # onto an existing row). Only the row the server serves back
                     # says what happened, so the read-back decides both whether
                     # this entry is in AI Matrx and whether it shares a file.
-                    await self._confirm_record(record, expected_path=_cloud_path(session, rel))
+                    await self._confirm_record(
+                        record,
+                        expected_path=_cloud_path(session, rel),
+                        legacy_path=_legacy_cloud_path(session, rel),
+                    )
                     counts["uploaded"] += 1
                     self._blocker = None
                     self._session_blocker_since = None
@@ -987,7 +992,11 @@ class CodingSessionArtifactsLane:
 
     # ── confirmation / repair ────────────────────────────────────────
     async def _confirm_record(
-        self, record: dict[str, Any], *, expected_path: str | None = None
+        self,
+        record: dict[str, Any],
+        *,
+        expected_path: str | None = None,
+        legacy_path: str | None = None,
     ) -> bool:
         """Read the recorded cloud file id back. True when AI Matrx serves it.
 
@@ -998,6 +1007,8 @@ class CodingSessionArtifactsLane:
         The row's own ``file_path`` also settles the dedupe question: a row filed
         at a DIFFERENT path than this entry asked for is an existing
         byte-identical file this path now shares, not a file of its own.
+        ``legacy_path`` (the pre-registry ``coding-sessions/`` placement) also
+        counts as its own: a row there or at the System folder is never re-filed.
         """
         file_id = record.get("file_id")
         if not file_id:
@@ -1025,7 +1036,7 @@ class CodingSessionArtifactsLane:
         if isinstance(cloud_path, str) and cloud_path:
             record["cloud_file_path"] = cloud_path
             if expected_path is not None:
-                shares_another_row = cloud_path != expected_path
+                shares_another_row = cloud_path not in {expected_path, legacy_path}
                 record["deduplicated"] = shares_another_row
                 if not shares_another_row:
                     # It has its own placement now — nothing left to announce.
@@ -1137,7 +1148,9 @@ class CodingSessionArtifactsLane:
             async with gate:
                 before = record.get("file_id")
                 ok = await self._confirm_record(
-                    record, expected_path=_cloud_path(session, rel)
+                    record,
+                    expected_path=_cloud_path(session, rel),
+                    legacy_path=_legacy_cloud_path(session, rel),
                 )
                 if ok:
                     counts["confirmed"] += 1
@@ -1210,9 +1223,99 @@ class CodingSessionArtifactsLane:
         os.replace(tmp, path)
 
 
+# ── placement: the registry decides where this lane files ──────────────
+# AI Matrx's placement registry (``files.file_pathway``) owns the destination
+# of every automated writer: coding-session artifacts are the
+# ``coding.session_artifact`` pathway, filed under the one dimmed System
+# folder (``system-files/``) instead of a top-level folder in the person's
+# Files. The row is public to every signed-in caller, so the lane reads it
+# with the session's token once per process (before its first upload) and files
+# where the registry says; until a read succeeds it uses the compiled copy of
+# the same declaration (and says so in the log). ``{session}`` is filled with
+# ``<provider>/<session id>`` — the layout the server's ledgered mover gave
+# every row it already moved out of ``coding-sessions/``.
+PATHWAY_KEY = "coding.session_artifact"
+SYSTEM_ROOT_KEY = "system"
+SYSTEM_ROOT_PATH = "system-files"
+FALLBACK_PATHWAY_SUBFOLDER = "coding/{session}"
+LEGACY_ROOT = "coding-sessions"
+_pathway_subfolder: str | None = None
+
+
+def _accept_pathway_row(row: Any) -> str | None:
+    """The row's subfolder when it is one this lane can file under, else None.
+
+    Only an active System pathway with a ``{session}`` slot is usable: any
+    other shape would file artifacts somewhere the read-back and the mover do
+    not agree on, so the compiled declaration stays in force."""
+    if not isinstance(row, dict) or row.get("is_active") is False or row.get("deleted_at"):
+        return None
+    sub = row.get("subfolder")
+    if row.get("root") != SYSTEM_ROOT_KEY or not isinstance(sub, str):
+        return None
+    sub = sub.strip("/")
+    return sub if sub.count("{session}") == 1 and sub.endswith("{session}") else None
+
+
+async def refresh_pathway(jwt: str) -> str:
+    """Read the coding-session pathway from the registry; returns the subfolder in force."""
+    global _pathway_subfolder
+    if _pathway_subfolder is not None:
+        return _pathway_subfolder
+    try:
+        import httpx
+
+        from app.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as http:
+            resp = await http.get(
+                f"{SUPABASE_URL.rstrip('/')}/rest/v1/file_pathway",
+                params={
+                    "key": f"eq.{PATHWAY_KEY}",
+                    "select": "root,subfolder,is_active,deleted_at",
+                },
+                headers={
+                    "apikey": SUPABASE_PUBLISHABLE_KEY,
+                    "Accept-Profile": "files",
+                    "Authorization": f"Bearer {jwt}",
+                },
+            )
+        resp.raise_for_status()
+        rows = resp.json()
+        sub = _accept_pathway_row(rows[0] if isinstance(rows, list) and rows else None)
+        if sub is None:
+            logger.warning(
+                "[coding_session_artifacts] placement registry row for %s is missing or unusable; "
+                "filing under the compiled declaration %s/%s",
+                PATHWAY_KEY, SYSTEM_ROOT_PATH, FALLBACK_PATHWAY_SUBFOLDER,
+            )
+            return FALLBACK_PATHWAY_SUBFOLDER
+        _pathway_subfolder = sub
+        return sub
+    except Exception as exc:  # noqa: BLE001 — offline is a state; the compiled copy files the same place
+        logger.info(
+            "[coding_session_artifacts] could not read placement registry (%s); filing under the "
+            "compiled declaration %s/%s",
+            exc, SYSTEM_ROOT_PATH, FALLBACK_PATHWAY_SUBFOLDER,
+        )
+        return FALLBACK_PATHWAY_SUBFOLDER
+
+
 def _cloud_path(session: SessionArtifacts, rel: str) -> str:
-    """The ONE logical path this lane asks matrx-files to file an entry at."""
-    return f"coding-sessions/{session.provider}/{session.cli_session_id}/{rel}"
+    """The ONE logical path this lane asks matrx-files to file an entry at:
+    the registry's System folder for the coding-session pathway."""
+    sub = (_pathway_subfolder or FALLBACK_PATHWAY_SUBFOLDER).replace(
+        "{session}", f"{session.provider}/{session.cli_session_id}"
+    )
+    return f"{SYSTEM_ROOT_PATH}/{sub}/{rel}"
+
+
+def _legacy_cloud_path(session: SessionArtifacts, rel: str) -> str:
+    """Where builds before the placement registry filed an entry. A row still
+    there is this entry's OWN placement (the server's mover relocates it), so
+    the read-back accepts it rather than re-uploading — remove once no row is
+    left under ``coding-sessions/``."""
+    return f"{LEGACY_ROOT}/{session.provider}/{session.cli_session_id}/{rel}"
 
 
 def _sha256(path: Path) -> str:

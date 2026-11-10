@@ -30,6 +30,13 @@ from tests.unit.test_coding_session_artifacts import _FakeFilesClient, _Tokens
 
 pytestmark = pytest.mark.anyio
 
+
+@pytest.fixture(autouse=True)
+def _registry_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests never reach the live placement registry: pin the subfolder
+    the registry declares so ``refresh_pathway`` answers without a request."""
+    monkeypatch.setattr(mod, "_pathway_subfolder", mod.FALLBACK_PATHWAY_SUBFOLDER)
+
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "codex"
 WITH_WRITES = FIXTURES / "session-with-writes.jsonl"
 SECOND = FIXTURES / "session-second.jsonl"
@@ -238,7 +245,7 @@ async def test_codex_lane_captures_and_publishes_the_file_the_rollout_names(
         assert manifest["files"][WRITTEN_REL]["sha256"]
 
         assert [u["file_path"] for u in client.uploads] == [
-            f"coding-sessions/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}"
+            f"system-files/coding/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}"
         ]
         meta = client.uploads[0]["metadata"]
         assert meta["provider"] == "codex"
@@ -250,7 +257,7 @@ async def test_codex_lane_captures_and_publishes_the_file_the_rollout_names(
         entry = detail["entries"][WRITTEN_REL]
         assert entry["verified_at"] and entry["deduplicated"] is False
         assert client.rows[entry["file_id"]]["file_path"] == (
-            f"coding-sessions/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}"
+            f"system-files/coding/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}"
         )
         status = lane.status()
         assert status["provider"] == "codex" and status["uploaded"] == 1
@@ -375,8 +382,8 @@ async def test_each_provider_keeps_its_own_durable_root_and_cloud_path(
         await codex_lane.run_once()
         await claude_lane.run_once()
         assert sorted(u["file_path"] for u in client.uploads) == [
-            "coding-sessions/claude_code/cc-session/report.md",
-            f"coding-sessions/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}",
+            "system-files/coding/claude_code/cc-session/report.md",
+            f"system-files/coding/codex/{SESSION_WITH_WRITES}/{WRITTEN_REL}",
         ]
         assert (tmp_path / "durable" / "codex" / SESSION_WITH_WRITES / WRITTEN_REL).is_file()
         assert (tmp_path / "durable" / "claude_code" / "cc-session" / "report.md").is_file()

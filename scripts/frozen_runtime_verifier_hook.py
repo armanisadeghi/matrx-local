@@ -24,6 +24,17 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Annotated
+
+def _import_contract_module(
+    module_name: Annotated[str, "matrx.external_bootstrap_module"],
+) -> object:
+    """Import one module the frozen contract names. The names are DATA (the contract's
+    runtime_imports / runtime_attributes / shared_import_packages lists), so they cannot be
+    spelled as static imports; this is the one declared place that loads them, and the
+    annotation is the mandate scanner's marker for a caller-selected module name."""
+    return importlib.import_module(module_name)
+
 
 
 def _verify_office_codec() -> dict[str, object]:
@@ -310,16 +321,16 @@ if os.environ.get("MATRX_FROZEN_RUNTIME_VERIFY") == "1":
 
         imported: dict[str, str] = {}
         for module_name in contract["runtime_imports"]:
-            module = importlib.import_module(module_name)
+            module = _import_contract_module(module_name)
             imported[module_name] = str(getattr(module, "__file__", "<built-in>"))
         for module_name, attributes in contract["runtime_attributes"].items():
-            module = importlib.import_module(module_name)
+            module = _import_contract_module(module_name)
             for attribute in attributes:
                 getattr(module, attribute)
 
         frozen_shared_origins: dict[str, str] = {}
         for module_name in contract["shared_import_packages_by_target"][target]:
-            module = importlib.import_module(module_name)
+            module = _import_contract_module(module_name)
             origin = Path(str(getattr(module, "__file__", ""))).resolve(strict=False)
             if origin.is_relative_to(runtime_path):
                 raise RuntimeError(

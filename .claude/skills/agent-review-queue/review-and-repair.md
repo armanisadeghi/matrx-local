@@ -45,7 +45,9 @@ he is using, and close only the tabs/groups you created.
   standing authorization for scheduled Agent Review First Pass workers to perform this exact
   env-to-admin login on 2026-08-24. Never ask where the credentials live and never ask him to
   approve this routine login again. If sign-in is required, complete it before claiming a queue
-  item; the persistent profile retains the resulting session for later runs.
+  item; the persistent profile retains the resulting session for later runs. Admin pages then ask for the
+  authenticator code (admin power needs an aal2 session): the doors are in
+  [Admin work](/policies/test-accounts.md#admin-work).
 - Passwords and session tokens never appear in this skill, an automation prompt, queue metadata,
   messages, screenshots, logs, or chat. Automated credential entry is authorized only for the
   exact local env fields and destination above; this is not permission to use or expose any other

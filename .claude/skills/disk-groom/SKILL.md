@@ -35,9 +35,12 @@ After the build (or after compose up):
 
 `python3 /Users/armanisadeghi/code/common-docs/meta/scripts/disk-groom/groom.py docker --apply`
 
-That keeps running containers and prunes unused images plus BuildKit
-cache down to 8 GB. Old SHA tags from the last twenty pushes are the
-thing that filled a 4 TB disk.
+That keeps running containers and prunes unused images, anonymous volumes
+and BuildKit cache down to 8 GB. Named volumes (local site databases) stay
+unless you pass `--volumes`. Old SHA tags from the last twenty pushes are the
+thing that filled a 4 TB disk. The hourly run repeats the prune whenever
+Docker is up and the last good one is over 24 h old, because Docker is
+usually off at the 04:15 daily run.
 
 ## When the disk is tight
 

@@ -14,6 +14,9 @@ handoff is a map drawn by someone else — it says where to look and proves noth
 
 ## 1. Read the handoff
 
+First claim the project and dispatch the vision check new hands require
+([projects §1](/skills/projects/SKILL.md), steps 2 and 3); its result is evidence for step 3 below.
+
 Use the path Arman gave, or find it by the project's name: `rg -l '^type: Handoff' common-docs/systems`.
 Read all of it. A handoff not in the standard sections (pasted text, an older format) is read the
 same way; the sections it lacks are what step 3 must fill. Note the mode in its header. **Stalled** → assume it carries the blind spots that

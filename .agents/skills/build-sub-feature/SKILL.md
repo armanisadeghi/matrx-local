@@ -50,6 +50,8 @@ Write a ≤20-line design note in scratch and run `plan-attack` (one reviewer) o
 
 **Quality is the baseline, not the target.** Do it correctly and completely the first time — no half-wired states, no "good enough for now," no TODOs left as landmines. Compiling isn't working; it works when it's verified, handles the real edges, and reads like someone competent maintains it tomorrow.
 
+**AI first, on every screen.** Before a person is asked to do anything by hand, ask in order: can the app do it; can an agent do it in the built-in browser or the Chrome extension while they watch; and whatever is left for the person carries Copy for AI on each step and on the whole, because people hand instructions to an AI rather than follow them. Rule and check: `systems/platform/ui-shell/FEATURE.md` rule 21.
+
 **Mimic what works.** Before you design or implement, explicitly consider the best systems in the world that already do something similar — their principles, layouts, patterns, and concepts. Don't invent from scratch — reuse as much as possible from what has proven to work at scale. Agents produce significantly better results when they emulate excellence rather than reinvent mediocrity. The ruled set of leaders per discipline is `common-docs/policies/champions.md`; absorb what makes them successful and apply those patterns here. Stand on the shoulders of giants.
 
 ## Done means

@@ -27,6 +27,8 @@ question travels.
 0. **Boss or user?** Would the question exist if he had never used the product himself? A
    question about ONE organization's content, taste or settings is a customer's: make it an
    onboarding step, a starter kit, or a knob with a default ([ask the boss](/policies/talk-to-arman-like-a-person.md)).
+0a. **Is it a step the task he gave already needs?** Then it is approved: do it, never ask
+   ([rule 3a](/policies/talk-to-arman-like-a-person.md)). Could he plausibly say no? If not, it is not a question.
 0b. **Does any answer change what he will see?** If not, decide and record it.
 1. **A fact?** Code, the DB, a doc or the web settles it: look it up (a `quick` lane if tedious).
 2. **Already ruled or delegated?** Grep the SUBJECT nouns across the owning node's

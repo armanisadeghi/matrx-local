@@ -41,8 +41,9 @@ description: The standing order for local git state in every AI Matrx repo — z
    when a peer reports a revert, check `git log` for the gate's current state and its forcing test first.
 7. **A plumbing or private-index commit is proven against what is pushed.** Before committing a shared file,
    `git diff HEAD -- <file>` and confirm every hunk is yours; before reporting done, prove every symbol the
-   commit imports exists in the pushed tree (`git archive <commit>` into scratch, then import-test or
-   type-check the touched files). In matrx-frontend, first run
+   commit imports exists in the pushed tree (`scripts/scratch_tree.sh --at <commit> <name> <touched files and
+   what they import>`, then import-test or type-check them; never a whole-repo `git archive`, never an install —
+   those filled `~/code/temp` to 1.15 TB by 2026-11-13). In matrx-frontend, first run
    `node scripts/check-staged-imports.mjs --index "$GIT_INDEX_FILE"`: hooks never see a temp index.
 8. **This checkout and GitHub main are never apart for more than 29 minutes.** Any agent that finds them
    unmerged (`git rev-list --left-right --count HEAD...origin/main` not `0 0` after a fetch, or a round

@@ -16,6 +16,8 @@ timestamp: 2026-09-10T00:00:00Z
 
 # Feature Deep-Dive: Audit, Plan & Build
 
+**If the work is a project** (it has a card: `python3 common-docs/meta/scripts/project_board.py --project <name>`), claim it and get its vision check first: [projects §1](/skills/projects/SKILL.md).
+
 Fully understand a feature, define what it should ideally become, get that plan approved, then build it — in full. No code changes before the plan is approved: enter plan mode at the start (if not already active), work Phases 1–5 to full depth, present the plan deliverable for approval, and begin Phase 6 only after approval. Your focus is: gather everything, decide what it should be, and make it real, completely. "Done" means every part implemented, tested, and confirmed working — never partially done.
 
 Primary focus: frontend + backend. The database matters insofar as code reads and writes it — verify the code's assumptions about the schema are actually true.
@@ -77,6 +79,8 @@ Combine what exists, what was intended, and what best practices demand into one 
 - **Canonicalization.** One implementation of any unit — component, hook, utility, service, script, type, query — that everything else uses. Fix it once and the fix flows everywhere; a bug in it surfaces loudly, while a bug in a duplicate hides. Flag every duplicate or re-creation across every layer (frontend, Python, shared) and name which becomes canonical.
 - **Integration, two-sided (encapsulation via a public facade).** Each module exposes a controlled public surface — a facade — that others consume, never reaching into its internals or hand-rolling their own integration. *Outward:* provide the interface other modules need, written and owned by this feature. *Inward:* stop doing the hard way what another module already exposes canonically.
 - **Underexposed vs. legacy.** Under-used code is usually an unsurfaced opportunity, not legacy — treat it as an asset to surface, finish, or promote. Apply "legacy / dead / deprecated" ONLY when (a) the owner says so, or (b) Git history proves it was once active, then deliberately reduced under human direction, and is genuinely old. Otherwise call it "underexposed" or "status unclear — confirm with owner."
+
+**AI first, on every screen.** For each thing the feature asks a person to do by hand, the gap analysis answers in order: can the app do it; can an agent do it in the built-in browser or the Chrome extension while they watch; and does whatever is left carry Copy for AI on each step and on the whole. Rule and check: `systems/platform/ui-shell/FEATURE.md` rule 21.
 
 ## Phase 5 — Ask vs. decide
 

@@ -16,6 +16,8 @@ Do no new building, polishing or extra verification — the window exists for se
 
 - Cancel your own scheduled check-ins and wake-ups; one that fires mid-handoff spends the window.
 - Finished and verified → commit and push to where the work normally lands.
+- The project's card: bring `state`, `next` and `waiting_on` up to the minute, then
+  `project_board.py --release <slug>` ([projects rule 3](/policies/projects.md)).
 - Unfinished, in a cloud session → push to **this session's own branch, never main** (main ships
   about every 30 minutes). In-process helpers share your machine, so their changes are yours to
   push here too.

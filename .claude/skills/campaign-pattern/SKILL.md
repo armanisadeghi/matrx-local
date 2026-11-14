@@ -81,6 +81,8 @@ needed (*"you are focused on the wrong things"*), and otherwise did not interfer
 
 ## Part 2 — The coordinator's operating system (what the agent must do)
 
+**If the work is a project** (it has a card: `python3 common-docs/meta/scripts/project_board.py --project <name>`), claim it and get its vision check first: [projects §1](/skills/projects/SKILL.md).
+
 1. **Externalize everything; make yourself replaceable.** One register as the single tracking
    home (stable IDs; no parallel status docs; **an index, not a store** — a decision lives in
    its item and the register only points at it). The register links the owner's words

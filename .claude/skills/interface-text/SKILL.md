@@ -105,6 +105,8 @@ From the 2026-09-30 baseline runs (`evals.md`) — each one produced a defect.
 
 ## The sweep — Discover → Review → Fix → Confirm (Pattern Patrol P14)
 
+A line marked `ui-exception: duplicate …` is a declared replica keeping another application's exact text ([interface duplication](/policies/interface-duplication.md)): every phase skips it.
+
 Each phase is its own agent. Read **only the file for the phase you were given**:
 
 | Phase | Lane | Read |

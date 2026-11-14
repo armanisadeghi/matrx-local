@@ -72,4 +72,4 @@ Then a line per brief item that PASSED with its evidence. No fix proposals, no c
 beyond naming the component if obvious.
 
 ## Lessons (maintained by the coach — newest first, keep under 30 lines)
-- (none yet)
+- 2026-11-13 (Mail walk): before pressing a single-key shortcut, blur any editor (`document.activeElement.blur()` or press Escape and click the page body) — a draft that took focus received the walk's "n", "p", "r" as text and changed a real record.

@@ -91,8 +91,11 @@ Ask of every double: *does it replace a dependency, or the logic I am verifying?
 A RED proof that edits the real guard on disk is one interruption away from shipping the weakening: on
 a shared checkout a peer sweeper commits whatever is on disk the moment a lane dies (it happened —
 a frame guard reached `main` deleted; DD-158). So: prove RED by injecting the weakening **in memory**
-(patch/mock inside the test), in a **scratch copy**, or in a **`git worktree`** you delete after. If the
-real file must be touched, weaken and restore in the SAME tool call, then verify the restore.
+(patch/mock inside the test), or in a **scratch copy of only the files involved**:
+`scripts/scratch_tree.sh [--link-venv] <name> <paths>` (aidream), deleted when the proof is done. Never a
+whole-repo export, a full `apps/` copy or a fresh install per attempt (each was 2-7 GB; 1.15 TB piled up by
+2026-11-13), never a worktree. If the real file must be touched, weaken and restore in the SAME tool call,
+then verify the restore.
 
 ## 5. Fixtures: captured, complete, typed
 

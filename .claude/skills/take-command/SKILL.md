@@ -37,6 +37,8 @@ a good run. Answers make it better; their absence never stops it.
 
 ## Phase 0 — Homework before the first question (≤3 minutes, silent)
 
+**If the work is a project** (it has a card: `python3 common-docs/meta/scripts/project_board.py --project <name>`), claim it and get its vision check first: [projects §1](/skills/projects/SKILL.md).
+
 1. **The team.** `ListAgents` first — it lists every live session on this machine across **every
    signed-in account**, however many there are; never assume a count. The session list
    (`mcp__ccd_session_mgmt__list_sessions`) shows only the current account. Then transcript search

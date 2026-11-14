@@ -24,7 +24,7 @@ timestamp: 2026-10-02T00:00:00Z
 2. **No duplication.** A fact is written once. Everywhere else links to it or says nothing.
 3. **Projects are temporary.** A project exists only while work is tangled across two or more
    homes. Once untangled, it splits into a `projects/` folder inside each home, and each is
-   deleted when its work lands. Nothing is left behind.
+   deleted when its work lands. Nothing is left behind. How one is run: [projects](/policies/projects.md).
 4. **No changelogs, no history.** Finished work shrinks to a status phrase ("Gmail: live").
    History is git. Delete; never archive.
 5. **Write only what isn't already known.** Document what a frontier model and our team would

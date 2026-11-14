@@ -27,7 +27,7 @@ Usage:
 """
 from __future__ import annotations
 
-import importlib.util
+import ast
 import pprint
 import re
 import sys
@@ -383,13 +383,19 @@ def render_module(data: dict[str, list[dict]]) -> str:
 
 
 def load_current() -> dict[str, list[dict]]:
-    """The constants currently committed in compiled_data.py (import by path
-    so this works without the app package on sys.path)."""
-    spec = importlib.util.spec_from_file_location("compiled_data_current", TARGET)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return {kind: getattr(mod, const) for kind, const, _e, _s in KINDS}
+    """The constants currently committed in compiled_data.py, read as literals
+    (the file is pure data, so it is parsed, never executed or imported)."""
+    tree = ast.parse(TARGET.read_text(encoding="utf-8"))
+    literals: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            literals[node.target.id] = ast.literal_eval(node.value)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                literals[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    return {kind: literals[const] for kind, const, _e, _s in KINDS}
 
 
 def main(argv: list[str]) -> int:

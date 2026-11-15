@@ -5,7 +5,7 @@ import hashlib, importlib.util, json, shutil, subprocess, tempfile, time, urllib
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-CONFIG=ROOT/'scripts/reliability-config-import-image.py'
+CONFIG=ROOT/'scripts'/'reliability-config-import-image.py'
 UV_URL='https://files.pythonhosted.org/packages/19/c5/6e5923d6c9e3b50dc8542647bea692b7c227a9489f59ddff4fdfb20d8459/uv-0.10.8-py3-none-manylinux_2_28_aarch64.whl'
 UV_SHA='e26f8c35684face38db814d452dd1a2181152dbf7f7b2de1f547e6ba0c378d67'
 T=600

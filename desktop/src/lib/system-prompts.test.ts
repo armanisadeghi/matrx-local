@@ -77,3 +77,16 @@ describe("built-in prompt library", () => {
     expect(enginePost).not.toHaveBeenCalled();
   });
 });
+
+describe("built-in prompt failures", () => {
+  it("files ONE warning per refresh when the engine is unreachable for every built-in", async () => {
+    clearLocalMandateCache();
+    engineGet.mockReset();
+    engineGet.mockRejectedValue(new Error("Engine not discovered"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await refreshBuiltinPrompts();
+    const lines = warn.mock.calls.filter((c) => String(c[0]).includes("built-in prompt"));
+    expect(lines).toHaveLength(1);
+    warn.mockRestore();
+  });
+});

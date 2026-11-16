@@ -94,9 +94,20 @@ export async function refreshBuiltinPrompts(): Promise<void> {
         }),
       );
       const prompts: BuiltinPrompt[] = [];
-      for (const r of settled) {
+      // ONE line per refresh, however many built-ins failed: the engine not being discovered yet fails
+      // all seven at once, and a line each filed seven system_error rows for one cause (2026-11-16).
+      const unavailable: string[] = [];
+      for (const [i, r] of settled.entries()) {
         if (r.status === "fulfilled") prompts.push(r.value);
-        else console.warn("[system-prompts] built-in prompt unavailable:", r.reason);
+        else {
+          const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+          unavailable.push(`${BUILTIN_PROMPT_MANDATES[i]?.mandateKey ?? "?"}: ${reason}`);
+        }
+      }
+      if (unavailable.length > 0) {
+        console.warn(
+          `[system-prompts] ${unavailable.length} built-in prompt(s) unavailable: ${unavailable.join("; ")}`,
+        );
       }
       const changed = JSON.stringify(prompts) !== JSON.stringify(resolvedBuiltins);
       resolvedBuiltins = prompts;

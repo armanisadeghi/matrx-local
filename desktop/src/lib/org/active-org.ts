@@ -360,11 +360,6 @@ export async function listMemberOrganizations(): Promise<MemberOrganization[]> {
  */
 let lastEngineRefusal: string | null = null;
 
-/** @internal test seam: forget the last warned refusal. */
-export function __resetEngineRefusalWarningForTests(): void {
-  lastEngineRefusal = null;
-}
-
 async function pushSelectionToEngine(organizationId: string | null): Promise<boolean> {
   try {
     const { engine } = await import("@/lib/api");

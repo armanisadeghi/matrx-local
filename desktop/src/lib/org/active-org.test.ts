@@ -404,6 +404,25 @@ describe("republishActiveOrganizationToEngine — the engine inherits this Mac's
     });
   });
 
+  it("warns ONCE per distinct refusal while the engine keeps refusing, and again after it recovers", async () => {
+    seedStored("user-1", { id: "org-7", name: "Chosen" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mod = await import("./active-org");
+    const orgWarns = () =>
+      warn.mock.calls.filter((c) => String(c[0]).startsWith("[active-org] the engine did not take")).length;
+
+    enginePut.mockRejectedValue(new Error("Authentication token lookup timed out after 10 seconds"));
+    for (let i = 0; i < 5; i++) await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(false);
+    expect(orgWarns()).toBe(1);
+
+    enginePut.mockResolvedValue({ organization_id: "org-7" });
+    await expect(mod.republishActiveOrganizationToEngine()).resolves.toBe(true);
+    enginePut.mockRejectedValue(new Error("Authentication token lookup timed out after 10 seconds"));
+    await mod.republishActiveOrganizationToEngine();
+    expect(orgWarns()).toBe(2);
+    warn.mockRestore();
+  });
+
   it("REPORTS that the engine did not take it, so the caller can retry", async () => {
     // The engine is not up yet — the normal case at boot. Swallowing this is
     // what left the sidecar empty and produced the double-ask.

@@ -3195,7 +3195,7 @@ export function Settings({
                     { label: "Groq", url: "https://console.groq.com/keys" },
                     {
                       label: "Together AI",
-                      url: "https://api.together.ai/settings/api-keys",
+                      url: "https://docs.together.ai/docs/quickstart",
                     },
                     { label: "xAI (Grok)", url: "https://console.x.ai/" },
                     {

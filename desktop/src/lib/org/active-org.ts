@@ -358,13 +358,28 @@ export async function listMemberOrganizations(): Promise<MemberOrganization[]> {
  * Imported lazily: `@/lib/api` is the app's heaviest module and pulls this
  * one back in transitively.
  */
+let lastEngineRefusal: string | null = null;
+
+/** @internal test seam: forget the last warned refusal. */
+export function __resetEngineRefusalWarningForTests(): void {
+  lastEngineRefusal = null;
+}
+
 async function pushSelectionToEngine(organizationId: string | null): Promise<boolean> {
   try {
     const { engine } = await import("@/lib/api");
     if (organizationId === null) await engine.delete("/organization/active");
     else await engine.put("/organization/active", { organization_id: organizationId });
+    lastEngineRefusal = null;
     return true;
   } catch (err) {
+    // The retry loop (ladder push + picker republish + engine-connected
+    // republish) can fail the same way many times while the engine or its
+    // auth lookup is still coming up. Say it once per distinct reason, until
+    // the engine takes an answer — one row per cause, not one per attempt.
+    const reason = err instanceof Error ? err.message : String(err);
+    if (lastEngineRefusal === reason) return false;
+    lastEngineRefusal = reason;
     // The engine may simply not be up yet. That is not a reason to fail the
     // user's choice — the desktop is still correct, and the engine-connected
     // republish (below) re-states it until the engine takes it. It IS a

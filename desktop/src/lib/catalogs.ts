@@ -58,6 +58,27 @@ export interface CatalogResponse<P = Record<string, unknown>> {
   entries: CatalogEntry<P>[];
 }
 
+/** How long a catalog read waits for engine discovery before using the compiled fallback. */
+export const CATALOG_ENGINE_WAIT_MS = 5000;
+const CATALOG_ENGINE_POLL_MS = 250;
+
+/**
+ * The engine's URL for a catalog read. At launch the catalog overlays (LLM, Whisper) run in the same
+ * tick as the first engine discovery, so the URL was still null and every launch filed "engine not
+ * connected" warnings while the engine was coming up (2026-11-16). Discovery is healed here (the same
+ * self-healing `rediscover` other engine calls use, which is rate-limited and single-flight) and the
+ * read waits, bounded, for the URL; only an engine still missing after the wait falls back.
+ */
+async function engineBaseForCatalogs(): Promise<string | null> {
+  const deadline = Date.now() + CATALOG_ENGINE_WAIT_MS;
+  while (!engine.engineUrl && Date.now() < deadline) {
+    await engine.rediscover().catch(() => null);
+    if (engine.engineUrl) break;
+    await new Promise((r) => setTimeout(r, CATALOG_ENGINE_POLL_MS));
+  }
+  return engine.engineUrl;
+}
+
 /**
  * Fetch the resolved entries for one catalog kind from the engine.
  *
@@ -67,7 +88,7 @@ export interface CatalogResponse<P = Record<string, unknown>> {
 export async function fetchCatalog<P = Record<string, unknown>>(
   kind: CatalogKind,
 ): Promise<CatalogEntry<P>[]> {
-  const base = engine.engineUrl;
+  const base = await engineBaseForCatalogs();
   if (!base) throw new Error("engine not connected");
   // 5s cap: a hung engine must read as "unreachable" (throw → compiled
   // fallback), never stall SetupWizard or a selector behind a dead socket.

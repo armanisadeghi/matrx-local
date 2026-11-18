@@ -36,8 +36,8 @@ This is the only skill, besides ai-dream-coding-projects, where an agent may cha
 ## 2. The official vision
 
 - There is one highly structured, official set of my vision. It's where my cleaned-up vision ends up.
-- Assume it already exists. Find it before you start.
-- If it doesn't exist yet, stop and ask me to create it. Don't create a substitute yourself.
+- *(Agent-added from his 2026-11-17 answer.)* It is the tree of vision files along the [domain tree](/policies/domain-tree.md): the platform vision on top ([systems/ai-dream-platform/VISION.md](/systems/ai-dream-platform/VISION.md)), then one `VISION.md` per domain, feature and sub-feature. Each piece is filed at the level it belongs to.
+- Don't create a substitute or a second structure yourself.
 - Everything filed there must be filed perfectly: the right place, the right level, nothing duplicated.
 
 ## 3. Research before you change anything
@@ -98,11 +98,10 @@ Agents love to be long-winded. The result must be shorter and clearer than what 
 
 ## 8. The hierarchy of rulings
 
-I often make a ruling about something, and somewhere else there's a ruling that says the opposite. The official vision needs a strong hierarchy so it gets easier over time to know which one wins.
+I often make a ruling about something, and somewhere else there's a ruling that says the opposite.
 
-- Every ruling in the official vision has a clear place in the hierarchy.
-- When two rulings conflict, the hierarchy decides, and the official vision says which one wins and why.
-- When the hierarchy doesn't settle it, bring it to me and record my answer.
+- *(Agent-added from his 2026-11-17 answer.)* **No rule decides for me. Conflicting rulings mean stop and ask.** Bring every conflict to me immediately, with all the variations, their context, and the reason for the possible misunderstanding.
+- Then solve it all the way through, so no one else ever has the same misunderstanding: one ruling stays, the other place is fixed or points to it, and any real exception says why it is one.
 
 ## 9. Spread my decisions everywhere
 

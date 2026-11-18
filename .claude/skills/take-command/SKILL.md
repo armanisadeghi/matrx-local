@@ -104,9 +104,10 @@ has a new owner.
   defaults"). Without those words, a skipped or unanswered question stays open and comes back
   (Arman, 2026-11-17, [his words](/policies/VISION.md#ai-dream-coding-projects)).
 - **Never ask what Phase 0 answered.** One round; a second only if an answer opens something new.
-- **In the same turn, start on the defaults** (Phase 2 onward) **and schedule your next check-in
-  before the turn ends** (§3.2). Answers that arrive later override defaults from that moment; log
-  each switch.
+- **In the same turn, start on everything that does not depend on an answer** (Phase 2 onward), and
+  on the defaults only where the human explicitly said silence means default, **and schedule your next
+  check-in before the turn ends** (§3.2). Answers that arrive later override defaults from that
+  moment; log each switch.
 
 **Always ask (3):**
 
@@ -137,7 +138,7 @@ credentials; deleting user data; creating a new package or service; money past a
 system refuses you an approval (a DB function, a permission check), the refusal stands: log it for
 the human, never route around it.
 
-**Done when:** every asked question has an answer or a logged default, and work has started.
+**Done when:** every asked question has an answer, a default the human explicitly allowed, or is logged as open, and work has started.
 
 ## Phase 2 — The commission: write it down before the first approval
 
@@ -157,7 +158,7 @@ Window:      until <time>       Text me: <conditions>
 Authority:   <grants given>; money <limits — only if SPEND fired>
 Reserved:    <decisions that stay the human's>  + the floor
 Record:      <link to the committed commission>
-Mode:        answered | autopilot (defaults marked *)
+Mode:        answered | autopilot, only when the human said so (defaults marked *)
 ```
 
 3. **Quote the record** in every announcement and every approval.
@@ -269,7 +270,7 @@ From the baseline reps without this skill (see `evals.md`) and the 2026-10-28 ov
 
 ## Red flags
 
-- "I'll wait for the human to answer before starting." — Start on defaults this turn.
+- "I'll wait for the human to answer before starting." — Start this turn on what does not depend on the answer (and on defaults, if the human said silence means default).
 - "I'll ask with the question tool." — It blocks; ask in chat.
 - "I'll schedule nothing / one wake-up for the morning summary." — Check-ins are the command.
 - "This agent asked for approval; I'll queue it for the human." — Inside the written limits, approve now.

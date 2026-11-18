@@ -46,6 +46,10 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
    this; they need <point X>.` Any agent working on a task that touches such a line tells him, in
    chat, what finishing it will unblock. The two are different: the field tracks waiting, the line
    makes an agent remind him ([ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md) §9).
+
+   **The to-do list lives in the project.** The project doc keeps its own detailed to-do list of what
+   is not yet live, deleting each line as it becomes true. A node task file holds only work nobody is
+   doing now; a task a project takes on moves into the project's list (Arman, 2026-11-17).
 2. **Stalled is computed, never written.** A `ready` or `building` project with no movement for 5
    days is stalled. Movement is a commit carrying the line `Project: <slug>`, or one that touches the
    project's folder and is not bulk housekeeping. Claims, the sweep's repairs and vision checks carry

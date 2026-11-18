@@ -61,11 +61,7 @@ trusted, and every "done" got attacked before it was believed. Adversarialism wa
 order, so no agent ever treated it as optional. (Mechanics: `plan-attack`.) Plan attackers run on Opus 5.5 (design judgment); verifiers of built work run on Sonnet unless the change is large or high-risk.
 
 ### 4. Rule the done-means-done law (the single most load-bearing message)
-Verbatim, from launch: *"I don't want fake tests that take in fake data that the agents
-manufacture to test their own work. All verification, testing, and validations must be done
-independently of the agent who has done the work, and they must be done in a comparison of the
-initial guidance documents and vision to the final production system, verified in the user
-interface, with actual data... Features are only considered done when they are truly done."*
+His launch order, in his words in [human-resources VISION.md](/systems/human-resources/VISION.md): no fake tests on agent-made data; every check is independent of the builder, compares the guidance and vision to the production system, in the real interface, with actual data; done means truly done.
 This became D15 — and it is why the campaign caught a live cross-tenant leak, a feature that had
 never worked once, a dead engine, and a dozen lying screens that every builder had reported as
 finished. **Without this law, the other four moves produce confident garbage.**

@@ -34,9 +34,9 @@ Reports, ledgers, and other agents' findings are leads — reproduce them agains
 |---|---|
 | Any recorded error | AI Dream MCP `errors` tool, `action='surfaces'` first (system_error, write_failure, app_log, stuck_rows, shape/tool-UI incidents) |
 | A provider/LLM call | the failed request's `cx_request_snapshot.request_payload` — the exact wire payload; replay it (aidream `error-capture`) |
-| A tool call | aidream `inspect-call` · AI Dream MCP `debug_traces` tool (`cx_tool_trace`) |
+| A tool call | aidream `inspect-call` · AI Dream MCP `errors` tool, `trace_failures` / `trace_get` (`cx_tool_trace`) |
 | A browser surface | the admin Error Inspector (`captureError`), AdminIndicator "Copy Full Context", console + network via browser tools |
-| Rows stuck / never landed | MCP `persistence_watchdog` |
+| Rows stuck / never landed | MCP `errors` `watchdog` / `stuck_rows` |
 | Fleet, deploy, containers | matrx-ship `fleet-incident` |
 | "Is my fix live?" | `https://server.app.matrxserver.com/health/version`, never the repo |
 

@@ -32,9 +32,11 @@ python3 /Users/armanisadeghi/code/common-docs/meta/scripts/transcript_user_messa
 ```
 
 The transcript is JSONL under `~/.claude/projects/` (the folder is the session's working
-directory with `/` turned into `-`). The script keeps only top-level user turns that a person
-typed: tool results, injected skill bodies, slash-command output, task notifications, the
-compaction summary, cron wake-ups and the app's automatic "Continue from where you left off" are
+directory with `/` turned into `-`). The script keeps only what a person typed: top-level user
+turns, plus the messages he typed while the agent was mid-turn (stored not as user turns but as
+`queued_command` attachment records, commandMode `prompt`, origin human or absent). Dropped:
+tool results, injected skill bodies, slash-command output, task notifications, the
+compaction summary, peer-session and task-notification messages, cron wake-ups and the app's automatic "Continue from where you left off" are
 all dropped (the harness marks its own turns `isMeta`). One entry per message: the time, then the
 text verbatim. `--include-injected` keeps the dropped records, labeled, to audit the filter.
 

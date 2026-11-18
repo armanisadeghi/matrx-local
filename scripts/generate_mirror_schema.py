@@ -68,7 +68,7 @@ MIRRORED_SCHEMAS: dict[str, dict] = {
 # Cloud columns the device never mirrors or syncs while the cloud still carries them
 # (``schema_mirror/withheld_columns.json``): access-ladder T-13's retiring row column, which
 # becomes ``shown_to`` (a list filter) and ``published_to_web`` (the only anonymous lane) —
-# common-docs projects/access-ladder/t13/PLAN.md phase 5. A client that no longer reads or
+# common-docs systems/platform/access/projects/access-ladder/t13/PLAN.md phase 5. A client that no longer reads or
 # writes it is what lets phase 7 drop it; an older local SQLite file keeps the column (never
 # destroyed) exactly like a retired one, and pulled values for it are ignored, not drift.
 WITHHELD_COLUMNS_PATH = REPO_ROOT / "schema_mirror" / "withheld_columns.json"

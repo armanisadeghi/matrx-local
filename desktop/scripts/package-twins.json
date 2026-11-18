@@ -10,7 +10,7 @@
     "PROVABLY not the same capability, and it must say why in `reason`.",
     "A WRAPPER is not a twin: a local function that BINDS the package function's options (unit, style, fallback) and delegates in a line or two is the sanctioned adapter, and needs no entry. A re-implemented BODY is a twin, always.",
     "",
-    "Register: common-docs /projects/npm-package-extraction/DUPLICATION-CENSUS.md (common-docs).",
+    "Register: common-docs /systems/architecture/frontend/projects/npm-package-extraction/DUPLICATION-CENSUS.md (common-docs).",
     "A SHAPE rule (`shapeWhy` + `shapeAllow` + `shapeCensus` on a row) catches the same capability under an UNREGISTERED name, or with no name at all. `shapeAllow` = provably NOT this capability, silent. `shapeCensus` = pre-existing bodies that ARE it and are not collapsed yet: loud every run, shrink-only, and a stale entry fails the guard."
   ],
   "$catalogFloor": 216,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """T-13 source ratchet — no new code reference to the retiring row column (access ladder).
 
-Access ladder T-13 (common-docs/projects/access-ladder/t13/PLAN.md §2.5c) retires the row column
+Access ladder T-13 (common-docs/systems/platform/access/projects/access-ladder/t13/PLAN.md §2.5c) retires the row column
 into ``shown_to`` (a list filter) and ``published_to_web`` (the only anonymous lane). Every code
 reference to the old column is a reader or writer phase 5 converts; this guard makes sure the set
 only shrinks while that happens. The same guard, same rule and same baseline shape live in
@@ -18,7 +18,7 @@ the database), generated types and build output.
 It FAILS (exit 1) when any file holds more such lines than ``scripts/t13_row_column_source_baseline.json``
 allows (a new file's allowance is 0), naming every line. The baseline was taken 2026-09-28 from
 this detector over the tree and cross-checked against the T-13 census
-(common-docs/projects/access-ladder/t13/census/). It only shrinks: ``--shrink-baseline`` lowers
+(common-docs/systems/platform/access/projects/access-ladder/t13/census/). It only shrinks: ``--shrink-baseline`` lowers
 counts to what is live and drops converted files; it can never raise one.
 
 SPLIT SPELLINGS FAIL: the word assembled from quoted pieces (``"vis" + "ibility"``, ``'visi' || 'bility'``,
@@ -256,7 +256,7 @@ def main() -> int:
         print(f"FAIL {p}")
     if split or tproblems:
         print("[t13-row-column-source] FAIL — write the column name plainly; a phase-3 machinery script goes under "
-              "\"transitional\" in the baseline with its line count (common-docs/projects/access-ladder/t13/PLAN.md §2.5).")
+              "\"transitional\" in the baseline with its line count (common-docs/systems/platform/access/projects/access-ladder/t13/PLAN.md §2.5).")
         return 1
     if shrinkable:
         print(f"[t13-row-column-source] {len(shrinkable)} file(s) converted below baseline — run --shrink-baseline")
@@ -265,7 +265,7 @@ def main() -> int:
             print(f"FAIL {g}")
         print(f"[t13-row-column-source] FAIL — {len(grew)} file(s) gained a reference to the row column access-ladder "
               "T-13 retires. Read published_to_web for the anonymous lane and shown_to for list narrowing "
-              "(common-docs/projects/access-ladder/t13/PLAN.md); the baseline never grows.")
+              "(common-docs/systems/platform/access/projects/access-ladder/t13/PLAN.md); the baseline never grows.")
         return 1
     print(f"[t13-row-column-source] clean — {sum(len(v) for v in found.values())} baselined reference(s) in "
           f"{len(found)} file(s), none new")

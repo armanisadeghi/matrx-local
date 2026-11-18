@@ -1,5 +1,5 @@
 {
- "_what": "Access-ladder T-13 2.5c source ratchet for matrx-local: per file, the most lines allowed to name the retiring row column. Shrink-only (--shrink-baseline lowers, nothing raises). Seeded 2026-09-28 from the detector; cross-check with common-docs/projects/access-ladder/t13/census/matrx-local.json: 16 of the census's 26 row-access files are here, 10 more are counted because the detector is literal (every literal reference is a phase-5 conversion or a rename).",
+ "_what": "Access-ladder T-13 2.5c source ratchet for matrx-local: per file, the most lines allowed to name the retiring row column. Shrink-only (--shrink-baseline lowers, nothing raises). Seeded 2026-09-28 from the detector; cross-check with common-docs/systems/platform/access/projects/access-ladder/t13/census/matrx-local.json: 16 of the census's 26 row-access files are here, 10 more are counted because the detector is literal (every literal reference is a phase-5 conversion or a rename).",
  "files": {
   "app/services/catalogs/service.py": 1,
   "app/services/chat_sync/engine.py": 1,

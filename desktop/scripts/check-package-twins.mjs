@@ -11,7 +11,7 @@
  * later by an agent that never saw the package export, which then drifts,
  * accumulates its own bug fixes, and cancels the package's out. The census of
  * what has already been collapsed is
- * `/projects/npm-package-extraction/DUPLICATION-CENSUS.md` (common-docs).
+ * `/systems/architecture/frontend/projects/npm-package-extraction/DUPLICATION-CENSUS.md` (common-docs).
  *
  * THE RULE. `scripts/package-twins.json` names every export that has been
  * collapsed. A top-level `function <name>` / `const <name> =` / `class <name>`

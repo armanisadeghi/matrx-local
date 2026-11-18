@@ -1,7 +1,7 @@
 """Access-ladder T-13: this client never reads or writes the retiring row column.
 
 The cloud retires the row column into ``shown_to`` (a list filter) and ``published_to_web``
-(the only anonymous lane) — common-docs projects/access-ladder/t13/PLAN.md phase 5. Phase 7
+(the only anonymous lane) — common-docs systems/platform/access/projects/access-ladder/t13/PLAN.md phase 5. Phase 7
 drops the column from the cloud, and it can only do that once every shipped client has stopped
 touching it. For this app that means: the generated SQLite mirror creates, pulls and pushes no
 such column, an older local file that already has one keeps it quietly (never destroyed, never

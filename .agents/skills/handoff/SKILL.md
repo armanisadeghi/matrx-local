@@ -16,6 +16,8 @@ timestamp: 2026-11-02T00:00:00Z
 
 # handoff
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 A project changes lead for one of two reasons: the account ran out of credits, or the work stalled
 and Arman is cutting his losses. Either way, nothing the old lead knew may be lost — and done right
 the project **gains**, because a fresh lead sees what the old one missed. Two sides share one
@@ -40,9 +42,9 @@ Proof record: [evals.md](evals.md) (only when editing this skill).
 
 ## Where it lives
 
-`HANDOFF.md`, frontmatter `type: Handoff`, in the project's home node under `common-docs/systems/`
-(the [domain tree](/policies/domain-tree.md); the folder holding its VISION.md). A project that is one
-of several inside its node uses `projects/<project-slug>/HANDOFF.md` there. One per project,
+`HANDOFF.md`, frontmatter `type: Handoff`, in the project's own folder: `projects/<project-slug>/HANDOFF.md`
+inside its home node under `common-docs/systems/` (the [domain tree](/policies/domain-tree.md)), or under
+the top `projects/` for a project with no permanent home ([rule 3](/policies/document-types.md)). One per project,
 **rewritten in place** — never appended; git holds history. Raw evidence (his extracted words, long
 lane notes) is a work product, not a doc: store it with
 [platform work products](/systems/files/file-service/STATE.md#platform-work-products), collection

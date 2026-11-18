@@ -66,7 +66,7 @@ plainly that none was found and what was checked.
 In chat ([talk to Arman like a person](/policies/talk-to-arman-like-a-person.md)): where the project
 stands today first (not what changed), then the remaining work, the discrepancies, and your fresh-eyes
 findings. Then put every question you could not answer yourself to him through
-[grilling](/skills/grilling/SKILL.md) and the question tool, your recommendation first on each, round
+[ask-arman](/skills/ask-arman/SKILL.md) and the question tool, your recommendation first on each, round
 after round until no real question is left.
 
 **Done when** no open question remains and his answers are recorded in VISION.md.

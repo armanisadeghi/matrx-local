@@ -24,7 +24,8 @@ description: The standing order for local git state in every AI Matrx repo — z
    `pull --rebase --autostash`, `checkout -- .`, `reset --hard`, `clean`, dirty `pull --rebase`. Other
    sessions' uncommitted work rides the stash and is lost. Pathspec-scope every such operation to your own
    files. If a file you need vanished, find the stash commit (`git log --all -- <path>`, "index on main")
-   and restore it with `git show <sha>:<path>`, never `git stash pop`.
+   and restore it with `git show <sha>:<path>`, never `git stash pop`. A `git` wrapper now refuses these in the shared
+   checkout ([The git guard](#the-git-guard-rule-2-is-enforced-in-the-checkout-itself)).
 3. **No local worktrees and no local branches, ever; remote branches are fine**. Edit the
    single shared checkout on main. To protect a live feature, build the replacement beside it and swap. Never
    request your own PR, branch or worktree, and never spend output complaining about other agents editing

@@ -39,7 +39,10 @@ timestamp: 2026-10-02T00:00:00Z
    else; add to the vision file instead. Short rule lists are the ideal form. An agent-written
    doc that contradicts his vision is drift, not truth. A doctrine document from his interviews is
    presumed right against the code and other docs; an agent who thinks a clause is wrong tells
-   him, and only he amends it.
+   him, and only he amends it. Verbatim is the rule everywhere except a live session with him under
+   the [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md) or
+   [vision-closeout](/skills/vision-closeout/SKILL.md) skill, where his words may be cleaned up with
+   him; an agent that feels the need to clean them up uses one of those skills.
    One exception: a feature's bug list (`<AREA>-BUGS.md`, skill `bug-list`) quotes the reporter verbatim on each item; the quote leaves when the item is fixed.
 8. **Conflicts go in [/operations/conflicts.md](/operations/conflicts.md),** one or two sentences
    per entry, then ask Arman. When he answers, delete the entry (never mark it done), apply the

@@ -15,6 +15,8 @@ description: "The agent.review_queue register for work Arman must see or test in
 
 # Agent Review Queue — get your work seen, get feedback back
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 **The failure this kills:** agents build things, mention them mid-message, Arman misses it, and finished features rot undiscovered for weeks. The queue at `/admin/users/agent-review` is the ONE place he checks. If you built something he must look at and you didn't register it, assume it will never be seen. It is one table for every repo: aidream, matrx-extend, and every other repo's agents register here too.
 
 ## Which part you need

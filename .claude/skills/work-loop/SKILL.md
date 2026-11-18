@@ -16,6 +16,8 @@ timestamp: 2026-08-30T00:00:00Z
 
 # Work Loop
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 Canonical contract:
 `/Users/armanisadeghi/code/common-docs/systems/architecture/work-loop/STATE.md`.
 

@@ -16,6 +16,8 @@ timestamp: 2026-10-03T00:00:00Z
 
 # subagent-dispatch — delegate down, check hard, close the loop
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 The laws say WHAT: you own the task, every dispatch names its lane
 ([subagent-model-ladder](/policies/subagent-model-ladder.md)), verification has zero authorship.
 This is the HOW. Campaign register, frozen contracts, succession: `campaign-pattern`. Durable
@@ -89,7 +91,9 @@ Templates: [implementer-brief.md](implementer-brief.md) · [verifier-brief.md](v
 ## 2. The report contract, and routing by status
 
 Every brief demands ONE status line, then ≤15 lines (full detail in the report file), then the
-worker's own commits (short SHA + subject), evidence, and what it could NOT verify.
+worker's own commits (short SHA + subject), evidence, and what it could NOT verify. The report opens with its
+reach and lists every exception used ([stranger proof](/policies/stranger-proof.md); the paragraph is in
+[implementer-brief.md](implementer-brief.md)).
 
 | Status | Means | Owner does |
 |---|---|---|

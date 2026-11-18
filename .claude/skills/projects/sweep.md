@@ -13,11 +13,10 @@ Why it exists: a dead session cannot update its notes.
 
 ## Each run
 
-1. `python3 common-docs/meta/scripts/project_board.py --json` gives `{"note": ..., "projects": [...]}`.
-   A non-empty `note` means this clone's history is short: run once with `--deepen` first. Each
-   project's `path` is relative to `common-docs/`. Work only on projects flagged `stalled` or
-   `lead gone quiet`, or listed by `--check`. At most 8 a run, in this order: `last_swept` empty
-   first, then oldest `last_swept` first, so every stalled project is reached in turn.
+1. `python3 common-docs/meta/scripts/project_board.py --sweep-batch` prints the 8 projects this run
+   takes, each in full; successive runs take successive batches, so do not pick your own. If it says
+   history is too short, run it once with `--deepen`. Also take any project `--check` lists. Each
+   project's folder is the path shown beside its name.
 2. **Find what happened last, per project.** In this order, stopping when you know:
    - the commits: `git log -15 --format='%cs %s%n%b' --grep='^Project: <slug>$'` and
      `git log -15 -- common-docs/<path>`, ignoring any commit with a `Project-Board:` line;
@@ -56,6 +55,7 @@ Why it exists: a dead session cannot update its notes.
 
 ## Limits
 
-Stop at 8 projects, one vision check, or 40 minutes, whichever comes first,
+Your claim returns `limits`; hold to them. They are set for 8 projects, one dispatched vision check and
+40 minutes. Stop at whichever comes first,
 and say what was left. A project you cannot work out from the evidence stays as it is and is named
 in the report; a guess is never written on a card without `(sweep, believed)`.

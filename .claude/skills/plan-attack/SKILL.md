@@ -3,7 +3,7 @@ name: plan-attack
 subject: skills/plan-attack
 type: Skill
 title: "plan-attack — a zero-authorship agent hole-pokes a plan before anyone commits to it"
-description: "Pre-commitment attack on a plan by an agent that did not write it. Use when presenting a feature-deep-dive plan, assigning vision-to-fleet briefs, moving a register to build mode, ratifying a scope list, or coding a new contract or table. NOT for built work or DONE reports (use subagent-dispatch)."
+description: "Pre-commitment attack on a plan by an agent that did not write it. Use when presenting a feature-deep-dive plan, assigning campaign fleet briefs, moving a register to build mode, ratifying a scope list, or coding a new contract or table. NOT for built work or DONE reports (use subagent-dispatch)."
 tags: [doctrine, planning, verification, adversarial]
 timestamp: 2026-09-12T00:00:00Z
 ---
@@ -16,6 +16,8 @@ timestamp: 2026-09-12T00:00:00Z
 
 # plan-attack
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 Arman's order (`campaign-pattern`, move 3) was to have an independent reviewer poke holes in the
 plan before anyone proceeded. A self-review is not an attack: the author is blind to what they left out.
 
@@ -26,7 +28,7 @@ plan before anyone proceeded. A self-review is not an attack: the author is blin
 | Single-surface sub-feature, no new contract/table | None — inline check: coverage + the placeholder list below |
 | Sub-feature with a new contract, table, or cross-surface change | 1 reviewer, `standard` |
 | `feature-deep-dive` plan (every repo but matrx-ship) · scope list · register → build mode | 2 in parallel: REGRET + BUILDABILITY, `standard` |
-| matrx-frontend `vision-to-fleet` brief set | 1 BUILDABILITY reviewer per brief + 1 cross-brief CONTRACTS reviewer, `standard`; `deep` only for conflicting evidence or consequential design, reason stated |
+| campaign-pattern fleet brief set ([vision-to-briefs](/skills/campaign-pattern/vision-to-briefs.md)) | 1 BUILDABILITY reviewer per brief + 1 cross-brief CONTRACTS reviewer, `standard`; `deep` only for conflicting evidence or consequential design, reason stated |
 
 ## Dispatch rules
 
@@ -94,7 +96,7 @@ OWNER-ONLY: questions only Arman can rule on (vision/money/brand/legal/data dele
 ## Adjudicate — the author's job, never skipped
 
 - Every finding gets one of: **FIX** (edit the plan), **REJECT** (a one-line reason, recorded), or
-  **OWNER-ONLY** (into the `grilling` tree). Verify a finding's claim before accepting it — reviewers
+  **OWNER-ONLY** (into the [ask-arman](/skills/ask-arman/SKILL.md) question tree). Verify a finding's claim before accepting it — reviewers
   are wrong too.
 - If a blocking fix changed scope or a contract, re-attack only the changed items with a fresh agent.
 - Record one line in the plan/register: `Attacked <date> (<lanes>): N blocking fixed, M rejected (<why>).`

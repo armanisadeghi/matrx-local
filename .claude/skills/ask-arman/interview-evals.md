@@ -1,6 +1,6 @@
 ---
 type: Reference
-title: "grilling — prove-it record"
+title: "ask-arman interview rounds — prove-it record (formerly grilling)"
 description: "Regression record for the grilling skill: the share-by-text question ledger, twelve criteria fixed before any run, RED/GREEN reps counted objectively, a simulated round 2, trigger checks, and proposed refactors. Rerun before changing the skill."
 tags: [meta, skills, evals, interview, decisions]
 timestamp: 2026-09-12T00:00:00Z

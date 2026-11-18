@@ -16,6 +16,8 @@ timestamp: 2026-11-14T00:00:00Z
 
 # projects
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 <!-- rules:stamp -->
 > Rules from `common-docs/policies/projects.md` — edit there, never here (`python3 common-docs/meta/scripts/one_home.py --write`).
 
@@ -37,6 +39,13 @@ timestamp: 2026-11-14T00:00:00Z
    under way. `paused` = parked on purpose; `waiting_on` says for what. `finished` = a vision check
    found every line of the bar met; his words move to the node's `VISION.md` and the folder is
    deleted in the same change (rule 3 of the bundle).
+
+   **Linked projects and "Remind Arman" lines.** `waiting_on` records what this project waits on.
+   The front page also carries `## Linked projects`: each linked project is named on both sides, and
+   when finishing work here unblocks other projects, a one-line `Remind Arman: <A> and <B> depend on
+   this; they need <point X>.` Any agent working on a task that touches such a line tells him, in
+   chat, what finishing it will unblock. The two are different: the field tracks waiting, the line
+   makes an agent remind him ([ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md) §9).
 2. **Stalled is computed, never written.** A `ready` or `building` project with no movement for 5
    days is stalled. Movement is a commit carrying the line `Project: <slug>`, or one that touches the
    project's folder and is not bulk housekeeping. Claims, the sweep's repairs and vision checks carry
@@ -53,7 +62,11 @@ timestamp: 2026-11-14T00:00:00Z
    what he said to the `VISION.md` that already serves the project (its own, else the nearest one
    above it), verbatim and dated, in the same turn, and records `origin` on the card the first time.
    A second vision file is never made by copying the first, and no plan, register or handoff text is
-   ever copied into one.
+   ever copied into one. The one exception: an agent running the
+   [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md) skill with him live may clean
+   up his words in the project's vision, keeping his meaning and talking with him about any clean-up
+   that could change it. Outside that skill (and the vision close-out interview,
+   [vision-closeout](/skills/vision-closeout/SKILL.md)), nobody changes his words.
 6. **The bar is the measure, and its first line never changes.** `VISION.md` has a section
    `## The bar`: a numbered list in his own words with dates. Line 1 is why the project exists, taken
    from the conversation where he first described it; nobody edits it. Every other line is one thing
@@ -62,7 +75,11 @@ timestamp: 2026-11-14T00:00:00Z
    line of the bar.
 7. **The builder never says how close it is.** No lead, lane or handoff reports closeness to the
    vision, percent done, or "nearly there". The only closeness statement is the last vision check's
-   verdict on line 1 and its one sentence, quoted with its date.
+   verdict on line 1 and its one sentence, quoted with its date. A completion percentage, when
+   one is given, is only the count defined in
+   [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md) §7: items of his latest
+   vision that are built as he said, ruled so by an adversarial review, and tested live against
+   his vision and passing, out of all items.
 8. **A vision check is made and recorded by an agent that did not build it.** It is given the
    project's `VISION.md` and the live product, and nothing the builders wrote. It writes its own
    result to `VISION-CHECK.md` in the project folder and commits that file itself; the board reads
@@ -146,6 +163,11 @@ folder or has been dispatched.
 Done when: he has the list, or `--claim` succeeded.
 
 ## 3. Start a project
+
+The rules for a new project (his words first, then search for an existing project and ask him
+"are these the same thing?") are the rulebook's §1–§5
+([ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md)). This section is only the
+board mechanics.
 
 1. Folder: `projects/<slug>/` inside the home it belongs to, or the bundle's top `projects/` while
    it spans homes ([docs skill §1](/skills/docs/SKILL.md)).

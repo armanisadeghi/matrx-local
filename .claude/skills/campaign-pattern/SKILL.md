@@ -12,6 +12,8 @@ description: "The doctrine for turning a vision into a finished, verified, deplo
 
 # The Campaign Pattern
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 **What this reproduces:** the HR-domain build — one vision message became a verified, deployed
 production module in five days with near-zero owner involvement, surviving compactions,
 disconnects, and usage-limit kills without losing a step. Worked example:
@@ -71,9 +73,9 @@ finished. **Without this law, the other four moves produce confident garbage.**
 **Test data looks real or it is deleted** ([policy](/policies/test-data-looks-real.md)).
 
 ### 5. Answer through a defaults-carrying interview, then get out of the way
-The final pre-build interview carried the team's recommendation on every item with the rule:
-*"anything you skip ships with the stated recommendation as the platform default."* Only the
-genuinely un-defaultable needed words (seven items). (Mechanics: `grilling`.) During the run,
+The final pre-build interview carried the team's recommendation on every item, so only the
+genuinely open items needed his words. (Since 2026-11-15 a skipped item stays open and comes back; it ships with the
+recommendation only when he says so for that item. Mechanics: [ask-arman](/skills/ask-arman/SKILL.md).) During the run,
 the owner answered decision batches fast and decisively, taught PRINCIPLES instead of fixes
 (org-scoping, knobs, platform primitives, package versioning), corrected focus bluntly when
 needed (*"you are focused on the wrong things"*), and otherwise did not interfere.
@@ -101,6 +103,9 @@ needed (*"you are focused on the wrong things"*), and otherwise did not interfer
    at most 2 at once), Fable only where the chair itself would struggle; every brief carries a
    "Done when" and a budget; workers never dispatch (only the `coordinator` lane can);
    effort medium unless the task needs sustained reasoning — `policies/subagent-model-ladder.md`).
+   Every brief carries the reach, stranger-proof and exceptions paragraph from the
+   [implementer brief](/skills/subagent-dispatch/implementer-brief.md) (`policies/stranger-proof.md`):
+   a report leads with its reach, and done means a fresh organization succeeded on defaults.
    Every brief also carries the commit law verbatim: *"Commit locally, often, only
    with `git commit -m "<message>" -- <your paths>` — never push, never a branch or worktree;
    `./ship.sh` commits everything else in the checkout and pushes it live, constantly — that is
@@ -193,7 +198,7 @@ Each gate's exit is checkable; a campaign that skips a gate is the failure mode 
 | 0 | **Mandate** (owner) | The mandate names the vision, the theory of past failure, the process shape, and the done-means-done law (Part 1 §1, §4). |
 | 1 | **Discovery** | The owner's words exist as a ground-truth file with a fresh summary beneath (`user-ground-truth` skill) and the register opens with them. Parallel recon agents (lanes named) have written to files: what already exists, found from the user's seat and verified against live code/DB, the champion for each discipline named with why it is the reference (`policies/champions.md` — parity is the floor), capability scope IN/DEFERRED — every load-bearing claim verified, not asserted, and every report checked against what the coordinator withheld (a report that misses what the coordinator already knew is discarded, and the brief is rewritten). |
 | 2 | **Scope + attack** | A feature tree / scope list exists; a zero-authorship `plan-attack` has run; every finding adjudicated (FIX / REJECT with reason / OWNER-ONLY). The register is opened as the single tracking home; questions that are sharp-but-blocked are items, questions not yet phrasable stay named **fog** (never pre-sliced into fake items), and work past the destination is **out of scope** — closed with one line, never "deferred" back onto the frontier. |
-| 3 | **Interview + readiness** | Each lane's readiness doc front-loads its unknowns and resolves what it can itself; the coordinator runs the residue through the `ask-arman` gate, then ONE `grilling` interview in rounds. A question that exists only because the owner is also a customer of one organization is the user's, not the boss's — it becomes an onboarding step or a knob, never his question. Exit: the frontier is empty (answered, decided-with-override, or deferred with a date). **After this, no lane ever stops to ask the owner** — a new unknown is a coordinator ruling. |
+| 3 | **Interview + readiness** | Each lane's readiness doc front-loads its unknowns and resolves what it can itself; the coordinator runs the residue through the `ask-arman` gate, then ONE interview in rounds ([ask-arman](/skills/ask-arman/SKILL.md) §3). A question that exists only because the owner is also a customer of one organization is the user's, not the boss's — it becomes an onboarding step or a knob, never his question. Exit: the frontier is empty (answered, decided-with-override, or deferred with a date). **After this, no lane ever stops to ask the owner** — a new unknown is a coordinator ruling. |
 | 4 | **Freeze (G1)** | A fresh judge has read the owner's words and the plan and gone to the live product as him, and reports no drift (`user-ground-truth` §3). Specs, contracts, types/mocks, and fixtures are frozen and hashed; the core schema is certified. From here a contract change is an amendment (changelog + register note + regeneration), never a silent edit. |
 | 5 | **Core** (serial) | The single critical-path core lands and certifies in order — never parallelized. |
 | 6 | **Fan-out** (parallel) | Lanes dispatched with exclusive file/schema ownership and frozen interfaces; shared inputs verified to exist BEFORE parallel dispatch (a bad ref fails here, not inside six agents). |
@@ -208,8 +213,8 @@ Each gate's exit is checkable; a campaign that skips a gate is the failure mode 
    the Part 1 §4 language verbatim.
 2. Tell the agent to run discovery first (what exists, from the user's seat + market reference + scope), then
    bring the scope list — and order the hole-poking review on it (`plan-attack`).
-3. Answer the defaults-carrying interview one round at a time (only un-defaultable items need
-   words — skipping ships the default).
+3. Answer the interview one round at a time (a skipped item stays open unless you say its
+   recommendation ships).
 4. Say the sentence that grants the chair: *"You own this end to end. Make yourself
    replaceable, keep everything in the register, and only bring me finished work and real
    decisions."* Approve the standing wake-up/schedule if offered.

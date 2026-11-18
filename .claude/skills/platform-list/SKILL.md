@@ -16,6 +16,8 @@ timestamp: 2026-09-21T00:00:00Z
 
 # The Platform List
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 One file: `common-docs/operations/platform-list/LIST.md`. One folder beside it with one short file per row.
 Owned by Arman. **Never read it at session start.** `due.py` beside it runs as a SessionStart hook on Arman's
 Mac and stays silent unless a `Waiting` row's Start date has arrived; it then tells the first attended session

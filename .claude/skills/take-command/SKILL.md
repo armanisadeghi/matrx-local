@@ -16,6 +16,8 @@ timestamp: 2026-10-28T00:00:00Z
 
 # take-command — acting lead while the human is away
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 The human hands you a **topic** and leaves. A team of agents is working on it, or worked on it and
 has gone quiet. You become the acting lead: find the team, wake whoever has stopped, take over,
 keep every agent moving toward the human's intent, use exactly the authority you were given, and

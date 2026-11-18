@@ -16,6 +16,8 @@ timestamp: 2026-09-10T00:00:00Z
 
 # Build a Sub-Feature
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 You're implementing a new sub-feature — an addition to something that already exists in the platform. The spec comes from the user (interview below); the standards are non-negotiable acceptance criteria. Implement to them, and loop until the result actually satisfies them. You're done when it's real, complete, verified, and at parity or better with the discipline's champion (`common-docs/policies/champions.md`) — not before.
 
 This isn't greenfield. It's an addition to something live, so the surrounding system is your first concern, not an afterthought. Build so the whole ecosystem is better for this — not just the one spot it lands in.
@@ -24,11 +26,11 @@ This isn't greenfield. It's an addition to something live, so the surrounding sy
 
 ## Step 1 — Interview: nail the spec before touching code
 
-If the invocation already includes a description, treat it as the overview and interview only for the gaps. Ask in plain numbered chat text — **never a structured question picker** (Arman ruled 2026-09-12); a picker blocks free-form replies.
+If the invocation already includes a description, treat it as the overview and interview only for the gaps. Ask per [ask-arman](/skills/ask-arman/SKILL.md): recommendations written in the message, real multiple-choice questions through the question tool, none while he is listening by voice, vision questions open in plain chat.
 
-Interview per the `grilling` skill (prune, frontier rounds, a recommendation on every closed question, skips ship as defaults). Specific here: round 1 holds only what exploration cannot answer. Send it, and **start exploring in the same turn**; do not wait for the answers. Say "exploring now — you can step away." Questions that come out of exploration join the next round. Stop when the frontier is empty.
+Interview per [ask-arman](/skills/ask-arman/SKILL.md) §1 and §3 (prune, frontier rounds, a recommendation on every closed question; a skipped question stays open). Specific here: round 1 holds only what exploration cannot answer. Send it, and **start exploring in the same turn**; do not wait for the answers. Say "exploring now — you can step away." Questions that come out of exploration join the next round. Stop when the frontier is empty.
 
-**Ratchet:** if exploration shows this is really a whole-feature overhaul or several independent subsystems, say so in one line and switch to feature-deep-dive (or vision-to-fleet). Hidden complexity only ever moves the work to a heavier path, never a lighter one.
+**Ratchet:** if exploration shows this is really a whole-feature overhaul or several independent subsystems, say so in one line and switch to feature-deep-dive (or campaign-pattern). Hidden complexity only ever moves the work to a heavier path, never a lighter one.
 
 ## Step 2 — Explore: know the ground
 

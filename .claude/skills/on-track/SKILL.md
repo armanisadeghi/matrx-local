@@ -16,6 +16,8 @@ timestamp: 2026-09-16T00:00:00Z
 
 # on-track
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 The owner names a thing — a conversation, a project, a phrase — and wants to know whether the
 work is still what he asked for, what was missed, and what it would take to fix. You own the
 whole run and return one page. Mechanics of each step live in `user-ground-truth`; the concept
@@ -44,10 +46,14 @@ python3 .../transcript_user_messages.py <matching files...> -o <ground-truth>.md
 ```
 
 Then a `quick` lane (Sonnet) with only that file and his summarization instruction verbatim
-(`user-ground-truth` §2). Commit the file. Read it yourself once — it is short, and everything
+(`user-ground-truth` §2). Keep the file where `user-ground-truth` says (never committed); his words go to `VISION.md`. Read it yourself once — it is short, and everything
 you say to him later is measured against it.
 
 ## 3. Judges — what was missed
+
+Any completion figure the judges or you report is the rulebook's §7 count: items of his latest
+vision that are built as he said, ruled so by an adversarial review, and tested live and passing,
+out of all items.
 
 One or more fresh lanes (`standard`; more than one only when the work spans clearly different
 surfaces, each judge owning one). Each gets: the ground-truth file, the summary, and the work's

@@ -50,6 +50,9 @@ limit, crash) loses everything it never pushed, and nobody ever learns it existe
 5. Commit + push as each unit lands. Never run a release script. Never dispatch a reviewer of your own work.
 6. Stop when "Done when" holds. No polish, extra censuses or report padding.
 
+## Reach, stranger proof, exceptions ([law 19](/policies/stranger-proof.md))
+Your report opens with its reach: "works for everyone by default", "works only for those who change X", or "works only for our account". Done means a fresh organization from `aidream/testing/stranger_proof.py` (`stranger_office`) succeeded on platform defaults with no override, hand-run call, seeded data or help. A run on our organization, the owner's records or a raised test account is a look, not proof. List every exception you used or made (override row, raised limit, free plan, usage reset, hand-run provider or database call, seeded record, literal id or domain in code), each declared in `scripts/stranger_proof_register.json` with an owner and an expiry. If the default cannot work for a new customer, fix the default or make the feature say so to everyone; never lead with a one-account step.
+
 ## Report
 Full report → [REPORT PATH]: what was built · files · evidence (commands + output, URLs, SHAs, row ids) ·
 RED/GREEN for any guard · what you could not verify · concerns.

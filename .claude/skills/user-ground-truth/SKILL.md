@@ -16,6 +16,8 @@ timestamp: 2026-09-16T00:00:00Z
 
 # user-ground-truth
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 A long session drifts from what the person asked for, and nobody notices because every later
 agent reads an agent's paraphrase of him instead of him. This skill keeps his words as an
 unaltered file, puts a faithful summary beside them (never in place of them), and lets a third

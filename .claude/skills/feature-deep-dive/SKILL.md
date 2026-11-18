@@ -16,6 +16,8 @@ timestamp: 2026-09-10T00:00:00Z
 
 # Feature Deep-Dive: Audit, Plan & Build
 
+Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md): a new project starts there, and where this skill disagrees with it, the rulebook wins.
+
 **If the work is a project** (it has a card: `python3 common-docs/meta/scripts/project_board.py --project <name>`), claim it and get its vision check first: [projects §1](/skills/projects/SKILL.md).
 
 Fully understand a feature, define what it should ideally become, get that plan approved, then build it — in full. No code changes before the plan is approved: enter plan mode at the start (if not already active), work Phases 1–5 to full depth, present the plan deliverable for approval, and begin Phase 6 only after approval. Your focus is: gather everything, decide what it should be, and make it real, completely. "Done" means every part implemented, tested, and confirmed working — never partially done.
@@ -84,7 +86,7 @@ Combine what exists, what was intended, and what best practices demand into one 
 
 ## Phase 5 — Ask vs. decide
 
-Prune and ask per the `grilling` skill. Facts and best-practice-decidable forks never reach the owner: decide them and list them as "Decided — override by number". Only genuine gray areas enter the tree — pure preference, no established best practice, or app-specific knowledge you cannot derive from the code. Ask frontier rounds until the tree is empty. The plan's **Open Questions** section holds only what remains unasked, each item with the default that ships if skipped.
+Prune and ask per [ask-arman](/skills/ask-arman/SKILL.md) §1 and §3. Facts and best-practice-decidable forks never reach the owner: decide them and list them as "Decided — override by number". Only genuine gray areas enter the tree — pure preference, no established best practice, or app-specific knowledge you cannot derive from the code. Ask frontier rounds until the tree is empty. The plan's **Open Questions** section holds only what remains unasked, each item with your recommendation; a skipped item stays open and comes back.
 
 ## Phase 5b — Attack the plan
 

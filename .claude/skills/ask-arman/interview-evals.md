@@ -8,6 +8,8 @@ timestamp: 2026-09-12T00:00:00Z
 
 # grilling — prove-it record
 
+> Historical record of the former `grilling` skill, now [ask-arman](/skills/ask-arman/SKILL.md) §1 and §3. Paths to `skills/grilling/SKILL.md` below are history: a rerun reads ask-arman instead and scores skipped questions as staying open (2026-11-15 ruling).
+
 ## 2026-09-10 — first proof run (skill-authoring §5)
 
 Eval runner: an agent with zero authorship of the skill, which performed none of the six reps.

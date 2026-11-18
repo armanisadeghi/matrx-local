@@ -15,7 +15,9 @@ timestamp: 2026-11-17T00:00:00Z
      sync, and commit each repo. Edits made here are overwritten and lost. -->
 
 <!-- Written with Arman in chat on 2026-11-15 and approved by him; his words behind it are in
-     /policies/VISION.md § ai-dream-coding-projects. Open work on this skill:
+     /policies/VISION.md § ai-dream-coding-projects. The quick mode in §2, the §17 skill map, the
+     back-links in §4 and §7, and the 2026-11-17 §15 bullets were added by an agent from his
+     2026-11-17 words (same VISION.md section), pending his review. Open work on this skill:
      /projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
@@ -46,7 +48,7 @@ If you find something that seems better or similar, never abandon what I asked f
 - End the vision with a numbered list of everything the vision says must be true, so progress can be measured against it (§7).
 - Words I said in earlier conversations are pulled out by script, never from memory: [user-ground-truth](/skills/user-ground-truth/SKILL.md).
 
-**Quick mode: an existing area with no vision yet.** (Formerly the domain-vision-interview skill, from my 2026-08-20 ruling.) One area per sitting, big picture only. Do the homework first: read the area's docs and settled rulings so you never re-ask. Then two open questions: the **minimal vision** ("what must this have before we can go live?", chased until it is a concrete, finite list) and the **final vision** ("when this is fully grown, what is it?"). Write both into the area's `VISION.md` and mark which of its open tasks block go-live and which serve only the final vision. That split is what makes gap analysis possible.
+**Quick mode: an existing area with no vision yet.** *(Agent-added 2026-11-17 at Arman's request, from the former domain-vision-interview skill; his 2026-08-20 words are in [docs-system VISION.md](/systems/platform/docs-system/VISION.md). Not the Masterwork Vision Interview product feature.)* One area per sitting, big picture only. Do the homework first: read the area's docs and settled rulings so you never re-ask. Then two open questions: the **minimal vision** ("what must this have before we can go live?", chased until it is a concrete, finite list; gently ask of anything big "is that needed to go live, or is that the destination?") and the **final vision** ("when this is fully grown, what is it?"). Capture details he volunteers; don't chase details he doesn't. Write both into the area's `VISION.md` in his words, dated, with anything inferred marked `(inferred)`; clear `VISION MISSING` wherever the area carried it; and mark which of its open tasks block go-live and which serve only the final vision. That split is what makes gap analysis possible.
 
 ## 3. Look forward only, then delete
 
@@ -175,7 +177,7 @@ Thinking about the vision often reveals a whole other vision. Capture it (§8), 
 
 ## 17. The skill map
 
-Added 2026-11-17 at my request: this skill holds the rules, and these skills say how to do each part. Each of them points back here.
+*Agent-added 2026-11-17 at Arman's request, pending his review: this skill holds the rules, and these skills say how to do each part. Each of them points back here.*
 
 **My vision, from first words to closing.** One rule set (§1–§4, §13). These are the how-tos:
 

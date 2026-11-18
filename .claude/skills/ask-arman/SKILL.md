@@ -16,6 +16,8 @@ timestamp: 2026-11-17T00:00:00Z
 
 # ask-arman — recommend first, the gate, the interview, the desk
 
+<!-- Interview mechanics (§1 draft-and-prune, §3 rounds) adapted from Matt Pocock's `grilling`, via the former grilling skill. -->
+
 Part of a project? The rulebook is [ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md);
 this skill is how every question in it is asked. How every sentence to him is shaped:
 [talk to Arman like a person](/policies/talk-to-arman-like-a-person.md). His words behind §0:
@@ -91,13 +93,14 @@ A question that survives §1 is his to answer, and asking it is the right move, 
 
 - **Frontier** = surviving decisions whose prerequisites are settled. A question whose answer
   depends on another question open this round waits for a later round. Never block on exploration:
-  send the fact-independent frontier now; only questions downstream of a running subagent wait.
+  send the fact-independent frontier now; only questions downstream of a running subagent wait. If he
+  can step away while you explore, say so. Queue the rest by how much of the tree each answer unblocks.
 - **Number continuously across rounds** (round 2 starts at Q5), so "5 yes" is never ambiguous.
 - **Question shape:** **Q<n> — <title>.** 2–3 plain sentences of background (no doc references,
   codenames, item IDs or emojis), then the question in one sentence. About a flow, surface or
   behavior: attach the clickable URL and where to look, or a mermaid diagram of what actually
   happens, or a throwaway prototype labelled PROTOTYPE. A question he cannot answer from what you
-  gave him is a defect in the question.
+  gave him is a defect in the question, and often a sign the path itself is broken, which is the real finding.
 - **Every round ends with:** `Decided (override by number): D1 … · D2 …` / `Anything you skip stays
   open; I'll bring it back.` / `What else should I know that I didn't ask?`
 - **After every answer:** record it where it belongs and commit (vision → his words in `VISION.md`;
@@ -174,6 +177,8 @@ read it verbatim, apply it, reverse the default where it differs.
 - "Blocked" in your status with no one-way door.
 - A question containing a file path, a code, or "see" (a page it is about carries its full link instead).
 - Zero open vision questions in a vision interview.
+- A decision left as a flag inside a document he would have to dig for.
+- One question per message, approval after each design section, or making him wait for a full audit before round 1.
 
 Proof records: [evals.md](evals.md) (the gate) and [interview-evals.md](interview-evals.md) (the
 rounds, from the former grilling skill; its ship-the-default criteria predate the 2026-11-15

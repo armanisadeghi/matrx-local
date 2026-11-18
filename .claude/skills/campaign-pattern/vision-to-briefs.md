@@ -25,6 +25,15 @@ Project docs stay forward-looking with no changelog (rulebook §3); a superseded
    path, small commits, never stash someone else's work.
 4. **This is an AI-application company.** In every step, "where do agents plug in" is a first-class design question.
 
+## Intake (before the steps below)
+
+Once his words are captured, classify the work. **Brownfield** (usual): parts exist somewhere in the
+codebase, so the vision interview and the reality audit run in parallel. **Greenfield** (rare): nothing exists;
+skip the audit and go to research. The scoping questions that shape everything (who is this for, what does
+winning look like, what is explicitly out, and *what function is this, really?*) go to him as open vision
+questions under the rulebook, in one batch. Never leave a decision as a flag inside a document he would have to
+dig for. The steps keep their original numbers (2, 3, 5, 6, 7); steps 0, 1 and 4 live in the rulebook.
+
 ## Phase 2 — Reality audit (brownfield)
 
 Produce the current-status summary that every later claim rests on. Method that worked:

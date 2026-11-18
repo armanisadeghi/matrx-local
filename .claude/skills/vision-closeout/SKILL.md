@@ -15,7 +15,7 @@ timestamp: 2026-11-15T00:00:00Z
      sync, and commit each repo. Edits made here are overwritten and lost. -->
 
 <!-- Written with Arman in chat on 2026-11-15; his words behind it are in
-     /policies/VISION.md § vision-closeout. Open work: /projects/ai-dream-coding-projects-rollout/README.md -->
+     /policies/VISION.md § vision-closeout. Open work: /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # Vision closeout
 

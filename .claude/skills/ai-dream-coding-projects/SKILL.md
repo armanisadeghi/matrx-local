@@ -18,7 +18,7 @@ timestamp: 2026-11-17T00:00:00Z
      /policies/VISION.md § ai-dream-coding-projects. The quick mode in §2, the §17 skill map, the
      back-links in §4 and §7, and the 2026-11-17 §15 bullets were added by an agent from his
      2026-11-17 words (same VISION.md section), pending his review. Open work on this skill:
-     /projects/ai-dream-coding-projects-rollout/README.md -->
+     /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
 
@@ -55,6 +55,11 @@ If you find something that seems better or similar, never abandon what I asked f
 
 - *(Agent-added 2026-11-17 from his words.)* **All work is a project**, run under these same rules and tracked centrally on the project board. It lives in a `projects/` folder inside the home it belongs to in `common-docs` (a social media project lives in the social media folder). Only work that cannot have a permanent home gets a folder under the top `projects/`. When it is done, what remains is the updated code and the docs of the features it changed.
 - The project's detailed to-do list lives in the project doc itself.
+- *(Agent-added 2026-11-17 from his words.)* A project for one portion of the system lives in that portion's folder (rebuilding the agent UI lives in the Agents folder).
+
+## 3a. Converge as you go
+
+*(Agent-added 2026-11-17 from his words.)* Whenever you touch a project, take the chance to move what you touch closer to one shared flow: docs, routes, code and menus that follow the same structure (the [domain tree](/policies/domain-tree.md)). A project folder in the wrong place, a route or doc that disagrees with the tree: fix it in the same change when it is small, or add it to the project's to-do list when it is not.
 
 - The project doc is not a history. Don't record what was built or how long it took.
 - Anything finished, even months of work, becomes one short line saying that feature is live.

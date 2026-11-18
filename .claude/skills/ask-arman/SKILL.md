@@ -79,8 +79,8 @@ A question that survives §1 is his to answer, and asking it is the right move, 
    he needs: the thing in plain words, one line of background, what he ruled before (or "never
    ruled"); each option's description says its effect and what the best companies do. A question
    about a screen carries the page's full link ([rule 22](/policies/talk-to-arman-like-a-person.md)).
-   Where you hold a recommendation on a real question, it is also written in the message text, never
-   only as a labelled option.
+   Where you hold a recommendation on a real question, it is written in the message text, and that
+   option may also carry "(Recommended)" (Arman, 2026-11-17); never only the label.
 3. Options differ in approach, never just in magnitude. Up to four quick questions may share one
    call; a complex one goes alone.
 4. Keep building everything that does not depend on the answer. Say that a skipped question stays

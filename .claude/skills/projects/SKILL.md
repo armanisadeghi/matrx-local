@@ -70,9 +70,9 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
 6. **The bar is the measure, and its first line never changes.** `VISION.md` has a section
    `## The bar`: a numbered list in his own words with dates. Line 1 is why the project exists, taken
    from the conversation where he first described it; nobody edits it. Every other line is one thing
-   he said must be true when it is done. A line is added or replaced only by a sentence he typed,
-   with where he typed it; his pick among an agent's options is a decision for the plan and never a
-   line of the bar.
+   he said must be true when it is done. A line is added or replaced by a sentence he typed, with where he typed
+   it, or by an agent's suggestion he clearly agreed to, marked `(agreed YYYY-MM-DD)` (Arman,
+   2026-11-17). His pick among an agent's options is a decision for the plan, not a line of the bar.
 7. **The builder never says how close it is.** No lead, lane or handoff reports closeness to the
    vision, percent done, or "nearly there". The only closeness statement is the last vision check's
    verdict on line 1 and its one sentence, quoted with its date. A completion percentage, when
@@ -169,8 +169,10 @@ The rules for a new project (his words first, then search for an existing projec
 ([ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md)). This section is only the
 board mechanics.
 
-1. Folder: `projects/<slug>/` inside the home it belongs to, or the bundle's top `projects/` while
-   it spans homes ([docs skill §1](/skills/docs/SKILL.md)).
+1. Folder: `projects/<slug>/` inside the home it belongs to (the node's folder in `common-docs`;
+   create the `projects/` folder there if it is missing). Only a project that cannot have a permanent
+   home goes in the bundle's top `projects/` ([rule 3](/policies/document-types.md)). Every project,
+   wherever it lives, follows the same rules and shows on the board.
 2. His words first. If the home already has a `VISION.md`, add to it; else create one in the
    project (`type: Vision`, `authority: owner`). Verbatim and dated, pulled from the conversation
    itself, never from memory of it ([user-ground-truth §1](/skills/user-ground-truth/SKILL.md); a

@@ -22,9 +22,13 @@ timestamp: 2026-10-02T00:00:00Z
 1. **One home per thing.** Everything about a thing lives in its one folder; whatever straddles
    two things has one home and a link from the other.
 2. **No duplication.** A fact is written once. Everywhere else links to it or says nothing.
-3. **Projects are temporary.** A project exists only while work is tangled across two or more
-   homes. Once untangled, it splits into a `projects/` folder inside each home, and each is
-   deleted when its work lands. Nothing is left behind. How one is run: [projects](/policies/projects.md).
+3. **All work is a project, and every project is temporary.** Any work we have done is run as a
+   project under the same rules, tracked centrally on the project board. It lives in a `projects/`
+   folder inside the home it belongs to (a project about social media lives in the social media
+   node's folder); only work that cannot have a permanent home gets a folder under the bundle's top
+   `projects/`. A project lives as long as its work and is deleted when done: what remains is the
+   updated code and the docs of the features it changed. Nothing else is left behind. How one is
+   run: [projects](/policies/projects.md).
 4. **No changelogs, no history.** Finished work shrinks to a status phrase ("Gmail: live").
    History is git. Delete; never archive.
 5. **Write only what isn't already known.** Document what a frontier model and our team would
@@ -77,8 +81,8 @@ The rules above are stamped from [the rules of this bundle](/policies/document-t
 ## 1. Place it
 
 1. Find the subject's node in the [domain tree](/policies/domain-tree.md) (Domain → Feature →
-   Sub-feature). The doc goes in that node's folder under `systems/`, or in a temporary
-   `projects/` folder only while work is tangled across two or more homes.
+   Sub-feature). The doc goes in that node's folder under `systems/`. Project work goes in a `projects/<slug>/`
+   folder inside that node; only a project with no permanent home goes under the top `projects/` (rule 3).
 2. No node fits: add a feature where its domain clearly holds it (same commit, tell Arman), or
    propose the change in chat. Never invent a domain.
 3. Something already covers the subject? Edit that file. Never create a parallel doc. The home of a

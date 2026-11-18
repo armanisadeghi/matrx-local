@@ -100,6 +100,9 @@ has a new owner.
 - **Ask in plain chat as a numbered list — never a blocking question tool.** A tool that waits for an
   answer cannot time out, and the human may already be asleep.
 - **Every question carries your recommended answer**, built from Phase 0. "Defaults" answers all.
+- **Silence ships a default only when the human has explicitly said so** ("I'm away, run it", "go with your
+  defaults"). Without those words, a skipped or unanswered question stays open and comes back
+  (Arman, 2026-11-17, [his words](/policies/VISION.md#ai-dream-coding-projects)).
 - **Never ask what Phase 0 answered.** One round; a second only if an answer opens something new.
 - **In the same turn, start on the defaults** (Phase 2 onward) **and schedule your next check-in
   before the turn ends** (§3.2). Answers that arrive later override defaults from that moment; log
@@ -114,7 +117,7 @@ has a new owner.
 
 **Ask only when its trigger fired:**
 
-| Trigger | Question | Default (silence / skipped) |
+| Trigger | Question | Default (only once the human said silence means default) |
 |---|---|---|
 | `SPEND` | Is money a factor here? If so, any limits? | The house rules on spend; nothing beyond them |
 | `OPTIMIZE` | Chase improvements now, or log them? | Log; start one only if it serves a current priority |
@@ -279,7 +282,7 @@ From the baseline reps without this skill (see `evals.md`) and the 2026-10-28 ov
 ## Principles
 
 - The human's intent decides every situation they didn't foresee.
-- Anything not delegated is reserved; an unanswered question means its default, never more.
+- Anything not delegated is reserved; an unanswered question means its default only when the human explicitly said so, never more.
 - Written authority, quoted every time.
 - Reversible work moves fast; irreversible work needs proof first.
 - Progress is verified outcomes, pushed, not activity.

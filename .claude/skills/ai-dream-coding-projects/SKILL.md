@@ -45,12 +45,16 @@ If you find something that seems better or similar, never abandon what I asked f
 - Because this is a long back-and-forth with clarifications, you may clean up my words when you use this skill. Keep my meaning. Talk with me about any clean-up that might change what I meant. (Outside this skill, agents may not change my words at all.)
 - If you suggested something and I clearly agreed, add it to the vision.
 - Don't present your own ideas as mine. They stay as questions until I agree.
+- *(Agent-added 2026-11-17 from his words.)* A vision is never agent-written on its own, but it can be a collaboration: in an extended vision session, what we build together and he agrees to goes in, each agreed line marked `(agreed YYYY-MM-DD)`.
 - End the vision with a numbered list of everything the vision says must be true, so progress can be measured against it (§7).
 - Words I said in earlier conversations are pulled out by script, never from memory: [user-ground-truth](/skills/user-ground-truth/SKILL.md).
 
 **Quick mode: an existing area with no vision yet.** *(Agent-added 2026-11-17 at Arman's request, from the former domain-vision-interview skill; his 2026-08-20 words are in [docs-system VISION.md](/systems/platform/docs-system/VISION.md). Not the Masterwork Vision Interview product feature.)* One area per sitting, big picture only. Do the homework first: read the area's docs and settled rulings so you never re-ask. Then two open questions: the **minimal vision** ("what must this have before we can go live?", chased until it is a concrete, finite list; gently ask of anything big "is that needed to go live, or is that the destination?") and the **final vision** ("when this is fully grown, what is it?"). Capture details he volunteers; don't chase details he doesn't. Write both into the area's `VISION.md` in his words, dated, with anything inferred marked `(inferred)`; clear `VISION MISSING` wherever the area carried it; and mark which of its open tasks block go-live and which serve only the final vision. That split is what makes gap analysis possible.
 
 ## 3. Look forward only, then delete
+
+- *(Agent-added 2026-11-17 from his words.)* **All work is a project**, run under these same rules and tracked centrally on the project board. It lives in a `projects/` folder inside the home it belongs to in `common-docs` (a social media project lives in the social media folder). Only work that cannot have a permanent home gets a folder under the top `projects/`. When it is done, what remains is the updated code and the docs of the features it changed.
+- The project's detailed to-do list lives in the project doc itself.
 
 - The project doc is not a history. Don't record what was built or how long it took.
 - Anything finished, even months of work, becomes one short line saying that feature is live.

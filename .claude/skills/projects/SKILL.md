@@ -23,7 +23,8 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
 
 1. **Every project has one card.** It is frontmatter on the project's front page: the one file an
    incoming agent reads first (the handoff if there is one, else the register, else the plan). Exactly
-   one file in a project folder carries `project:`.
+   one file in a project folder carries the card (the one with `state:`); other pages may name the
+   project with `project:` alone.
 
    ```yaml
    project: <folder name>
@@ -60,6 +61,9 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
    from each real commit for it; after that anyone may claim it. A claim that is only on a branch is
    invisible to everyone else until it merges: say so to Arman. Leaving for any reason you can
    foresee = `--release <slug>` with `state`, `next` and `waiting_on` brought up to the minute.
+   While you hold it, the project-focus hook (`aidream/scripts/hooks/project_focus_hook.py`) puts the
+   card in front of you at every start, reset and message: open it first, answer against it, and
+   update `next` and `waiting_on` before ending each turn (rulebook §14).
 4. **The card is updated when a step lands, not at the end.** A session can die without warning, so
    `next` always names the step after the last one pushed. A card is never left for a wind-down.
 5. **His words are kept once, and captured where he says them.** The agent he is talking to adds

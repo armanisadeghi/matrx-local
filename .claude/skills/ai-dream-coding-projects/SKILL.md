@@ -3,7 +3,7 @@ name: ai-dream-coding-projects
 subject: skills/ai-dream-coding-projects
 type: Skill
 title: "ai-dream-coding-projects — run a new project or vision with Arman"
-description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project or vision, you start, continue or resume a project, report where a project or its lanes stand, or a how-to skill sends you here."
+description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project or vision, you start, continue or resume a project, gather the projects on a topic into one, report where a project or its lanes stand, or a how-to skill sends you here."
 tags: [projects, vision, interview, owner, arman]
 timestamp: 2026-11-17T00:00:00Z
 ---
@@ -18,7 +18,8 @@ timestamp: 2026-11-17T00:00:00Z
      /policies/VISION.md § ai-dream-coding-projects. The quick mode in §2, the §17 skill map, the
      back-links in §4 and §7, and the 2026-11-17 §15 bullets were added by an agent from his
      2026-11-17 words (same VISION.md section), pending his review. The §14 "every turn" steps were
-     added by an agent on 2026-11-18, approved by him in chat that day. Open work on this skill:
+     added by an agent on 2026-11-18, approved by him in chat that day. The §4 fact list and §5a were added by an agent on 2026-11-18 from
+     his words that day (same VISION.md section), pending his review. Open work on this skill:
      /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
@@ -79,6 +80,20 @@ If you find something that seems better or similar, never abandon what I asked f
 - Never ask me a question in place of giving me your recommendation (§15).
 - How every question is asked, gated and recorded: [ask-arman](/skills/ask-arman/SKILL.md).
 
+**What to find out before the vision is written** *(agent-added 2026-11-18 from his words: "agents are still not really working hard to get all of the facts from me")*. Cover every one, from what he has said or by asking. Skip none because it seems obvious:
+
+1. Who uses it, and what they do today without it.
+2. The moment it works: what he sees, step by step, when it is done.
+3. What it must never do, and what would make him reject it.
+4. What he has seen that is close (another product, a page of ours), and what is wrong with it.
+5. What we have now that he is unhappy with, and why.
+6. What must be true to go live, and what is the final destination.
+7. How it connects to other parts of the platform, and what it depends on.
+8. What each organization should be able to decide for itself (knobs, law 6).
+9. Order: what matters first, and what can wait.
+
+Every round ends with what you still don't know, as a short numbered list. You leave this section only when he says the list is complete or says "enough for now". Then the unknowns stay as open questions in the vision. Reading the code or docs to ask better questions is allowed at any time, but what you find never replaces asking him (§1).
+
 ## 5. Decide: is this a new project?
 
 One of the biggest mistakes is launching something as a new project when it already exists. This applies to the first project and to every project that comes out of the conversation.
@@ -86,6 +101,15 @@ One of the biggest mistakes is launching something as a new project when it alre
 - Once my words are captured, search for current projects before creating a new one.
 - Some projects will be identical or almost identical. Bring those to me and ask "Are these the same thing?" Make sure they genuinely are. Don't get in the habit of bringing me random things that aren't connected.
 - Whatever you find, my words today still lead (§1). Never fold my new vision into an old project without asking me.
+
+## 5a. Gather the projects on a topic
+
+*(Agent-added 2026-11-18 from his words: "look for all of the projects that relate to a topic and bring them together, or start a new one when one doesn't exist.")* This is search mode (§1). Nothing is lost.
+
+1. **Search everywhere work waits:** the project board (`project_board.py`, every `projects/` folder), node task lists (`operations/tasks/`), each related node's VISION.md and STATE.md, and `inbox/`. Use background Haiku agents for the sweep. Also search his earlier words for the topic ([user-ground-truth](/skills/user-ground-truth/SKILL.md)).
+2. **Bring him one numbered list:** each project or task found, one line on what it is, how done it is (§7), and your recommendation: the same thing (merge), part of it (absorb, §6), related (link, §9), or not related (dropped from the list, never shown to him).
+3. **On his yes, merge into one project** in the home the [domain tree](/policies/domain-tree.md) gives the topic. Move every open item, Remind Arman line and dependency across. His words go to that node's VISION.md. Delete the emptied folders and repoint every link to them in the same change.
+4. **Nothing found:** start a new project there ([projects §3](/skills/projects/SKILL.md)) and run this rulebook from §1.
 
 ## 6. Absorb nearly finished projects
 
@@ -220,6 +244,7 @@ Every turn, while you work on a project (added 2026-11-18, approved by Arman):
 | A plan to commit to | [plan-attack](/skills/plan-attack/SKILL.md), by an agent that did not write it |
 | Work to hand to helper agents | [subagent-dispatch](/skills/subagent-dispatch/SKILL.md) |
 | A queue of tasks for the always-on fleet | [work-loop](/skills/work-loop/SKILL.md) |
+| A topic whose projects should be gathered into one, or started | this skill, §5a |
 | An existing project to take, resume, find stalled, or commit for | [projects](/skills/projects/SKILL.md) |
 | A project another lead is leaving | [handoff](/skills/handoff/SKILL.md) |
 | A team to run while I'm away | [take-command](/skills/take-command/SKILL.md) |

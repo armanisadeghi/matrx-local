@@ -57,6 +57,8 @@ skip is logged as `KEEP git work tree: <reason>`. After 48 h a clean one is
 renamed to `<name>.groom-deleting` and then removed, so it is never left
 half-deleted. Prove it with `groom.py selftest-git-guard`.
 
+Build Macs in the shared line have their own rule (every job and lane cleans up, cleanup first under 30 GB free): `common-docs/systems/architecture/compute-targets/COMPUTE-BOARD.md` rule 9.
+
 ## When your script parks copies
 
 Put throwaway copies in `mktemp -d` and delete them in an EXIT trap. If they

@@ -3,7 +3,7 @@ name: ai-dream-coding-projects
 subject: skills/ai-dream-coding-projects
 type: Skill
 title: "ai-dream-coding-projects — run a new project or vision with Arman"
-description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project or vision, an area has no vision yet, you are told to start a new project, or a how-to skill sends you here: capture his words as the law, interview him, organize and link projects, check against everything else."
+description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project or vision, you start, continue or resume a project, report where a project or its lanes stand, or a how-to skill sends you here."
 tags: [projects, vision, interview, owner, arman]
 timestamp: 2026-11-17T00:00:00Z
 ---
@@ -17,7 +17,8 @@ timestamp: 2026-11-17T00:00:00Z
 <!-- Written with Arman in chat on 2026-11-15 and approved by him; his words behind it are in
      /policies/VISION.md § ai-dream-coding-projects. The quick mode in §2, the §17 skill map, the
      back-links in §4 and §7, and the 2026-11-17 §15 bullets were added by an agent from his
-     2026-11-17 words (same VISION.md section), pending his review. Open work on this skill:
+     2026-11-17 words (same VISION.md section), pending his review. The §14 "every turn" steps were
+     added by an agent on 2026-11-18, approved by him in chat that day. Open work on this skill:
      /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
@@ -167,6 +168,16 @@ Until the official vision it files into exists, when a project closes, tell me t
 ## 14. Stay on track
 
 Thinking about the vision often reveals a whole other vision. Capture it (§8), but don't get sidetracked. The main vision is much bigger than one side thing.
+
+Every turn, while you work on a project (added 2026-11-18, approved by Arman):
+
+1. **Open the project page first.** It is the plan, not the latest message. Claim it
+   (`project_board.py --claim <slug>`) so the project-focus hook puts it in front of you at every
+   start, every context reset and every message.
+2. **Answer against it.** A status question is answered from the page and checked against this
+   rulebook, not from what the chat happened to do last.
+3. **Update `next` and `waiting_on` before you end the turn,** so the board never says "nothing"
+   while you wait on him.
 
 ## 15. Talk so I can listen
 

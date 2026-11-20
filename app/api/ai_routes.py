@@ -53,7 +53,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from starlette.responses import JSONResponse
 
 from app.common.system_logger import get_logger
@@ -85,8 +85,12 @@ from matrx_ai.capabilities import ClientContext  # noqa: E402
 from matrx_ai.config.llm_params import LLMParams  # noqa: E402
 from matrx_ai.tools.specs import ToolSpec  # noqa: E402
 
+from app.services.ai.context_picks import CarriesContextPicks  # noqa: E402
 
-class LocalScopedRequest(BaseModel):
+
+class LocalScopedRequest(CarriesContextPicks):
+    # context_picks (CarriesContextPicks): read with scope_ids by the server's rules — aidream
+    # common-docs/systems/data/scopes-context/projects/any-table-context/CONTRACT.md §2.
     organization_id: str | None = None
     project_id: str | None = None
     task_id: str | None = None

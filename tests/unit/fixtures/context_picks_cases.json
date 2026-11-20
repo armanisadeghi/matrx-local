@@ -1,0 +1,483 @@
+{
+  "about": "Shared by the Python (matrx-connect) and TypeScript (@ai-matrx/api context-picks) tests of the pick contract: common-docs/systems/data/scopes-context/projects/any-table-context/CONTRACT.md. canonical = fold_legacy_selection(scope_ids, active_scope_type_ids, picks) as JSON; legacy = legacy_selection(canonical).",
+  "cases": [
+    {
+      "name": "a legacy body folds to one record pick and one table pick",
+      "round_trip": true,
+      "picks": [],
+      "scope_ids": [
+        "1e000000-0000-4000-8000-000000000001",
+        "1e000000-0000-4000-8000-000000000002"
+      ],
+      "active_scope_type_ids": [
+        "7a000000-0000-4000-8000-000000000001"
+      ],
+      "canonical": [
+        {
+          "organization_id": null,
+          "table": null,
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001",
+            "1e000000-0000-4000-8000-000000000002"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": null,
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001",
+          "1e000000-0000-4000-8000-000000000002"
+        ],
+        "active_scope_type_ids": [
+          "7a000000-0000-4000-8000-000000000001"
+        ],
+        "built_in": []
+      }
+    },
+    {
+      "name": "a pick-only body: custom records, a built-in record, a whole custom table",
+      "round_trip": false,
+      "picks": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "7a000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "scope_ids": null,
+      "active_scope_type_ids": null,
+      "canonical": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "view": null,
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "7a000000-0000-4000-8000-000000000002",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001"
+        ],
+        "active_scope_type_ids": [
+          "7a000000-0000-4000-8000-000000000002"
+        ],
+        "built_in": [
+          {
+            "organization_id": "0a000000-0000-4000-8000-000000000001",
+            "table": "entity:party",
+            "view": null,
+            "record_ids": [
+              "9c000000-0000-4000-8000-000000000001"
+            ],
+            "fields": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "a folded pick is absorbed by the filled pick that names the same record or table",
+      "round_trip": false,
+      "picks": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "7a000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "scope_ids": [
+        "1e000000-0000-4000-8000-000000000001",
+        "1e000000-0000-4000-8000-000000000003"
+      ],
+      "active_scope_type_ids": [
+        "7a000000-0000-4000-8000-000000000002"
+      ],
+      "canonical": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "7a000000-0000-4000-8000-000000000002",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        },
+        {
+          "organization_id": null,
+          "table": null,
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000003"
+          ],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001",
+          "1e000000-0000-4000-8000-000000000003"
+        ],
+        "active_scope_type_ids": [
+          "7a000000-0000-4000-8000-000000000002"
+        ],
+        "built_in": []
+      }
+    },
+    {
+      "name": "picks of one table merge records and fields in first-seen order; a whole-table pick stays apart",
+      "round_trip": false,
+      "picks": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": [
+            "f0000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000002",
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": [
+            "status",
+            "f0000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "scope_ids": [],
+      "active_scope_type_ids": [],
+      "canonical": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001",
+            "1e000000-0000-4000-8000-000000000002"
+          ],
+          "fields": [
+            "f0000000-0000-4000-8000-000000000001",
+            "status"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001",
+          "1e000000-0000-4000-8000-000000000002"
+        ],
+        "active_scope_type_ids": [
+          "7a000000-0000-4000-8000-000000000001"
+        ],
+        "built_in": []
+      }
+    },
+    {
+      "name": "one built-in table in two organizations, and a named view, stay separate picks",
+      "round_trip": false,
+      "picks": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "entity:party",
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000002"
+          ]
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "view": "companies"
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party"
+        }
+      ],
+      "scope_ids": null,
+      "active_scope_type_ids": null,
+      "canonical": [
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "view": null,
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000002",
+          "table": "entity:party",
+          "view": null,
+          "record_ids": [
+            "9c000000-0000-4000-8000-000000000002"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "view": "companies",
+          "record_ids": [],
+          "fields": []
+        },
+        {
+          "organization_id": "0a000000-0000-4000-8000-000000000001",
+          "table": "entity:party",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [],
+        "active_scope_type_ids": [],
+        "built_in": [
+          {
+            "organization_id": "0a000000-0000-4000-8000-000000000001",
+            "table": "entity:party",
+            "view": null,
+            "record_ids": [
+              "9c000000-0000-4000-8000-000000000001"
+            ],
+            "fields": []
+          },
+          {
+            "organization_id": "0a000000-0000-4000-8000-000000000002",
+            "table": "entity:party",
+            "view": null,
+            "record_ids": [
+              "9c000000-0000-4000-8000-000000000002"
+            ],
+            "fields": []
+          },
+          {
+            "organization_id": "0a000000-0000-4000-8000-000000000001",
+            "table": "entity:party",
+            "view": "companies",
+            "record_ids": [],
+            "fields": []
+          },
+          {
+            "organization_id": "0a000000-0000-4000-8000-000000000001",
+            "table": "entity:party",
+            "view": null,
+            "record_ids": [],
+            "fields": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "a repeated legacy id is named once",
+      "round_trip": false,
+      "picks": [],
+      "scope_ids": [
+        "1e000000-0000-4000-8000-000000000001",
+        "1e000000-0000-4000-8000-000000000001"
+      ],
+      "active_scope_type_ids": [
+        "7a000000-0000-4000-8000-000000000001",
+        "7a000000-0000-4000-8000-000000000001"
+      ],
+      "canonical": [
+        {
+          "organization_id": null,
+          "table": null,
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        },
+        {
+          "organization_id": null,
+          "table": "7a000000-0000-4000-8000-000000000001",
+          "view": null,
+          "record_ids": [],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001"
+        ],
+        "active_scope_type_ids": [
+          "7a000000-0000-4000-8000-000000000001"
+        ],
+        "built_in": []
+      }
+    },
+    {
+      "name": "a legacy id that is not a uuid is skipped, never refused",
+      "round_trip": false,
+      "picks": [],
+      "scope_ids": [
+        "not-a-uuid",
+        "1e000000-0000-4000-8000-000000000001",
+        ""
+      ],
+      "active_scope_type_ids": [
+        "Clients"
+      ],
+      "canonical": [
+        {
+          "organization_id": null,
+          "table": null,
+          "view": null,
+          "record_ids": [
+            "1e000000-0000-4000-8000-000000000001"
+          ],
+          "fields": []
+        }
+      ],
+      "legacy": {
+        "scope_ids": [
+          "1e000000-0000-4000-8000-000000000001"
+        ],
+        "active_scope_type_ids": [],
+        "built_in": []
+      }
+    },
+    {
+      "name": "nothing picked is an empty context",
+      "round_trip": true,
+      "picks": [],
+      "scope_ids": [],
+      "active_scope_type_ids": [],
+      "canonical": [],
+      "legacy": {
+        "scope_ids": [],
+        "active_scope_type_ids": [],
+        "built_in": []
+      }
+    }
+  ],
+  "refused": [
+    {
+      "name": "an organization suffix on a built-in address",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": "entity:party@0a000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "a table named by its label",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": "Contacts"
+      }
+    },
+    {
+      "name": "a built-in token that breaks the grammar",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": "entity:Party"
+      }
+    },
+    {
+      "name": "a record id that is not a uuid",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": "7a000000-0000-4000-8000-000000000001",
+        "record_ids": [
+          "r-1"
+        ]
+      }
+    },
+    {
+      "name": "an unknown key",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": "7a000000-0000-4000-8000-000000000001",
+        "scope_id": "1e000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "a pick with no table that is not a folded record id",
+      "pick": {
+        "organization_id": "0a000000-0000-4000-8000-000000000001",
+        "table": null,
+        "fields": [
+          "a"
+        ]
+      }
+    }
+  ]
+}

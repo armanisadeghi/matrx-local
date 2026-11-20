@@ -317,6 +317,14 @@ def _apply_request_scope(ctx: AppContext, request: Any) -> AppContext:
     scope_ids = getattr(request, "scope_ids", None)
     if scope_ids is not None:
         metadata = {**(metadata if metadata is not None else ctx.metadata), "scope_ids": list(scope_ids)}
+    # The canonical picks ride beside the legacy key, as the server stamps them (any-table-context
+    # CONTRACT §3, CONTEXT_PICKS_KEY = "context_picks"), built-in picks included.
+    context_picks = getattr(request, "context_picks", None)
+    if context_picks:
+        metadata = {
+            **(metadata if metadata is not None else ctx.metadata),
+            "context_picks": [p.model_dump(mode="json") for p in context_picks],
+        }
     dropped = context_keys_not_delivered(request)
     if dropped:
         logger.warning(

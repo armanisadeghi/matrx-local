@@ -126,6 +126,7 @@ Package managers: pnpm (desktop), uv (Python). Technical depth:
 - **Every org-scoped write carries an explicit `organization_id`.** Database defaults,
   signup-organization/system fallbacks, and parent-inheritance triggers are defects. Emergency work order:
   `/Users/armanisadeghi/code/common-docs/systems/architecture/database/projects/no-db-assigned-org/PLAN.md`
+- **A request's context is a list of picks** (`context_picks`, read with the legacy `scope_ids`; local reading in `app/services/ai/context_picks.py` until matrx-connect ships it here) → aidream `common-docs/systems/data/scopes-context/projects/any-table-context/README.md`
 
 ## Configuration posture — everything here ships to the user
 

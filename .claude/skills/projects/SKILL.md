@@ -175,7 +175,8 @@ Done when: he has the list, or `--claim` succeeded.
 The rules for a new project (his words first, then search for an existing project and ask him
 "are these the same thing?") are the rulebook's §1–§5
 ([ai-dream-coding-projects](/skills/ai-dream-coding-projects/SKILL.md)). This section is only the
-board mechanics.
+board mechanics. A side task never starts a project: it joins the running project it belongs to
+(rulebook §0).
 
 1. Folder: `projects/<slug>/` inside the home it belongs to (the node's folder in `common-docs`;
    create the `projects/` folder there if it is missing). Only a project that cannot have a permanent

@@ -3,7 +3,7 @@ name: ai-dream-coding-projects
 subject: skills/ai-dream-coding-projects
 type: Skill
 title: "ai-dream-coding-projects — run a new project or vision with Arman"
-description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project or vision, you start, continue or resume a project, gather the projects on a topic into one, report where a project or its lanes stand, or a how-to skill sends you here."
+description: "The rulebook for every coding project with Arman, and the map to the how-to skills. Use when he brings a new project, vision or side task, you start, continue or resume a project, gather the projects on a topic into one, report where a project or its lanes stand, or a how-to skill sends you here."
 tags: [projects, vision, interview, owner, arman]
 timestamp: 2026-11-17T00:00:00Z
 ---
@@ -19,7 +19,8 @@ timestamp: 2026-11-17T00:00:00Z
      back-links in §4 and §7, and the 2026-11-17 §15 bullets were added by an agent from his
      2026-11-17 words (same VISION.md section), pending his review. The §14 "every turn" steps were
      added by an agent on 2026-11-18, approved by him in chat that day. The §4 fact list and §5a were added by an agent on 2026-11-18 from
-     his words that day (same VISION.md section), pending his review. Open work on this skill:
+     his words that day (same VISION.md section), pending his review. §0 was added by an agent on
+     2026-11-19 from his words that day (same section), pending his review. Open work on this skill:
      /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
@@ -31,6 +32,19 @@ Project docs live in the `common-docs` folder of the AI Dream repo (`AI-Matrix-E
 **This is the rulebook for every coding project.** It holds the rules. The how-to skills it links
 to (the skill map, §17) say exactly how to do each part, and every one of them points back here. If
 you arrived through one of them and are told to start a new project, start here.
+
+## 0. Every time this skill fires: find the big project, gather, then work
+
+*(Agent-added 2026-11-19 from his words, modeled on the App Frame lead's run that day; his words are in the same VISION.md section.)* This runs first, every time, whether he brings a big vision or one small task. Little things scattered everywhere is the failure this prevents.
+
+1. **Find the running project this belongs to.** Search the board, every `projects/` folder, each related node's VISION.md and task list. Most work belongs on a bigger project that is already going.
+2. **A side task joins that project; it never becomes a new one.** Add it as a line on that project's to-do list, do it, and delete the line when it is live (one "is live" line if it matters). If it gets complicated or stalls, the line stays on the bigger project so it never dies. Start a new project only when nothing running fits, and say so.
+3. **For a vision or a large piece, gather everything (§5a), without being asked:**
+   - Your own project first: everything said in this conversation is in its files.
+   - Background agents search every past conversation on this Mac about the topic, including old and abandoned ones ([user-ground-truth](/skills/user-ground-truth/SKILL.md)), and file his dated quotes into the right VISION.md. In a project another session leads, add only his dated words and tell that lead. Say plainly what the search could not read in full.
+   - Find every related project and doc, not only the obvious ones. Link them (§9).
+4. **Push to main and give him a link to every file**, plus a short paste-ready snippet: each related doc's link and what it is for, and who leads it. He pastes it into the other sessions so they know these exist.
+5. **Keep building whatever needs nothing from him.** Ask only what truly needs him, as specific questions he can answer quickly (§15).
 
 ## 1. My words today are the law
 
@@ -98,13 +112,13 @@ Every round ends with what you still don't know, as a short numbered list. You l
 
 One of the biggest mistakes is launching something as a new project when it already exists. This applies to the first project and to every project that comes out of the conversation.
 
-- Once my words are captured, search for current projects before creating a new one.
+- Once my words are captured, search for current projects before creating a new one (§0).
 - Some projects will be identical or almost identical. Bring those to me and ask "Are these the same thing?" Make sure they genuinely are. Don't get in the habit of bringing me random things that aren't connected.
 - Whatever you find, my words today still lead (§1). Never fold my new vision into an old project without asking me.
 
 ## 5a. Gather the projects on a topic
 
-*(Agent-added 2026-11-18 from his words: "look for all of the projects that relate to a topic and bring them together, or start a new one when one doesn't exist.")* This is search mode (§1). Nothing is lost.
+*(Agent-added 2026-11-18 from his words: "look for all of the projects that relate to a topic and bring them together, or start a new one when one doesn't exist.")* This is search mode (§1), and §0 runs it by default for any vision or large piece. Nothing is lost.
 
 1. **Search everywhere work waits:** the project board (`project_board.py`, every `projects/` folder), node task lists (`operations/tasks/`), each related node's VISION.md and STATE.md, and `inbox/`. Use background Haiku agents for the sweep. Also search his earlier words for the topic ([user-ground-truth](/skills/user-ground-truth/SKILL.md)).
 2. **Bring him one numbered list:** each project or task found, one line on what it is, how done it is (§7), and your recommendation: the same thing (merge), part of it (absorb, §6), related (link, §9), or not related (dropped from the list, never shown to him).

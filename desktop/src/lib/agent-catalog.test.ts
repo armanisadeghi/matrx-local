@@ -128,3 +128,35 @@ describe("the offline catalog client", () => {
     expect(result.error?.message).toContain("Engine not discovered");
   });
 });
+
+describe("the catalog's error sink", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("files the offline mirror's refusal as a warning, with its context in words (system_error 466796e5)", async () => {
+    const reporting = await import("./error-reporting");
+    const warn = vi.spyOn(reporting, "logWarn").mockImplementation(() => {});
+    const error = vi.spyOn(reporting, "logError").mockImplementation(() => {});
+    const { errorSink } = await import("./agent-catalog");
+    errorSink("local")({
+      code: "default_row_unresolved",
+      message:
+        'agx_resolve_agent_address: "agx_resolve_agent_address" is not served by the offline agent catalog. (matrx_local_rpc_not_mirrored)',
+      context: { mandateKey: "local.cloud_chat" },
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [, , detail] = warn.mock.calls[0]!;
+    expect(String(detail)).not.toContain("[object Object]");
+    expect(String(detail)).toContain("local.cloud_chat");
+  });
+
+  it("still files a real failure as an error", async () => {
+    const reporting = await import("./error-reporting");
+    const warn = vi.spyOn(reporting, "logWarn").mockImplementation(() => {});
+    const error = vi.spyOn(reporting, "logError").mockImplementation(() => {});
+    const { errorSink } = await import("./agent-catalog");
+    errorSink("cloud")({ code: "load_failed", message: "HTTP 500" });
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+});

@@ -281,14 +281,28 @@ function isPrecondition(message: string): boolean {
     message.includes("No organization is selected") ||
     message.includes("no signed-in user") ||
     message.includes("matrx_local_not_signed_in") ||
-    message.includes("Not connected: AI Matrx Sync")
+    message.includes("Not connected: AI Matrx Sync") ||
+    // The offline mirror's EXPECTED refusal: it replays one RPC on purpose, so a read it does not serve is the
+    // offline state speaking, not a failure (system_error 466796e5, 2026-11-16, filed at error level).
+    message.includes("matrx_local_rpc_not_mirrored") ||
+    message.includes("is not served by the offline agent catalog")
   );
 }
 
-function errorSink(scope: "cloud" | "local") {
+/** The sink's context as words: handed to the logger raw, an object printed as "[object Object]". */
+function contextText(context: object | undefined): string | undefined {
+  if (!context || Object.keys(context).length === 0) return undefined;
+  try {
+    return JSON.stringify(context);
+  } catch {
+    return Object.keys(context).join(", ");
+  }
+}
+
+export function errorSink(scope: "cloud" | "local") {
   return (event: { code: string; message: string; context?: object }) => {
     const report = isPrecondition(event.message) ? logWarn : logError;
-    report(`agent-catalog:${scope}`, `${event.code}: ${event.message}`, event.context);
+    report(`agent-catalog:${scope}`, `${event.code}: ${event.message}`, contextText(event.context));
   };
 }
 

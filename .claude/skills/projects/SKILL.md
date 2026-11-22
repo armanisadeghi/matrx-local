@@ -50,7 +50,17 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
 
    **The to-do list lives in the project.** The project doc keeps its own detailed to-do list of what
    is not yet live, deleting each line as it becomes true. A node task file holds only work nobody is
-   doing now; a task a project takes on moves into the project's list (Arman, 2026-11-17).
+   doing now; a task a project takes on moves into the project's list (Arman, 2026-11-17). The list
+   is written for a stranger with no access to the lead's chat: each line says what to do, where it is
+   done (the exact repo, Arman's Mac, the live site, or needs Arman), what it needs (access, a key, a
+   release), the link to its plan and how you know it is done, and lines are grouped by where they
+   are done. No line is only "not done": it has a plan or names what it waits on, and a wait on Arman
+   names the exact question. A lane that is not the lead takes one task without claiming the
+   project: it writes `(taken: <who/where>, YYYY-MM-DD)` on the line and pushes that to main before
+   working; a mark with no commit for 2 days is free again. The lane deletes the line when the task
+   is live, even when the work was in another repo: the project page is the one list, and every other
+   repo the project touches carries one pointer line to it in its `CLAUDE.md` or `AGENTS.md`
+   ([his words](/policies/VISION.md#ai-dream-coding-projects), 2026-11-19; rulebook §3b).
 2. **Stalled is computed, never written.** A `ready` or `building` project with no movement for 5
    days is stalled. Movement is a commit carrying the line `Project: <slug>`, or one that touches the
    project's folder and is not bulk housekeeping. Claims, the sweep's repairs and vision checks carry

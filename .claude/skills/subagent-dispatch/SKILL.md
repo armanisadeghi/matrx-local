@@ -84,6 +84,10 @@ Templates: [implementer-brief.md](implementer-brief.md) · [verifier-brief.md](v
   no trail back to the task, which is already checked off. Say it in the brief
   ([shared-checkout](/policies/shared-checkout.md) rule 1); two agents were killed by a spend limit on
   2026-09-10 and took their unpushed work with them.
+- **Waiting is free only in the background** ([ladder § Waiting without waste](/policies/subagent-model-ladder.md)):
+  workers keep each wait inside their cache life and hand back a job over ~30 minutes; you wait with
+  ONE background shell command (that is how you keep the turn alive in the rule above, never a chain of
+  timers), and schedule no check-in for what a notice will announce.
 - **More than 3 dispatches in one session → keep a ledger file** (task, agent id, status, commits,
   rulings). In a campaign the register IS the ledger. After compaction trust the ledger + `git log`,
   never recollection — re-dispatching finished work is the costliest failure.

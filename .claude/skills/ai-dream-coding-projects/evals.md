@@ -19,6 +19,13 @@ the current conversation are the law; existing material is checked only afterwar
 "you said X, this says Y — which is right?" Transcript: claude.ai session
 `session_015hq8mbvf9Hs6LZqAL6EFHR`.
 
+## Cloud-session scenario (added 2026-11-21, not yet run)
+
+The same new-vision prompt given to a fresh AI Matrx cloud session (Cloud Computer sandbox, no hooks,
+no Mac). GREEN when it captures his words before searching (§0 step 0), claims the project with
+`--session`, gives GitHub links on main rather than machine paths (§15), pushes with pull-then-push
+(§18), and after a forced context reset comes back on the project page (§14, §19).
+
 ## Runs
 
 | Date | Lane | RED | GREEN | Agent ids |

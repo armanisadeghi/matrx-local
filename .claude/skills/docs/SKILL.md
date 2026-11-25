@@ -61,7 +61,7 @@ timestamp: 2026-10-02T00:00:00Z
    artifacts) still get a place. Only Arman adds, merges, splits, or renames; agents propose in
    chat.
 10. **Arman reads the chat, not docs.** Anything for him is said in the chat.
-11. **Working documents belong here; clean up as you go.** Agents keep their working notes in their project or node, and while working collapse each finished step to a status line, delete what can be regenerated, and move Arman's words to VISION.md. A daily sweep cleans what is left. Large binaries and source data (books, datasets) go to file storage and are linked ([how](/systems/files/file-service/STATE.md#platform-work-products)). Release scripts commit everything; never hold files back.
+11. **Working documents belong here; clean up as you go.** Agents keep their working notes in their project or node, and while working collapse each finished step to a status line, delete what can be regenerated, and move Arman's words to VISION.md. A daily sweep cleans what is left. Large binaries and source data (books, datasets) go to file storage and are linked ([how](/systems/files/file-service/STATE.md#platform-work-products)). Test and run output (logs, screenshots, JSON results, run folders) never enters the bundle: it goes in `tmp/<task>/` at the repo root, which git ignores, and a result worth keeping is a few lines in the doc. Run output written as markdown is run output too: a lane's report, a walk, a verification pass, a session diary, a per-run ledger entry. A register, handoff or parity list holds only current state, binding rulings and open items, each finished item one status phrase; it is rewritten in place, never appended to. The bundle's `.gitignore` drops every non-markdown file outside its named code folders (Arman, 2026-11-24). Release scripts commit everything; never hold files back.
 
 12. **One subject, one home — enforced (law 15).** A subject is a domain-tree node
     (a folder under `systems/`); a policy (`policies/<name>`), an operations folder, a method that
@@ -80,6 +80,8 @@ timestamp: 2026-10-02T00:00:00Z
 
 The rules above are stamped from [the rules of this bundle](/policies/document-types.md); the
 [domain tree](/policies/domain-tree.md) places every subject. This skill is how to apply them.
+
+**Changing a `CLAUDE.md`? Load the [instruction-files](/skills/instruction-files/SKILL.md) skill first.** Its rules decide what may go in one.
 
 ## 1. Place it
 
@@ -161,7 +163,7 @@ delete the entry, apply the answer, tell him how many remain.
 
 Every repo that touches the node gets ONE line, in that feature's `FEATURE.md` or else the repo
 `CLAUDE.md`, never a stub file and never restated content:
-`Cross-repo system-of-record: /Users/armanisadeghi/code/common-docs/<path> — read it before touching this feature in ANY repo.`
+`Cross-repo system-of-record: common-docs/<path> (from the repo root): read it before touching this feature in any repo.`
 A renamed or deleted doc orphans its pointers: grep every repo for the old path in the same
 session.
 

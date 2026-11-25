@@ -89,12 +89,16 @@ Templates: [implementer-brief.md](implementer-brief.md) · [verifier-brief.md](v
   ONE background shell command (that is how you keep the turn alive in the rule above, never a chain of
   timers), and schedule no check-in for what a notice will announce.
 - **More than 3 dispatches in one session → keep a ledger file** (task, agent id, status, commits,
-  rulings). In a campaign the register IS the ledger. After compaction trust the ledger + `git log`,
+  rulings) in `tmp/<task>/` (git ignores it). In a campaign the register holds only each item's
+  current status line and the rulings that still bind, never the dispatch ledger, lane reports or
+  evidence (an item finished is one status phrase: [docs §4](/skills/docs/SKILL.md#4-clean-up-as-you-go)).
+  After compaction trust the ledger + `git log`,
   never recollection — re-dispatching finished work is the costliest failure.
 
 ## 2. The report contract, and routing by status
 
-Every brief demands ONE status line, then ≤15 lines (full detail in the report file), then the
+Every brief demands ONE status line, then ≤15 lines (full detail in the report file: a scratch file in
+`tmp/<task>/`, never a register, handoff or other committed doc), then the
 worker's own commits (short SHA + subject), evidence, and what it could NOT verify. The report opens with its
 reach and lists every exception used ([stranger proof](/policies/stranger-proof.md); the paragraph is in
 [implementer-brief.md](implementer-brief.md)).

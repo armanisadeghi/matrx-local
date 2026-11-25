@@ -111,6 +111,34 @@ Part of a coding project? The rules live in [ai-dream-coding-projects](/skills/a
    quotes, and takes the projects it visited longest ago first. It never marks work done on a
    builder's say-so, never runs a vision check itself (it dispatches one), and never changes a
    `VISION.md`, a plan's intent, or code.
+10. **A project too big for one session is split into lanes, and every lane says who commands it.**
+    A lane is one file, `lanes/<lane>.md` in the project folder: its goal, what it owns, an ordered
+    list of tasks each small enough for one session with a "Done when" anyone can repeat, what it
+    needs from Arman, requests from other lanes, and results. `commander: arman` means he starts and
+    steers that lane himself and no agent stands between them; `commander: lead` means the
+    project's lead agent does. Whoever holds a lane, its commander does not change. The lane file
+    is the lane's one home: its holder writes there, so lanes on different machines never edit the
+    same file, and a lane asks another lane for something by adding a line to that lane's Requests.
+    - **A check-in is `project_board.py --checkin`:** the lane file pushed to main in a commit that
+      carries `Lane: <project>/<lane>`. It is made after every finished task and before every turn
+      ends. A chat report is not a check-in, and neither is any other commit that happens to touch
+      the file.
+    - **A holder stops only when no task is workable.** A task it cannot finish gets
+      `(waits: who or what, what was tried, what is needed)` and the holder takes the next one. A
+      task that needs earlier ones says `(after: 3, 4)`. A lane is `waiting` only when every open
+      task carries a waits mark, and its `waiting_on` is `arman: <the line he must answer>` (also
+      written under Needs Arman), or `outside: ...` or `lane: ...` with a `check again YYYY-MM-DD`
+      date no more than 14 days out. A lane with a task open is never `done`.
+    - **The holder never accepts its own work.** A row of the project's bar or register closes only
+      on the yes of an agent that did not do the work (rules 7 and 8).
+    - **Alarms are computed, never written.** The clock runs from the last check-in, or from the
+      moment the present holder took the lane when that is later. 24 hours: quiet. 48 hours: stuck,
+      and any agent may take it. 72 hours: abandoned; an agent with no task from Arman takes it at
+      once, and an agent that has one tells him in one line and starts a session on it where its
+      harness can. A lane waiting on Arman, and a lane he commands that nobody has started, are
+      his: never taken, and he is reminded. Every session start shows the stuck lanes, and the sweep
+      acts on them and tells him. A lane that reaches 72 hours also sends him one text.
+    ([his words](/policies/VISION.md#ai-dream-coding-projects), 2026-11-24.)
 <!-- rules:stamp-end -->
 
 The board is one command, computed fresh each run from the cards, the checkers' files and git:
@@ -120,6 +148,8 @@ python3 common-docs/meta/scripts/project_board.py            # everything
 python3 common-docs/meta/scripts/project_board.py --stalled  # free to take, then waiting on him
 python3 common-docs/meta/scripts/project_board.py --project <slug>
 python3 common-docs/meta/scripts/project_board.py --claim <slug>
+python3 common-docs/meta/scripts/project_board.py --lanes <slug>   # a split project's lanes
+python3 common-docs/meta/scripts/project_board.py --stuck          # lanes with no check-in for 24 h or more
 ```
 
 A cloud or sandbox checkout has only a few hours of history. The board then prints a NOTE on its
@@ -132,6 +162,7 @@ first line and marks nothing stalled. Add `--deepen` once (about two minutes) fo
 | "take / resume / pick up <project>" | §1 |
 | "find stalled projects", "what needs progress", "pick one and run" | §2 |
 | "how close is <project>", "compare it to what I asked for", or the board says a check is owed | [vision-check.md](vision-check.md) |
+| "take lane X", a stuck lane shows at session start, "split this into lanes", "where do the lanes stand" | [lanes.md](lanes.md) |
 | you are the scheduled project sweep | [sweep.md](sweep.md) |
 | he is describing something new that will take more than one session | §3 |
 | you are committing work for a project | §4 |
@@ -216,5 +247,6 @@ It is how the board knows the project moved and that you still hold it.
 - "Nearly done" from the agent doing the work is the one sentence rule 7 forbids. Quote the last
   vision check's verdict with its date, or say none has been run.
 - A lead that has gone quiet does not hold a project. Do not wait for it.
+- A project that stopped moving because it is one long page is split into lanes ([lanes.md](lanes.md) §3), not handed to a bigger agent.
 - Finished means a check found the whole bar met, his words moved to the home's vision file, and
   the folder deleted. A `finished` card still on the board is a deletion owed.

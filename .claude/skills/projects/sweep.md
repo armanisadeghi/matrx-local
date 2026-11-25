@@ -60,6 +60,19 @@ Why it exists: a dead session cannot update its notes.
    Judge each from `last_words`. Many sessions share one import time; that is the copy's stamp,
    not his activity, so rank by what the last words ask, not by the time. Match each to a project by its words; one that matches none is
    listed in your report as "work with no project".
+4a. **Stuck lanes** ([lanes.md](lanes.md) §2). `python3 common-docs/meta/scripts/project_board.py --stuck`.
+   - STUCK (48 h): leave the file as it is; any agent may already take it. Name it in the report.
+   - ABANDONED (72 h): start ONE fresh subagent for the lane that has waited longest, with the text
+     `--lane-prompt <project>/<lane>` prints as its whole brief, plus "run the take with --force".
+     It takes the lane and checks in itself. One per run; the rest are named in your report.
+   - **Text him once per abandoned lane.** The board marks a lane `TEXT ARMAN` on the first run
+     after it passes 72 hours. For each, send ONE text with the `send_text` tool: the lane's
+     name, who held it, how long it has been quiet, and whether a session was started on it. No
+     mark, no text.
+   - "says waiting but N tasks are not blocked", "says done but N tasks are open": on the clock
+     like any other. Do not edit the file.
+   - Waiting on Arman, or not started under `commander: arman`: his. First in the report.
+   You never tick a lane's task and never change its Tasks, Goal or Results.
 5. **Vision checks owed: always dispatch one.** You have read builders' notes, so you must not judge
    yourself; a fresh lane that has read none of them must. If the board flags any project
    `never checked against the vision` or `new hands since the last vision check`, start ONE fresh
@@ -70,16 +83,16 @@ Why it exists: a dead session cannot update its notes.
    with the lines `Project-Board: sweep` and `Project: <slug>`. Push. A project you looked at and
    left alone gets no commit.
 7. **Report in chat**, plain names and no paths, in this order: what is waiting on him (each as one
-   question he can answer in a word); what is stalled and free for any agent; what you repaired;
+   question he can answer in a word); lanes stuck or abandoned and what you did about each; what is stalled and free for any agent; what you repaired;
    the vision check's verdict if one ran; work with no project. Nothing changed and nothing waiting:
    say so in one line.
 8. **Tell him only when something new waits on him.** If this run found a question for him that
-   was not on a card before, send ONE notification through the `notify_me` tool: the count and the
+   was not on a card before, or a lane that passed 48 or 72 hours since the last run (name the lane, its holder and how long), send ONE notification through the `notify_me` tool: the count and the
    first question, plain words. Otherwise send nothing.
 
 ## Limits
 
-Your claim returns `limits`; hold to them. They are set for 8 projects, one dispatched vision check and
-40 minutes. Stop at whichever comes first,
+Your claim returns `limits`; hold to them. They are set for 8 projects, one dispatched vision check, one
+dispatched lane session and 40 minutes. Stop at whichever comes first,
 and say what was left. A project you cannot work out from the evidence stays as it is and is named
 in the report; a guess is never written on a card without `(sweep, believed)`.

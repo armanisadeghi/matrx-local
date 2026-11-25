@@ -25,7 +25,8 @@ timestamp: 2026-11-21T00:00:00Z
      added by an agent on 2026-11-19 from his words that day (Agent Understanding VISION.md), pending his review. The
      cloud-session wording (§0 order, §14, §15 links, §18, §19 and the tool names throughout) was added by an
      agent on 2026-11-21 for his 2026-11-21 cloud-development vision
-     (/systems/architecture/agent-machine-setup/VISION.md), pending his review; no rule was made stricter. Open work on this skill:
+     (/systems/architecture/agent-machine-setup/VISION.md), pending his review; no rule was made stricter. §3d and its §17 rows were
+     added by an agent on 2026-11-24 from his words that day (same VISION.md section), pending his review. Open work on this skill:
      /systems/platform/docs-system/projects/ai-dream-coding-projects-rollout/README.md -->
 
 # AI Dream coding projects
@@ -41,6 +42,8 @@ you arrived through one of them and are told to start a new project, start here.
 ## 0. Every time this skill fires: find the big project, gather, then work
 
 *(Agent-added 2026-11-19 from his words, modeled on the App Frame lead's run that day; his words are in the same VISION.md section.)* This runs first, every time, whether he brings a big vision or one small task. Little things scattered everywhere is the failure this prevents.
+
+Started by another agent? Run this only if your brief says to; a lane's holder follows §3d.
 
 **The order is: capture, then search, then work.** His words are written down as he said them before anything found can color them (§1); the search below never replaces or rewrites them (§5).
 
@@ -79,6 +82,11 @@ If you find something that seems better or similar, never abandon what I asked f
 
 ## 3. Look forward only, then delete
 
+- The project doc is not a history. Don't record what was built or how long it took.
+- Anything finished, even months of work, becomes one short line saying that feature is live.
+- The goal is to delete the project doc as fast as possible. As things are done, take them out. In the end only the vision remains.
+- What the doc must keep is a detailed to-do list showing where the vision isn't fully live yet.
+- What happens to my vision once a project closes is a separate process (§13).
 - *(Agent-added 2026-11-17 from his words.)* **All work is a project**, run under these same rules and tracked centrally on the project board. It lives in a `projects/` folder inside the home it belongs to in `common-docs` (a social media project lives in the social media folder). Only work that cannot have a permanent home gets a folder under the top `projects/`. When it is done, what remains is the updated code and the docs of the features it changed.
 - The project's detailed to-do list lives in the project doc itself.
 - *(Agent-added 2026-11-17 from his words.)* A project for one portion of the system lives in that portion's folder (rebuilding the agent UI lives in the Agents folder).
@@ -87,11 +95,6 @@ If you find something that seems better or similar, never abandon what I asked f
 
 *(Agent-added 2026-11-17 from his words.)* Whenever you touch a project, take the chance to move what you touch closer to one shared flow: docs, routes, code and menus that follow the same structure (the [domain tree](/policies/domain-tree.md)). A project folder in the wrong place, a route or doc that disagrees with the tree: fix it in the same change when it is small, or add it to the project's to-do list when it is not.
 
-- The project doc is not a history. Don't record what was built or how long it took.
-- Anything finished, even months of work, becomes one short line saying that feature is live.
-- The goal is to delete the project doc as fast as possible. As things are done, take them out. In the end only the vision remains.
-- What the doc must keep is a detailed to-do list showing where the vision isn't fully live yet.
-- What happens to my vision once a project closes is a separate process (§13).
 
 ## 3b. Any lane can pick up any task
 
@@ -120,6 +123,34 @@ plan or a chat gets reversed later by an agent who never read why it was made.
 - **Before proposing to change a decision, read its entry.** Quote the reason, say what is now different, and
   bring it to me. A reversal that does not answer the recorded reason is drift.
 - **A new lead reads the decisions file first** and says which ones it would change and why, before building.
+
+## 3d. Big projects run in lanes, and I command them
+
+*(Agent-added 2026-11-24 from his words that day, pending his review. The rule is
+[projects rule 10](/policies/projects.md); every step is in [lanes](/skills/projects/lanes.md).)* Most
+agents cannot manage a large team, and I can only use the strongest ones for a short time. So a
+large project is split once, carefully, into lanes that any agent can run from its file alone.
+
+- **A project with more work than one session can hold is split into lanes.** A lane is one short
+  file in the project's `lanes/` folder: goal, what it owns, numbered tasks each small enough for
+  one session with a check anyone can repeat.
+- **Every lane names its commander.** `arman` means I start that lane's session and steer it
+  myself; no agent manages it or reports for it. `lead` means the project's lead agent runs it.
+  Never put an agent between me and a lane I command, and never route a lane's updates through
+  another chat: each lane writes its own file.
+- **A lane's holder keeps going.** It stops only when no task is workable. One blocked task gets a
+  `(waits: ...)` mark and the holder takes the next one. What only I can do is one line under Needs
+  Arman that I can answer in a word.
+- **Every finished task is a check-in:** the lane file, pushed to main, from whatever machine or
+  harness the lane runs on. Chat reports are not check-ins.
+- **Alarms are computed from the check-ins.** 24 hours quiet, 48 hours stuck and free to take, 72
+  hours abandoned. Every session start shows them, and the sweep acts on them and tells me; an
+  abandoned lane also sends me one text. A lane
+  waiting on me, or one I command that I have not started, is never taken; I am reminded.
+- **A lane never accepts its own work.** A task is ticked when its check passes; a row of the
+  project's bar closes only on the yes of an agent that did not do the work (§7).
+- **When you split a project, give me each lane's starting message** as its own block to paste,
+  and say which to start first.
 
 ## 4. Grill me
 
@@ -152,15 +183,16 @@ One of the biggest mistakes is launching something as a new project when it alre
 
 - Once my words are captured (§0 step 0), search for current projects before creating a new one (§0 steps 1-3).
 - Some projects will be identical or almost identical. Bring those to me and ask "Are these the same thing?" Make sure they genuinely are. Don't get in the habit of bringing me random things that aren't connected.
+- **While "same thing?" is open, create no project folder.** My words wait, dated, in the VISION.md of the node they are about; the folder, or the merge, follows my answer. *(Agent-added 2026-11-24: in a test, an agent made the new project first and asked after.)*
 - Whatever you find, my words today still lead (§1). Never fold my new vision into an old project without asking me.
 
 ## 5a. Gather the projects on a topic
 
-*(Agent-added 2026-11-18 from his words: "look for all of the projects that relate to a topic and bring them together, or start a new one when one doesn't exist.")* This is search mode (§1), and §0 runs it by default for any vision or large piece. Nothing is lost.
+*(Agent-added 2026-11-18 from his words: "look for all of the projects that relate to a topic and bring them together, or start a new one when one doesn't exist.")* §0 runs this for any vision or large piece, after his words are captured; when he asks for it directly it is search mode (§1). Nothing is lost.
 
 1. **Search everywhere work waits:** the project board (`common-docs/meta/scripts/project_board.py`, every `projects/` folder), node task lists (`operations/tasks/`), each related node's VISION.md and STATE.md, and `inbox/`. Use background helper agents for the sweep (Haiku in Claude Code; the `agent` tool in an AI Matrx session). Also search his earlier words for the topic ([user-ground-truth](/skills/user-ground-truth/SKILL.md)).
 2. **Bring him one numbered list:** each project or task found, one line on what it is, how done it is (§7), and your recommendation: the same thing (merge), part of it (absorb, §6), related (link, §9), or not related (dropped from the list, never shown to him).
-3. **On his yes, merge into one project** in the home the [domain tree](/policies/domain-tree.md) gives the topic. Move every open item, Remind Arman line and dependency across. His words go to that node's VISION.md. Delete the emptied folders and repoint every link to them in the same change.
+3. **On his yes, merge into one project** in the home the [domain tree](/policies/domain-tree.md) gives the topic. Move everything across: open items with their `(taken:)` marks, Remind Arman lines, dependencies, `DECISIONS.md`, lane files, vision checks, and each project's bar, its lines unedited. Tell a lead or lane holder before its folder moves, and repoint other repos' pointer lines. His words go to that node's VISION.md. Repoint every link and delete the emptied folders in the same change, only after `project_board.py --check` is clean for the merged project.
 4. **Nothing found:** start a new project there ([projects §3](/skills/projects/SKILL.md)) and run this rulebook from §1.
 
 ## 6. Absorb nearly finished projects
@@ -247,7 +279,8 @@ Thinking about the vision often reveals a whole other vision. Capture it (§8), 
 
 Every turn, while you work on a project (added 2026-11-18, approved by Arman):
 
-1. **Open the project page first.** It is the plan, not the latest message. Claim it
+1. **Open the project page first.** It is the plan, not the latest message. If you lead it, claim it
+   once (a side task or a single taken task never claims, §3b). The claim is
    (`python3 common-docs/meta/scripts/project_board.py --claim <slug>`; pull main first, and where
    there is no Claude Code or Codex session id add `--session "AI Matrx chat <conversation id>"`).
    On the Mac the project-focus hook then puts it in front of you at every start, every context reset
@@ -255,7 +288,7 @@ Every turn, while you work on a project (added 2026-11-18, approved by Arman):
    the start of every turn and after any context reset (§19).
 2. **Answer against it.** A status question is answered from the page and checked against this
    rulebook, not from what the chat happened to do last.
-3. **Update `next` and `waiting_on` before you end the turn,** so the board never says "nothing"
+3. **Update `next` and `waiting_on`, and push them, before you end the turn,** so the board never says "nothing"
    while you wait on him.
 
 ## 15. Talk so I can listen
@@ -304,6 +337,7 @@ Every turn, while you work on a project (added 2026-11-18, approved by Arman):
 | A topic whose projects should be gathered into one, or started | this skill, §5a |
 | An existing project to take, resume, find stalled, or commit for | [projects](/skills/projects/SKILL.md) |
 | One task on a project someone else leads (you are a second lane) | this skill, §3b, and [projects](/skills/projects/SKILL.md) |
+| A lane to hold, a stuck lane, or a project too big for one session to split into lanes | this skill, §3d, and [lanes](/skills/projects/lanes.md) |
 | A project another lead is leaving | [handoff](/skills/handoff/SKILL.md) |
 | A team to run while I'm away | [take-command](/skills/take-command/SKILL.md) |
 
@@ -318,7 +352,8 @@ A how-to skill that disagrees with this rulebook is wrong: fix it to match, and 
 
 *(Agent-added 2026-11-21, pending his review: how, not whether; nothing here needs permission that did not before.)* Many sessions push to the same `main`. Work lands safely like this, on any machine:
 
-1. Be on a branch (normally `main`), never a detached HEAD.
+1. Be on `main`, never a local branch or a detached HEAD. On the Mac's shared checkout, push with
+   `bash scripts/push_paths.sh -m "<message>" <files>` instead of step 3; step 3 is for a clone only you use.
 2. Commit the exact paths you changed (`git add <path>…`), never `git add -A`, and never `git stash`, `git reset` or `git checkout -- .` over work you did not make.
 3. `git pull --no-rebase origin main`, then `git push origin HEAD:main`. Rejected because main moved: pull and push again. Never force-push main.
 4. A push is not a release. Whether a commit is live is read from the deploy runs, not from the push.
@@ -335,7 +370,8 @@ A how-to skill that disagrees with this rulebook is wrong: fix it to match, and 
 | Long commands | A command dies at 300 s: run long ones with `nohup … > log 2>&1 &` and check the log. |
 | A long context | Tool results can be cleared from context within a step or two: write output to a file and read it, keep working notes in the project folder, and commit often. |
 | The project-focus hook and session-start checks | No hooks run. Re-read the project page at the start of every turn (§14); its path as the first item of your `tasks` list keeps it in view. |
-| `project_board.py` | Works from a common-docs checkout (about 30 s on a blob-less clone). `--claim` needs `--session "AI Matrx chat <conversation id>"`. |
+| `project_board.py` | Works from a common-docs checkout (about 30 s on a blob-less clone). `--claim`, `--take-lane` and `--checkin` need `--session "AI Matrx chat <conversation id>"`. |
+| Stuck lanes shown at session start | Nothing shows them. Holding no lane: run `project_board.py --stuck` once at the start (§3d). |
 | Past conversations ([user-ground-truth](/skills/user-ground-truth/SKILL.md)) | AI Matrx chats are in the platform database (`chat.conversation`, `chat.message`), read with the `sql` tool. Claude Code transcripts on his Mac and claude.ai sessions cannot be reached from here: say so, and ask him for the words or a Mac lane if they matter. |
 | Background Haiku/Sonnet agents | The `agent` tool (`run_in_background: true`); its report comes back by itself. |
 | The question tool | `ask_person` where offered, else plain chat (§15). |

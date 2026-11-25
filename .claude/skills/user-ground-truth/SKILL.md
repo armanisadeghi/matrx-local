@@ -37,7 +37,9 @@ turns, plus the messages he typed while the agent was mid-turn (stored not as us
 `queued_command` attachment records, commandMode `prompt`, origin human or absent). Dropped:
 tool results, injected skill bodies, slash-command output, task notifications, the
 compaction summary, peer-session and task-notification messages, cron wake-ups and the app's automatic "Continue from where you left off" are
-all dropped (the harness marks its own turns `isMeta`). One entry per message: the time, then the
+all dropped (the harness marks its own turns `isMeta`). What the harness wraps around typed words
+(a `<system-reminder>`, an interrupt note, the slash-command envelope) is peeled off and the words
+kept; `--self-test` proves it. One entry per message: the time, then the
 text verbatim. `--include-injected` keeps the dropped records, labeled, to audit the filter.
 
 Never do this step by hand or by reading the transcript into an agent — it costs nothing as a

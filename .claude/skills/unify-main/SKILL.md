@@ -17,7 +17,7 @@ description: The standing order for local git state in every AI Matrx repo — z
 
 1. **Commit your own paths, locally and often, by pathspec** (`git commit -m "<message>" -- <your paths>`) as
    soon as your code won't crash the app. Never `git add -A` / `git commit -a`: a stale index put the app
-   version back on 2026-09-24. Whatever you leave uncommitted is not lost; the sync commits and ships it.
+   version back on 2026-09-24. Commit and push every file you change before your turn ends, or revert it; the sync that commits leftover files is a safety net, not permission to leave them.
    Push is constant: `./ship.sh` pushes for everyone; every app inside aidream builds changed `@ai-matrx`
    packages from source; nothing is published to npm.
 2. **Never run tree-wide destructive or stashing git in a shared checkout:** any `git stash`,
@@ -30,8 +30,8 @@ description: The standing order for local git state in every AI Matrx repo — z
    single shared checkout on main. To protect a live feature, build the replacement beside it and swap. Never
    request your own PR, branch or worktree, and never spend output complaining about other agents editing
    the tree.
-4. **Attribution is not the goal; live code is.** The sync commits your
-   uncommitted files under its own message and pushes them; do not fight, re-scope or report it. A feature
+4. **Attribution is not the goal; live code is.** When the sync commits a file before you did,
+   under its own message, do not fight, re-scope or report it. A feature
    split across several pushes, or live half-done for a few minutes, is fine. We are not in production.
 5. **When `git push` is rejected, integrate:** never stash, never rebase a dirty tree, never force (procedure
    below). **Every merge conflict, blocked pull or failed push is yours to resolve and push in the same

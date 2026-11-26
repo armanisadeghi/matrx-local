@@ -41,6 +41,17 @@ Work down this list and stop at the first that fits.
 - Never an open list of pages to "read once". A page is linked from a task row or not at all.
 - Every path, skill and command you name must exist. Check before you write it.
 
+**A rule about judgment** (what to conclude, not which command to run) is written to the agent in the middle of the work:
+
+- Open with what to do or never do. Never open by describing our situation.
+- Name the exact thing the agent will be looking at when it goes wrong, in plain words ("a table that is empty or quiet").
+- Give the reason in one clause, and keep it accurate: no exaggeration to make the point ("a few early users", not "no users").
+- End with what to do instead, in a few words ("Read the code.").
+
+The model line:
+
+> **Database counts.** Never judge a feature by how many rows it has or how recently they were written. We have only a few early users, so a table that is empty or quiet tells you nothing about whether the feature works, is used or matters. Read the code.
+
 ## Limits
 
 - The root file stays under 220 lines. A project file stays under 180.
